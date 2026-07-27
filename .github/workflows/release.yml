@@ -12,20 +12,15 @@ on:
       - "v*"
     paths:
       - ".github/workflows/release.yml"
+      - ".dockerignore"
       - "Dockerfile"
       - "package.json"
       - "package-lock.json"
-      - "server.js"
-      - "serverCore.js"
-      - "webrtcConfig.js"
-      - "webrtcConfig.test.js"
-      - "db.js"
-      - "dbHandler.js"
-      - "dataPaths.js"
-      - "applePttPushService.js"
+      - "*.js"
       - "gateway/**"
       - "public/**"
       - "scripts/copy-runtime-deps.js"
+      - "scripts/docker-smoke-test.sh"
       - "scripts/postbuild-pkg.js"
       - "scripts/create-macos-dmg.sh"
       - "server-app/**"
@@ -163,9 +158,26 @@ jobs:
           gh release edit "$TAG" --draft=true --title "$TITLE"
           gh release upload "$TAG" "$INSTALLER_PATH" --clobber
 
+  docker-smoke:
+    name: Verify Docker image startup
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build Docker image
+        shell: bash
+        run: docker build --tag talktome:smoke-test .
+
+      - name: Start and verify Docker image
+        shell: bash
+        run: scripts/docker-smoke-test.sh talktome:smoke-test
+
   docker:
     name: Build Docker image (${{ matrix.arch }})
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    needs: docker-smoke
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -212,6 +224,7 @@ jobs:
   docker-publish:
     name: Publish Docker image
     if: startsWith(github.ref, 'refs/tags/')
+    needs: docker-smoke
     runs-on: ubuntu-latest
 
     steps:

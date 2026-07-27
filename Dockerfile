@@ -10,13 +10,9 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-COPY applePttPushService.js ./
-COPY dataPaths.js ./
-COPY db.js ./
-COPY dbHandler.js ./
-COPY server.js ./
-COPY serverCore.js ./
-COPY webrtcConfig.js ./
+# Keep all root-level runtime modules together so a newly required module cannot
+# be omitted from the image by an incomplete list of COPY instructions.
+COPY *.js ./
 COPY public ./public
 COPY LICENSE ./
 COPY README.md ./
@@ -31,5 +27,8 @@ ENV NODE_ENV=production \
 VOLUME ["/data"]
 
 EXPOSE 8443 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "containerHealthcheck.js"]
 
 CMD ["node", "server.js"]
