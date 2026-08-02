@@ -889,6 +889,12 @@
         }
       }
 
+      @media (min-width: 1367px) and (max-width: 1599px) {
+        #targets-list {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+      }
+
       @media (min-width: 900px) and (max-width: 1180px) {
         #targets-list li.target-item {
           --target-row-pad-x: 0.45rem;
@@ -944,43 +950,9 @@
         box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
       }
 
-      .conference-members-modal__header {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        padding: 1rem 1rem 0.75rem;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-      }
-
-      .conference-members-modal__title {
-        min-width: 0;
-        margin: 0;
-        overflow: hidden;
-        color: #f8fafc;
-        font-size: 1.05rem;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .conference-members-modal__close {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 2.25rem;
-        height: 2.25rem;
-        margin-left: auto;
-        padding: 0;
-        border: 1px solid rgba(148, 163, 184, 0.3);
-        border-radius: 50%;
-        background: transparent;
-        color: #e2e8f0;
-        font-size: 1.3rem;
-        cursor: pointer;
-      }
-
       .conference-members-modal__description {
         margin: 0;
-        padding: 0.85rem 1rem 0.55rem;
+        padding: 1rem 1rem 0.55rem;
         color: rgba(226, 232, 240, 0.7);
         font-size: 0.82rem;
       }
@@ -1000,14 +972,12 @@
       }
 
       .conference-member-listen {
-        display: flex;
-        align-items: center;
-        gap: 0.65rem;
-        min-height: 2.75rem;
-        padding: 0.35rem 0.5rem;
+        display: grid;
+        gap: 0.45rem;
+        min-height: 4.25rem;
+        padding: 0.55rem 0.6rem;
         border-radius: 8px;
         color: rgba(226, 232, 240, 0.95);
-        cursor: pointer;
       }
 
       .conference-member-listen:hover {
@@ -1016,6 +986,14 @@
 
       .conference-member-listen.is-offline {
         color: rgba(148, 163, 184, 0.72);
+      }
+
+      .conference-member-listen__toggle {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        min-width: 0;
+        cursor: pointer;
       }
 
       .conference-member-listen-checkbox {
@@ -1031,6 +1009,31 @@
         color: rgba(148, 163, 184, 0.7);
       }
 
+      .conference-member-level {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        padding-left: 1.85rem;
+      }
+
+      .conference-member-level__slider {
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+      }
+
+      .conference-member-level__value {
+        flex: 0 0 2.8rem;
+        color: rgba(226, 232, 240, 0.82);
+        font-size: 0.75rem;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+
+      .conference-member-listen.is-muted .conference-member-level {
+        opacity: 0.58;
+      }
+
       .conference-members-modal__footer {
         display: flex;
         justify-content: flex-end;
@@ -1039,7 +1042,7 @@
       }
 
       .conference-members-modal__done {
-        min-width: 6rem;
+        width: 100%;
         margin: 0;
         padding: 0.65rem 1rem;
         border: 0;
@@ -1235,7 +1238,8 @@
         flex-wrap: nowrap;
       }
 
-      #targets-list .volume-slider {
+      #targets-list .volume-slider,
+      .conference-member-level__slider {
         width: 100%;
         display: block;
         -webkit-appearance: none;
@@ -1245,17 +1249,20 @@
         height: 6px;
       }
 
-      #targets-list .volume-slider:focus-visible {
+      #targets-list .volume-slider:focus-visible,
+      .conference-member-level__slider:focus-visible {
         outline: none;
       }
 
-      #targets-list .volume-slider::-webkit-slider-runnable-track {
+      #targets-list .volume-slider::-webkit-slider-runnable-track,
+      .conference-member-level__slider::-webkit-slider-runnable-track {
         height: 6px;
         border-radius: 999px;
         background: rgba(148, 163, 184, 0.45);
       }
 
-      #targets-list .volume-slider::-webkit-slider-thumb {
+      #targets-list .volume-slider::-webkit-slider-thumb,
+      .conference-member-level__slider::-webkit-slider-thumb {
         -webkit-appearance: none;
         width: 20px;
         height: 20px;
@@ -1267,17 +1274,20 @@
         touch-action: pan-x;
       }
 
-      #targets-list .volume-slider:active::-webkit-slider-thumb {
+      #targets-list .volume-slider:active::-webkit-slider-thumb,
+      .conference-member-level__slider:active::-webkit-slider-thumb {
         transform: scale(1.05);
       }
 
-      #targets-list .volume-slider::-moz-range-track {
+      #targets-list .volume-slider::-moz-range-track,
+      .conference-member-level__slider::-moz-range-track {
         height: 6px;
         border-radius: 999px;
         background: rgba(148, 163, 184, 0.45);
       }
 
-      #targets-list .volume-slider::-moz-range-thumb {
+      #targets-list .volume-slider::-moz-range-thumb,
+      .conference-member-level__slider::-moz-range-thumb {
         width: 20px;
         height: 20px;
         border-radius: 50%;
@@ -2271,20 +2281,10 @@
     class="conference-members-modal"
     role="dialog"
     aria-modal="true"
-    aria-labelledby="conference-members-modal-title"
-    aria-describedby="conference-members-modal-description"
+    aria-labelledby="conference-members-modal-description"
     hidden
   >
     <section class="conference-members-modal__card">
-      <header class="conference-members-modal__header">
-        <h2 id="conference-members-modal-title" class="conference-members-modal__title">Conference</h2>
-        <button
-          id="conference-members-modal-close"
-          class="conference-members-modal__close"
-          type="button"
-          aria-label="Close member listen controls"
-        >&times;</button>
-      </header>
       <p id="conference-members-modal-description" class="conference-members-modal__description">
         Choose who you hear in this conference.
       </p>

@@ -102,6 +102,7 @@ let warnedVolumeStorageRead = false;
 let warnedVolumeStorageWrite = false;
 const TARGET_AUDIO_VOLUME_STORAGE_PREFIXES = ['volume_user_', 'volume_conf_', 'volume_feed_'];
 const CONFERENCE_LISTEN_EXCLUSIONS_STORAGE_PREFIX = 'conferenceListenExclusions';
+const CONFERENCE_MEMBER_LEVELS_STORAGE_PREFIX = 'conferenceMemberLevels';
 const IDENTITY_KIND_KEY = 'identityKind';
 const FEED_ID_STORAGE_KEY = 'feedId';
 const GUEST_SESSION_STORAGE_KEY = 'guestSession';
@@ -3230,9 +3231,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const logoutBtn = document.getElementById("logout-btn");
   const feedLogoutBtn = document.getElementById("feed-logout-btn");
   const conferenceMembersModal = document.getElementById('conference-members-modal');
-  const conferenceMembersModalTitle = document.getElementById('conference-members-modal-title');
+  const conferenceMembersModalDescription = document.getElementById('conference-members-modal-description');
   const conferenceMembersModalList = document.getElementById('conference-members-modal-list');
-  const conferenceMembersModalClose = document.getElementById('conference-members-modal-close');
   const conferenceMembersModalDone = document.getElementById('conference-members-modal-done');
   const targetLayerSwitcher = document.getElementById('target-layer-switcher');
   const targetLayerButton = document.getElementById('target-layer-button');
@@ -3578,6 +3578,7 @@ document.addEventListener("DOMContentLoaded", () => {
           type: entry?.type || null,
           sourceUserId: entry?.sourceUserId ?? null,
           memberListenExcluded: Boolean(entry?.memberListenExcluded),
+          memberListenLevel: entry?.memberListenLevel ?? 1,
           paused: entry?.audio?.paused ?? null,
           muted: entry?.audio?.muted ?? null,
           volume: entry?.audio?.volume ?? null,
@@ -3649,7 +3650,9 @@ let cachedUsers = [];
 let latestServerUsers = [];
 let cachedOperatorTargets = null;
   const conferenceMemberListenExclusions = new Map();
+  const conferenceMemberListenLevels = new Map();
   let loadedConferenceListenExclusionsKey = null;
+  let loadedConferenceMemberLevelsKey = null;
   let conferenceMembersModalRestoreFocus = null;
   let incomingTalkState = { addressedNow: [], replyTarget: null };
   let initializingMediaPromise = null;
@@ -3677,6 +3680,13 @@ let cachedOperatorTargets = null;
     if (!profileUserId) return null;
     const identityKind = session.kind === 'guest' ? 'guest' : 'user';
     return `${CONFERENCE_LISTEN_EXCLUSIONS_STORAGE_PREFIX}:${identityKind}:${profileUserId}`;
+  }
+
+  function getConferenceMemberLevelsStorageKey() {
+    const profileUserId = getOperatorProfileUserId();
+    if (!profileUserId) return null;
+    const identityKind = session.kind === 'guest' ? 'guest' : 'user';
+    return `${CONFERENCE_MEMBER_LEVELS_STORAGE_PREFIX}:${identityKind}:${profileUserId}`;
   }
 
   function ensureConferenceListenExclusionsLoaded() {
@@ -3725,6 +3735,74 @@ let cachedOperatorTargets = null;
     }
   }
 
+  function ensureConferenceMemberLevelsLoaded() {
+    const storageKey = getConferenceMemberLevelsStorageKey();
+    if (storageKey === loadedConferenceMemberLevelsKey) return;
+
+    conferenceMemberListenLevels.clear();
+    loadedConferenceMemberLevelsKey = storageKey;
+    if (!storageKey) return;
+
+    try {
+      const parsed = JSON.parse(window.localStorage?.getItem(storageKey) || '{}');
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      Object.entries(parsed).forEach(([conferenceId, rawLevels]) => {
+        const numericConferenceId = Number(conferenceId);
+        if (
+          !Number.isFinite(numericConferenceId)
+          || !rawLevels
+          || typeof rawLevels !== 'object'
+          || Array.isArray(rawLevels)
+        ) return;
+        const normalizedLevels = new Map();
+        Object.entries(rawLevels).forEach(([userId, rawLevel]) => {
+          const numericUserId = Number(userId);
+          const numericLevel = Number(rawLevel);
+          if (!Number.isFinite(numericUserId) || !Number.isFinite(numericLevel)) return;
+          normalizedLevels.set(numericUserId, Math.max(0, Math.min(1, numericLevel)));
+        });
+        if (normalizedLevels.size) {
+          conferenceMemberListenLevels.set(numericConferenceId, normalizedLevels);
+        }
+      });
+    } catch (error) {
+      console.warn('Failed to load conference member levels:', error);
+    }
+  }
+
+  function persistConferenceMemberLevels() {
+    ensureConferenceMemberLevelsLoaded();
+    const storageKey = loadedConferenceMemberLevelsKey;
+    if (!storageKey) return;
+
+    const serialized = {};
+    conferenceMemberListenLevels.forEach((levels, conferenceId) => {
+      const serializedLevels = {};
+      levels?.forEach((level, userId) => {
+        if (level >= 0.999) return;
+        serializedLevels[String(userId)] = Math.round(level * 100) / 100;
+      });
+      if (Object.keys(serializedLevels).length) {
+        serialized[String(conferenceId)] = serializedLevels;
+      }
+    });
+
+    try {
+      window.localStorage?.setItem(storageKey, JSON.stringify(serialized));
+    } catch (error) {
+      console.warn('Failed to save conference member levels:', error);
+    }
+  }
+
+  function getConferenceMemberListenLevel(conferenceId, userId) {
+    if (conferenceId == null || userId == null) return 1;
+    const numericConferenceId = Number(conferenceId);
+    const numericUserId = Number(userId);
+    if (!Number.isFinite(numericConferenceId) || !Number.isFinite(numericUserId)) return 1;
+    ensureConferenceMemberLevelsLoaded();
+    return conferenceMemberListenLevels.get(numericConferenceId)?.get(numericUserId) ?? 1;
+  }
+
   function isConferenceMemberExcluded(conferenceId, userId) {
     const numericConferenceId = Number(conferenceId);
     const numericUserId = Number(userId);
@@ -3767,6 +3845,31 @@ let cachedOperatorTargets = null;
     if (!excludedUserIds.size) conferenceMemberListenExclusions.delete(numericConferenceId);
 
     persistConferenceListenExclusions();
+    applyConferenceMemberListenPreference(numericConferenceId, numericUserId);
+  }
+
+  function setConferenceMemberListenLevel(conferenceId, userId, level, { persist = true } = {}) {
+    const numericConferenceId = Number(conferenceId);
+    const numericUserId = Number(userId);
+    const numericLevel = Number(level);
+    if (
+      !Number.isFinite(numericConferenceId)
+      || !Number.isFinite(numericUserId)
+      || !Number.isFinite(numericLevel)
+    ) return;
+    ensureConferenceMemberLevelsLoaded();
+    const clamped = Math.max(0, Math.min(1, numericLevel));
+
+    let levels = conferenceMemberListenLevels.get(numericConferenceId);
+    if (!levels) {
+      levels = new Map();
+      conferenceMemberListenLevels.set(numericConferenceId, levels);
+    }
+    if (clamped >= 0.999) levels.delete(numericUserId);
+    else levels.set(numericUserId, clamped);
+    if (!levels.size) conferenceMemberListenLevels.delete(numericConferenceId);
+
+    if (persist) persistConferenceMemberLevels();
     applyConferenceMemberListenPreference(numericConferenceId, numericUserId);
   }
 
@@ -4931,10 +5034,15 @@ let cachedOperatorTargets = null;
       ? Math.max(0, Math.min(1, base * feedDuckingFactor))
       : base;
     const memberExcluded = isConferenceMemberEntryExcluded(entry);
+    const conferenceId = entry?.type === 'conference'
+      ? Number(String(entry.key || '').replace(/^conf-/, ''))
+      : null;
+    const memberLevel = getConferenceMemberListenLevel(conferenceId, entry?.sourceUserId);
+    const memberGain = memberExcluded ? 0 : memberLevel;
     if (entry.usesSharedAudioElement && entry.gainNode?.gain) {
-      entry.gainNode.gain.value = memberExcluded ? 0 : 1;
-    } else if (memberExcluded) {
-      applied = 0;
+      entry.gainNode.gain.value = memberGain;
+    } else {
+      applied *= memberGain;
     }
     if (playbackGainNode) {
       if (entry.usesMediaElementSource || entry.usesSharedAudioElement) {
@@ -4951,6 +5059,7 @@ let cachedOperatorTargets = null;
     }
     entry.lastAppliedLevel = applied;
     entry.memberListenExcluded = memberExcluded;
+    entry.memberListenLevel = memberLevel;
   }
 
   function mutePlaybackEntry(entry) {
@@ -8059,7 +8168,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   }
 
   function renderConferenceMembersModal(target, users = cachedUsers) {
-    if (!conferenceMembersModalTitle || !conferenceMembersModalList) return;
+    if (!conferenceMembersModalDescription || !conferenceMembersModalList) return;
     const conferenceId = Number(target?.targetId);
     const members = normalizeConferenceTargetMembers(target);
     const usersById = new Map();
@@ -8068,7 +8177,8 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       usersById.set(Number(user.userId), user);
     });
 
-    conferenceMembersModalTitle.textContent = target?.name || `Conference ${conferenceId}`;
+    const conferenceName = target?.name || `Conference ${conferenceId}`;
+    conferenceMembersModalDescription.textContent = `Choose who you hear in ${conferenceName}.`;
     conferenceMembersModalList.innerHTML = '';
     if (!members.length) {
       const empty = document.createElement('span');
@@ -8078,10 +8188,13 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     } else {
       members.forEach((member) => {
         const online = Boolean(usersById.get(member.userId)?.socketId);
-        const row = document.createElement('label');
+        const row = document.createElement('div');
         row.className = 'conference-member-listen';
         row.classList.toggle('is-offline', !online);
         row.dataset.userId = String(member.userId);
+
+        const toggleLabel = document.createElement('label');
+        toggleLabel.className = 'conference-member-listen__toggle';
 
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
@@ -8090,6 +8203,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         checkbox.setAttribute('aria-label', `Hear ${member.name || `user ${member.userId}`}`);
         checkbox.addEventListener('change', () => {
           setConferenceMemberListening(conferenceId, member.userId, checkbox.checked);
+          row.classList.toggle('is-muted', !checkbox.checked);
         });
 
         const name = document.createElement('span');
@@ -8098,7 +8212,38 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         const onlineState = document.createElement('span');
         onlineState.className = 'conference-member-online-state';
         onlineState.textContent = online ? 'Online' : 'Offline';
-        row.append(checkbox, name, onlineState);
+        toggleLabel.append(checkbox, name, onlineState);
+
+        const level = getConferenceMemberListenLevel(conferenceId, member.userId);
+        const levelControl = document.createElement('div');
+        levelControl.className = 'conference-member-level';
+        const levelSlider = document.createElement('input');
+        levelSlider.type = 'range';
+        levelSlider.className = 'conference-member-level__slider';
+        levelSlider.min = '0';
+        levelSlider.max = '1';
+        levelSlider.step = '0.01';
+        levelSlider.value = String(level);
+        levelSlider.setAttribute('aria-label', `${member.name || `User ${member.userId}`} volume`);
+        const levelOutput = document.createElement('output');
+        levelOutput.className = 'conference-member-level__value';
+        const updateLevelOutput = (nextLevel) => {
+          levelOutput.value = `${Math.round(nextLevel * 100)}%`;
+          levelOutput.textContent = levelOutput.value;
+        };
+        updateLevelOutput(level);
+        levelSlider.addEventListener('input', () => {
+          const nextLevel = Math.max(0, Math.min(1, Number(levelSlider.value)));
+          updateLevelOutput(nextLevel);
+          setConferenceMemberListenLevel(conferenceId, member.userId, nextLevel, { persist: false });
+        });
+        levelSlider.addEventListener('change', () => {
+          setConferenceMemberListenLevel(conferenceId, member.userId, levelSlider.value);
+        });
+        levelControl.append(levelSlider, levelOutput);
+
+        row.classList.toggle('is-muted', !checkbox.checked);
+        row.append(toggleLabel, levelControl);
         conferenceMembersModalList.appendChild(row);
       });
     }
@@ -8110,7 +8255,9 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     renderConferenceMembersModal(target, cachedUsers);
     conferenceMembersModal.hidden = false;
     window.requestAnimationFrame(() => {
-      conferenceMembersModalClose?.focus();
+      conferenceMembersModal.querySelector(
+        '.conference-member-listen-checkbox, .conference-members-modal__done'
+      )?.focus();
     });
   }
 
@@ -8124,7 +8271,6 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     }
   }
 
-  conferenceMembersModalClose?.addEventListener('click', () => closeConferenceMembersModal());
   conferenceMembersModalDone?.addEventListener('click', () => closeConferenceMembersModal());
   conferenceMembersModal?.addEventListener('click', (event) => {
     if (event.target === conferenceMembersModal) closeConferenceMembersModal();
