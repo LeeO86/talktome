@@ -154,7 +154,26 @@ jobs:
         if: matrix.ffmpeg_source == 'macos-lgpl'
         shell: bash
         run: |
-          APP_PLIST="bridge-client/src-tauri/target/release/bundle/macos/Talktome Bridge.app/Contents/Info.plist"
+          shopt -s nullglob
+          DMG_FILES=(bridge-client/src-tauri/target/release/bundle/dmg/*.dmg)
+          if [[ ${#DMG_FILES[@]} -ne 1 ]]; then
+            printf 'Expected exactly one macOS Bridge DMG, found %s\n' "${#DMG_FILES[@]}" >&2
+            exit 1
+          fi
+
+          MOUNT_POINT="$(mktemp -d)"
+          MOUNTED=false
+          cleanup() {
+            if [[ "$MOUNTED" == true ]]; then
+              hdiutil detach "$MOUNT_POINT" >/dev/null || true
+            fi
+            rm -rf "$MOUNT_POINT"
+          }
+          trap cleanup EXIT
+
+          hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_POINT" "${DMG_FILES[0]}" >/dev/null
+          MOUNTED=true
+          APP_PLIST="$MOUNT_POINT/Talktome Bridge.app/Contents/Info.plist"
           ACTUAL_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PLIST")"
           ACTUAL_BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PLIST")"
           if [[ "$ACTUAL_VERSION" != "$APP_VERSION" || "$ACTUAL_BUILD_VERSION" != "$APP_VERSION" ]]; then
