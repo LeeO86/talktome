@@ -1406,6 +1406,34 @@ function isManagedLevelTriggerEnabled(port) {
   return port?.kind === "user" && port?.trigger?.mode === "audio-level";
 }
 
+function getManagedEffectiveTriggerPort(session) {
+  const port = session?.port;
+  if (!port || port.kind !== "user") return port;
+  const draft = managedPortDrafts.get(bridgePortKey(port))?.trigger;
+  if (!draft) return port;
+
+  const mode = draft.mode === "audio-level" ? "audio-level" : "external";
+  const targetType = String(draft.targetType || "").trim().toLowerCase();
+  const targetId = Number(draft.targetId);
+  return {
+    ...port,
+    trigger: {
+      ...(port.trigger || {}),
+      mode,
+      target: mode === "audio-level"
+        && (targetType === "user" || targetType === "conference")
+        && Number.isFinite(targetId)
+        ? { type: targetType, id: targetId }
+        : null,
+      thresholdDb: draft.thresholdDb ?? port.trigger?.thresholdDb
+    }
+  };
+}
+
+function isManagedLevelTriggerEnabledForSession(session) {
+  return isManagedLevelTriggerEnabled(getManagedEffectiveTriggerPort(session));
+}
+
 async function disableManagedLevelTrigger(session, { forceRelease = false } = {}) {
   const state = session.levelTriggerState || {
     active: false,
@@ -1420,14 +1448,19 @@ async function disableManagedLevelTrigger(session, { forceRelease = false } = {}
   state.active = false;
   state.aboveSince = 0;
   state.belowSince = 0;
-  if (forceRelease && session.talking) {
+  if (forceRelease) {
     state.releaseRequired = true;
   }
 
   try {
     if (
-      session.talking
-      && (forceRelease || state.releaseRequired || session.talkSource === "level")
+      session.sessionId
+      && session.producerId
+      && (
+        forceRelease
+        || state.releaseRequired
+        || (session.talking && session.talkSource === "level")
+      )
     ) {
       await applyManagedTalkState(session, {
         talking: false,
@@ -1493,7 +1526,7 @@ async function sendManagedCommandResult(session, payload, result) {
   });
 }
 
-async function applyManagedTalkState(session, { talking, targets, lockActive = false, source = "external" }) {
+async function performManagedTalkState(session, { talking, targets, lockActive = false, source = "external" }) {
   if (session.port.kind === "feed") {
     throw new Error("Feed bridge ports do not support talk state");
   }
@@ -1533,6 +1566,27 @@ async function applyManagedTalkState(session, { talking, targets, lockActive = f
   session.lockActive = Boolean(lockActive && talking);
   session.targets = talking ? targets : [];
   renderManagedBridgePorts();
+  return true;
+}
+
+function applyManagedTalkState(session, request) {
+  const operation = async () => {
+    if (
+      request?.talking
+      && request?.source === "level"
+      && !isManagedLevelTriggerEnabledForSession(session)
+    ) {
+      recordManagedLifecycle(session, "level-trigger-start-skipped", "trigger mode is no longer audio-level");
+      return false;
+    }
+    return performManagedTalkState(session, request);
+  };
+
+  const queued = (session.talkStateQueue || Promise.resolve())
+    .catch(() => {})
+    .then(operation);
+  session.talkStateQueue = queued;
+  return queued;
 }
 
 async function handleManagedTalkCommand(session, payload) {
@@ -1928,7 +1982,7 @@ async function processManagedLevelTriggers() {
   const sessions = [...managedSessions.values()].filter((session) => (
     session.ready
     && !session.starting
-    && isManagedLevelTriggerEnabled(session.port)
+    && isManagedLevelTriggerEnabledForSession(session)
   ));
   if (!sessions.length) return;
 
@@ -1942,13 +1996,14 @@ async function processManagedLevelTriggers() {
 
     for (const session of sessions) {
       if (!session.ready || session.starting) continue;
-      if (!isManagedLevelTriggerEnabled(session.port)) {
+      if (!isManagedLevelTriggerEnabledForSession(session)) {
         await disableManagedLevelTrigger(session).catch((error) => {
           setManagedSessionError(session, error);
         });
         continue;
       }
-      const triggerTarget = getManagedTriggerTarget(session.port);
+      const effectivePort = getManagedEffectiveTriggerPort(session);
+      const triggerTarget = getManagedTriggerTarget(effectivePort);
       const state = session.levelTriggerState || {
         active: false,
         aboveSince: 0,
@@ -1982,7 +2037,7 @@ async function processManagedLevelTriggers() {
       updateManagedInputLevelDisplay(session, inputStats);
       const levelDb = Number(inputStats?.rmsDb);
       if (!Number.isFinite(levelDb)) continue;
-      const thresholdDb = getManagedLevelTriggerThreshold(session.port);
+      const thresholdDb = getManagedLevelTriggerThreshold(effectivePort);
 
       if (levelDb >= thresholdDb) {
         state.belowSince = 0;
@@ -1994,13 +2049,14 @@ async function processManagedLevelTriggers() {
         ) {
           state.pending = true;
           try {
-            await applyManagedTalkState(session, {
+            const started = await applyManagedTalkState(session, {
               talking: true,
               targets: [triggerTarget],
               source: "level"
             });
             if (
-              isManagedLevelTriggerEnabled(session.port)
+              started
+              && isManagedLevelTriggerEnabledForSession(session)
               && Number(state.revision || 0) === triggerRevision
             ) {
               state.active = true;
@@ -2084,6 +2140,7 @@ function createManagedSession(port) {
     eventSource: null,
     eventStreamActive: false,
     eventQueue: Promise.resolve(),
+    talkStateQueue: Promise.resolve(),
     retryAt: null,
     retryable: true,
     statusLabel: null,
