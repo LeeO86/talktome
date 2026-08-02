@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleShortVersionString</key>
+  <string>1.2.1</string>
+  <key>CFBundleVersion</key>
+  <string>1.2.1</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Talktome Bridge needs audio input access to transmit assigned inputs and operate audio level triggers.</string>
 </dict>

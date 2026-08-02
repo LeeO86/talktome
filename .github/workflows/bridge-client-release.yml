@@ -87,6 +87,14 @@ jobs:
           echo "SAFE_VERSION=$SAFE_VERSION" >> "$GITHUB_ENV"
           printf '{"version":"%s"}\n' "$APP_VERSION" > bridge-client/tauri.release-version.json
 
+      - name: Set macOS Bridge bundle version
+        if: matrix.ffmpeg_source == 'macos-lgpl'
+        shell: bash
+        run: |
+          PLIST="bridge-client/src-tauri/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$PLIST"
+
       - name: Restore LGPL FFmpeg sidecar
         id: ffmpeg-sidecar
         uses: actions/cache@v4
@@ -148,8 +156,10 @@ jobs:
         run: |
           APP_PLIST="bridge-client/src-tauri/target/release/bundle/macos/Talktome Bridge.app/Contents/Info.plist"
           ACTUAL_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PLIST")"
-          if [[ "$ACTUAL_VERSION" != "$APP_VERSION" ]]; then
-            printf 'Expected Bridge version %s, found %s\n' "$APP_VERSION" "$ACTUAL_VERSION" >&2
+          ACTUAL_BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PLIST")"
+          if [[ "$ACTUAL_VERSION" != "$APP_VERSION" || "$ACTUAL_BUILD_VERSION" != "$APP_VERSION" ]]; then
+            printf 'Expected Bridge version %s, found short version %s and build version %s\n' \
+              "$APP_VERSION" "$ACTUAL_VERSION" "$ACTUAL_BUILD_VERSION" >&2
             exit 1
           fi
 
