@@ -1061,6 +1061,7 @@ function handleManagedPortControlChange(event) {
   }
   const card = control.closest("[data-managed-port-key]");
   if (!(card instanceof HTMLElement)) return;
+  const portKey = card.dataset.managedPortKey || "";
 
   const field = control.dataset.field || "";
   if (field === "inputDevice" || field === "outputDevice") {
@@ -1091,10 +1092,48 @@ function handleManagedPortControlChange(event) {
     }
   }
   if (field === "triggerMode") {
+    const session = managedSessions.get(portKey);
+    const nextMode = control.value === "audio-level" ? "audio-level" : "external";
+    const previousMode = session?.port?.trigger?.mode === "audio-level"
+      ? "audio-level"
+      : "external";
+    if (
+      session
+      && nextMode === "external"
+      && (
+        previousMode === "audio-level"
+        || session.talking
+        || session.levelTriggerState?.active
+        || session.levelTriggerState?.releaseRequired
+      )
+    ) {
+      session.port = {
+        ...session.port,
+        trigger: {
+          ...(session.port.trigger || {}),
+          mode: "external",
+          target: null
+        }
+      };
+      recordManagedLifecycle(
+        session,
+        "level-trigger-mode-change",
+        `${previousMode}->external talking=${session.talking} source=${session.talkSource || "unknown"}`
+      );
+      disableManagedLevelTrigger(session, { forceRelease: true }).catch((error) => {
+        recordManagedLifecycle(
+          session,
+          "level-trigger-release-error",
+          String(error?.message || error)
+        );
+        setManagedSessionError(session, error);
+        renderManagedBridgePorts();
+      });
+    }
     renderManagedBridgePorts();
   }
   if (event.type === "change") {
-    scheduleManagedPortAutoSave(card.dataset.managedPortKey || "");
+    scheduleManagedPortAutoSave(portKey);
   }
 }
 
@@ -1395,6 +1434,7 @@ async function disableManagedLevelTrigger(session, { forceRelease = false } = {}
         targets: [],
         source: "level"
       });
+      recordManagedLifecycle(session, "level-trigger-talk-released", "trigger mode disabled");
     }
     state.releaseRequired = false;
   } finally {
