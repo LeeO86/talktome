@@ -117,6 +117,7 @@ const FEED_DIM_SELF_STORAGE_KEY = 'feedDimSelf';
 const FEED_DIM_INCOMING_STORAGE_KEY = 'feedDimIncoming';
 const AUDIO_PROCESSING_STORAGE_KEY = 'audioProcessingEnabled';
 const AUDIO_PROCESSING_EXPLICIT_STORAGE_KEY = 'audioProcessingEnabledExplicit';
+const LEFT_HAND_MODE_STORAGE_KEY = 'leftHandModeEnabled';
 const FEED_INPUT_GAIN_DB_STORAGE_KEY = 'feedInputGainDb';
 const MIC_DEVICE_STORAGE_KEY = 'preferredAudioInputDeviceId';
 const OUTPUT_DEVICE_STORAGE_KEY = 'preferredAudioOutputDeviceId';
@@ -130,6 +131,7 @@ const USER_INPUT_GAIN_DB_MIN = -30;
 const USER_INPUT_GAIN_DB_MAX = 40;
 const USER_METER_MIN_DB = -60;
 const USER_CLIP_THRESHOLD_DB = -0.5;
+const INPUT_MONITOR_SINK_GAIN = 0.000001;
 const VOICE_TRIGGER_ENABLED_STORAGE_KEY = 'voiceTriggerEnabled';
 const VOICE_TRIGGER_TARGET_STORAGE_KEY = 'voiceTriggerTarget';
 const VOICE_TRIGGER_THRESHOLD_DB_STORAGE_KEY = 'voiceTriggerThresholdDb';
@@ -236,6 +238,7 @@ let feedDimIncoming = true;
 let audioProcessingEnabled = false;
 let audioProcessingReinitializePending = false;
 let refreshTalkProducerForAudioProcessingChange = null;
+let leftHandModeEnabled = false;
 let feedInputProcessingEnabled = false;
 let feedPtimeMs = DEFAULT_FEED_PTIME_MS;
 const audioProcessingOptions = {
@@ -253,6 +256,16 @@ let voiceTriggerThresholdDb = VOICE_TRIGGER_DEFAULT_THRESHOLD_DB;
 let preferredInputDeviceId = '';
 let preferredInputDeviceExplicit = false;
 let preferredOutputDeviceId = '';
+
+function getSlideToLockHintText() {
+  return leftHandModeEnabled ? 'Slide to lock →' : '← Slide to lock';
+}
+
+function didReachSlideToLockThreshold(currentX, startX) {
+  const delta = Number(currentX) - Number(startX);
+  return leftHandModeEnabled ? delta >= 42 : delta <= -42;
+}
+
 const USER_AGENT = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
 const isTouchMacUA = typeof navigator !== 'undefined'
   ? navigator.maxTouchPoints > 1 && /Macintosh/.test(USER_AGENT)
@@ -544,6 +557,10 @@ if (typeof window !== 'undefined') {
         audioProcessingEnabled = false;
       }
     }
+    const storedLeftHandMode = window.localStorage?.getItem(LEFT_HAND_MODE_STORAGE_KEY);
+    if (storedLeftHandMode !== null) {
+      leftHandModeEnabled = storedLeftHandMode === 'true';
+    }
     const storedInputGainDb = window.localStorage?.getItem(FEED_INPUT_GAIN_DB_STORAGE_KEY);
     if (storedInputGainDb !== null) {
       const parsedGainDb = parseFloat(storedInputGainDb);
@@ -576,7 +593,7 @@ if (typeof window !== 'undefined') {
       }
     }
   } catch (err) {
-    console.warn('Unable to restore feed dim level from storage:', err);
+    console.warn('Unable to restore saved preferences from storage:', err);
   }
 }
 syncAudioProcessingOptions();
@@ -860,6 +877,7 @@ let sessionSlideHintEl;
 let dimWhileSpeakingToggle;
 let dimWhenAddressedToggle;
 let audioProcessingToggle;
+let leftHandModeToggle;
 let userLevelControls;
 let userInputGainSlider;
 let userInputGainValueDisplay;
@@ -929,6 +947,7 @@ let targetPlaybackBuses = new Map();
 let remotePlaybackBus = null;
 let targetHasActiveStreams = () => false;
 let userProcessingChain = null;
+let userMeterMonitorChain = null;
 let voiceTriggerMonitorChain = null;
 let voiceTriggerRafId = null;
 let voiceTriggerActive = false;
@@ -1964,10 +1983,26 @@ async function requestInitialMicrophoneAccess({ reason = 'startup' } = {}) {
 
 async function startInputMonitor() {
   if (!settingsMenuOpen) return null;
-  if (settingsMonitorActive || settingsMonitorPromise) {
+  if (settingsMonitorPromise) {
     return settingsMonitorPromise;
   }
   if (session.kind === 'guest' && !isGuestSessionActive()) return null;
+
+  const activateUserMeter = async (track) => {
+    if (!track || session.kind === 'feed' || audioProcessingEnabled) return;
+    ensureUserProcessingChain(track);
+    const monitor = ensureUserMeterMonitorChain(track);
+    if (!monitor) return;
+    await resumeAudioContextIfNeeded(monitor.ctx, { label: 'user input meter AudioContext' });
+    scheduleUserMeterUpdate();
+  };
+
+  if (settingsMonitorActive && micTrack?.readyState === 'live') {
+    micTrack.enabled = true;
+    await activateUserMeter(micTrack);
+    return micTrack;
+  }
+  settingsMonitorActive = false;
 
   const { constraints, selectedDeviceId } = getCurrentAudioConstraints();
   const startPromise = (async () => {
@@ -1987,7 +2022,7 @@ async function startInputMonitor() {
       settingsMonitorActive = true;
 
       if (session.kind !== 'feed' && !audioProcessingEnabled) {
-        ensureUserProcessingChain(track);
+        await activateUserMeter(track);
       }
       if (session.kind === 'feed') {
         if (feedInputProcessingEnabled) {
@@ -1998,9 +2033,6 @@ async function startInputMonitor() {
         } else {
           destroyFeedProcessing();
         }
-      }
-      if (!audioProcessingEnabled && userProcessingChain) {
-        scheduleUserMeterUpdate();
       }
       return track;
     } catch (err) {
@@ -2024,7 +2056,14 @@ function stopInputMonitor() {
   }
   settingsMonitorActive = false;
 
-  if (producer || feedStreaming || isTalking || (voiceTriggerEnabled && isOperatorSession())) {
+  if (feedStreaming || isTalking || pendingTalkStart || (voiceTriggerEnabled && isOperatorSession())) {
+    return;
+  }
+
+  if (producer && !producer.closed) {
+    if (micTrack) micTrack.enabled = false;
+    if (userProcessingChain?.outputTrack) userProcessingChain.outputTrack.enabled = false;
+    destroyUserMeterMonitorChain();
     return;
   }
 
@@ -2108,8 +2147,9 @@ function applyUserGainControlState() {
     userInputGainSlider.disabled = disabled;
   }
   if (disabled) {
-    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-  } else if (userProcessingChain) {
+    destroyUserMeterMonitorChain();
+  } else if (settingsMenuOpen && micTrack?.readyState === 'live') {
+    ensureUserMeterMonitorChain(micTrack);
     scheduleUserMeterUpdate();
   }
   return disabled;
@@ -2132,6 +2172,9 @@ function setUserInputGainDb(dbValue, { persist = true, apply = true } = {}) {
 
   if (apply && userProcessingChain?.gainNode) {
     userProcessingChain.gainNode.gain.value = userInputGainLinear;
+  }
+  if (apply && userMeterMonitorChain?.gainNode) {
+    userMeterMonitorChain.gainNode.gain.value = userInputGainLinear;
   }
 }
 
@@ -2168,11 +2211,95 @@ function setUserMeterDisplay(fraction, text, showClip, clipFraction = null, { fo
   }
 }
 
+function destroyUserMeterMonitorChain({ resetUI = true } = {}) {
+  if (userMeterMonitorChain?.rafId) {
+    cancelAnimationFrame(userMeterMonitorChain.rafId);
+  }
+  try { userMeterMonitorChain?.sourceNode?.disconnect(); } catch {}
+  try { userMeterMonitorChain?.gainNode?.disconnect(); } catch {}
+  try { userMeterMonitorChain?.analyser?.disconnect(); } catch {}
+  try { userMeterMonitorChain?.sinkGain?.disconnect(); } catch {}
+  if (userMeterMonitorChain?.monitorTrack && userMeterMonitorChain.monitorTrack !== userMeterMonitorChain.originalTrack) {
+    try { userMeterMonitorChain.monitorTrack.stop(); } catch {}
+  }
+  userMeterMonitorChain = null;
+
+  if (resetUI) {
+    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  }
+}
+
+function ensureUserMeterMonitorChain(track) {
+  if (!track || track.readyState !== 'live' || audioProcessingEnabled || session.kind === 'feed') {
+    return null;
+  }
+
+  if (
+    userMeterMonitorChain
+    && userMeterMonitorChain.originalTrack === track
+    && userMeterMonitorChain.monitorTrack?.readyState === 'live'
+  ) {
+    userMeterMonitorChain.gainNode.gain.value = userInputGainLinear;
+    return userMeterMonitorChain;
+  }
+
+  destroyUserMeterMonitorChain({ resetUI: false });
+  const ctx = ensureAudioContext();
+  if (!ctx) return null;
+
+  let sourceStream;
+  let monitorTrack;
+  let sourceNode;
+  let gainNode;
+  let analyser;
+  let sinkGain;
+  try {
+    monitorTrack = typeof track.clone === 'function' ? track.clone() : track;
+    monitorTrack.enabled = true;
+    sourceStream = new MediaStream([monitorTrack]);
+    sourceNode = ctx.createMediaStreamSource(sourceStream);
+    gainNode = ctx.createGain();
+    gainNode.gain.value = userInputGainLinear;
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.85;
+    sinkGain = ctx.createGain();
+    sinkGain.gain.value = INPUT_MONITOR_SINK_GAIN;
+    sourceNode.connect(gainNode);
+    gainNode.connect(analyser);
+    analyser.connect(sinkGain);
+    sinkGain.connect(ctx.destination);
+  } catch (error) {
+    console.warn('Failed to set up user input meter:', error);
+    try { sourceNode?.disconnect(); } catch {}
+    try { gainNode?.disconnect(); } catch {}
+    try { analyser?.disconnect(); } catch {}
+    try { sinkGain?.disconnect(); } catch {}
+    if (monitorTrack && monitorTrack !== track) {
+      try { monitorTrack.stop(); } catch {}
+    }
+    return null;
+  }
+
+  userMeterMonitorChain = {
+    ctx,
+    originalTrack: track,
+    monitorTrack,
+    sourceStream,
+    sourceNode,
+    gainNode,
+    analyser,
+    sinkGain,
+    meterData: new Float32Array(analyser.fftSize),
+    rafId: null,
+    clipHoldFrames: 0,
+  };
+  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  return userMeterMonitorChain;
+}
+
 function destroyUserProcessing({ resetUI = true } = {}) {
   if (!userProcessingChain) return;
-  if (userProcessingChain.rafId) {
-    cancelAnimationFrame(userProcessingChain.rafId);
-  }
   try { userProcessingChain.sourceNode?.disconnect(); } catch {}
   try { userProcessingChain.gainNode?.disconnect(); } catch {}
   try { userProcessingChain.analyser?.disconnect(); } catch {}
@@ -2196,27 +2323,27 @@ function destroyUserProcessing({ resetUI = true } = {}) {
 
   userProcessingChain = null;
 
-  if (resetUI) {
+  if (resetUI && !userMeterMonitorChain) {
     setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
   }
 }
 
 function scheduleUserMeterUpdate() {
-  if (!userProcessingChain) return;
-  if (userProcessingChain.rafId) return;
+  if (!userMeterMonitorChain) return;
+  if (userMeterMonitorChain.rafId) return;
   const tick = () => {
-    if (!userProcessingChain) return;
-    userProcessingChain.rafId = null;
+    if (!userMeterMonitorChain) return;
+    userMeterMonitorChain.rafId = null;
     updateUserMeterFromAnalyser();
-    if (userProcessingChain) {
-      userProcessingChain.rafId = requestAnimationFrame(tick);
+    if (userMeterMonitorChain) {
+      userMeterMonitorChain.rafId = requestAnimationFrame(tick);
     }
   };
-  userProcessingChain.rafId = requestAnimationFrame(tick);
+  userMeterMonitorChain.rafId = requestAnimationFrame(tick);
 }
 
 function updateUserMeterFromAnalyser() {
-  const chain = userProcessingChain;
+  const chain = userMeterMonitorChain;
   if (!chain || !chain.analyser || !chain.meterData) return;
   chain.analyser.getFloatTimeDomainData(chain.meterData);
 
@@ -2264,9 +2391,6 @@ function ensureUserProcessingChain(track) {
   }
 
   if (userProcessingChain && userProcessingChain.originalTrack === track) {
-    if (!userProcessingChain.rafId) {
-      scheduleUserMeterUpdate();
-    }
     userProcessingChain.gainNode.gain.value = userInputGainLinear;
     return userProcessingChain;
   }
@@ -2322,8 +2446,6 @@ function ensureUserProcessingChain(track) {
   outputTrack.enabled = track.enabled;
   outputTrack.contentHint = track.contentHint || 'speech';
 
-  const meterData = new Float32Array(analyser.fftSize);
-
   userProcessingChain = {
     ctx,
     originalTrack: track,
@@ -2333,13 +2455,7 @@ function ensureUserProcessingChain(track) {
     analyser,
     destination,
     outputTrack,
-    meterData,
-    rafId: null,
-    clipHoldFrames: 0,
   };
-
-  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-  scheduleUserMeterUpdate();
 
   if (typeof outputTrack.addEventListener === 'function') {
     outputTrack.addEventListener('ended', () => {
@@ -2371,15 +2487,15 @@ function ensureVoiceTriggerMonitorChain(track) {
 
   if (
     !audioProcessingEnabled
-    && userProcessingChain
-    && userProcessingChain.originalTrack === track
-    && userProcessingChain.analyser
-    && userProcessingChain.meterData
+    && userMeterMonitorChain
+    && userMeterMonitorChain.originalTrack === track
+    && userMeterMonitorChain.analyser
+    && userMeterMonitorChain.meterData
   ) {
     destroyVoiceTriggerMonitorChain();
     return {
-      analyser: userProcessingChain.analyser,
-      meterData: userProcessingChain.meterData,
+      analyser: userMeterMonitorChain.analyser,
+      meterData: userMeterMonitorChain.meterData,
       shared: true,
     };
   }
@@ -2405,7 +2521,7 @@ function ensureVoiceTriggerMonitorChain(track) {
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.8;
     sinkGain = ctx.createGain();
-    sinkGain.gain.value = 0;
+    sinkGain.gain.value = INPUT_MONITOR_SINK_GAIN;
     sourceNode.connect(analyser);
     analyser.connect(sinkGain);
     sinkGain.connect(ctx.destination);
@@ -2661,6 +2777,7 @@ function cleanupMicTrack() {
   settingsMonitorPromise = null;
 
   destroyFeedProcessing();
+  destroyUserMeterMonitorChain();
   destroyUserProcessing();
   destroyVoiceTriggerMonitorChain();
 
@@ -2830,14 +2947,16 @@ async function warmReceiveAudioSession(reason = 'receive-audio-session') {
   if (!shouldKeepReceiveAudioSessionWarm()) return micTrack;
   if (!navigator.mediaDevices?.getUserMedia) return micTrack;
   if (micTrack?.readyState === 'live') {
-    try { micTrack.enabled = false; } catch {}
+    if (!settingsMenuOpen && !(voiceTriggerEnabled && isOperatorSession())) {
+      try { micTrack.enabled = false; } catch {}
+    }
     keepMicTrackWarmForReceiveAudio(reason);
     return micTrack;
   }
 
   const { constraints, selectedDeviceId } = getCurrentAudioConstraints();
   const track = await ensureMicTrack(constraints, selectedDeviceId);
-  if (track) {
+  if (track && !settingsMenuOpen && !(voiceTriggerEnabled && isOperatorSession())) {
     try { track.enabled = false; } catch {}
   }
   keepMicTrackWarmForReceiveAudio(reason);
@@ -2940,6 +3059,7 @@ document.addEventListener("DOMContentLoaded", () => {
   dimWhileSpeakingToggle = document.getElementById('toggle-self-dim');
   dimWhenAddressedToggle = document.getElementById('toggle-incoming-dim');
   audioProcessingToggle = document.getElementById('toggle-processing');
+  leftHandModeToggle = document.getElementById('toggle-left-hand-mode');
   userLevelControls = document.getElementById('user-level-controls');
   userInputGainSlider = document.getElementById('user-input-gain');
   userInputGainValueDisplay = document.getElementById('user-input-gain-value');
@@ -3072,6 +3192,31 @@ document.addEventListener("DOMContentLoaded", () => {
       setAudioProcessingEnabled(audioProcessingToggle.checked);
     });
   }
+
+  function setLeftHandMode(value, { persist = true } = {}) {
+    leftHandModeEnabled = Boolean(value);
+    document.body?.classList.toggle('left-hand-mode', leftHandModeEnabled);
+    if (leftHandModeToggle && leftHandModeToggle.checked !== leftHandModeEnabled) {
+      leftHandModeToggle.checked = leftHandModeEnabled;
+    }
+    const hintText = getSlideToLockHintText();
+    if (sessionSlideHintEl) sessionSlideHintEl.textContent = hintText;
+    document.querySelectorAll('.slide-to-lock-hint').forEach((hint) => {
+      hint.textContent = hintText;
+    });
+    if (persist && typeof window !== 'undefined') {
+      try {
+        window.localStorage?.setItem(LEFT_HAND_MODE_STORAGE_KEY, String(leftHandModeEnabled));
+      } catch (error) {
+        console.warn('Unable to persist left-hand mode:', error);
+      }
+    }
+  }
+
+  setLeftHandMode(leftHandModeEnabled, { persist: false });
+  leftHandModeToggle?.addEventListener('change', () => {
+    setLeftHandMode(leftHandModeToggle.checked);
+  });
 
   const storedQuality = localStorage.getItem('audioQualityProfile');
   if (qualitySelect) {
@@ -4269,7 +4414,7 @@ let cachedOperatorTargets = null;
       }
       isTalking = false;
       currentTargetPeer = null;
-      if (micTrack && !(voiceTriggerEnabled && isOperatorSession())) {
+      if (micTrack && !settingsMenuOpen && !(voiceTriggerEnabled && isOperatorSession())) {
         micTrack.enabled = false;
       }
       if (processedTrack && processedTrack !== micTrack) {
@@ -4337,6 +4482,13 @@ let cachedOperatorTargets = null;
           producer = null;
         }
         return null;
+      }
+      if (settingsMenuOpen || (voiceTriggerEnabled && isOperatorSession())) {
+        track.enabled = true;
+        if (!audioProcessingEnabled) {
+          ensureUserMeterMonitorChain(track);
+          scheduleUserMeterUpdate();
+        }
       }
       return producer;
     })();
@@ -7230,6 +7382,9 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       voiceTriggerActive = false;
     }
     destroyVoiceTriggerMonitorChain();
+    if (!settingsMenuOpen) {
+      destroyUserMeterMonitorChain();
+    }
     if (!settingsMenuOpen && !producer && !isTalking && !pendingTalkStart && micTrack) {
       try { micTrack.enabled = false; } catch {}
       scheduleMicCleanup();
@@ -7261,6 +7416,8 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     track.enabled = true;
     if (!audioProcessingEnabled) {
       ensureUserProcessingChain(track);
+      ensureUserMeterMonitorChain(track);
+      scheduleUserMeterUpdate();
     }
 
     const tick = () => {
@@ -7312,7 +7469,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
           }
           if (
             now - voiceTriggerAboveSince >= VOICE_TRIGGER_ATTACK_MS
-            && !producer
+            && (!producer || producer.closed || producer.paused)
             && !pendingTalkStart
             && !isTalking
             && !activeLockButton
@@ -7783,7 +7940,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
       const hint = document.createElement('div');
       hint.className = 'slide-to-lock-hint';
-      hint.textContent = '← Slide to lock';
+      hint.textContent = getSlideToLockHintText();
       hint.setAttribute('aria-hidden', 'true');
 
       const icon = document.createElement('div');
@@ -7869,7 +8026,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
         const onMove = (ev) => {
           if (lockedByGesture || activeLockButton === talkBtn) return;
-          if (ev.clientX - startX <= -42) {
+          if (didReachSlideToLockThreshold(ev.clientX, startX)) {
             lockedByGesture = true;
             activateTalkLock(normalizedTarget, talkBtn);
           }
@@ -7941,7 +8098,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       li.addEventListener('pointermove', (e) => {
         if (!rowPttGestureActive) return;
         if (rowPttLockedByGesture || activeLockButton === talkBtn) return;
-        if (e.clientX - rowPttStartX <= -42) {
+        if (didReachSlideToLockThreshold(e.clientX, rowPttStartX)) {
           const currentSocketId = resolveCurrentUserSocketId();
           if (!currentSocketId) return;
           rowPttLockedByGesture = true;
@@ -8033,7 +8190,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       if (!hint) {
         hint = document.createElement('div');
         hint.className = 'slide-to-lock-hint';
-        hint.textContent = '← Slide to lock';
+        hint.textContent = getSlideToLockHintText();
         hint.setAttribute('aria-hidden', 'true');
         existingRow.appendChild(hint);
       }
@@ -8467,7 +8624,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
       const hint = document.createElement('div');
       hint.className = 'slide-to-lock-hint';
-      hint.textContent = '← Slide to lock';
+      hint.textContent = getSlideToLockHintText();
       hint.setAttribute('aria-hidden', 'true');
 
       const talkBtn = document.createElement('button');
@@ -8503,7 +8660,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
         const onMove = (ev) => {
           if (lockedByGesture || activeLockButton === talkBtn) return;
-          if (ev.clientX - startX <= -42) {
+          if (didReachSlideToLockThreshold(ev.clientX, startX)) {
             lockedByGesture = true;
             activateTalkLock(normalizedTarget, talkBtn);
           }
@@ -8544,7 +8701,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       li.addEventListener('pointermove', (e) => {
         if (!rowPttGestureActive) return;
         if (rowPttLockedByGesture || activeLockButton === talkBtn) return;
-        if (e.clientX - rowPttStartX <= -42) {
+        if (didReachSlideToLockThreshold(e.clientX, rowPttStartX)) {
           rowPttLockedByGesture = true;
           activateTalkLock({ type: 'conference', id }, talkBtn);
         }
@@ -10454,7 +10611,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       clearLockState();
       isTalking = false;
       currentTargetPeer = null;
-      if (micTrack && !(voiceTriggerEnabled && isOperatorSession())) {
+      if (micTrack && !settingsMenuOpen && !(voiceTriggerEnabled && isOperatorSession())) {
         micTrack.enabled = false;
       }
       if (userProcessingChain?.outputTrack) {
@@ -10560,7 +10717,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       });
     }
 
-    if (micTrack && !(voiceTriggerEnabled && isOperatorSession())) {
+    if (micTrack && !settingsMenuOpen && !(voiceTriggerEnabled && isOperatorSession())) {
       micTrack.enabled = false;
     }
     if (userProcessingChain?.outputTrack) {

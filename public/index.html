@@ -354,8 +354,7 @@
         position: sticky;
         bottom: -1rem;
         padding-top: 0.5rem;
-        padding-bottom: 0.1rem;
-        border-top: 1px solid rgba(148, 163, 184, 0.2);
+        padding-bottom: 1.1rem;
         background: #1f2937;
       }
 
@@ -596,6 +595,17 @@
         flex-wrap: wrap;
       }
 
+      #settings-main-view > .device-selector {
+        display: grid;
+        grid-template-columns: 6.5rem minmax(0, 1fr);
+        flex-wrap: initial;
+      }
+
+      #settings-main-view > .device-selector select {
+        width: 100%;
+        min-width: 0;
+      }
+
       .device-selector[hidden] {
         display: none !important;
       }
@@ -610,19 +620,43 @@
         }
 
         .shortcut-settings__row {
-          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-columns: minmax(0, 1fr) clamp(3.5rem, 20vw, 4.75rem) auto;
+          gap: 0.4rem;
+          padding: 0.55rem;
         }
 
         .shortcut-settings__target {
-          grid-column: 1 / -1;
+          grid-column: auto;
+          gap: 0;
+        }
+
+        .shortcut-settings__target-type,
+        .shortcut-settings__binding-meta {
+          display: none;
         }
 
         .shortcut-settings__binding-wrap {
-          min-width: 4.65rem;
+          min-width: 0;
+          width: 100%;
+        }
+
+        .shortcut-settings__binding {
+          overflow: hidden;
+          padding-right: 0.4rem;
+          padding-left: 0.4rem;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .shortcut-settings__actions {
           justify-self: end;
+          gap: 0.3rem;
+        }
+
+        .shortcut-settings__button {
+          padding-right: 0.5rem;
+          padding-left: 0.5rem;
+          font-size: 0.76rem;
         }
       }
 
@@ -630,7 +664,7 @@
         .settings-body {
           min-width: min(520px, calc(100vw - 1.25rem));
           width: min(720px, calc(100vw - 1.25rem));
-          max-height: min(calc(100dvh - 2.5rem), 48rem);
+          max-height: min(calc(100dvh - 4rem), 48rem);
         }
 
         .session-slide-hint {
@@ -663,7 +697,7 @@
         .settings-body {
           min-width: 560px;
           width: min(780px, calc(100vw - 2rem));
-          max-height: min(calc(100dvh - 2rem), 52rem);
+          max-height: min(calc(100dvh - 4rem), 52rem);
         }
 
         .session-slide-hint {
@@ -1038,7 +1072,6 @@
         display: flex;
         justify-content: flex-end;
         padding: 0.75rem 1rem 1rem;
-        border-top: 1px solid rgba(148, 163, 184, 0.2);
       }
 
       .conference-members-modal__done {
@@ -1373,6 +1406,26 @@
         transition: none;
       }
 
+      body.left-hand-mode #targets-list li.target-item {
+        grid-template-areas: "actions info icon";
+      }
+
+      body.left-hand-mode #targets-list .user-icon,
+      body.left-hand-mode #targets-list .conf-icon,
+      body.left-hand-mode #targets-list .feed-icon {
+        margin-right: var(--target-row-pad-x);
+        margin-left: 0;
+      }
+
+      body.left-hand-mode #targets-list .target-actions.ptt-actions {
+        flex-direction: row-reverse;
+      }
+
+      body.left-hand-mode #targets-list .target-actions.ptt-actions button {
+        border-right: 1px solid rgba(148, 163, 184, 0.35);
+        border-left: none;
+      }
+
       #targets-list .target-actions.ptt-actions,
       #targets-list .target-actions.ptt-actions button,
       #targets-list .target-actions.ptt-actions img,
@@ -1412,6 +1465,12 @@
         white-space: nowrap;
         opacity: 0;
         z-index: 2;
+      }
+
+      @media (max-width: 699px) {
+        body.left-hand-mode #targets-list .slide-to-lock-hint {
+          left: 72%;
+        }
       }
 
       #intercom-app {
@@ -1753,6 +1812,19 @@
         margin-left: 1.8rem;
       }
 
+      @media (min-width: 980px) {
+        .processing-options label.processing-setting-label {
+          flex-direction: row;
+          align-items: center;
+          gap: 0.5rem;
+        }
+
+        .processing-options label.processing-setting-label .processing-desc {
+          display: inline;
+          margin-left: 0;
+        }
+      }
+
       .user-level-controls.is-disabled input[type="range"] {
         opacity: 0.4;
         pointer-events: none;
@@ -2089,12 +2161,20 @@
                 </label>
               </div>
               <div class="processing-options feed-optional">
-                <label>
+                <label class="processing-setting-label">
                   <span class="processing-inline">
                     <input type="checkbox" id="toggle-processing" />
                     Audio auto processing
                   </span>
                   <span class="processing-desc">(auto gain, noise cancellation, echo suppression - adds ~50 ms latency)</span>
+                </label>
+              </div>
+              <div class="processing-options feed-optional">
+                <label>
+                  <span class="processing-inline">
+                    <input type="checkbox" id="toggle-left-hand-mode" />
+                    Left-hand mode
+                  </span>
                 </label>
               </div>
               <div class="user-level-controls feed-optional" id="user-level-controls">
