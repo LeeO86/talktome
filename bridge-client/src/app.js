@@ -1363,6 +1363,37 @@ function getManagedLevelTriggerThreshold(port) {
   return Math.max(MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB, Math.min(MANAGED_LEVEL_TRIGGER_MAX_THRESHOLD_DB, threshold));
 }
 
+function isManagedLevelTriggerEnabled(port) {
+  return port?.kind === "user" && port?.trigger?.mode === "audio-level";
+}
+
+async function disableManagedLevelTrigger(session) {
+  const state = session.levelTriggerState || {
+    active: false,
+    aboveSince: 0,
+    belowSince: 0,
+    pending: false,
+    revision: 0
+  };
+  session.levelTriggerState = state;
+  state.revision = Number(state.revision || 0) + 1;
+  state.active = false;
+  state.aboveSince = 0;
+  state.belowSince = 0;
+
+  try {
+    if (session.talking && session.talkSource === "level") {
+      await applyManagedTalkState(session, {
+        talking: false,
+        targets: [],
+        source: "level"
+      });
+    }
+  } finally {
+    state.pending = false;
+  }
+}
+
 function getManagedInputLevelMap(status) {
   return new Map((status?.inputStreamStats || []).map((entry) => [
     String(entry.streamId || ""),
@@ -1444,6 +1475,7 @@ async function applyManagedTalkState(session, { talking, targets, lockActive = f
   session.talking = Boolean(talking);
   session.talkSource = talking ? source : null;
   if (source !== "level" && session.levelTriggerState) {
+    session.levelTriggerState.revision = Number(session.levelTriggerState.revision || 0) + 1;
     session.levelTriggerState.active = false;
     session.levelTriggerState.aboveSince = 0;
     session.levelTriggerState.belowSince = 0;
@@ -1847,8 +1879,7 @@ async function processManagedLevelTriggers() {
   const sessions = [...managedSessions.values()].filter((session) => (
     session.ready
     && !session.starting
-    && session.port.kind === "user"
-    && session.port?.trigger?.mode === "audio-level"
+    && isManagedLevelTriggerEnabled(session.port)
   ));
   if (!sessions.length) return;
 
@@ -1862,15 +1893,23 @@ async function processManagedLevelTriggers() {
 
     for (const session of sessions) {
       if (!session.ready || session.starting) continue;
+      if (!isManagedLevelTriggerEnabled(session.port)) {
+        await disableManagedLevelTrigger(session).catch((error) => {
+          setManagedSessionError(session, error);
+        });
+        continue;
+      }
       const triggerTarget = getManagedTriggerTarget(session.port);
       const state = session.levelTriggerState || {
         active: false,
         aboveSince: 0,
         belowSince: 0,
-        pending: false
+        pending: false,
+        revision: 0
       };
       session.levelTriggerState = state;
       if (state.pending) continue;
+      const triggerRevision = Number(state.revision || 0);
 
       if (!triggerTarget) {
         if (state.active && session.talking && session.talkSource === "level") {
@@ -1910,8 +1949,24 @@ async function processManagedLevelTriggers() {
               targets: [triggerTarget],
               source: "level"
             });
-            state.active = true;
-            state.belowSince = 0;
+            if (
+              isManagedLevelTriggerEnabled(session.port)
+              && Number(state.revision || 0) === triggerRevision
+            ) {
+              state.active = true;
+              state.belowSince = 0;
+            } else {
+              if (session.talking && session.talkSource === "level") {
+                await applyManagedTalkState(session, {
+                  talking: false,
+                  targets: [],
+                  source: "level"
+                });
+              }
+              state.active = false;
+              state.aboveSince = 0;
+              state.belowSince = 0;
+            }
           } catch (error) {
             setManagedSessionError(session, error);
           } finally {
@@ -1971,7 +2026,8 @@ function createManagedSession(port) {
       active: false,
       aboveSince: 0,
       belowSince: 0,
-      pending: false
+      pending: false,
+      revision: 0
     },
     eventStreamId: null,
     eventSource: null,
@@ -2006,7 +2062,8 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
     active: false,
     aboveSince: 0,
     belowSince: 0,
-    pending: false
+    pending: false,
+    revision: 0
   };
   session.ready = false;
   session.starting = true;
@@ -2096,6 +2153,7 @@ async function stopManagedSession(session, { remove = true, reason = "client-sto
   session.replyTarget = null;
   session.addressedNow = [];
   if (session.levelTriggerState) {
+    session.levelTriggerState.revision = Number(session.levelTriggerState.revision || 0) + 1;
     session.levelTriggerState.active = false;
     session.levelTriggerState.aboveSince = 0;
     session.levelTriggerState.belowSince = 0;
@@ -2122,8 +2180,17 @@ async function reconcileManagedBridgeConfig(config) {
       await stopManagedSession(session, { reason: "port-config-changed" });
       continue;
     }
+    const levelTriggerWasEnabled = isManagedLevelTriggerEnabled(session.port);
     session.port = nextPort;
     session.signature = nextSignature;
+    if (
+      !isManagedLevelTriggerEnabled(nextPort)
+      && (levelTriggerWasEnabled || (session.talking && session.talkSource === "level"))
+    ) {
+      await disableManagedLevelTrigger(session).catch((error) => {
+        setManagedSessionError(session, error);
+      });
+    }
   }
   for (const [key, port] of wanted) {
     const session = managedSessions.get(key);
