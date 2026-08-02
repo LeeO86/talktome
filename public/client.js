@@ -101,6 +101,7 @@ const volumeMemoryStore = new Map();
 let warnedVolumeStorageRead = false;
 let warnedVolumeStorageWrite = false;
 const TARGET_AUDIO_VOLUME_STORAGE_PREFIXES = ['volume_user_', 'volume_conf_', 'volume_feed_'];
+const CONFERENCE_LISTEN_EXCLUSIONS_STORAGE_PREFIX = 'conferenceListenExclusions';
 const IDENTITY_KIND_KEY = 'identityKind';
 const FEED_ID_STORAGE_KEY = 'feedId';
 const GUEST_SESSION_STORAGE_KEY = 'guestSession';
@@ -3228,6 +3229,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const loginError = document.getElementById("login-error");
   const logoutBtn = document.getElementById("logout-btn");
   const feedLogoutBtn = document.getElementById("feed-logout-btn");
+  const conferenceMembersModal = document.getElementById('conference-members-modal');
+  const conferenceMembersModalTitle = document.getElementById('conference-members-modal-title');
+  const conferenceMembersModalList = document.getElementById('conference-members-modal-list');
+  const conferenceMembersModalClose = document.getElementById('conference-members-modal-close');
+  const conferenceMembersModalDone = document.getElementById('conference-members-modal-done');
   const targetLayerSwitcher = document.getElementById('target-layer-switcher');
   const targetLayerButton = document.getElementById('target-layer-button');
 
@@ -3570,6 +3576,8 @@ document.addEventListener("DOMContentLoaded", () => {
           streamKey,
           targetKey: entry?.key || null,
           type: entry?.type || null,
+          sourceUserId: entry?.sourceUserId ?? null,
+          memberListenExcluded: Boolean(entry?.memberListenExcluded),
           paused: entry?.audio?.paused ?? null,
           muted: entry?.audio?.muted ?? null,
           volume: entry?.audio?.volume ?? null,
@@ -3640,6 +3648,9 @@ let selfTalkingKey = null;
 let cachedUsers = [];
 let latestServerUsers = [];
 let cachedOperatorTargets = null;
+  const conferenceMemberListenExclusions = new Map();
+  let loadedConferenceListenExclusionsKey = null;
+  let conferenceMembersModalRestoreFocus = null;
   let incomingTalkState = { addressedNow: [], replyTarget: null };
   let initializingMediaPromise = null;
   let mediaStateGeneration = 0;
@@ -3660,6 +3671,122 @@ let cachedOperatorTargets = null;
   const earlyClosedStreamKeys = new Map();
   let slideHintShown = false;
   let slideHintTimeoutId = null;
+
+  function getConferenceListenExclusionsStorageKey() {
+    const profileUserId = getOperatorProfileUserId();
+    if (!profileUserId) return null;
+    const identityKind = session.kind === 'guest' ? 'guest' : 'user';
+    return `${CONFERENCE_LISTEN_EXCLUSIONS_STORAGE_PREFIX}:${identityKind}:${profileUserId}`;
+  }
+
+  function ensureConferenceListenExclusionsLoaded() {
+    const storageKey = getConferenceListenExclusionsStorageKey();
+    if (storageKey === loadedConferenceListenExclusionsKey) return;
+
+    conferenceMemberListenExclusions.clear();
+    loadedConferenceListenExclusionsKey = storageKey;
+    if (!storageKey) return;
+
+    try {
+      const parsed = JSON.parse(window.localStorage?.getItem(storageKey) || '{}');
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      Object.entries(parsed).forEach(([conferenceId, userIds]) => {
+        const numericConferenceId = Number(conferenceId);
+        if (!Number.isFinite(numericConferenceId) || !Array.isArray(userIds)) return;
+        const normalizedUserIds = new Set(
+          userIds
+            .map((userId) => Number(userId))
+            .filter((userId) => Number.isFinite(userId))
+        );
+        if (normalizedUserIds.size) {
+          conferenceMemberListenExclusions.set(numericConferenceId, normalizedUserIds);
+        }
+      });
+    } catch (error) {
+      console.warn('Failed to load conference member listen preferences:', error);
+    }
+  }
+
+  function persistConferenceListenExclusions() {
+    ensureConferenceListenExclusionsLoaded();
+    const storageKey = loadedConferenceListenExclusionsKey;
+    if (!storageKey) return;
+
+    const serialized = {};
+    conferenceMemberListenExclusions.forEach((userIds, conferenceId) => {
+      if (!userIds?.size) return;
+      serialized[String(conferenceId)] = Array.from(userIds).sort((a, b) => a - b);
+    });
+
+    try {
+      window.localStorage?.setItem(storageKey, JSON.stringify(serialized));
+    } catch (error) {
+      console.warn('Failed to save conference member listen preferences:', error);
+    }
+  }
+
+  function isConferenceMemberExcluded(conferenceId, userId) {
+    const numericConferenceId = Number(conferenceId);
+    const numericUserId = Number(userId);
+    if (!Number.isFinite(numericConferenceId) || !Number.isFinite(numericUserId)) return false;
+    ensureConferenceListenExclusionsLoaded();
+    return conferenceMemberListenExclusions.get(numericConferenceId)?.has(numericUserId) || false;
+  }
+
+  function isConferenceMemberEntryExcluded(entry) {
+    if (entry?.type !== 'conference') return false;
+    const conferenceId = Number(String(entry.key || '').replace(/^conf-/, ''));
+    return isConferenceMemberExcluded(conferenceId, entry.sourceUserId);
+  }
+
+  function applyConferenceMemberListenPreference(conferenceId, userId) {
+    const targetKey = `conf-${conferenceId}`;
+    forEachStreamEntry(targetKey, (entry) => {
+      if (Number(entry?.sourceUserId) !== Number(userId)) return;
+      if (mutedPeers.has(targetKey)) {
+        mutePlaybackEntry(entry);
+      } else {
+        setPlaybackEntryLevel(entry, entry.volume ?? defaultVolume);
+      }
+    });
+  }
+
+  function setConferenceMemberListening(conferenceId, userId, listening) {
+    const numericConferenceId = Number(conferenceId);
+    const numericUserId = Number(userId);
+    if (!Number.isFinite(numericConferenceId) || !Number.isFinite(numericUserId)) return;
+    ensureConferenceListenExclusionsLoaded();
+
+    let excludedUserIds = conferenceMemberListenExclusions.get(numericConferenceId);
+    if (!excludedUserIds) {
+      excludedUserIds = new Set();
+      conferenceMemberListenExclusions.set(numericConferenceId, excludedUserIds);
+    }
+    if (listening) excludedUserIds.delete(numericUserId);
+    else excludedUserIds.add(numericUserId);
+    if (!excludedUserIds.size) conferenceMemberListenExclusions.delete(numericConferenceId);
+
+    persistConferenceListenExclusions();
+    applyConferenceMemberListenPreference(numericConferenceId, numericUserId);
+  }
+
+  function refreshIncomingEntrySourceUserIds(users = cachedUsers) {
+    const userIdBySocketId = new Map(
+      (Array.isArray(users) ? users : [])
+        .filter((user) => user?.socketId && user?.userId != null)
+        .map((user) => [String(user.socketId), Number(user.userId)])
+        .filter(([, userId]) => Number.isFinite(userId))
+    );
+
+    audioElements.forEach((entry) => {
+      if (!entry || entry.sourceUserId != null || !entry.sourcePeerId) return;
+      const sourceUserId = userIdBySocketId.get(String(entry.sourcePeerId));
+      if (!Number.isFinite(sourceUserId)) return;
+      entry.sourceUserId = sourceUserId;
+      if (entry.type !== 'conference' || mutedPeers.has(entry.key)) return;
+      setPlaybackEntryLevel(entry, entry.volume ?? defaultVolume);
+    });
+  }
 
   function makePersistedTargetAudioStateKey(targetType, targetId) {
     const normalizedType = typeof targetType === 'string' ? targetType.trim().toLowerCase() : '';
@@ -4800,9 +4927,15 @@ let cachedOperatorTargets = null;
     const audioEl = entry.audio || entry.playbackBus?.audio || null;
     const playbackGainNode = entry.playbackGainNode || entry.gainNode || null;
     const base = Math.max(0, Math.min(1, value));
-    const applied = shouldDimListenOnlyConferenceEntry(entry)
+    let applied = shouldDimListenOnlyConferenceEntry(entry)
       ? Math.max(0, Math.min(1, base * feedDuckingFactor))
       : base;
+    const memberExcluded = isConferenceMemberEntryExcluded(entry);
+    if (entry.usesSharedAudioElement && entry.gainNode?.gain) {
+      entry.gainNode.gain.value = memberExcluded ? 0 : 1;
+    } else if (memberExcluded) {
+      applied = 0;
+    }
     if (playbackGainNode) {
       if (entry.usesMediaElementSource || entry.usesSharedAudioElement) {
         audioEl.muted = false;
@@ -4817,6 +4950,7 @@ let cachedOperatorTargets = null;
       audioEl.volume = applied;
     }
     entry.lastAppliedLevel = applied;
+    entry.memberListenExcluded = memberExcluded;
   }
 
   function mutePlaybackEntry(entry) {
@@ -6280,6 +6414,19 @@ let cachedOperatorTargets = null;
     requestActiveProducers().catch(() => {});
   });
 
+  socket.on('conference-members-updated', async ({ conferenceId = null } = {}) => {
+    if (!isOperatorSession() || !cachedUsers.length) return;
+    const numericConferenceId = conferenceId == null ? null : Number(conferenceId);
+    const conferenceIsVisible = numericConferenceId === null
+      || !Number.isFinite(numericConferenceId)
+      || cachedOperatorTargets?.some((target) => (
+        target?.targetType === 'conference'
+        && Number(target.targetId) === numericConferenceId
+      ));
+    if (!conferenceIsVisible) return;
+    await renderTargetList(cachedUsers);
+  });
+
   function resolveApiUserTargetSocketId(rawTargetId) {
     const numericId = Number(rawTargetId);
     const user = cachedUsers.find(u => Number(u.userId) === numericId);
@@ -7411,6 +7558,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   async function applyUserListToUi(users) {
     cachedUsers = users;
+    refreshIncomingEntrySourceUserIds(users);
     const list = document.getElementById('targets-list');
     const hasRenderedTargets = Boolean(list?.querySelector('li.target-item'));
     if (!hasRenderedTargets || !Array.isArray(cachedOperatorTargets) || !cachedOperatorTargets.length) {
@@ -7859,6 +8007,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     }
 
     applyIncomingTalkState();
+    refreshConferenceMemberOnlineStates(users);
     syncRenderedTargetStateUi();
     syncRenderedTargetAudioPreferences();
     refreshTargetHotkeyUi(users);
@@ -7869,6 +8018,144 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     pruneTargetPlaybackBuses();
     return true;
   }
+
+  function normalizeConferenceTargetMembers(target) {
+    const currentProfileUserId = Number(getOperatorProfileUserId());
+    const seenUserIds = new Set();
+    return (Array.isArray(target?.members) ? target.members : [])
+      .map((member) => ({
+        userId: Number(member?.userId ?? member?.id),
+        name: String(member?.name || '').trim(),
+      }))
+      .filter((member) => {
+        if (!Number.isFinite(member.userId) || seenUserIds.has(member.userId)) return false;
+        seenUserIds.add(member.userId);
+        return member.userId !== currentProfileUserId;
+      })
+      .sort((left, right) => (
+        (left.name || String(left.userId)).localeCompare(
+          right.name || String(right.userId),
+          undefined,
+          { sensitivity: 'base' }
+        )
+      ));
+  }
+
+  function refreshConferenceMemberOnlineStates(users = cachedUsers) {
+    const onlineUserIds = new Set(
+      (Array.isArray(users) ? users : [])
+        .filter((user) => user?.socketId && user?.userId != null)
+        .map((user) => Number(user.userId))
+        .filter((userId) => Number.isFinite(userId))
+    );
+
+    document.querySelectorAll('.conference-member-listen[data-user-id]').forEach((memberRow) => {
+      const userId = Number(memberRow.dataset.userId);
+      const online = onlineUserIds.has(userId);
+      memberRow.classList.toggle('is-offline', !online);
+      const state = memberRow.querySelector('.conference-member-online-state');
+      if (state) state.textContent = online ? 'Online' : 'Offline';
+    });
+  }
+
+  function renderConferenceMembersModal(target, users = cachedUsers) {
+    if (!conferenceMembersModalTitle || !conferenceMembersModalList) return;
+    const conferenceId = Number(target?.targetId);
+    const members = normalizeConferenceTargetMembers(target);
+    const usersById = new Map();
+    (Array.isArray(users) ? users : []).forEach((user) => {
+      if (user?.userId == null) return;
+      usersById.set(Number(user.userId), user);
+    });
+
+    conferenceMembersModalTitle.textContent = target?.name || `Conference ${conferenceId}`;
+    conferenceMembersModalList.innerHTML = '';
+    if (!members.length) {
+      const empty = document.createElement('span');
+      empty.className = 'conference-members-empty';
+      empty.textContent = 'No other members';
+      conferenceMembersModalList.appendChild(empty);
+    } else {
+      members.forEach((member) => {
+        const online = Boolean(usersById.get(member.userId)?.socketId);
+        const row = document.createElement('label');
+        row.className = 'conference-member-listen';
+        row.classList.toggle('is-offline', !online);
+        row.dataset.userId = String(member.userId);
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'conference-member-listen-checkbox';
+        checkbox.checked = !isConferenceMemberExcluded(conferenceId, member.userId);
+        checkbox.setAttribute('aria-label', `Hear ${member.name || `user ${member.userId}`}`);
+        checkbox.addEventListener('change', () => {
+          setConferenceMemberListening(conferenceId, member.userId, checkbox.checked);
+        });
+
+        const name = document.createElement('span');
+        name.textContent = member.name || `User ${member.userId}`;
+
+        const onlineState = document.createElement('span');
+        onlineState.className = 'conference-member-online-state';
+        onlineState.textContent = online ? 'Online' : 'Offline';
+        row.append(checkbox, name, onlineState);
+        conferenceMembersModalList.appendChild(row);
+      });
+    }
+  }
+
+  function openConferenceMembersModal(target, triggerElement = null) {
+    if (!conferenceMembersModal || !target) return;
+    conferenceMembersModalRestoreFocus = triggerElement;
+    renderConferenceMembersModal(target, cachedUsers);
+    conferenceMembersModal.hidden = false;
+    window.requestAnimationFrame(() => {
+      conferenceMembersModalClose?.focus();
+    });
+  }
+
+  function closeConferenceMembersModal({ restoreFocus = true } = {}) {
+    if (!conferenceMembersModal || conferenceMembersModal.hidden) return;
+    conferenceMembersModal.hidden = true;
+    const focusTarget = conferenceMembersModalRestoreFocus;
+    conferenceMembersModalRestoreFocus = null;
+    if (restoreFocus && focusTarget && document.body.contains(focusTarget)) {
+      focusTarget.focus();
+    }
+  }
+
+  conferenceMembersModalClose?.addEventListener('click', () => closeConferenceMembersModal());
+  conferenceMembersModalDone?.addEventListener('click', () => closeConferenceMembersModal());
+  conferenceMembersModal?.addEventListener('click', (event) => {
+    if (event.target === conferenceMembersModal) closeConferenceMembersModal();
+  });
+  conferenceMembersModal?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeConferenceMembersModal();
+      return;
+    }
+    if (event.key !== 'Tab') {
+      event.stopPropagation();
+      return;
+    }
+
+    const focusable = Array.from(conferenceMembersModal.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter((element) => !element.hidden);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+    event.stopPropagation();
+  });
 
   async function renderTargetList(users) {
     if (!isOperatorSession()) return;
@@ -7889,6 +8176,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
     const list = document.getElementById('targets-list');
     if (!list) return;
+    closeConferenceMembersModal({ restoreFocus: false });
     list.innerHTML = '';
 
     ensureCustomTargetHotkeysLoaded();
@@ -7951,6 +8239,21 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       const icon = document.createElement('div');
       icon.className = 'conf-icon';
       icon.textContent = '📡';
+      icon.tabIndex = 0;
+      icon.setAttribute('role', 'button');
+      icon.setAttribute('aria-label', `Choose who you hear in ${name}`);
+      icon.title = 'Choose who you hear';
+      icon.addEventListener('pointerdown', (event) => event.stopPropagation());
+      icon.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openConferenceMembersModal(target, icon);
+      });
+      icon.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        openConferenceMembersModal(target, icon);
+      });
 
       const info = document.createElement('div');
       info.className = 'target-info';
@@ -8106,7 +8409,8 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
           if (
             e.target.closest('.talk-btn') ||
             e.target.closest('.mute-btn') ||
-            e.target.closest('.volume-slider')
+            e.target.closest('.volume-slider') ||
+            e.target.closest('.conf-icon')
           ) return;
           if (ev === 'down') {
             const targetData = { type: 'conference', id };
@@ -8368,7 +8672,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     await consumeProducerPayload(payload);
   }
 
-  async function consumeProducerPayload({ peerId, producerId, appData }) {
+  async function consumeProducerPayload({ peerId, speakerUserId = null, producerId, appData }) {
     const consumeStartedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
       : Date.now();
@@ -8746,6 +9050,12 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         feedDuckingNode,
         lastAppliedLevel: null,
         producerId: effectiveProducerId,
+        sourcePeerId: peerId,
+        sourceUserId: speakerUserId !== null
+          && speakerUserId !== undefined
+          && Number.isFinite(Number(speakerUserId))
+          ? Number(speakerUserId)
+          : Number(cachedUsers.find((candidate) => String(candidate?.socketId) === String(peerId))?.userId) || null,
       };
       audioElements.set(streamKey, entry);
       if (!usesSharedAudioElement) {
@@ -9554,6 +9864,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     if (!isOperatorSession()) return false;
     if (activeLockButton) return false;
     if (settingsMenuOpen) return false;
+    if (conferenceMembersModal && !conferenceMembersModal.hidden) return false;
     if (activeHotkeyCaptureTargetIdentity) return false;
     if (!event) return false;
     if (event.altKey || event.ctrlKey || event.metaKey) return false;

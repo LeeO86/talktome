@@ -917,6 +917,140 @@
         position: relative;
       }
 
+      .conference-members-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        display: grid;
+        place-items: center;
+        padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom));
+        background: rgba(2, 6, 23, 0.72);
+        backdrop-filter: blur(5px);
+      }
+
+      .conference-members-modal[hidden] {
+        display: none !important;
+      }
+
+      .conference-members-modal__card {
+        display: flex;
+        flex-direction: column;
+        width: min(28rem, 100%);
+        max-height: min(38rem, calc(100dvh - 2rem));
+        overflow: hidden;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 14px;
+        background: #1f2937;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+      }
+
+      .conference-members-modal__header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem 1rem 0.75rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      }
+
+      .conference-members-modal__title {
+        min-width: 0;
+        margin: 0;
+        overflow: hidden;
+        color: #f8fafc;
+        font-size: 1.05rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .conference-members-modal__close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.25rem;
+        height: 2.25rem;
+        margin-left: auto;
+        padding: 0;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 50%;
+        background: transparent;
+        color: #e2e8f0;
+        font-size: 1.3rem;
+        cursor: pointer;
+      }
+
+      .conference-members-modal__description {
+        margin: 0;
+        padding: 0.85rem 1rem 0.55rem;
+        color: rgba(226, 232, 240, 0.7);
+        font-size: 0.82rem;
+      }
+
+      .conference-members-list {
+        display: grid;
+        gap: 0.25rem;
+        padding: 0.25rem 1rem 1rem;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+
+      .conference-members-empty {
+        padding: 1rem 0;
+        color: rgba(148, 163, 184, 0.8);
+        text-align: center;
+      }
+
+      .conference-member-listen {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        min-height: 2.75rem;
+        padding: 0.35rem 0.5rem;
+        border-radius: 8px;
+        color: rgba(226, 232, 240, 0.95);
+        cursor: pointer;
+      }
+
+      .conference-member-listen:hover {
+        background: rgba(51, 65, 85, 0.7);
+      }
+
+      .conference-member-listen.is-offline {
+        color: rgba(148, 163, 184, 0.72);
+      }
+
+      .conference-member-listen-checkbox {
+        width: 1.2rem;
+        height: 1.2rem;
+        margin: 0;
+        accent-color: #22c55e;
+      }
+
+      .conference-member-online-state {
+        margin-left: auto;
+        font-size: 0.75rem;
+        color: rgba(148, 163, 184, 0.7);
+      }
+
+      .conference-members-modal__footer {
+        display: flex;
+        justify-content: flex-end;
+        padding: 0.75rem 1rem 1rem;
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+      }
+
+      .conference-members-modal__done {
+        min-width: 6rem;
+        margin: 0;
+        padding: 0.65rem 1rem;
+        border: 0;
+        border-radius: 8px;
+        background: #3b82f6;
+        color: white;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
       #targets-list li.target-item.speaking,
       #targets-list li.target-item.talking-to,
       #targets-list li.target-item.talking-to.speaking {
@@ -1033,6 +1167,15 @@
 
       #targets-list .conf-icon {
         background: #4f9b8b;
+      }
+
+      #targets-list .conf-icon[role="button"] {
+        cursor: pointer;
+      }
+
+      #targets-list .conf-icon[role="button"]:focus-visible {
+        outline: 2px solid #60a5fa;
+        outline-offset: 3px;
       }
 
       #targets-list .feed-icon {
@@ -2121,6 +2264,35 @@
       </div>
       <div id="audio-streams"></div>
     </div>
+  </div>
+
+  <div
+    id="conference-members-modal"
+    class="conference-members-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="conference-members-modal-title"
+    aria-describedby="conference-members-modal-description"
+    hidden
+  >
+    <section class="conference-members-modal__card">
+      <header class="conference-members-modal__header">
+        <h2 id="conference-members-modal-title" class="conference-members-modal__title">Conference</h2>
+        <button
+          id="conference-members-modal-close"
+          class="conference-members-modal__close"
+          type="button"
+          aria-label="Close member listen controls"
+        >&times;</button>
+      </header>
+      <p id="conference-members-modal-description" class="conference-members-modal__description">
+        Choose who you hear in this conference.
+      </p>
+      <div id="conference-members-modal-list" class="conference-members-list"></div>
+      <footer class="conference-members-modal__footer">
+        <button id="conference-members-modal-done" class="conference-members-modal__done" type="button">Done</button>
+      </footer>
+    </section>
   </div>
 
   <!-- Scripts -->

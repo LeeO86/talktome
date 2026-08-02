@@ -2158,7 +2158,24 @@ function buildOperatorTargetsForUser(userId) {
       mergedTargets.push(conference);
     });
 
-  return mergedTargets;
+  return mergedTargets.map((target) => {
+    if (target?.targetType !== "conference") {
+      return target;
+    }
+
+    const conferenceId = Number(target.targetId);
+    const members = Number.isFinite(conferenceId)
+      ? (getUsersForConference(conferenceId) || []).map((member) => ({
+        userId: Number(member.id),
+        name: member.name || String(member.id),
+      }))
+      : [];
+
+    return {
+      ...target,
+      members,
+    };
+  });
 }
 
 function filterSystemInternalTargets(targets = []) {
@@ -3701,6 +3718,7 @@ app.post("/feeds", requireAdmin, (req, res) => {
 app.post('/conferences/:conferenceId/users/:userId', requireAdmin, (req, res) => {
   addUserToConference(req.params.userId, req.params.conferenceId);
   notifyTargetChange(req.params.userId);
+  notifyConferenceMembersChanged(req.params.conferenceId, req.params.userId);
   broadcastRuntimeUserStates("conference-membership-added");
   res.sendStatus(204);
 });
@@ -4782,6 +4800,7 @@ app.put('/conferences/:id', requireAdmin, (req, res) => {
   try {
     const success = updateConferenceName(req.params.id, name);
     if (!success) return res.status(404).json({ error: 'Conference not found' });
+    notifyConferenceMembersChanged(req.params.id);
     res.sendStatus(204);
   } catch (err) {
     if (err.message.includes('UNIQUE')) {
@@ -4837,6 +4856,7 @@ app.delete("/conferences/:conferenceId/users/:userId", requireAdmin, (req, res) 
   try {
     removeUserFromConference(req.params.userId, req.params.conferenceId);
     notifyTargetChange(req.params.userId);
+    notifyConferenceMembersChanged(req.params.conferenceId, req.params.userId);
     broadcastRuntimeUserStates("conference-membership-removed");
     res.sendStatus(204);
   } catch (err) {
@@ -4859,6 +4879,7 @@ app.delete("/users/:id", requireAdmin, (req, res) => {
       return res.status(403).json({ error: "Guest profile cannot be deleted" });
     }
     deleteUser(req.params.id);
+    notifyConferenceMembersChanged(null);
     scheduleAdminStatusBroadcast("user-deleted");
     res.sendStatus(204);
   } catch (err) {
@@ -4881,6 +4902,7 @@ app.delete("/feeds/:id", requireAdmin, (req, res) => {
 app.delete("/conferences/:id", requireAdmin, (req, res) => {
   try {
     deleteConference(req.params.id);
+    notifyConferenceMembersChanged(req.params.id);
     broadcastRuntimeUserStates("conference-deleted");
     res.sendStatus(204);
   } catch (err) {
@@ -4913,6 +4935,21 @@ function notifyTargetChange(userId) {
     emitCompanionEvent("user-targets-updated", {
       at: new Date().toISOString(),
       userId: Number(userId),
+    });
+  }
+}
+
+function notifyConferenceMembersChanged(conferenceId, excludedProfileUserId = null) {
+  const numericConferenceId = conferenceId == null ? null : Number(conferenceId);
+  const excludedId = excludedProfileUserId == null ? null : String(excludedProfileUserId);
+  for (const peer of peers.values()) {
+    if (!isOperatorPeer(peer)) continue;
+    const profileUserId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+    if (excludedId !== null && String(profileUserId) === excludedId) continue;
+    peer.socket.emit('conference-members-updated', {
+      conferenceId: numericConferenceId !== null && Number.isFinite(numericConferenceId)
+        ? numericConferenceId
+        : null,
     });
   }
 }
@@ -6132,6 +6169,8 @@ function closeProducerConsumersForRecipient({ producerId, recipientSocketId }) {
 function syncProducerRecipients({ producer, speakerSocketId, forceAnnounce = false }) {
   if (!producer) return [];
 
+  const speakerPeer = peers.get(speakerSocketId);
+
   const deliveries = resolveProducerRecipientDeliveries({
     appData: producer.appData,
     speakerSocketId,
@@ -6161,6 +6200,7 @@ function syncProducerRecipients({ producer, speakerSocketId, forceAnnounce = fal
     if (!recipientPeer?.socket) continue;
     recipientPeer.socket.emit("new-producer", {
       peerId: speakerSocketId,
+      speakerUserId: speakerPeer?.userId ?? null,
       producerId: producer.id,
       appData: nextAppData,
     });
@@ -6734,6 +6774,7 @@ io.on("connection", (socket) => {
         if (!reconciliationDelivery?.appData) continue;
         response.push({
           peerId: otherSocketId,
+          speakerUserId: otherPeer?.userId ?? null,
           producerId,
           appData: reconciliationDelivery.appData,
           retainOnly: Boolean(reconciliationDelivery.retainOnly),
