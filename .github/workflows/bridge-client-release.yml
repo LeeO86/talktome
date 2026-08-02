@@ -75,9 +75,17 @@ jobs:
             VERSION="v${PACKAGE_VERSION}"
           fi
 
+          APP_VERSION="${VERSION#v}"
+          if [[ ! "${APP_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            printf 'Invalid Bridge app version: %s\n' "${APP_VERSION}" >&2
+            exit 1
+          fi
+
           SAFE_VERSION="${VERSION//\//-}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
           echo "SAFE_VERSION=$SAFE_VERSION" >> "$GITHUB_ENV"
+          printf '{"version":"%s"}\n' "$APP_VERSION" > bridge-client/tauri.release-version.json
 
       - name: Restore LGPL FFmpeg sidecar
         id: ffmpeg-sidecar
@@ -114,7 +122,10 @@ jobs:
         working-directory: bridge-client
         env:
           FFMPEG_SIDECAR_SOURCE: ${{ github.workspace }}/bridge-client/.ffmpeg-sidecars/ffmpeg-aarch64-apple-darwin
-        run: npm run build:release:macos
+        run: |
+          npm run prepare:ffmpeg -- --release --force
+          npm exec tauri build -- --bundles dmg --config tauri.release-version.json
+          scripts/hide-macos-dmg-app-extension.sh
 
       - name: Build LGPL FFmpeg sidecar from source
         if: matrix.ffmpeg_source == 'windows-lgpl' && steps.ffmpeg-sidecar.outputs.cache-hit != 'true'
@@ -127,7 +138,30 @@ jobs:
         working-directory: bridge-client
         env:
           FFMPEG_SIDECAR_SOURCE: ${{ github.workspace }}/bridge-client/.ffmpeg-sidecars/ffmpeg-x86_64-pc-windows-msvc.exe
-        run: npm run build:release:windows
+        run: |
+          npm run prepare:ffmpeg -- --release --force
+          npm exec tauri build -- --bundles nsis --config tauri.release-version.json
+
+      - name: Verify macOS Bridge version
+        if: matrix.ffmpeg_source == 'macos-lgpl'
+        shell: bash
+        run: |
+          APP_PLIST="bridge-client/src-tauri/target/release/bundle/macos/Talktome Bridge.app/Contents/Info.plist"
+          ACTUAL_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PLIST")"
+          if [[ "$ACTUAL_VERSION" != "$APP_VERSION" ]]; then
+            printf 'Expected Bridge version %s, found %s\n' "$APP_VERSION" "$ACTUAL_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Verify Windows Bridge version
+        if: matrix.ffmpeg_source == 'windows-lgpl'
+        shell: pwsh
+        run: |
+          $binary = Get-Item "bridge-client/src-tauri/target/release/talktome-bridge-client.exe"
+          $actualVersion = $binary.VersionInfo.ProductVersion
+          if (-not $actualVersion.StartsWith($env:APP_VERSION)) {
+            throw "Expected Bridge version $env:APP_VERSION, found $actualVersion"
+          }
 
       - name: Prepare Bridge artifact
         shell: bash
