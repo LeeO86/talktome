@@ -12,6 +12,7 @@ Local WebRTC intercom app built with Node.js, mediasoup and Socket.IO.
 - Camera tally and remote control through HTTP API.
 - Remote control via Bitfocus Companion module and keyboard shortcuts.
 - Bridge Desktop Application to integrate hardware intercom systems, audio interfaces or mixing consoles.
+- Optional Productions with per-user target layouts and scoped production admins.
 
 ## Quick Start
 
@@ -136,6 +137,24 @@ Back up this directory before upgrades if you need to preserve accounts and rout
 - Online Guests can still be answered through `Reply`.
 - Guest login is passwordless and stored only in browser `sessionStorage`, so page refresh keeps it, but closing the browser session clears it.
 
+## Productions
+
+Productions are optional layout scopes configured on the Admin `Productions`
+page. Users without a Production keep the existing global layout. Users in one
+Production enter it automatically; users assigned to several choose after login
+and can switch from the application menu.
+
+Each Production has its own members, visible conferences/feeds, and individual
+target assignment and order for every member. Production admins may manage
+those memberships and layouts without access to global users, server config,
+backups, or other Productions. Only global admins may create, rename, delete,
+or assign admins to Productions.
+
+Productions intentionally scope the UI layout only. Conference membership,
+audio routing, Bridge endpoints, mute and volume state remain global. Hiding a
+conference from a Production therefore does not remove an existing global audio
+membership.
+
 ## Companion and HTTP API
 
 Companion module source is maintained separately:
@@ -157,6 +176,12 @@ Main endpoints:
 - `POST /api/v1/companion/users/:id/talk`
 - `POST /api/v1/companion/users/:id/target-audio`
 - Legacy: `POST /users/:id/talk`
+
+Production-aware Companion clients receive the available Productions in the
+login/config response. Pass `productionId` as a query parameter to the state,
+users, conferences, feeds and targets endpoints, and as Socket.IO auth data for
+a filtered snapshot and event stream. Omitting it keeps the existing global
+Companion behavior.
 
 Socket.IO namespace: `/companion` with `snapshot`, `user-state`, `command-result`, and `cut-camera` events.
 

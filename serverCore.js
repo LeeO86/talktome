@@ -162,6 +162,24 @@ const {
   getFeedBridgeEndpointsForDevice,
   getAllConferences,
   getAllFeeds,
+  getAllProductions,
+  getProductionById,
+  getProductionsForUser,
+  isUserInProduction,
+  isUserProductionAdmin,
+  createProduction,
+  updateProductionName,
+  deleteProduction,
+  getProductionMembers,
+  setProductionUser,
+  removeProductionUser,
+  getProductionConferences,
+  getProductionFeeds,
+  setProductionResource,
+  getProductionTargets,
+  addProductionTarget,
+  removeProductionTarget,
+  updateProductionTargetOrder,
   deleteUser,
   deleteConference,
   deleteFeed,
@@ -678,6 +696,7 @@ function createAdminSession(user) {
   const token = crypto.randomBytes(32).toString("hex");
   adminSessions.set(token, {
     userId: user.id,
+    isGlobalAdmin: !!user.is_admin,
     isSuperAdmin: !!user.is_superadmin,
     createdAt: Date.now(),
     expiresAt: Date.now() + ADMIN_SESSION_TTL_MS,
@@ -685,7 +704,7 @@ function createAdminSession(user) {
   return token;
 }
 
-function requireAdmin(req, res, next) {
+function requireAdminSession(req, res, next) {
   const result = getAdminSession(req);
   if (!result) {
     return res.status(401).json({ error: "Admin login required" });
@@ -693,6 +712,32 @@ function requireAdmin(req, res, next) {
   req.adminSession = result.session;
   req.adminToken = result.token;
   next();
+}
+
+function requireAdmin(req, res, next) {
+  requireAdminSession(req, res, () => {
+    if (!req.adminSession?.isGlobalAdmin) {
+      return res.status(403).json({ error: "Global admin access required" });
+    }
+    next();
+  });
+}
+
+function requireProductionManager(req, res, next) {
+  requireAdminSession(req, res, () => {
+    const productionId = Number(req.params.productionId || req.params.id);
+    if (!Number.isFinite(productionId) || !getProductionById(productionId)) {
+      return res.status(404).json({ error: "Production not found" });
+    }
+    if (
+      !req.adminSession?.isGlobalAdmin
+      && !isUserProductionAdmin(req.adminSession?.userId, productionId)
+    ) {
+      return res.status(403).json({ error: "Production admin access required" });
+    }
+    req.productionId = productionId;
+    next();
+  });
 }
 
 function requireSuperAdmin(req, res, next) {
@@ -1078,6 +1123,22 @@ function requireCompanionApiKey(req, res, next) {
   }
   req.companionAuth = auth;
   next();
+}
+
+function resolveCompanionProduction(auth, value) {
+  if (value === null || value === undefined || value === "") return null;
+  const productionId = Number(value);
+  if (!Number.isFinite(productionId) || !getProductionById(productionId)) {
+    const error = new Error("Production not found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!hasCompanionGlobalAccess(auth) && !isUserInProduction(auth?.userId, productionId)) {
+    const error = new Error("User is not a member of this production");
+    error.statusCode = 403;
+    throw error;
+  }
+  return productionId;
 }
 
 function requireBridgeApiAuth(req, res, next) {
@@ -2120,9 +2181,27 @@ function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot =
   };
 }
 
-function buildOperatorTargetsForUser(userId) {
-  const explicitTargets = getUserTargets(userId) || [];
-  const conferenceMemberships = getConferencesForUser(userId) || [];
+function buildOperatorTargetsForUser(userId, productionId = null) {
+  const numericProductionId = productionId === null || productionId === undefined || productionId === ""
+    ? null
+    : Number(productionId);
+  if (numericProductionId !== null) {
+    if (!Number.isFinite(numericProductionId) || !isUserInProduction(userId, numericProductionId)) {
+      const error = new Error("User is not a member of this production");
+      error.statusCode = 403;
+      throw error;
+    }
+  }
+
+  const explicitTargets = numericProductionId === null
+    ? (getUserTargets(userId) || [])
+    : (getProductionTargets(userId, numericProductionId) || []);
+  const allowedConferenceIds = numericProductionId === null
+    ? null
+    : new Set(getProductionConferences(numericProductionId).map((conference) => Number(conference.id)));
+  const conferenceMemberships = (getConferencesForUser(userId) || []).filter((conference) => (
+    allowedConferenceIds === null || allowedConferenceIds.has(Number(conference.id))
+  ));
   const explicitConferenceIds = new Set();
   const mergedTargets = [];
 
@@ -2195,9 +2274,14 @@ function getCompanionAddressableUsers() {
   return getAllUsers().filter(isCompanionAddressableUser);
 }
 
-function buildCompanionSnapshot() {
+function buildCompanionSnapshot(productionId = null) {
   const incomingSnapshot = buildIncomingTalkStateSnapshot();
-  const users = getCompanionAddressableUsers().map((user) => ({
+  const productionMemberIds = productionId === null
+    ? null
+    : new Set(getProductionMembers(productionId).map((member) => Number(member.id)));
+  const users = getCompanionAddressableUsers()
+    .filter((user) => productionMemberIds === null || productionMemberIds.has(Number(user.id)))
+    .map((user) => ({
     id: user.id,
     name: user.name,
     state: buildCompanionUserState(user.id, user.name, incomingSnapshot),
@@ -2208,21 +2292,37 @@ function buildCompanionSnapshot() {
     serverTime: new Date().toISOString(),
     cutCameraUser,
     users,
-    conferences: getAllConferences(),
-    feeds: getAllFeeds(),
+    conferences: productionId === null ? getAllConferences() : getProductionConferences(productionId),
+    feeds: productionId === null ? getAllFeeds() : getProductionFeeds(productionId),
+    production: productionId === null ? null : getProductionById(productionId),
   };
 }
 
-function buildCompanionSnapshotForAuth(auth) {
+function buildCompanionSnapshotForAuth(auth, productionId = null) {
   return {
-    ...buildCompanionSnapshot(),
+    ...buildCompanionSnapshot(productionId),
     scope: buildCompanionAuthScope(auth),
   };
 }
 
 function emitCompanionEvent(event, payload = {}) {
   if (!companionNamespace) return;
-  companionNamespace.emit(event, payload);
+  for (const socket of companionNamespace.sockets.values()) {
+    const productionId = socket.data?.productionId ?? null;
+    if (productionId === null) {
+      socket.emit(event, payload);
+      continue;
+    }
+    const userId = Number(payload?.userId ?? payload?.state?.userId ?? payload?.state?.id);
+    if (Number.isFinite(userId) && !isUserInProduction(userId, productionId)) continue;
+    const conferenceId = Number(payload?.conferenceId);
+    if (Number.isFinite(conferenceId) && !getProductionConferences(productionId)
+      .some((conference) => Number(conference.id) === conferenceId)) continue;
+    const feedId = Number(payload?.feedId);
+    if (Number.isFinite(feedId) && !getProductionFeeds(productionId)
+      .some((feed) => Number(feed.id) === feedId)) continue;
+    socket.emit(event, payload);
+  }
 }
 
 function emitCompanionUserState(userId, reason = "state-updated", fallbackName = null, incomingSnapshot = null) {
@@ -2488,12 +2588,32 @@ app.get('/users/:id/targets', (req, res) => {
     const includeMemberships = ["1", "true", "yes", "on"].includes(
       String(req.query?.includeMemberships || "").trim().toLowerCase()
     );
+    const productionId = req.query?.productionId ?? null;
+    if (productionId !== null && productionId !== undefined && productionId !== "") {
+      if (!isUserInProduction(req.params.id, productionId)) {
+        return res.status(403).json({ error: "User is not a member of this production" });
+      }
+    }
     const targets = includeMemberships
-      ? buildOperatorTargetsForUser(req.params.id)
-      : getUserTargets(req.params.id);
+      ? buildOperatorTargetsForUser(req.params.id, productionId)
+      : productionId === null || productionId === undefined || productionId === ""
+        ? getUserTargets(req.params.id)
+        : getProductionTargets(req.params.id, productionId);
     res.json(targets);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err?.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.get('/users/:id/productions', (req, res) => {
+  try {
+    const user = getUserById(req.params.id);
+    if (!user || user.is_superadmin) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(getProductionsForUser(req.params.id).map(({ id, name }) => ({ id, name })));
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to load productions' });
   }
 });
 
@@ -2503,12 +2623,24 @@ app.get("/guest/targets", (req, res) => {
     if (!settings.enabled || !settings.profileUserId) {
       return res.status(403).json({ error: "Guest login is disabled" });
     }
-    res.json(buildOperatorTargetsForUser(settings.profileUserId));
+    res.json(buildOperatorTargetsForUser(settings.profileUserId, req.query?.productionId ?? null));
   } catch (err) {
     console.error("Guest targets error:", err);
     res.status(500).json({ error: err.message || "Failed to load guest targets" });
   }
 });
+
+function buildLoginIdentity(user, kind = "user") {
+  const productions = kind === "user" || kind === "guest"
+    ? getProductionsForUser(user.id).map(({ id, name }) => ({ id, name }))
+    : [];
+  return {
+    id: user.id,
+    name: user.name,
+    kind,
+    productions,
+  };
+}
 
 // === POST ===
 app.get("/login/options", (req, res) => {
@@ -2537,7 +2669,7 @@ app.post("/login", (req, res) => {
         return res.status(401).json({ error: "Invalid credentials" });
       }
       console.log("Login successful for user:", user.name);
-      return res.json({ id: user.id, name: user.name, kind: "user" });
+      return res.json(buildLoginIdentity(user));
     }
 
     const feed = verifyFeed(name, password);
@@ -2562,7 +2694,7 @@ app.post("/login/token", (req, res) => {
     }
     console.log("Login URL used for user:", user.name);
     res.setHeader("Cache-Control", "no-store");
-    return res.json({ id: user.id, name: user.name, kind: "user" });
+    return res.json(buildLoginIdentity(user));
   } catch (err) {
     console.error("Login URL error:", err);
     return res.status(500).json({ error: "Login link failed" });
@@ -2584,6 +2716,10 @@ app.post("/login/guest", (req, res) => {
       guestId: crypto.randomUUID(),
       guestProfileUserId: settings.profileUserId,
       name,
+      productions: getProductionsForUser(settings.profileUserId).map(({ id, name: productionName }) => ({
+        id,
+        name: productionName,
+      })),
     });
   } catch (err) {
     console.error("Guest login error:", err);
@@ -2610,7 +2746,8 @@ app.post("/admin/login", (req, res) => {
     if (!user || user.is_guest_profile) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
-    if (!user.is_admin) {
+    const productionAdminOf = getProductionsForUser(user.id).filter((production) => production.isAdmin);
+    if (!user.is_admin && productionAdminOf.length === 0) {
       return res.status(403).json({ error: "Admin access required" });
     }
 
@@ -2624,9 +2761,11 @@ app.post("/admin/login", (req, res) => {
     return res.json({
       id: user.id,
       name: user.name,
-      isAdmin: true,
+      isAdmin: !!user.is_admin,
+      isGlobalAdmin: !!user.is_admin,
       isSuperadmin: !!user.is_superadmin,
       mustChangePassword: !!user.admin_must_change,
+      productionAdminOf: productionAdminOf.map(({ id, name: productionName }) => ({ id, name: productionName })),
     });
   } catch (err) {
     console.error("Admin login error:", err);
@@ -2634,7 +2773,7 @@ app.post("/admin/login", (req, res) => {
   }
 });
 
-app.post("/admin/logout", requireAdmin, (req, res) => {
+app.post("/admin/logout", requireAdminSession, (req, res) => {
   if (req.adminToken) {
     closeAdminStatusStreamsForToken(req.adminToken, "logged-out");
     adminSessions.delete(req.adminToken);
@@ -2658,7 +2797,10 @@ app.get("/admin/me", (req, res) => {
   }
 
   const user = getUserById(result.session.userId);
-  if (!user || !user.is_admin) {
+  const productionAdminOf = user
+    ? getProductionsForUser(user.id).filter((production) => production.isAdmin)
+    : [];
+  if (!user || (!user.is_admin && productionAdminOf.length === 0)) {
     adminSessions.delete(result.token);
     res.clearCookie("admin_session", { httpOnly: true, sameSite: "lax", secure: true });
     return res.status(401).json({ error: "Not authenticated" });
@@ -2668,9 +2810,170 @@ app.get("/admin/me", (req, res) => {
     id: user.id,
     name: user.name,
     isAdmin: !!user.is_admin,
+    isGlobalAdmin: !!user.is_admin,
     isSuperadmin: !!user.is_superadmin,
     mustChangePassword: !!user.admin_must_change,
+    productionAdminOf: productionAdminOf.map(({ id, name: productionName }) => ({ id, name: productionName })),
   });
+});
+
+app.get("/admin/productions", requireAdminSession, (req, res) => {
+  try {
+    const productions = req.adminSession.isGlobalAdmin
+      ? getAllProductions()
+      : getProductionsForUser(req.adminSession.userId)
+        .filter((production) => production.isAdmin)
+        .map(({ isAdmin, ...production }) => production);
+    res.json(productions);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load productions" });
+  }
+});
+
+app.post("/admin/productions", requireAdmin, (req, res) => {
+  try {
+    const id = createProduction(req.body?.name);
+    res.status(201).json(getProductionById(id));
+  } catch (err) {
+    const conflict = String(err?.message || "").includes("already exists");
+    res.status(conflict ? 409 : 400).json({ error: err.message || "Failed to create production" });
+  }
+});
+
+app.get("/admin/productions/:productionId", requireProductionManager, (req, res) => {
+  try {
+    const members = getProductionMembers(req.productionId);
+    const targets = {};
+    members.forEach((member) => {
+      targets[String(member.id)] = getProductionTargets(member.id, req.productionId);
+    });
+    res.json({
+      production: getProductionById(req.productionId),
+      members,
+      conferences: getProductionConferences(req.productionId),
+      feeds: getProductionFeeds(req.productionId),
+      targets,
+      catalog: {
+        users: getAllUsers()
+          .filter((user) => !user.is_superadmin)
+          .map((user) => ({ id: user.id, name: user.name, is_guest_profile: user.is_guest_profile })),
+        conferences: getAllConferences(),
+        feeds: getAllFeeds().map((feed) => ({ id: feed.id, name: feed.name })),
+      },
+      permissions: {
+        globalAdmin: Boolean(req.adminSession.isGlobalAdmin),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load production" });
+  }
+});
+
+app.put("/admin/productions/:productionId", requireAdmin, (req, res) => {
+  try {
+    if (!updateProductionName(req.params.productionId, req.body?.name)) {
+      return res.status(404).json({ error: "Production not found" });
+    }
+    res.json(getProductionById(req.params.productionId));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to update production" });
+  }
+});
+
+app.delete("/admin/productions/:productionId", requireAdmin, (req, res) => {
+  try {
+    if (!deleteProduction(req.params.productionId)) {
+      return res.status(404).json({ error: "Production not found" });
+    }
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to delete production" });
+  }
+});
+
+app.put("/admin/productions/:productionId/users/:userId", requireProductionManager, (req, res) => {
+  try {
+    const requestedAdmin = Boolean(req.body?.isAdmin);
+    if (requestedAdmin && !req.adminSession.isGlobalAdmin) {
+      return res.status(403).json({ error: "Only global admins can assign production admins" });
+    }
+    const existing = getProductionMembers(req.productionId)
+      .find((member) => Number(member.id) === Number(req.params.userId));
+    const isAdmin = req.adminSession.isGlobalAdmin
+      ? requestedAdmin
+      : Boolean(existing?.isProductionAdmin);
+    setProductionUser(req.productionId, req.params.userId, { isAdmin });
+    notifyTargetChange(req.params.userId);
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to update production member" });
+  }
+});
+
+app.delete("/admin/productions/:productionId/users/:userId", requireProductionManager, (req, res) => {
+  try {
+    const existing = getProductionMembers(req.productionId)
+      .find((member) => Number(member.id) === Number(req.params.userId));
+    if (!req.adminSession.isGlobalAdmin && existing?.isProductionAdmin) {
+      return res.status(403).json({ error: "Only global admins can remove production admins" });
+    }
+    removeProductionUser(req.productionId, req.params.userId);
+    notifyTargetChange(req.params.userId);
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to remove production member" });
+  }
+});
+
+app.put("/admin/productions/:productionId/resources/:type/:resourceId", requireProductionManager, (req, res) => {
+  try {
+    setProductionResource(req.productionId, req.params.type, req.params.resourceId, Boolean(req.body?.enabled));
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to update production resource" });
+  }
+});
+
+app.post("/admin/productions/:productionId/users/:userId/targets", requireProductionManager, (req, res) => {
+  try {
+    addProductionTarget(
+      req.productionId,
+      req.params.userId,
+      req.body?.targetType,
+      req.body?.targetId
+    );
+    notifyTargetChange(req.params.userId);
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to add production target" });
+  }
+});
+
+app.delete("/admin/productions/:productionId/users/:userId/targets/:type/:targetId", requireProductionManager, (req, res) => {
+  try {
+    removeProductionTarget(
+      req.productionId,
+      req.params.userId,
+      req.params.type,
+      req.params.targetId
+    );
+    notifyTargetChange(req.params.userId);
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to remove production target" });
+  }
+});
+
+app.put("/admin/productions/:productionId/users/:userId/targets/order", requireProductionManager, (req, res) => {
+  const items = Array.isArray(req.body?.items) ? req.body.items : null;
+  if (!items) return res.status(400).json({ error: "items array required" });
+  try {
+    updateProductionTargetOrder(req.productionId, req.params.userId, items);
+    notifyTargetChange(req.params.userId);
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to reorder production targets" });
+  }
 });
 
 app.get("/admin/api-key", requireAdmin, (req, res) => {
@@ -3594,6 +3897,10 @@ app.post("/api/v1/companion/auth/login", (req, res) => {
         isAdmin: !!user.is_admin,
         isSuperadmin: !!user.is_superadmin,
       },
+      productions: getProductionsForUser(user.id).map(({ id, name: productionName }) => ({
+        id,
+        name: productionName,
+      })),
       scope: {
         mode: scope,
         userId: user.id,
@@ -3605,7 +3912,7 @@ app.post("/api/v1/companion/auth/login", (req, res) => {
   }
 });
 
-app.put("/admin/password", requireAdmin, (req, res) => {
+app.put("/admin/password", requireAdminSession, (req, res) => {
   const { password } = req.body || {};
   if (typeof password !== "string" || password.trim().length < 4) {
     return res.status(400).json({ error: "Password must be at least 4 characters" });
@@ -3793,6 +4100,9 @@ app.put('/users/:id/targets/order', requireAdmin, (req, res) => {
 });
 
 app.get("/api/v1/companion/config", requireCompanionApiKey, (req, res) => {
+  const availableProductions = hasCompanionGlobalAccess(req.companionAuth)
+    ? getAllProductions().map(({ id, name }) => ({ id, name }))
+    : getProductionsForUser(req.companionAuth.userId).map(({ id, name }) => ({ id, name }));
   res.json({
     version: 1,
     auth: {
@@ -3802,6 +4112,7 @@ app.get("/api/v1/companion/config", requireCompanionApiKey, (req, res) => {
       loginEndpoint: "/api/v1/companion/auth/login",
     },
     scope: buildCompanionAuthScope(req.companionAuth),
+    productions: availableProductions,
     realtime: {
       transport: "socket.io",
       namespace: "/companion",
@@ -3811,18 +4122,31 @@ app.get("/api/v1/companion/config", requireCompanionApiKey, (req, res) => {
 });
 
 app.get("/api/v1/companion/state", requireCompanionApiKey, (req, res) => {
-  res.json({
-    ...buildCompanionSnapshot(),
-    scope: buildCompanionAuthScope(req.companionAuth),
-  });
+  try {
+    const productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
+    res.json(buildCompanionSnapshotForAuth(req.companionAuth, productionId));
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
 });
 
 app.get("/api/v1/companion/users", requireCompanionApiKey, (req, res) => {
-  const allUsers = getCompanionAddressableUsers().map((user) => ({
-    id: user.id,
-    name: user.name,
-    state: buildCompanionUserState(user.id, user.name),
-  }));
+  let productionId = null;
+  try {
+    productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({ error: err.message });
+  }
+  const memberIds = productionId === null
+    ? null
+    : new Set(getProductionMembers(productionId).map((member) => Number(member.id)));
+  const allUsers = getCompanionAddressableUsers()
+    .filter((user) => memberIds === null || memberIds.has(Number(user.id)))
+    .map((user) => ({
+      id: user.id,
+      name: user.name,
+      state: buildCompanionUserState(user.id, user.name),
+    }));
 
   if (!hasCompanionGlobalAccess(req.companionAuth)) {
     const ownUserId = Number(req.companionAuth?.userId);
@@ -3834,11 +4158,21 @@ app.get("/api/v1/companion/users", requireCompanionApiKey, (req, res) => {
 });
 
 app.get("/api/v1/companion/conferences", requireCompanionApiKey, (req, res) => {
-  res.json(getAllConferences());
+  try {
+    const productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
+    res.json(productionId === null ? getAllConferences() : getProductionConferences(productionId));
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
 });
 
 app.get("/api/v1/companion/feeds", requireCompanionApiKey, (req, res) => {
-  res.json(getAllFeeds());
+  try {
+    const productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
+    res.json(productionId === null ? getAllFeeds() : getProductionFeeds(productionId));
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
 });
 
 app.use("/api/v1/bridge", allowBridgeCors);
@@ -4478,11 +4812,20 @@ app.get("/api/v1/companion/users/:id/targets", requireCompanionApiKey, (req, res
   if (!isCompanionAddressableUserId(userId)) {
     return res.status(404).json({ error: "User not found" });
   }
+  if (!canCompanionControlUser(req.companionAuth, userId)) {
+    return res.status(403).json({ error: "Companion session cannot access this user" });
+  }
   try {
-    const targets = getUserTargets(userId);
+    const productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
+    if (productionId !== null && !isUserInProduction(userId, productionId)) {
+      return res.status(403).json({ error: "User is not a member of this production" });
+    }
+    const targets = productionId === null
+      ? getUserTargets(userId)
+      : getProductionTargets(userId, productionId);
     res.json(targets);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -5057,7 +5400,15 @@ companionNamespace.use((socket, next) => {
   if (!candidate || !auth) {
     return next(new Error("unauthorized"));
   }
-  socket.data.companionAuth = auth;
+  try {
+    const requestedProduction = socket.handshake?.auth?.productionId
+      ?? socket.handshake?.query?.productionId
+      ?? null;
+    socket.data.productionId = resolveCompanionProduction(auth, requestedProduction);
+    socket.data.companionAuth = auth;
+  } catch (err) {
+    return next(new Error(err.message || "production access denied"));
+  }
   next();
 });
 companionNamespace.on("connection", (socket) => {
@@ -5076,10 +5427,16 @@ companionNamespace.on("connection", (socket) => {
     markCompanionSocketSeen(socket);
   });
   scheduleAdminStatusBroadcast("companion-connected");
-  socket.emit("snapshot", buildCompanionSnapshotForAuth(socket.data?.companionAuth || null));
+  socket.emit("snapshot", buildCompanionSnapshotForAuth(
+    socket.data?.companionAuth || null,
+    socket.data?.productionId ?? null
+  ));
   socket.on("request-snapshot", () => {
     markCompanionSocketSeen(socket);
-    socket.emit("snapshot", buildCompanionSnapshotForAuth(socket.data?.companionAuth || null));
+    socket.emit("snapshot", buildCompanionSnapshotForAuth(
+      socket.data?.companionAuth || null,
+      socket.data?.productionId ?? null
+    ));
   });
   socket.on("disconnect", () => {
     clearCompanionStatusTimer(socket);

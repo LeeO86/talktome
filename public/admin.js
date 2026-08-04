@@ -1,5 +1,6 @@
 const adminState = {
   isAuthenticated: false,
+  isGlobalAdmin: false,
   isSuperAdmin: false,
   mustChangePassword: false,
   userId: null,
@@ -60,6 +61,21 @@ const statusBridgesBody = document.getElementById('status-bridges-body');
 const statusCompanionsBody = document.getElementById('status-companions-body');
 const targetMatrixContainer = document.getElementById('target-matrix-container');
 const conferenceMembershipMatrixContainer = document.getElementById('conference-membership-matrix-container');
+const productionList = document.getElementById('production-list');
+const productionCreateForm = document.getElementById('production-create-form');
+const productionCreateName = document.getElementById('production-create-name');
+const productionEmpty = document.getElementById('production-empty');
+const productionDetail = document.getElementById('production-detail');
+const productionDetailName = document.getElementById('production-detail-name');
+const productionGlobalActions = document.getElementById('production-global-actions');
+const productionRenameButton = document.getElementById('production-rename');
+const productionDeleteButton = document.getElementById('production-delete');
+const productionMembersList = document.getElementById('production-members');
+const productionConferencesList = document.getElementById('production-conferences');
+const productionFeedsList = document.getElementById('production-feeds');
+const productionTargetMatrixContainer = document.getElementById('production-target-matrix-container');
+const productionOrderUser = document.getElementById('production-order-user');
+const productionOrderList = document.getElementById('production-order-list');
 const configExportBtn = document.getElementById('config-export-btn');
 const configImportBtn = document.getElementById('config-import-btn');
 const configImportFile = document.getElementById('config-import-file');
@@ -109,6 +125,13 @@ const collapsibleAdminSections = {
     cardEl: document.getElementById('matrix-section-toggle')?.closest('.card'),
     headerEl: document.getElementById('matrix-section-toggle')?.closest('.card-header'),
   },
+  productions: {
+    label: 'Productions',
+    bodyEl: document.getElementById('productions-section-body'),
+    buttonEl: document.getElementById('productions-section-toggle'),
+    cardEl: document.getElementById('productions-section-toggle')?.closest('.card'),
+    headerEl: document.getElementById('productions-section-toggle')?.closest('.card-header'),
+  },
   conferences: {
     label: 'Conferences',
     bodyEl: document.getElementById('conferences-section-body'),
@@ -142,6 +165,9 @@ let statusHealthTimer = null;
 let latestAdminStatus = null;
 let serverReachable = null;
 let activeAdminView = null;
+let productionSummaries = [];
+let selectedProductionId = null;
+let selectedProductionPayload = null;
 
 function focusAdminLoginNameField() {
   if (!adminNameInput) return;
@@ -199,6 +225,8 @@ function showMessage(text, tone = 'error', scope = 'global') {
         ? 'feed-message'
         : scope === 'matrix'
           ? 'matrix-message'
+        : scope === 'productions'
+          ? 'productions-message'
         : scope === 'status'
           ? 'status-message'
         : scope === 'config'
@@ -284,6 +312,7 @@ function setActiveAdminNav(sectionKey) {
 
 function getKnownAdminViews() {
   return adminNavLinks
+    .filter((link) => !link.hidden)
     .map((link) => link.dataset.adminNav)
     .filter(Boolean);
 }
@@ -792,6 +821,7 @@ async function authedFetch(url, options) {
   const res = await fetch(url, options);
   if (res.status === 401) {
     adminState.isAuthenticated = false;
+    adminState.isGlobalAdmin = false;
     adminState.isSuperAdmin = false;
     adminState.mustChangePassword = false;
     adminState.userId = null;
@@ -809,6 +839,7 @@ async function fetchJSON(url) {
 
 function applyAdminState(payload) {
   adminState.isAuthenticated = true;
+  adminState.isGlobalAdmin = Boolean(payload?.isGlobalAdmin ?? payload?.isAdmin);
   adminState.isSuperAdmin = Boolean(payload?.isSuperadmin);
   adminState.mustChangePassword = Boolean(payload?.mustChangePassword);
   adminState.userId = payload?.id ?? null;
@@ -816,6 +847,10 @@ function applyAdminState(payload) {
   if (adminNameLabel) {
     adminNameLabel.textContent = adminState.name || 'Admin';
   }
+  adminNavLinks.forEach((link) => {
+    link.hidden = !adminState.isGlobalAdmin && link.dataset.adminNav !== 'productions';
+  });
+  if (productionCreateForm) productionCreateForm.hidden = !adminState.isGlobalAdmin;
 }
 
 function escapeSvgText(value) {
@@ -986,6 +1021,7 @@ async function logoutAdmin(message) {
     console.warn('Logout failed:', err);
   }
   adminState.isAuthenticated = false;
+  adminState.isGlobalAdmin = false;
   adminState.isSuperAdmin = false;
   adminState.mustChangePassword = false;
   adminState.userId = null;
@@ -1354,6 +1390,7 @@ function startStatusStream() {
   });
   const handleExpiredSession = () => {
     adminState.isAuthenticated = false;
+    adminState.isGlobalAdmin = false;
     stopStatusStream();
     showLogin('Session expired.');
   };
@@ -1375,7 +1412,198 @@ function stopStatusStream() {
   setServerReachability(null);
 }
 
+async function productionRequest(url, options = undefined) {
+  const response = await authedFetch(url, options);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `Request failed: ${response.status}`);
+  }
+  return response;
+}
+
+function renderProductionSummaries() {
+  if (!productionList) return;
+  if (!productionSummaries.length) {
+    productionList.innerHTML = '<li class="section-note">No productions configured.</li>';
+    return;
+  }
+  productionList.innerHTML = productionSummaries.map((production) => `
+    <li>
+      <button type="button" data-production-select="${production.id}" aria-current="${Number(production.id) === Number(selectedProductionId)}">
+        ${escapeHtml(production.name)}
+      </button>
+    </li>
+  `).join('');
+}
+
+function setProductionDetailVisible(visible) {
+  productionEmpty?.classList.toggle('is-hidden', visible);
+  productionDetail?.classList.toggle('is-hidden', !visible);
+}
+
+function productionTargetKey(targetType, targetId) {
+  return `${targetType}:${targetId}`;
+}
+
+function renderProductionMembers(payload) {
+  if (!productionMembersList) return;
+  const memberMap = new Map(payload.members.map((member) => [String(member.id), member]));
+  productionMembersList.innerHTML = payload.catalog.users.map((user) => {
+    const member = memberMap.get(String(user.id));
+    const adminControl = member && payload.permissions.globalAdmin
+      ? `<label title="Production admin"><input type="checkbox" data-production-admin="${user.id}" ${member.isProductionAdmin ? 'checked' : ''}> Admin</label>`
+      : member?.isProductionAdmin
+        ? '<span class="badge admin">Production admin</span>'
+        : '';
+    return `
+      <li class="production-check-row">
+        <input type="checkbox" data-production-member="${user.id}" ${member ? 'checked' : ''}>
+        <span>${escapeHtml(user.name)}${user.is_guest_profile ? ' <span class="badge guest-profile">Guest</span>' : ''}</span>
+        ${adminControl}
+      </li>
+    `;
+  }).join('') || '<li class="section-note">No users available.</li>';
+}
+
+function renderProductionResources(payload) {
+  const linkedConferences = new Set(payload.conferences.map((item) => String(item.id)));
+  const linkedFeeds = new Set(payload.feeds.map((item) => String(item.id)));
+  if (productionConferencesList) {
+    productionConferencesList.innerHTML = payload.catalog.conferences.map((conference) => `
+      <li class="production-check-row">
+        <input type="checkbox" data-production-resource="conference" data-resource-id="${conference.id}" ${linkedConferences.has(String(conference.id)) ? 'checked' : ''}>
+        <span>${escapeHtml(conference.name)}</span>
+      </li>
+    `).join('') || '<li class="section-note">No conferences available.</li>';
+  }
+  if (productionFeedsList) {
+    productionFeedsList.innerHTML = payload.catalog.feeds.map((feed) => `
+      <li class="production-check-row">
+        <input type="checkbox" data-production-resource="feed" data-resource-id="${feed.id}" ${linkedFeeds.has(String(feed.id)) ? 'checked' : ''}>
+        <span>${escapeHtml(feed.name)}</span>
+      </li>
+    `).join('') || '<li class="section-note">No feeds available.</li>';
+  }
+}
+
+function renderProductionTargetMatrix(payload) {
+  if (!productionTargetMatrixContainer) return;
+  const rowUsers = payload.members;
+  const targetUsers = payload.members.filter((user) => !user.is_guest_profile);
+  const groups = [
+    { type: 'user', label: 'Users', className: 'users', items: targetUsers },
+    { type: 'conference', label: 'Conferences', className: 'conferences', items: payload.conferences },
+    { type: 'feed', label: 'Feeds', className: 'feeds', items: payload.feeds },
+  ].filter((group) => group.items.length > 0);
+  const columns = groups.flatMap((group) => group.items.map((item) => ({ ...item, targetType: group.type })));
+
+  if (!rowUsers.length || !columns.length) {
+    productionTargetMatrixContainer.innerHTML = '<p class="target-matrix-empty">Add members and visible resources to configure this layout.</p>';
+    return;
+  }
+
+  const groupHeaders = groups.map((group) => `
+    <th class="target-matrix__group target-matrix__group--${group.className}" colspan="${group.items.length}" scope="colgroup">${escapeHtml(group.label)}</th>
+  `).join('');
+  const columnHeaders = columns.map((column, columnIndex) => `
+    <th class="target-matrix__target-column target-matrix__column--${escapeHtml(column.targetType)}" data-matrix-column="${columnIndex}" scope="col" title="${escapeHtml(column.name)}">
+      <span class="target-matrix__column-label">${escapeHtml(column.name)}</span>
+    </th>
+  `).join('');
+  const bodyRows = rowUsers.map((user) => {
+    const assignments = new Set((payload.targets[String(user.id)] || []).map((target) => (
+      productionTargetKey(target.targetType, target.targetId)
+    )));
+    const cells = columns.map((column, columnIndex) => {
+      const self = column.targetType === 'user' && Number(column.id) === Number(user.id);
+      if (self) {
+        return `<td class="target-matrix__unavailable target-matrix__target-column target-matrix__column--user" data-matrix-column="${columnIndex}">&mdash;</td>`;
+      }
+      const label = `${column.name} as target for ${user.name}`;
+      return `
+        <td class="target-matrix__coupling target-matrix__target-column target-matrix__column--${escapeHtml(column.targetType)}" data-matrix-column="${columnIndex}">
+          <button type="button" class="target-matrix-toggle production-target-toggle"
+            data-user-id="${user.id}" data-target-type="${escapeHtml(column.targetType)}" data-target-id="${column.id}"
+            aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"
+            aria-pressed="${assignments.has(productionTargetKey(column.targetType, column.id))}"></button>
+        </td>
+      `;
+    }).join('');
+    return `<tr><th class="target-matrix__user-name" scope="row">${escapeHtml(user.name)}</th>${cells}</tr>`;
+  }).join('');
+  const matrixTableWidth = 7.5 + (columns.length * 1.9);
+  productionTargetMatrixContainer.innerHTML = `
+    <table class="target-matrix" style="--matrix-table-width: ${matrixTableWidth}rem">
+      <colgroup><col class="target-matrix__profile-column" />${columns.map(() => '<col class="target-matrix__target-col" />').join('')}</colgroup>
+      <thead><tr><th class="target-matrix__corner" rowspan="2" scope="col"><span class="target-matrix__corner-label target-matrix__corner-label--users">Users</span><span class="target-matrix__corner-label target-matrix__corner-label--targets">Targets</span></th>${groupHeaders}</tr><tr>${columnHeaders}</tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>
+  `;
+}
+
+function renderProductionOrder(payload, preferredUserId = null) {
+  if (!productionOrderUser || !productionOrderList) return;
+  const current = String(preferredUserId || productionOrderUser.value || payload.members[0]?.id || '');
+  productionOrderUser.innerHTML = payload.members.map((member) => (
+    `<option value="${member.id}" ${String(member.id) === current ? 'selected' : ''}>${escapeHtml(member.name)}</option>`
+  )).join('');
+  const userId = productionOrderUser.value;
+  const targets = payload.targets[String(userId)] || [];
+  productionOrderList.innerHTML = targets.map((target, index) => `
+    <li class="production-order-item" data-order-index="${index}">
+      <span>${escapeHtml(target.name)} <small>(${escapeHtml(target.targetType)})</small></span>
+      <button type="button" class="small" data-order-move="up" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escapeHtml(target.name)} up">↑</button>
+      <button type="button" class="small" data-order-move="down" ${index === targets.length - 1 ? 'disabled' : ''} aria-label="Move ${escapeHtml(target.name)} down">↓</button>
+    </li>
+  `).join('') || '<li class="section-note">No target buttons assigned to this member.</li>';
+}
+
+function renderProductionDetail(payload) {
+  selectedProductionPayload = payload;
+  setProductionDetailVisible(true);
+  if (productionDetailName) productionDetailName.textContent = payload.production.name;
+  if (productionGlobalActions) productionGlobalActions.hidden = !payload.permissions.globalAdmin;
+  renderProductionMembers(payload);
+  renderProductionResources(payload);
+  renderProductionTargetMatrix(payload);
+  renderProductionOrder(payload);
+}
+
+async function loadProductionDetail(productionId) {
+  selectedProductionId = Number(productionId);
+  renderProductionSummaries();
+  try {
+    const payload = await fetchJSON(`/admin/productions/${selectedProductionId}`);
+    renderProductionDetail(payload);
+  } catch (error) {
+    selectedProductionPayload = null;
+    setProductionDetailVisible(false);
+    showMessage(error.message || 'Failed to load production', 'error', 'productions');
+  }
+}
+
+async function loadProductions({ selectId = selectedProductionId } = {}) {
+  productionSummaries = await fetchJSON('/admin/productions');
+  if (!productionSummaries.some((item) => Number(item.id) === Number(selectId))) {
+    selectId = productionSummaries[0]?.id || null;
+  }
+  selectedProductionId = selectId ? Number(selectId) : null;
+  renderProductionSummaries();
+  if (selectedProductionId) {
+    await loadProductionDetail(selectedProductionId);
+  } else {
+    selectedProductionPayload = null;
+    setProductionDetailVisible(false);
+  }
+}
+
 async function loadData() {
+  await loadProductions();
+  if (!adminState.isGlobalAdmin) {
+    stopStatusStream();
+    activateAdminView('productions', { updateHash: true, replaceHash: true });
+    return;
+  }
   await loadGuestLoginSettings();
   const { users, conferences, feeds, bridges } = await fetchAdminCollections();
   await loadMdnsSettings();
@@ -3424,6 +3652,189 @@ window.resetPassword = async function(userId, userName) {
   }
 };
 
+async function handleProductionTargetToggle(toggle, forcedEnabled = null) {
+  if (!selectedProductionPayload || !selectedProductionId) return;
+  const userId = Number(toggle.dataset.userId);
+  const targetType = toggle.dataset.targetType;
+  const targetId = Number(toggle.dataset.targetId);
+  const wasEnabled = toggle.getAttribute('aria-pressed') === 'true';
+  const enabled = typeof forcedEnabled === 'boolean' ? forcedEnabled : !wasEnabled;
+  if (!Number.isFinite(userId) || !Number.isFinite(targetId) || !targetType || enabled === wasEnabled) return;
+
+  toggle.setAttribute('aria-pressed', String(enabled));
+  toggle.disabled = true;
+  try {
+    const base = `/admin/productions/${selectedProductionId}/users/${userId}/targets`;
+    await productionRequest(
+      enabled ? base : `${base}/${encodeURIComponent(targetType)}/${targetId}`,
+      enabled
+        ? {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetType, targetId }),
+          }
+        : { method: 'DELETE' }
+    );
+    const targets = selectedProductionPayload.targets[String(userId)] || [];
+    if (enabled) {
+      const catalogs = targetType === 'user'
+        ? selectedProductionPayload.members
+        : targetType === 'conference'
+          ? selectedProductionPayload.conferences
+          : selectedProductionPayload.feeds;
+      const target = catalogs.find((item) => Number(item.id) === targetId);
+      targets.push({ targetType, targetId, name: target?.name || String(targetId) });
+    } else {
+      selectedProductionPayload.targets[String(userId)] = targets.filter((target) => !(
+        target.targetType === targetType && Number(target.targetId) === targetId
+      ));
+    }
+    renderProductionOrder(selectedProductionPayload, productionOrderUser?.value);
+  } catch (error) {
+    toggle.setAttribute('aria-pressed', String(wasEnabled));
+    showMessage(error.message || 'Target update failed', 'error', 'productions');
+  } finally {
+    toggle.disabled = false;
+  }
+}
+
+productionList?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-production-select]');
+  if (!button) return;
+  loadProductionDetail(button.dataset.productionSelect);
+});
+
+productionCreateForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const name = productionCreateName?.value?.trim() || '';
+  if (!name) return;
+  try {
+    const response = await productionRequest('/admin/productions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const created = await response.json();
+    productionCreateForm.reset();
+    await loadProductions({ selectId: created.id });
+    showMessage('Production created.', 'success', 'productions');
+  } catch (error) {
+    showMessage(error.message || 'Failed to create production', 'error', 'productions');
+  }
+});
+
+productionRenameButton?.addEventListener('click', async () => {
+  if (!selectedProductionPayload || !selectedProductionId) return;
+  const name = prompt('Production name:', selectedProductionPayload.production.name)?.trim();
+  if (!name || name === selectedProductionPayload.production.name) return;
+  try {
+    await productionRequest(`/admin/productions/${selectedProductionId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    await loadProductions({ selectId: selectedProductionId });
+    showMessage('Production renamed.', 'success', 'productions');
+  } catch (error) {
+    showMessage(error.message || 'Failed to rename production', 'error', 'productions');
+  }
+});
+
+productionDeleteButton?.addEventListener('click', async () => {
+  if (!selectedProductionPayload || !selectedProductionId) return;
+  if (!confirm(`Delete production “${selectedProductionPayload.production.name}”? Global users, conferences and feeds will not be deleted.`)) return;
+  try {
+    await productionRequest(`/admin/productions/${selectedProductionId}`, { method: 'DELETE' });
+    selectedProductionId = null;
+    await loadProductions();
+    showMessage('Production deleted.', 'success', 'productions');
+  } catch (error) {
+    showMessage(error.message || 'Failed to delete production', 'error', 'productions');
+  }
+});
+
+productionMembersList?.addEventListener('change', async (event) => {
+  const memberInput = event.target.closest('[data-production-member]');
+  const adminInput = event.target.closest('[data-production-admin]');
+  const userId = Number(memberInput?.dataset.productionMember || adminInput?.dataset.productionAdmin);
+  if (!selectedProductionId || !Number.isFinite(userId)) return;
+  event.target.disabled = true;
+  try {
+    if (memberInput) {
+      if (memberInput.checked) {
+        await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isAdmin: false }),
+        });
+      } else {
+        await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}`, { method: 'DELETE' });
+      }
+    } else if (adminInput) {
+      await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isAdmin: adminInput.checked }),
+      });
+    }
+    await loadProductionDetail(selectedProductionId);
+  } catch (error) {
+    event.target.checked = !event.target.checked;
+    event.target.disabled = false;
+    showMessage(error.message || 'Failed to update member', 'error', 'productions');
+  }
+});
+
+async function handleProductionResourceChange(event) {
+  const input = event.target.closest('[data-production-resource]');
+  if (!input || !selectedProductionId) return;
+  input.disabled = true;
+  try {
+    await productionRequest(
+      `/admin/productions/${selectedProductionId}/resources/${encodeURIComponent(input.dataset.productionResource)}/${input.dataset.resourceId}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: input.checked }),
+      }
+    );
+    await loadProductionDetail(selectedProductionId);
+  } catch (error) {
+    input.checked = !input.checked;
+    input.disabled = false;
+    showMessage(error.message || 'Failed to update resource', 'error', 'productions');
+  }
+}
+
+productionConferencesList?.addEventListener('change', handleProductionResourceChange);
+productionFeedsList?.addEventListener('change', handleProductionResourceChange);
+productionOrderUser?.addEventListener('change', () => {
+  if (selectedProductionPayload) renderProductionOrder(selectedProductionPayload, productionOrderUser.value);
+});
+productionOrderList?.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-order-move]');
+  if (!button || !selectedProductionPayload || !selectedProductionId) return;
+  const item = button.closest('[data-order-index]');
+  const index = Number(item?.dataset.orderIndex);
+  const userId = Number(productionOrderUser?.value);
+  const targets = selectedProductionPayload.targets[String(userId)] || [];
+  const nextIndex = button.dataset.orderMove === 'up' ? index - 1 : index + 1;
+  if (!Number.isInteger(index) || nextIndex < 0 || nextIndex >= targets.length) return;
+  [targets[index], targets[nextIndex]] = [targets[nextIndex], targets[index]];
+  renderProductionOrder(selectedProductionPayload, userId);
+  try {
+    await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}/targets/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: targets.map(({ targetType, targetId }) => ({ targetType, targetId })) }),
+    });
+  } catch (error) {
+    [targets[index], targets[nextIndex]] = [targets[nextIndex], targets[index]];
+    renderProductionOrder(selectedProductionPayload, userId);
+    showMessage(error.message || 'Failed to reorder targets', 'error', 'productions');
+  }
+});
+
 if (adminLoginForm) {
   adminLoginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -3561,6 +3972,7 @@ function setupMatrixInteractions(container, toggleSelector, toggleHandler) {
 }
 
 setupMatrixInteractions(targetMatrixContainer, '.target-matrix-toggle', handleTargetMatrixToggle);
+setupMatrixInteractions(productionTargetMatrixContainer, '.production-target-toggle', handleProductionTargetToggle);
 setupMatrixInteractions(
   conferenceMembershipMatrixContainer,
   '.conference-membership-toggle',

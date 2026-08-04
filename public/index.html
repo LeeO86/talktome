@@ -2068,6 +2068,11 @@
           </div>
           <button type="submit" class="login-submit">Login</button>
         </form>
+        <div id="production-login-panel" class="production-login-panel is-hidden">
+          <p>Choose a production</p>
+          <div id="production-login-options" class="production-login-options"></div>
+          <button type="button" id="production-login-back" class="login-submit login-submit--secondary">Back</button>
+        </div>
         <div id="guest-login-panel" class="guest-login-panel is-hidden">
           <div class="login-field">
             <label for="guest-display-name">Guest name</label>
@@ -2091,6 +2096,7 @@
           <div class="session-info" aria-live="polite">
             <img class="session-brand-icon" src="/images/talktome-mark.png" alt="" aria-hidden="true" />
             <span id="session-info-prefix">Logged in as</span><span id="my-id">Connecting...</span>
+            <span id="active-production-label" class="is-hidden"></span>
             <span id="media-connection-status" class="media-connection-status" title="Signaling and media connection status">
               <span class="media-connection-status__dot" aria-hidden="true"></span>
               <span id="media-connection-status-label">Connecting</span>
@@ -2114,6 +2120,10 @@
           <button id="feed-logout-btn" type="button" class="logout-btn feed-session-logout">Logout</button>
           <div class="settings-body" id="settings-menu" hidden>
             <div class="settings-view" id="settings-main-view">
+              <div id="production-session-selector" class="device-selector feed-optional" hidden>
+                <label for="production-session-select">Production</label>
+                <select id="production-session-select"></select>
+              </div>
               <div class="device-selector feed-optional">
                 <label for="input-select">Microphone</label>
                 <select id="input-select">

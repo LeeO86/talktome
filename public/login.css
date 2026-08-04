@@ -204,6 +204,39 @@
   border-top: 1px solid rgba(148, 163, 184, 0.2);
 }
 
+.production-login-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.production-login-panel p {
+  margin: 0;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.production-login-options {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.production-login-options button {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid rgba(59, 130, 246, 0.38);
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.18);
+  color: #e2e8f0;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.production-login-options button:hover {
+  background: rgba(37, 99, 235, 0.3);
+}
+
 .login-message {
   display: none;
   padding: 0.4rem 0.75rem;

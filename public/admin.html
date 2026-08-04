@@ -1162,6 +1162,100 @@
         cursor: crosshair;
       }
 
+      .production-layout {
+        display: grid;
+        grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr);
+        gap: 1rem;
+      }
+
+      .production-sidebar,
+      .production-panel {
+        padding: 0.9rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.32);
+      }
+
+      .production-list {
+        display: grid;
+        gap: 0.45rem;
+        margin: 0 0 0.9rem;
+        padding: 0;
+        list-style: none;
+      }
+
+      .production-list button {
+        width: 100%;
+        text-align: left;
+        background: rgba(30, 41, 59, 0.72);
+      }
+
+      .production-list button[aria-current="true"] {
+        border-color: #3b82f6;
+        background: rgba(59, 130, 246, 0.18);
+      }
+
+      .production-detail-header,
+      .production-order-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+
+      .production-detail-header h3 {
+        margin: 0;
+      }
+
+      .production-config-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin: 1rem 0;
+      }
+
+      .production-check-list,
+      .production-order-list {
+        display: grid;
+        gap: 0.4rem;
+        max-height: 18rem;
+        margin: 0.6rem 0 0;
+        padding: 0;
+        overflow: auto;
+        list-style: none;
+      }
+
+      .production-check-row,
+      .production-order-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        min-height: 2.3rem;
+        padding: 0.42rem 0.55rem;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        border-radius: 7px;
+        background: rgba(15, 23, 42, 0.45);
+      }
+
+      .production-check-row > span,
+      .production-order-item > span {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .production-order-list button {
+        min-width: 2.1rem;
+        padding: 0.28rem 0.48rem;
+      }
+
+      @media (max-width: 900px) {
+        .production-layout,
+        .production-config-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
       .target-matrix {
         --matrix-cell-size: 1.9rem;
         width: var(--matrix-table-width);
@@ -1908,6 +2002,7 @@
         <a href="#users" data-admin-nav="users">Users</a>
         <a href="#conferences" data-admin-nav="conferences">Conferences</a>
         <a href="#feeds" data-admin-nav="feeds">Feeds</a>
+        <a href="#productions" data-admin-nav="productions">Productions</a>
         <a href="#matrix" data-admin-nav="matrix">Matrix</a>
         <a href="#config" data-admin-nav="config">Config</a>
       </nav>
@@ -2215,6 +2310,71 @@
           </div>
 
           <ul id="feed-list" class="item-list" aria-live="polite"></ul>
+        </div>
+      </section>
+
+      <section id="productions-section" class="card" aria-labelledby="productions-heading">
+        <div class="card-header card-header--toggleable">
+          <div class="card-header__title">
+            <button id="productions-section-toggle" type="button" class="card-collapse-toggle" aria-expanded="true" aria-controls="productions-section-body" aria-label="Collapse productions section"></button>
+            <h2 id="productions-heading">Productions</h2>
+          </div>
+          <div class="card-header__actions">
+            <div id="productions-message" class="flash-message"></div>
+          </div>
+        </div>
+
+        <div id="productions-section-body" class="card-section-body">
+          <div class="section-note">
+            Productions provide separate visible target layouts. Conference membership and audio routing remain global.
+          </div>
+          <div class="production-layout">
+            <aside class="production-sidebar">
+              <ul id="production-list" class="production-list" aria-label="Productions"></ul>
+              <form id="production-create-form" class="inline-form" autocomplete="off">
+                <div class="field-group field-group--stacked">
+                  <label for="production-create-name">New production</label>
+                  <input id="production-create-name" type="text" maxlength="100" required />
+                </div>
+                <button type="submit" class="small">Add</button>
+              </form>
+            </aside>
+
+            <div id="production-empty" class="production-panel">Select a production to configure it.</div>
+            <div id="production-detail" class="production-panel is-hidden">
+              <div class="production-detail-header">
+                <h3 id="production-detail-name"></h3>
+                <div id="production-global-actions" class="inline-controls">
+                  <button id="production-rename" type="button" class="small warning">Rename</button>
+                  <button id="production-delete" type="button" class="small danger">Delete</button>
+                </div>
+              </div>
+
+              <div class="production-config-grid">
+                <section>
+                  <strong>Members</strong>
+                  <ul id="production-members" class="production-check-list"></ul>
+                </section>
+                <section>
+                  <strong>Conferences shown</strong>
+                  <ul id="production-conferences" class="production-check-list"></ul>
+                </section>
+                <section>
+                  <strong>Feeds shown</strong>
+                  <ul id="production-feeds" class="production-check-list"></ul>
+                </section>
+              </div>
+
+              <h3 class="matrix-subheading">Target buttons</h3>
+              <div id="production-target-matrix-container" class="target-matrix-wrap" aria-live="polite"></div>
+
+              <div class="production-order-row matrix-subheading matrix-subheading--secondary">
+                <h3>Button order</h3>
+                <label>Member <select id="production-order-user"></select></label>
+              </div>
+              <ul id="production-order-list" class="production-order-list"></ul>
+            </div>
+          </div>
         </div>
       </section>
 

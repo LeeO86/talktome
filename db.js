@@ -100,6 +100,55 @@ db.exec(`
                                                            PRIMARY KEY (user_id, target_type, target_id)
     );
 
+    CREATE TABLE IF NOT EXISTS productions (
+                                                   id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                   name       TEXT NOT NULL UNIQUE,
+                                                   created_at TEXT NOT NULL,
+                                                   updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS production_users (
+                                                       production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                                                       user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                                                       is_admin      INTEGER NOT NULL DEFAULT 0,
+                                                       PRIMARY KEY (production_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS production_conferences (
+                                                             production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                                                             conference_id INTEGER NOT NULL REFERENCES conferences(id) ON DELETE CASCADE,
+                                                             PRIMARY KEY (production_id, conference_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS production_feeds (
+                                                      production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                                                      feed_id       INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                                                      PRIMARY KEY (production_id, feed_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS production_user_targets (
+                                                             production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                                                             user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                                                             target_type   TEXT NOT NULL,
+                                                             target_id     INTEGER NOT NULL,
+                                                             PRIMARY KEY (production_id, user_id, target_type, target_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS production_target_order (
+                                                             production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                                                             user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                                                             target_type   TEXT NOT NULL,
+                                                             target_id     INTEGER NOT NULL,
+                                                             position      INTEGER NOT NULL,
+                                                             PRIMARY KEY (production_id, user_id, target_type, target_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_production_users_user
+      ON production_users(user_id, production_id);
+
+    CREATE INDEX IF NOT EXISTS idx_production_targets_user
+      ON production_user_targets(production_id, user_id, target_type, target_id);
+
     CREATE TABLE IF NOT EXISTS user_bridge_endpoints (
                                                           user_id              INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                                                           enabled              INTEGER NOT NULL DEFAULT 0,

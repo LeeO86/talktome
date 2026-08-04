@@ -157,6 +157,7 @@ const MOBILE_TARGET_LAYER_LANDSCAPE_SIZE = 4;
 const MOBILE_TARGET_LAYER_DEFAULT_SIZE = 8;
 const MOBILE_TARGET_LAYER_COMPACT_SIZE = 7;
 const TARGET_HOTKEY_STORAGE_KEY_PREFIX = 'targetHotkeys:';
+const ACTIVE_PRODUCTION_STORAGE_KEY_PREFIX = 'activeProduction:';
 const REPLY_HOTKEY_IDENTITY = 'reply';
 const DEFAULT_REPLY_HOTKEY_BINDING = Object.freeze({
   id: 'code:Space',
@@ -342,7 +343,8 @@ function normalizeStoredTargetHotkeyBinding(rawBinding) {
 
 function getTargetHotkeyStorageKeyForSession() {
   if (session?.kind !== 'user' || !session?.userId) return null;
-  return `${TARGET_HOTKEY_STORAGE_KEY_PREFIX}${session.userId}`;
+  const productionSuffix = session.productionId ? `:production:${session.productionId}` : '';
+  return `${TARGET_HOTKEY_STORAGE_KEY_PREFIX}${session.userId}${productionSuffix}`;
 }
 
 function ensureCustomTargetHotkeysLoaded() {
@@ -622,6 +624,9 @@ function createAnonymousSession() {
     feedId: null,
     guestId: null,
     guestProfileUserId: null,
+    productionId: null,
+    productionName: null,
+    productions: [],
     name: null,
   };
 }
@@ -3371,6 +3376,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const guestLoginPanel = document.getElementById("guest-login-panel");
   const guestLoginButton = document.getElementById("guest-login-button");
   const guestDisplayNameInput = document.getElementById("guest-display-name");
+  const productionLoginPanel = document.getElementById('production-login-panel');
+  const productionLoginOptions = document.getElementById('production-login-options');
+  const productionLoginBack = document.getElementById('production-login-back');
   const intercomApp = document.getElementById("intercom-app");
   const loginError = document.getElementById("login-error");
   const logoutBtn = document.getElementById("logout-btn");
@@ -3384,6 +3392,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const myIdEl = document.getElementById("my-id");
   const sessionInfoPrefixEl = document.getElementById('session-info-prefix');
+  const activeProductionLabelEl = document.getElementById('active-production-label');
+  const productionSessionSelector = document.getElementById('production-session-selector');
+  const productionSessionSelect = document.getElementById('production-session-select');
   const mediaConnectionStatusEl = document.getElementById('media-connection-status');
   const mediaConnectionStatusLabelEl = document.getElementById('media-connection-status-label');
   let mediaInitialized = false;
@@ -3623,6 +3634,9 @@ document.addEventListener("DOMContentLoaded", () => {
         feedId: null,
         guestId,
         guestProfileUserId,
+        productionId: parsed?.productionId ? String(parsed.productionId) : null,
+        productionName: parsed?.productionName || null,
+        productions: Array.isArray(parsed?.productions) ? parsed.productions : [],
         name,
       };
     } catch (err) {
@@ -3637,6 +3651,9 @@ document.addEventListener("DOMContentLoaded", () => {
       sessionStorage.setItem(GUEST_SESSION_STORAGE_KEY, JSON.stringify({
         guestId: nextSession.guestId,
         guestProfileUserId: nextSession.guestProfileUserId,
+        productionId: nextSession.productionId,
+        productionName: nextSession.productionName,
+        productions: nextSession.productions,
         name: nextSession.name,
       }));
     } catch (err) {
@@ -5581,6 +5598,7 @@ let cachedOperatorTargets = null;
   function applySessionUI() {
     const isFeed = session.kind === 'feed';
     const isOperator = isOperatorSession();
+    applyProductionSessionUI();
     document.body.classList.toggle('feed-mode', isFeed);
     ensureCustomTargetHotkeysLoaded();
     if (!isOperator) {
@@ -6308,12 +6326,103 @@ let cachedOperatorTargets = null;
     });
   }
 
-  async function completeCredentialLogin(user) {
+  const PRODUCTION_SELECTION_CANCELLED = Symbol('production-selection-cancelled');
+
+  function getActiveProductionStorageKey(identity) {
+    const id = identity?.kind === 'guest'
+      ? identity.guestProfileUserId
+      : identity?.id || identity?.userId;
+    return id ? `${ACTIVE_PRODUCTION_STORAGE_KEY_PREFIX}${id}` : null;
+  }
+
+  function restoreCredentialLoginView(kind = 'user') {
+    productionLoginPanel?.classList.add('is-hidden');
+    loginForm?.classList.remove('is-hidden');
+    if (guestLoginPanel && guestLoginButton) {
+      guestLoginButton.disabled = !guestLoginEnabled;
+      guestLoginPanel.classList.toggle('is-hidden', !guestLoginEnabled);
+    }
+  }
+
+  function chooseProduction(identity, { preferStored = false } = {}) {
+    const productions = Array.isArray(identity?.productions) ? identity.productions : [];
+    if (productions.length === 0) return Promise.resolve(null);
+    if (productions.length === 1) return Promise.resolve(productions[0]);
+
+    if (preferStored) {
+      const storageKey = getActiveProductionStorageKey(identity);
+      const storedId = storageKey ? localStorage.getItem(storageKey) : null;
+      const stored = productions.find((production) => String(production.id) === String(storedId));
+      if (stored) return Promise.resolve(stored);
+    }
+
+    loginForm?.classList.add('is-hidden');
+    guestLoginPanel?.classList.add('is-hidden');
+    productionLoginPanel?.classList.remove('is-hidden');
+    if (productionLoginOptions) {
+      productionLoginOptions.innerHTML = '';
+    }
+
+    return new Promise((resolve) => {
+      const finish = (selection) => {
+        productionLoginBack?.removeEventListener('click', handleBack);
+        productionLoginPanel?.classList.add('is-hidden');
+        resolve(selection);
+      };
+      const handleBack = () => {
+        restoreCredentialLoginView(identity?.kind);
+        finish(PRODUCTION_SELECTION_CANCELLED);
+      };
+      productions.forEach((production) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = production.name;
+        button.addEventListener('click', () => finish(production), { once: true });
+        productionLoginOptions?.appendChild(button);
+      });
+      productionLoginBack?.addEventListener('click', handleBack);
+    });
+  }
+
+  function applyProductionSessionUI() {
+    const productions = Array.isArray(session?.productions) ? session.productions : [];
+    if (activeProductionLabelEl) {
+      activeProductionLabelEl.textContent = session.productionName ? `· ${session.productionName}` : '';
+      activeProductionLabelEl.classList.toggle('is-hidden', !session.productionName);
+    }
+    if (productionSessionSelector && productionSessionSelect) {
+      productionSessionSelector.hidden = session.kind === 'feed' || productions.length < 2;
+      const options = productions.map((production) => {
+        const option = document.createElement('option');
+        option.value = String(production.id);
+        option.textContent = production.name;
+        option.selected = String(production.id) === String(session.productionId);
+        return option;
+      });
+      productionSessionSelect.replaceChildren(...options);
+    }
+  }
+
+  function persistActiveProduction(identity, production) {
+    const storageKey = getActiveProductionStorageKey(identity);
+    if (!storageKey) return;
+    if (production?.id) localStorage.setItem(storageKey, String(production.id));
+    else localStorage.removeItem(storageKey);
+  }
+
+  async function completeCredentialLogin(user, { preferStoredProduction = false } = {}) {
     const kind = user.kind === 'feed' ? 'feed' : 'user';
+    const production = kind === 'user'
+      ? await chooseProduction(user, { preferStored: preferStoredProduction })
+      : null;
+    if (production === PRODUCTION_SELECTION_CANCELLED) return false;
     const nextSession = {
       kind,
       userId: kind === 'user' ? String(user.id) : null,
       feedId: kind === 'feed' ? String(user.id) : null,
+      productionId: production?.id ? String(production.id) : null,
+      productionName: production?.name || null,
+      productions: kind === 'user' && Array.isArray(user.productions) ? user.productions : [],
       name: user.name,
     };
 
@@ -6324,6 +6433,7 @@ let cachedOperatorTargets = null;
       allowPrompt: true,
     });
     if (!reg?.ok) {
+      restoreCredentialLoginView(kind);
       if (!reg?.cancelled) setLoginError("Unable to sign in");
       return false;
     }
@@ -6341,6 +6451,7 @@ let cachedOperatorTargets = null;
     localStorage.setItem(IDENTITY_KIND_KEY, kind);
     if (kind === 'user') {
       localStorage.setItem("userId", session.userId);
+      persistActiveProduction(user, production);
       localStorage.removeItem(FEED_ID_STORAGE_KEY);
     } else {
       localStorage.setItem(FEED_ID_STORAGE_KEY, session.feedId);
@@ -6350,12 +6461,32 @@ let cachedOperatorTargets = null;
     loginContainer.style.display = "none";
     intercomApp.style.display = "flex";
     setSessionDisplay(user.name);
+    applyProductionSessionUI();
     applySessionUI();
     await syncOperatorTargetsFromLatestUserList(`login-${kind}`);
     requestInitialMicrophoneAccess({ reason: `login-${kind}` });
     initializeMediaIfPossible();
     return true;
   }
+
+  productionSessionSelect?.addEventListener('change', async () => {
+    if (!isOperatorSession()) return;
+    const production = (session.productions || []).find((item) => (
+      String(item.id) === String(productionSessionSelect.value)
+    ));
+    if (!production || String(production.id) === String(session.productionId)) return;
+
+    try {
+      handleStopTalking({ preventDefault() {}, currentTarget: null });
+    } catch {}
+    session.productionId = String(production.id);
+    session.productionName = production.name;
+    loadedTargetHotkeyStorageKey = null;
+    persistActiveProduction(session, production);
+    if (session.kind === 'guest') persistGuestSession(session);
+    applyProductionSessionUI();
+    await renderTargetList(cachedUsers);
+  });
 
   function consumeLoginTokenFromHash() {
     const hash = window.location.hash;
@@ -6401,24 +6532,46 @@ let cachedOperatorTargets = null;
   } else if (storedKind === "user") {
     const storedId = localStorage.getItem("userId");
     if (storedId && storedName) {
-      session = { kind: "user", userId: storedId, feedId: null, name: storedName };
-      console.log("Auto-login as:", storedName);
-      loginContainer.style.display = "none";
-      intercomApp.style.display = "flex";
-      setSessionDisplay(storedName);
-      applySessionUI();
-      shouldInitializeAfterConnect = true;
-      requestSessionRecovery('auto-login-user');
-      requestInitialMicrophoneAccess({ reason: 'auto-login-user' });
+      (async () => {
+        let productions = [];
+        try {
+          productions = await fetchJSON(`/users/${storedId}/productions`);
+        } catch (error) {
+          console.warn('Unable to restore production selection:', error);
+        }
+        const identity = { id: storedId, userId: storedId, kind: 'user', name: storedName, productions };
+        const production = await chooseProduction(identity, { preferStored: true });
+        if (production === PRODUCTION_SELECTION_CANCELLED) return;
+        session = {
+          kind: "user",
+          userId: storedId,
+          feedId: null,
+          name: storedName,
+          productionId: production?.id ? String(production.id) : null,
+          productionName: production?.name || null,
+          productions,
+        };
+        persistActiveProduction(identity, production);
+        console.log("Auto-login as:", storedName);
+        loginContainer.style.display = "none";
+        intercomApp.style.display = "flex";
+        setSessionDisplay(storedName);
+        applyProductionSessionUI();
+        applySessionUI();
+        shouldInitializeAfterConnect = true;
+        requestSessionRecovery('auto-login-user');
+        requestInitialMicrophoneAccess({ reason: 'auto-login-user' });
+      })();
     }
   } else if (storedKind === "feed") {
     const storedFeedId = localStorage.getItem(FEED_ID_STORAGE_KEY);
     if (storedFeedId && storedName) {
-      session = { kind: "feed", userId: null, feedId: storedFeedId, name: storedName };
+      session = { ...createAnonymousSession(), kind: "feed", userId: null, feedId: storedFeedId, name: storedName };
       console.log("Auto-login feed:", storedName);
       loginContainer.style.display = "none";
       intercomApp.style.display = "flex";
       setSessionDisplay(storedName);
+      applyProductionSessionUI();
       feedManualStop = false;
       shouldStartFeedWhenReady = true;
       applySessionUI();
@@ -6432,6 +6585,7 @@ let cachedOperatorTargets = null;
     loginContainer.style.display = "none";
     intercomApp.style.display = "flex";
     setSessionDisplay(storedGuestSession.name);
+    applyProductionSessionUI();
     applySessionUI();
     shouldInitializeAfterConnect = true;
     requestSessionRecovery('auto-login-guest');
@@ -6488,12 +6642,22 @@ let cachedOperatorTargets = null;
         return;
       }
 
+      const production = await chooseProduction({
+        kind: 'guest',
+        guestProfileUserId: payload.guestProfileUserId,
+        productions: payload.productions,
+      });
+      if (production === PRODUCTION_SELECTION_CANCELLED) return;
+
       const nextSession = {
         kind: 'guest',
         userId: null,
         feedId: null,
         guestId: String(payload.guestId || ''),
         guestProfileUserId: String(payload.guestProfileUserId || ''),
+        productionId: production?.id ? String(production.id) : null,
+        productionName: production?.name || null,
+        productions: Array.isArray(payload.productions) ? payload.productions : [],
         name: payload.name || 'Guest',
       };
 
@@ -6505,6 +6669,7 @@ let cachedOperatorTargets = null;
         allowPrompt: false,
       });
       if (!reg?.ok) {
+        restoreCredentialLoginView('guest');
         setLoginError(reg?.error || "Unable to sign in as Guest");
         clearStoredGuestSession();
         return;
@@ -6515,10 +6680,12 @@ let cachedOperatorTargets = null;
       shouldStartFeedWhenReady = false;
       clearStoredPersistentIdentity();
       persistGuestSession(nextSession);
+      persistActiveProduction(nextSession, production);
 
       loginContainer.style.display = "none";
       intercomApp.style.display = "flex";
       setSessionDisplay(nextSession.name);
+      applyProductionSessionUI();
       applySessionUI();
       await syncOperatorTargetsFromLatestUserList('login-guest');
       requestInitialMicrophoneAccess({ reason: 'login-guest' });
@@ -8467,9 +8634,12 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
     let targets;
     try {
+      const productionQuery = session.productionId
+        ? `?productionId=${encodeURIComponent(session.productionId)}`
+        : '';
       targets = session.kind === 'guest'
-        ? await fetchJSON('/guest/targets')
-        : await fetchJSON(`/users/${dbUserId}/targets?includeMemberships=1`);
+        ? await fetchJSON(`/guest/targets${productionQuery}`)
+        : await fetchJSON(`/users/${dbUserId}/targets?includeMemberships=1${session.productionId ? `&productionId=${encodeURIComponent(session.productionId)}` : ''}`);
     } catch (err) {
       console.error('Failed to fetch targets', err);
       return;
