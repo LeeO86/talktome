@@ -1258,11 +1258,27 @@
         margin: 0;
       }
 
-      .production-config-grid {
-        display: grid;
-        grid-template-columns: minmax(14rem, 28rem);
-        gap: 0.75rem;
+      .production-config-layout {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 1rem;
         margin: 1rem 0;
+      }
+
+      .production-members-panel {
+        flex: 1 1 16rem;
+        min-width: min(100%, 16rem);
+        max-width: 28rem;
+      }
+
+      .production-matrix-panel {
+        flex: 999 1 38rem;
+        min-width: min(100%, 38rem);
+      }
+
+      .production-matrix-panel .matrix-subheading {
+        margin-top: 0;
       }
 
       .production-check-list,
@@ -1289,8 +1305,13 @@
       }
 
       .production-check-row {
+        min-height: 2.45rem;
         cursor: pointer;
         transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+      }
+
+      #production-members {
+        max-height: min(36rem, 65vh);
       }
 
       .production-check-row.is-inactive {
@@ -1317,6 +1338,8 @@
 
       .production-admin-role-toggle {
         flex: 0 0 auto;
+        min-height: 1.8rem;
+        padding: 0.25rem 0.55rem;
       }
 
       .production-check-row > span,
@@ -1331,8 +1354,7 @@
       }
 
       @media (max-width: 900px) {
-        .production-layout,
-        .production-config-grid {
+        .production-layout {
           grid-template-columns: 1fr;
         }
       }
@@ -2449,15 +2471,16 @@
                 </div>
               </div>
 
-              <div class="production-config-grid">
+              <div class="production-config-layout">
                 <section class="production-members-panel">
                   <strong>Members</strong>
                   <ul id="production-members" class="production-check-list"></ul>
                 </section>
+                <section class="production-matrix-panel">
+                  <h3 class="matrix-subheading">Target buttons</h3>
+                  <div id="production-target-matrix-container" class="target-matrix-wrap" aria-live="polite"></div>
+                </section>
               </div>
-
-              <h3 class="matrix-subheading">Target buttons</h3>
-              <div id="production-target-matrix-container" class="target-matrix-wrap" aria-live="polite"></div>
 
               <div class="production-order-row matrix-subheading matrix-subheading--secondary">
                 <h3>Button order</h3>
