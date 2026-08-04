@@ -52,6 +52,7 @@ const adminLoginMessage = document.getElementById('admin-login-message');
 const adminNameInput = document.getElementById('admin-name');
 const adminApp = document.getElementById('admin-app');
 const adminBar = document.getElementById('admin-bar');
+const adminBarMessage = document.getElementById('admin-bar-message');
 const adminNameLabel = document.getElementById('admin-name-label');
 const adminLogoutBtn = document.getElementById('admin-logout');
 const adminNavLinks = [...document.querySelectorAll('[data-admin-nav]')];
@@ -215,23 +216,7 @@ function showLoginMessage(message, tone = 'error') {
 }
 
 function showMessage(text, tone = 'error', scope = 'global') {
-  const targetId = scope === 'user'
-    ? 'user-message'
-    : scope === 'conf'
-      ? 'conf-message'
-      : scope === 'feed'
-        ? 'feed-message'
-        : scope === 'matrix'
-          ? 'matrix-message'
-        : scope === 'productions'
-          ? 'productions-message'
-        : scope === 'status'
-          ? 'status-message'
-        : scope === 'config'
-          ? 'config-message'
-          : 'message';
-
-  const el = document.getElementById(targetId);
+  const el = adminBarMessage;
   if (!el) return;
 
   const toneClass = tone === 'success' || tone === 'green'
@@ -241,14 +226,18 @@ function showMessage(text, tone = 'error', scope = 'global') {
       : 'flash-error';
 
   el.textContent = text;
+  el.title = text;
   el.classList.remove('flash-success', 'flash-error', 'flash-warning');
   el.classList.add('is-visible', toneClass);
+  adminBar?.classList.add('has-message');
 
   showMessage._timers = showMessage._timers || {};
-  clearTimeout(showMessage._timers[targetId]);
-  showMessage._timers[targetId] = setTimeout(() => {
+  clearTimeout(showMessage._timers.adminBar);
+  showMessage._timers.adminBar = setTimeout(() => {
     el.classList.remove('is-visible', toneClass);
     el.textContent = '';
+    el.removeAttribute('title');
+    adminBar?.classList.remove('has-message');
   }, 5000);
 }
 
