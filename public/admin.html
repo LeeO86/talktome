@@ -66,7 +66,7 @@
         padding: 0.58rem 1.15rem;
         transform: translateX(-50%);
         display: grid;
-        grid-template-columns: minmax(10rem, 1fr) auto minmax(0, 1fr) auto;
+        grid-template-columns: minmax(10rem, 1fr) auto minmax(10rem, 1fr);
         align-items: center;
         gap: 1rem;
         background: rgba(11, 17, 32, 0.94);
@@ -127,15 +127,24 @@
       }
 
       #admin-logout {
-        justify-self: end;
+        flex: 0 0 auto;
         min-height: 2.15rem;
         padding: 0.34rem 0.8rem;
         font-size: 0.86rem;
       }
 
+      .admin-bar__actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        min-width: 0;
+      }
+
       .admin-bar__message-slot {
         display: flex;
         justify-content: flex-end;
+        flex: 1 1 auto;
         min-width: 0;
       }
 
@@ -1865,19 +1874,21 @@
           scrollbar-width: none;
         }
 
-        .admin-bar__message-slot {
-          grid-column: 1;
+        .admin-bar__actions {
+          grid-column: 2;
           grid-row: 1;
-          justify-content: flex-start;
         }
 
         .admin-bar.has-message .admin-bar__meta {
           display: none;
         }
 
-        #admin-logout {
-          grid-column: 2;
-          grid-row: 1;
+        .admin-bar.has-message .admin-bar__actions {
+          grid-column: 1 / -1;
+        }
+
+        .admin-bar.has-message .admin-bar__message-slot {
+          justify-content: flex-start;
         }
 
         .admin-bar__nav::-webkit-scrollbar {
@@ -2124,10 +2135,12 @@
         <a href="#matrix" data-admin-nav="matrix">Matrix</a>
         <a href="#config" data-admin-nav="config">Config</a>
       </nav>
-      <div class="admin-bar__message-slot" aria-live="polite" aria-atomic="true">
-        <div id="admin-bar-message" class="flash-message" role="status"></div>
+      <div class="admin-bar__actions">
+        <div class="admin-bar__message-slot" aria-live="polite" aria-atomic="true">
+          <div id="admin-bar-message" class="flash-message" role="status"></div>
+        </div>
+        <button id="admin-logout" type="button">Logout</button>
       </div>
-      <button id="admin-logout" type="button">Logout</button>
     </div>
 
     <main id="admin-app" class="is-hidden">
