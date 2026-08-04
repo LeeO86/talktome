@@ -21,8 +21,6 @@ test('keeps production layouts separate from the global target matrix', () => {
     const production = db.createProduction('Morning show');
     db.setProductionUser(production, anna);
     db.setProductionUser(production, daniel, { isAdmin: true });
-    db.setProductionResource(production, 'conference', regie, true);
-    db.setProductionResource(production, 'feed', program, true);
     db.addProductionTarget(production, anna, 'conference', regie);
     db.addProductionTarget(production, anna, 'feed', program);
 
@@ -52,17 +50,9 @@ test('keeps production layouts separate from the global target matrix', () => {
     assert.equal(db.getProductionById(production).name, 'Morning show');
     assert.equal(db.getProductionTargets(anna, production).length, 2);
 
-    db.setProductionResource(production, 'conference', regie, false);
-    assert.deepEqual(
-      db.getProductionTargets(anna, production).map((target) => target.targetType),
-      ['feed']
-    );
-
     const legacySnapshot = { ...snapshot };
     delete legacySnapshot.productions;
     delete legacySnapshot.productionUsers;
-    delete legacySnapshot.productionConferences;
-    delete legacySnapshot.productionFeeds;
     delete legacySnapshot.productionUserTargets;
     delete legacySnapshot.productionTargetOrder;
     db.importDatabaseSnapshot(legacySnapshot);

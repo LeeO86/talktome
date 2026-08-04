@@ -114,18 +114,6 @@ db.exec(`
                                                        PRIMARY KEY (production_id, user_id)
     );
 
-    CREATE TABLE IF NOT EXISTS production_conferences (
-                                                             production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
-                                                             conference_id INTEGER NOT NULL REFERENCES conferences(id) ON DELETE CASCADE,
-                                                             PRIMARY KEY (production_id, conference_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS production_feeds (
-                                                      production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
-                                                      feed_id       INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
-                                                      PRIMARY KEY (production_id, feed_id)
-    );
-
     CREATE TABLE IF NOT EXISTS production_user_targets (
                                                              production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
                                                              user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

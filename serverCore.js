@@ -173,9 +173,6 @@ const {
   getProductionMembers,
   setProductionUser,
   removeProductionUser,
-  getProductionConferences,
-  getProductionFeeds,
-  setProductionResource,
   getProductionTargets,
   addProductionTarget,
   removeProductionTarget,
@@ -2196,12 +2193,7 @@ function buildOperatorTargetsForUser(userId, productionId = null) {
   const explicitTargets = numericProductionId === null
     ? (getUserTargets(userId) || [])
     : (getProductionTargets(userId, numericProductionId) || []);
-  const allowedConferenceIds = numericProductionId === null
-    ? null
-    : new Set(getProductionConferences(numericProductionId).map((conference) => Number(conference.id)));
-  const conferenceMemberships = (getConferencesForUser(userId) || []).filter((conference) => (
-    allowedConferenceIds === null || allowedConferenceIds.has(Number(conference.id))
-  ));
+  const conferenceMemberships = getConferencesForUser(userId) || [];
   const explicitConferenceIds = new Set();
   const mergedTargets = [];
 
@@ -2292,8 +2284,8 @@ function buildCompanionSnapshot(productionId = null) {
     serverTime: new Date().toISOString(),
     cutCameraUser,
     users,
-    conferences: productionId === null ? getAllConferences() : getProductionConferences(productionId),
-    feeds: productionId === null ? getAllFeeds() : getProductionFeeds(productionId),
+    conferences: getAllConferences(),
+    feeds: getAllFeeds(),
     production: productionId === null ? null : getProductionById(productionId),
   };
 }
@@ -2315,12 +2307,6 @@ function emitCompanionEvent(event, payload = {}) {
     }
     const userId = Number(payload?.userId ?? payload?.state?.userId ?? payload?.state?.id);
     if (Number.isFinite(userId) && !isUserInProduction(userId, productionId)) continue;
-    const conferenceId = Number(payload?.conferenceId);
-    if (Number.isFinite(conferenceId) && !getProductionConferences(productionId)
-      .some((conference) => Number(conference.id) === conferenceId)) continue;
-    const feedId = Number(payload?.feedId);
-    if (Number.isFinite(feedId) && !getProductionFeeds(productionId)
-      .some((feed) => Number(feed.id) === feedId)) continue;
     socket.emit(event, payload);
   }
 }
@@ -2850,8 +2836,8 @@ app.get("/admin/productions/:productionId", requireProductionManager, (req, res)
     res.json({
       production: getProductionById(req.productionId),
       members,
-      conferences: getProductionConferences(req.productionId),
-      feeds: getProductionFeeds(req.productionId),
+      conferences: getAllConferences(),
+      feeds: getAllFeeds().map((feed) => ({ id: feed.id, name: feed.name })),
       targets,
       catalog: {
         users: getAllUsers()
@@ -2922,15 +2908,6 @@ app.delete("/admin/productions/:productionId/users/:userId", requireProductionMa
     res.sendStatus(204);
   } catch (err) {
     res.status(400).json({ error: err.message || "Failed to remove production member" });
-  }
-});
-
-app.put("/admin/productions/:productionId/resources/:type/:resourceId", requireProductionManager, (req, res) => {
-  try {
-    setProductionResource(req.productionId, req.params.type, req.params.resourceId, Boolean(req.body?.enabled));
-    res.sendStatus(204);
-  } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to update production resource" });
   }
 });
 
@@ -4160,7 +4137,7 @@ app.get("/api/v1/companion/users", requireCompanionApiKey, (req, res) => {
 app.get("/api/v1/companion/conferences", requireCompanionApiKey, (req, res) => {
   try {
     const productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
-    res.json(productionId === null ? getAllConferences() : getProductionConferences(productionId));
+    res.json(getAllConferences());
   } catch (err) {
     res.status(err.statusCode || 400).json({ error: err.message });
   }
@@ -4169,7 +4146,7 @@ app.get("/api/v1/companion/conferences", requireCompanionApiKey, (req, res) => {
 app.get("/api/v1/companion/feeds", requireCompanionApiKey, (req, res) => {
   try {
     const productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
-    res.json(productionId === null ? getAllFeeds() : getProductionFeeds(productionId));
+    res.json(getAllFeeds());
   } catch (err) {
     res.status(err.statusCode || 400).json({ error: err.message });
   }

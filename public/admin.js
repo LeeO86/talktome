@@ -71,8 +71,6 @@ const productionGlobalActions = document.getElementById('production-global-actio
 const productionRenameButton = document.getElementById('production-rename');
 const productionDeleteButton = document.getElementById('production-delete');
 const productionMembersList = document.getElementById('production-members');
-const productionConferencesList = document.getElementById('production-conferences');
-const productionFeedsList = document.getElementById('production-feeds');
 const productionTargetMatrixContainer = document.getElementById('production-target-matrix-container');
 const productionOrderUser = document.getElementById('production-order-user');
 const productionOrderList = document.getElementById('production-order-list');
@@ -1451,7 +1449,7 @@ function renderProductionMembers(payload) {
   productionMembersList.innerHTML = payload.catalog.users.map((user) => {
     const member = memberMap.get(String(user.id));
     const adminControl = member && payload.permissions.globalAdmin
-      ? `<label title="Production admin"><input type="checkbox" data-production-admin="${user.id}" ${member.isProductionAdmin ? 'checked' : ''}> Admin</label>`
+      ? `<label class="production-admin-toggle" title="Production admin"><input type="checkbox" data-production-admin="${user.id}" ${member.isProductionAdmin ? 'checked' : ''}><span>Admin</span></label>`
       : member?.isProductionAdmin
         ? '<span class="badge admin">Production admin</span>'
         : '';
@@ -1463,27 +1461,6 @@ function renderProductionMembers(payload) {
       </li>
     `;
   }).join('') || '<li class="section-note">No users available.</li>';
-}
-
-function renderProductionResources(payload) {
-  const linkedConferences = new Set(payload.conferences.map((item) => String(item.id)));
-  const linkedFeeds = new Set(payload.feeds.map((item) => String(item.id)));
-  if (productionConferencesList) {
-    productionConferencesList.innerHTML = payload.catalog.conferences.map((conference) => `
-      <li class="production-check-row">
-        <input type="checkbox" data-production-resource="conference" data-resource-id="${conference.id}" ${linkedConferences.has(String(conference.id)) ? 'checked' : ''}>
-        <span>${escapeHtml(conference.name)}</span>
-      </li>
-    `).join('') || '<li class="section-note">No conferences available.</li>';
-  }
-  if (productionFeedsList) {
-    productionFeedsList.innerHTML = payload.catalog.feeds.map((feed) => `
-      <li class="production-check-row">
-        <input type="checkbox" data-production-resource="feed" data-resource-id="${feed.id}" ${linkedFeeds.has(String(feed.id)) ? 'checked' : ''}>
-        <span>${escapeHtml(feed.name)}</span>
-      </li>
-    `).join('') || '<li class="section-note">No feeds available.</li>';
-  }
 }
 
 function renderProductionTargetMatrix(payload) {
@@ -1549,13 +1526,70 @@ function renderProductionOrder(payload, preferredUserId = null) {
   )).join('');
   const userId = productionOrderUser.value;
   const targets = payload.targets[String(userId)] || [];
-  productionOrderList.innerHTML = targets.map((target, index) => `
-    <li class="production-order-item" data-order-index="${index}">
-      <span>${escapeHtml(target.name)} <small>(${escapeHtml(target.targetType)})</small></span>
-      <button type="button" class="small" data-order-move="up" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escapeHtml(target.name)} up">↑</button>
-      <button type="button" class="small" data-order-move="down" ${index === targets.length - 1 ? 'disabled' : ''} aria-label="Move ${escapeHtml(target.name)} down">↓</button>
+  productionOrderList.innerHTML = targets.map((target) => `
+    <li class="list-chip draggable-target" draggable="true"
+        data-type="${escapeHtml(target.targetType)}" data-id="${escapeHtml(target.targetId)}">
+      <span class="drag-handle" title="Drag to reorder">☰</span>
+      <span class="chip-label">${escapeHtml(target.name)}</span>
+      <span class="badge">${escapeHtml(target.targetType)}</span>
     </li>
   `).join('') || '<li class="section-note">No target buttons assigned to this member.</li>';
+  initProductionTargetOrdering(Number(userId), productionOrderList);
+}
+
+function initProductionTargetOrdering(userId, list) {
+  const items = [...list.querySelectorAll('.draggable-target')];
+  items.forEach((item) => {
+    item.addEventListener('dragstart', () => item.classList.add('dragging'));
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+      saveProductionTargetOrder(userId, list);
+    });
+  });
+
+  const onDragOver = (event) => {
+    event.preventDefault();
+    const dragging = list.querySelector('.dragging');
+    if (!dragging) return;
+    const afterElement = getDragAfterElement(list, event.clientY);
+    if (!afterElement) list.appendChild(dragging);
+    else if (afterElement !== dragging) list.insertBefore(dragging, afterElement);
+  };
+  if (list._productionDragOverHandler) {
+    list.removeEventListener('dragover', list._productionDragOverHandler);
+  }
+  list._productionDragOverHandler = onDragOver;
+  list.addEventListener('dragover', onDragOver);
+  if (!list._productionDropReady) {
+    list.addEventListener('drop', (event) => event.preventDefault());
+    list._productionDropReady = true;
+  }
+}
+
+async function saveProductionTargetOrder(userId, list) {
+  if (!selectedProductionPayload || !selectedProductionId) return;
+  const items = [...list.querySelectorAll('.draggable-target')].map((item) => ({
+    targetType: item.dataset.type,
+    targetId: Number(item.dataset.id),
+  }));
+  try {
+    await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}/targets/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    const targetsByKey = new Map(
+      (selectedProductionPayload.targets[String(userId)] || []).map((target) => (
+        [productionTargetKey(target.targetType, target.targetId), target]
+      ))
+    );
+    selectedProductionPayload.targets[String(userId)] = items
+      .map((item) => targetsByKey.get(productionTargetKey(item.targetType, item.targetId)))
+      .filter(Boolean);
+  } catch (error) {
+    showMessage(error.message || 'Failed to reorder targets', 'error', 'productions');
+    await loadProductionDetail(selectedProductionId);
+  }
 }
 
 function renderProductionDetail(payload) {
@@ -1564,7 +1598,6 @@ function renderProductionDetail(payload) {
   if (productionDetailName) productionDetailName.textContent = payload.production.name;
   if (productionGlobalActions) productionGlobalActions.hidden = !payload.permissions.globalAdmin;
   renderProductionMembers(payload);
-  renderProductionResources(payload);
   renderProductionTargetMatrix(payload);
   renderProductionOrder(payload);
 }
@@ -3785,54 +3818,8 @@ productionMembersList?.addEventListener('change', async (event) => {
   }
 });
 
-async function handleProductionResourceChange(event) {
-  const input = event.target.closest('[data-production-resource]');
-  if (!input || !selectedProductionId) return;
-  input.disabled = true;
-  try {
-    await productionRequest(
-      `/admin/productions/${selectedProductionId}/resources/${encodeURIComponent(input.dataset.productionResource)}/${input.dataset.resourceId}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: input.checked }),
-      }
-    );
-    await loadProductionDetail(selectedProductionId);
-  } catch (error) {
-    input.checked = !input.checked;
-    input.disabled = false;
-    showMessage(error.message || 'Failed to update resource', 'error', 'productions');
-  }
-}
-
-productionConferencesList?.addEventListener('change', handleProductionResourceChange);
-productionFeedsList?.addEventListener('change', handleProductionResourceChange);
 productionOrderUser?.addEventListener('change', () => {
   if (selectedProductionPayload) renderProductionOrder(selectedProductionPayload, productionOrderUser.value);
-});
-productionOrderList?.addEventListener('click', async (event) => {
-  const button = event.target.closest('[data-order-move]');
-  if (!button || !selectedProductionPayload || !selectedProductionId) return;
-  const item = button.closest('[data-order-index]');
-  const index = Number(item?.dataset.orderIndex);
-  const userId = Number(productionOrderUser?.value);
-  const targets = selectedProductionPayload.targets[String(userId)] || [];
-  const nextIndex = button.dataset.orderMove === 'up' ? index - 1 : index + 1;
-  if (!Number.isInteger(index) || nextIndex < 0 || nextIndex >= targets.length) return;
-  [targets[index], targets[nextIndex]] = [targets[nextIndex], targets[index]];
-  renderProductionOrder(selectedProductionPayload, userId);
-  try {
-    await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}/targets/order`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: targets.map(({ targetType, targetId }) => ({ targetType, targetId })) }),
-    });
-  } catch (error) {
-    [targets[index], targets[nextIndex]] = [targets[nextIndex], targets[index]];
-    renderProductionOrder(selectedProductionPayload, userId);
-    showMessage(error.message || 'Failed to reorder targets', 'error', 'productions');
-  }
 });
 
 if (adminLoginForm) {

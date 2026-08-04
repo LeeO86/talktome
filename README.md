@@ -144,8 +144,9 @@ page. Users without a Production keep the existing global layout. Users in one
 Production enter it automatically; users assigned to several choose after login
 and can switch from the application menu.
 
-Each Production has its own members, visible conferences/feeds, and individual
-target assignment and order for every member. Production admins may manage
+Each Production has its own members and individual target assignment and order
+for every member. All globally configured conferences and feeds remain directly
+available as target choices. Production admins may manage
 those memberships and layouts without access to global users, server config,
 backups, or other Productions. Only global admins may create, rename, delete,
 or assign admins to Productions.

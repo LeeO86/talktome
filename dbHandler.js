@@ -277,13 +277,9 @@ function getAllProductions() {
       p.name,
       p.created_at,
       p.updated_at,
-      COUNT(DISTINCT pu.user_id) AS member_count,
-      COUNT(DISTINCT pc.conference_id) AS conference_count,
-      COUNT(DISTINCT pf.feed_id) AS feed_count
+      COUNT(DISTINCT pu.user_id) AS member_count
     FROM productions p
     LEFT JOIN production_users pu ON pu.production_id = p.id
-    LEFT JOIN production_conferences pc ON pc.production_id = p.id
-    LEFT JOIN production_feeds pf ON pf.production_id = p.id
     GROUP BY p.id
     ORDER BY p.name COLLATE NOCASE
   `).all();
@@ -356,8 +352,6 @@ function deleteProduction(productionId) {
   const remove = db.transaction(() => {
     db.prepare('DELETE FROM production_target_order WHERE production_id = ?').run(id);
     db.prepare('DELETE FROM production_user_targets WHERE production_id = ?').run(id);
-    db.prepare('DELETE FROM production_feeds WHERE production_id = ?').run(id);
-    db.prepare('DELETE FROM production_conferences WHERE production_id = ?').run(id);
     db.prepare('DELETE FROM production_users WHERE production_id = ?').run(id);
     return db.prepare('DELETE FROM productions WHERE id = ?').run(id).changes > 0;
   });
@@ -402,56 +396,6 @@ function removeProductionUser(productionId, userId) {
   return remove();
 }
 
-function getProductionConferences(productionId) {
-  return db.prepare(`
-    SELECT c.id, c.name
-    FROM production_conferences pc
-    JOIN conferences c ON c.id = pc.conference_id
-    WHERE pc.production_id = ?
-    ORDER BY c.name COLLATE NOCASE
-  `).all(Number(productionId));
-}
-
-function getProductionFeeds(productionId) {
-  return db.prepare(`
-    SELECT f.id, f.name
-    FROM production_feeds pf
-    JOIN feeds f ON f.id = pf.feed_id
-    WHERE pf.production_id = ?
-    ORDER BY f.name COLLATE NOCASE
-  `).all(Number(productionId));
-}
-
-function setProductionResource(productionId, resourceType, resourceId, enabled) {
-  const pid = Number(productionId);
-  const rid = Number(resourceId);
-  if (!getProductionById(pid)) throw new Error('Production not found');
-  const definitions = resourceType === 'conference'
-    ? { table: 'production_conferences', column: 'conference_id', source: 'conferences' }
-    : resourceType === 'feed'
-      ? { table: 'production_feeds', column: 'feed_id', source: 'feeds' }
-      : null;
-  if (!definitions) throw new Error('Unsupported production resource type');
-  if (!db.prepare(`SELECT 1 FROM ${definitions.source} WHERE id = ?`).get(rid)) {
-    throw new Error(`${resourceType === 'feed' ? 'Feed' : 'Conference'} not found`);
-  }
-
-  const update = db.transaction(() => {
-    if (enabled) {
-      db.prepare(`INSERT OR IGNORE INTO ${definitions.table} (production_id, ${definitions.column}) VALUES (?, ?)`)
-        .run(pid, rid);
-      return;
-    }
-    db.prepare(`DELETE FROM ${definitions.table} WHERE production_id = ? AND ${definitions.column} = ?`)
-      .run(pid, rid);
-    db.prepare('DELETE FROM production_user_targets WHERE production_id = ? AND target_type = ? AND target_id = ?')
-      .run(pid, resourceType, rid);
-    db.prepare('DELETE FROM production_target_order WHERE production_id = ? AND target_type = ? AND target_id = ?')
-      .run(pid, resourceType, rid);
-  });
-  update();
-}
-
 function getProductionTargets(userId, productionId) {
   return db.prepare(`
     SELECT targetType, targetId, name
@@ -473,8 +417,6 @@ function getProductionTargets(userId, productionId) {
       SELECT 'conference', t.target_id, c.name, o.position, t.rowid
       FROM production_user_targets t
       JOIN conferences c ON t.target_type = 'conference' AND c.id = t.target_id
-      JOIN production_conferences pc
-        ON pc.production_id = t.production_id AND pc.conference_id = t.target_id
       LEFT JOIN production_target_order o
         ON o.production_id = t.production_id AND o.user_id = t.user_id
        AND o.target_type = t.target_type AND o.target_id = t.target_id
@@ -485,8 +427,6 @@ function getProductionTargets(userId, productionId) {
       SELECT 'feed', t.target_id, f.name, o.position, t.rowid
       FROM production_user_targets t
       JOIN feeds f ON t.target_type = 'feed' AND f.id = t.target_id
-      JOIN production_feeds pf
-        ON pf.production_id = t.production_id AND pf.feed_id = t.target_id
       LEFT JOIN production_target_order o
         ON o.production_id = t.production_id AND o.user_id = t.user_id
        AND o.target_type = t.target_type AND o.target_id = t.target_id
@@ -512,12 +452,12 @@ function validateProductionTarget(productionId, userId, targetType, targetId) {
       throw new Error('Target user is not available in this production');
     }
   } else if (targetType === 'conference') {
-    if (!db.prepare('SELECT 1 FROM production_conferences WHERE production_id = ? AND conference_id = ?').get(pid, tid)) {
-      throw new Error('Conference is not available in this production');
+    if (!db.prepare('SELECT 1 FROM conferences WHERE id = ?').get(tid)) {
+      throw new Error('Conference not found');
     }
   } else if (targetType === 'feed') {
-    if (!db.prepare('SELECT 1 FROM production_feeds WHERE production_id = ? AND feed_id = ?').get(pid, tid)) {
-      throw new Error('Feed is not available in this production');
+    if (!db.prepare('SELECT 1 FROM feeds WHERE id = ?').get(tid)) {
+      throw new Error('Feed not found');
     }
   } else {
     throw new Error('Unsupported target type');
@@ -589,16 +529,6 @@ function exportDatabaseSnapshot() {
       SELECT production_id, user_id, is_admin
       FROM production_users
       ORDER BY production_id, user_id
-    `).all(),
-    productionConferences: db.prepare(`
-      SELECT production_id, conference_id
-      FROM production_conferences
-      ORDER BY production_id, conference_id
-    `).all(),
-    productionFeeds: db.prepare(`
-      SELECT production_id, feed_id
-      FROM production_feeds
-      ORDER BY production_id, feed_id
     `).all(),
     productionUserTargets: db.prepare(`
       SELECT production_id, user_id, target_type, target_id
@@ -719,8 +649,6 @@ function importDatabaseSnapshot(snapshot) {
   const applePttRegistrations = Array.isArray(snapshot.applePttRegistrations) ? snapshot.applePttRegistrations : [];
   const productions = Array.isArray(snapshot.productions) ? snapshot.productions : [];
   const productionUsers = Array.isArray(snapshot.productionUsers) ? snapshot.productionUsers : [];
-  const productionConferences = Array.isArray(snapshot.productionConferences) ? snapshot.productionConferences : [];
-  const productionFeeds = Array.isArray(snapshot.productionFeeds) ? snapshot.productionFeeds : [];
   const productionUserTargets = Array.isArray(snapshot.productionUserTargets) ? snapshot.productionUserTargets : [];
   const productionTargetOrder = Array.isArray(snapshot.productionTargetOrder) ? snapshot.productionTargetOrder : [];
 
@@ -731,8 +659,6 @@ function importDatabaseSnapshot(snapshot) {
   const restore = db.transaction(() => {
     db.prepare('DELETE FROM production_target_order').run();
     db.prepare('DELETE FROM production_user_targets').run();
-    db.prepare('DELETE FROM production_feeds').run();
-    db.prepare('DELETE FROM production_conferences').run();
     db.prepare('DELETE FROM production_users').run();
     db.prepare('DELETE FROM productions').run();
     db.prepare('DELETE FROM user_target_order').run();
@@ -837,14 +763,6 @@ function importDatabaseSnapshot(snapshot) {
     const insertProductionUser = db.prepare(`
       INSERT INTO production_users (production_id, user_id, is_admin)
       VALUES (?, ?, ?)
-    `);
-    const insertProductionConference = db.prepare(`
-      INSERT INTO production_conferences (production_id, conference_id)
-      VALUES (?, ?)
-    `);
-    const insertProductionFeed = db.prepare(`
-      INSERT INTO production_feeds (production_id, feed_id)
-      VALUES (?, ?)
     `);
     const insertProductionUserTarget = db.prepare(`
       INSERT INTO production_user_targets (production_id, user_id, target_type, target_id)
@@ -994,12 +912,6 @@ function importDatabaseSnapshot(snapshot) {
     });
     productionUsers.forEach((row) => {
       insertProductionUser.run(Number(row.production_id), Number(row.user_id), row.is_admin ? 1 : 0);
-    });
-    productionConferences.forEach((row) => {
-      insertProductionConference.run(Number(row.production_id), Number(row.conference_id));
-    });
-    productionFeeds.forEach((row) => {
-      insertProductionFeed.run(Number(row.production_id), Number(row.feed_id));
     });
     productionUserTargets.forEach((row) => {
       insertProductionUserTarget.run(
@@ -1378,7 +1290,6 @@ function deleteConference(confId) {
   const tx = db.transaction((id) => {
     db.prepare("DELETE FROM production_target_order WHERE target_type = 'conference' AND target_id = ?").run(id);
     db.prepare("DELETE FROM production_user_targets WHERE target_type = 'conference' AND target_id = ?").run(id);
-    db.prepare('DELETE FROM production_conferences WHERE conference_id = ?').run(id);
     db.prepare("DELETE FROM user_target_order WHERE target_type = 'conference' AND target_id = ?").run(id);
     db.prepare("DELETE FROM user_target_audio_state WHERE target_type = 'conference' AND target_id = ?").run(id);
     db.prepare('DELETE FROM user_conf_targets WHERE target_conf = ?').run(id);
@@ -1392,7 +1303,6 @@ function deleteFeed(feedId) {
   const tx = db.transaction(id => {
     db.prepare("DELETE FROM production_target_order WHERE target_type = 'feed' AND target_id = ?").run(id);
     db.prepare("DELETE FROM production_user_targets WHERE target_type = 'feed' AND target_id = ?").run(id);
-    db.prepare('DELETE FROM production_feeds WHERE feed_id = ?').run(id);
     db.prepare('DELETE FROM user_feed_targets WHERE feed_id = ?').run(id);
     db.prepare("DELETE FROM user_target_order WHERE target_type = 'feed' AND target_id = ?").run(id);
     db.prepare("DELETE FROM user_target_audio_state WHERE target_type = 'feed' AND target_id = ?").run(id);
@@ -1824,9 +1734,6 @@ module.exports = {
   getProductionMembers,
   setProductionUser,
   removeProductionUser,
-  getProductionConferences,
-  getProductionFeeds,
-  setProductionResource,
   getProductionTargets,
   addProductionTarget,
   removeProductionTarget,
