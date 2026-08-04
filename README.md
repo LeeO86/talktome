@@ -140,9 +140,9 @@ Back up this directory before upgrades if you need to preserve accounts and rout
 ## Productions
 
 Productions are optional layout scopes configured on the Admin `Productions`
-page. Users without a Production keep the existing global layout. Users in one
-Production enter it automatically; users assigned to several choose after login
-and can switch from the application menu.
+page. Users without a Production keep the existing global layout. Users assigned
+to one or more Productions can choose either the existing Default layout or a
+Production after login, and can switch between them from the application menu.
 
 Each Production has its own members and individual target assignment and order
 for every member. All globally configured conferences and feeds remain directly

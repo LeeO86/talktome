@@ -1475,7 +1475,7 @@ function renderProductionTargetMatrix(payload) {
   const columns = groups.flatMap((group) => group.items.map((item) => ({ ...item, targetType: group.type })));
 
   if (!rowUsers.length || !columns.length) {
-    productionTargetMatrixContainer.innerHTML = '<p class="target-matrix-empty">Add members and visible resources to configure this layout.</p>';
+    productionTargetMatrixContainer.innerHTML = '<p class="target-matrix-empty">Add members and targets to configure this layout.</p>';
     return;
   }
 

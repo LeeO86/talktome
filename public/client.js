@@ -158,6 +158,7 @@ const MOBILE_TARGET_LAYER_DEFAULT_SIZE = 8;
 const MOBILE_TARGET_LAYER_COMPACT_SIZE = 7;
 const TARGET_HOTKEY_STORAGE_KEY_PREFIX = 'targetHotkeys:';
 const ACTIVE_PRODUCTION_STORAGE_KEY_PREFIX = 'activeProduction:';
+const DEFAULT_PRODUCTION_STORAGE_VALUE = 'default';
 const REPLY_HOTKEY_IDENTITY = 'reply';
 const DEFAULT_REPLY_HOTKEY_BINDING = Object.freeze({
   id: 'code:Space',
@@ -3378,7 +3379,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const guestDisplayNameInput = document.getElementById("guest-display-name");
   const productionLoginPanel = document.getElementById('production-login-panel');
   const productionLoginOptions = document.getElementById('production-login-options');
-  const productionLoginBack = document.getElementById('production-login-back');
+  const adminLoginLink = document.getElementById('admin-login-link');
   const intercomApp = document.getElementById("intercom-app");
   const loginError = document.getElementById("login-error");
   const logoutBtn = document.getElementById("logout-btn");
@@ -6326,8 +6327,6 @@ let cachedOperatorTargets = null;
     });
   }
 
-  const PRODUCTION_SELECTION_CANCELLED = Symbol('production-selection-cancelled');
-
   function getActiveProductionStorageKey(identity) {
     const id = identity?.kind === 'guest'
       ? identity.guestProfileUserId
@@ -6338,6 +6337,7 @@ let cachedOperatorTargets = null;
   function restoreCredentialLoginView(kind = 'user') {
     productionLoginPanel?.classList.add('is-hidden');
     loginForm?.classList.remove('is-hidden');
+    adminLoginLink?.classList.remove('is-hidden');
     if (guestLoginPanel && guestLoginButton) {
       guestLoginButton.disabled = !guestLoginEnabled;
       guestLoginPanel.classList.toggle('is-hidden', !guestLoginEnabled);
@@ -6347,11 +6347,11 @@ let cachedOperatorTargets = null;
   function chooseProduction(identity, { preferStored = false } = {}) {
     const productions = Array.isArray(identity?.productions) ? identity.productions : [];
     if (productions.length === 0) return Promise.resolve(null);
-    if (productions.length === 1) return Promise.resolve(productions[0]);
 
     if (preferStored) {
       const storageKey = getActiveProductionStorageKey(identity);
       const storedId = storageKey ? localStorage.getItem(storageKey) : null;
+      if (storedId === DEFAULT_PRODUCTION_STORAGE_VALUE) return Promise.resolve(null);
       const stored = productions.find((production) => String(production.id) === String(storedId));
       if (stored) return Promise.resolve(stored);
     }
@@ -6359,44 +6359,50 @@ let cachedOperatorTargets = null;
     loginForm?.classList.add('is-hidden');
     guestLoginPanel?.classList.add('is-hidden');
     productionLoginPanel?.classList.remove('is-hidden');
+    adminLoginLink?.classList.add('is-hidden');
     if (productionLoginOptions) {
       productionLoginOptions.innerHTML = '';
     }
 
     return new Promise((resolve) => {
       const finish = (selection) => {
-        productionLoginBack?.removeEventListener('click', handleBack);
         productionLoginPanel?.classList.add('is-hidden');
         resolve(selection);
       };
-      const handleBack = () => {
-        restoreCredentialLoginView(identity?.kind);
-        finish(PRODUCTION_SELECTION_CANCELLED);
-      };
-      productions.forEach((production) => {
+      const choices = [
+        { id: null, name: 'Default' },
+        ...productions,
+      ];
+      choices.forEach((production) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = production.name;
-        button.addEventListener('click', () => finish(production), { once: true });
+        button.addEventListener('click', () => finish(production.id === null ? null : production), { once: true });
         productionLoginOptions?.appendChild(button);
       });
-      productionLoginBack?.addEventListener('click', handleBack);
     });
   }
 
   function applyProductionSessionUI() {
     const productions = Array.isArray(session?.productions) ? session.productions : [];
     if (activeProductionLabelEl) {
-      activeProductionLabelEl.textContent = session.productionName ? `· ${session.productionName}` : '';
-      activeProductionLabelEl.classList.toggle('is-hidden', !session.productionName);
+      const productionLabel = session.productionName || (productions.length > 0 ? 'Default' : '');
+      activeProductionLabelEl.textContent = productionLabel ? `· ${productionLabel}` : '';
+      activeProductionLabelEl.classList.toggle('is-hidden', !productionLabel);
     }
     if (productionSessionSelector && productionSessionSelect) {
-      productionSessionSelector.hidden = session.kind === 'feed' || productions.length < 2;
-      const options = productions.map((production) => {
+      productionSessionSelector.hidden = session.kind === 'feed' || productions.length === 0;
+      const choices = [
+        { id: null, name: 'Default' },
+        ...productions,
+      ];
+      const options = choices.map((production) => {
         const option = document.createElement('option');
-        option.value = String(production.id);
+        option.value = production.id === null ? DEFAULT_PRODUCTION_STORAGE_VALUE : String(production.id);
         option.textContent = production.name;
-        option.selected = String(production.id) === String(session.productionId);
+        option.selected = production.id === null
+          ? !session.productionId
+          : String(production.id) === String(session.productionId);
         return option;
       });
       productionSessionSelect.replaceChildren(...options);
@@ -6407,7 +6413,7 @@ let cachedOperatorTargets = null;
     const storageKey = getActiveProductionStorageKey(identity);
     if (!storageKey) return;
     if (production?.id) localStorage.setItem(storageKey, String(production.id));
-    else localStorage.removeItem(storageKey);
+    else localStorage.setItem(storageKey, DEFAULT_PRODUCTION_STORAGE_VALUE);
   }
 
   async function completeCredentialLogin(user, { preferStoredProduction = false } = {}) {
@@ -6415,7 +6421,6 @@ let cachedOperatorTargets = null;
     const production = kind === 'user'
       ? await chooseProduction(user, { preferStored: preferStoredProduction })
       : null;
-    if (production === PRODUCTION_SELECTION_CANCELLED) return false;
     const nextSession = {
       kind,
       userId: kind === 'user' ? String(user.id) : null,
@@ -6471,16 +6476,19 @@ let cachedOperatorTargets = null;
 
   productionSessionSelect?.addEventListener('change', async () => {
     if (!isOperatorSession()) return;
-    const production = (session.productions || []).find((item) => (
-      String(item.id) === String(productionSessionSelect.value)
-    ));
-    if (!production || String(production.id) === String(session.productionId)) return;
+    const selectedValue = productionSessionSelect.value;
+    const production = selectedValue === DEFAULT_PRODUCTION_STORAGE_VALUE
+      ? null
+      : (session.productions || []).find((item) => String(item.id) === String(selectedValue));
+    if (selectedValue !== DEFAULT_PRODUCTION_STORAGE_VALUE && !production) return;
+    const nextProductionId = production?.id ? String(production.id) : null;
+    if (String(nextProductionId || '') === String(session.productionId || '')) return;
 
     try {
       handleStopTalking({ preventDefault() {}, currentTarget: null });
     } catch {}
-    session.productionId = String(production.id);
-    session.productionName = production.name;
+    session.productionId = nextProductionId;
+    session.productionName = production?.name || null;
     loadedTargetHotkeyStorageKey = null;
     persistActiveProduction(session, production);
     if (session.kind === 'guest') persistGuestSession(session);
@@ -6541,7 +6549,6 @@ let cachedOperatorTargets = null;
         }
         const identity = { id: storedId, userId: storedId, kind: 'user', name: storedName, productions };
         const production = await chooseProduction(identity, { preferStored: true });
-        if (production === PRODUCTION_SELECTION_CANCELLED) return;
         session = {
           kind: "user",
           userId: storedId,
@@ -6647,7 +6654,6 @@ let cachedOperatorTargets = null;
         guestProfileUserId: payload.guestProfileUserId,
         productions: payload.productions,
       });
-      if (production === PRODUCTION_SELECTION_CANCELLED) return;
 
       const nextSession = {
         kind: 'guest',
@@ -6693,6 +6699,7 @@ let cachedOperatorTargets = null;
     } catch (err) {
       setLoginError("Error logging in as Guest");
       console.error("Guest login failed:", err);
+      restoreCredentialLoginView('guest');
     } finally {
       if (!isGuestSessionActive()) {
         guestLoginButton.disabled = false;
