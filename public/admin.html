@@ -817,6 +817,8 @@
       }
 
       .config-panel {
+        display: flex;
+        flex-direction: column;
         min-width: 0;
         border: 1px solid var(--border);
         border-radius: 10px;
@@ -831,6 +833,10 @@
 
       .config-panel .setting-meta {
         margin-bottom: 0.85rem;
+      }
+
+      .config-panel > h3 + .setting-meta {
+        margin-top: auto;
       }
 
       .config-panel form.inline-form {
