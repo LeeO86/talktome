@@ -945,12 +945,13 @@
 
       .api-key-controls {
         display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
         gap: 0.6rem;
-        justify-items: start;
+        align-items: end;
       }
 
       .api-key-field {
-        width: min(100%, 34rem);
+        width: 100%;
       }
 
       .api-key-field input {
@@ -984,6 +985,7 @@
 
       .api-key-actions {
         display: flex;
+        justify-content: flex-end;
       }
 
       .rtc-port-form {
@@ -2365,6 +2367,18 @@
         .config-panel form button,
         .config-export-group button,
         .config-import-actions button {
+          width: 100%;
+        }
+
+        .api-key-controls {
+          grid-template-columns: 1fr;
+        }
+
+        .api-key-actions {
+          justify-content: stretch;
+        }
+
+        .api-key-actions button {
           width: 100%;
         }
 
