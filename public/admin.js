@@ -2723,8 +2723,7 @@ async function loadGuestLoginSettings() {
   }
   if (guestLoginProfile) {
     const profileName = payload?.profileName || 'Guest';
-    const profileId = payload?.profileUserId != null ? `ID ${payload.profileUserId}` : 'not created';
-    guestLoginProfile.textContent = `${profileName} (${profileId})`;
+    guestLoginProfile.textContent = profileName;
   }
   return payload;
 }
