@@ -194,6 +194,7 @@ let activeAdminView = null;
 let productionSummaries = [];
 let selectedProductionId = null;
 let selectedProductionPayload = null;
+let guestLoginEnabled = false;
 const entityMasterDetailState = {
   users: { selectedId: null, query: '' },
   conferences: { selectedId: null, query: '' },
@@ -1476,7 +1477,11 @@ function getEntityMasterDetailConfig(kind) {
 }
 
 function getEntityMasterDetailItems(kind) {
-  return Array.isArray(currentAdminCatalog[kind]) ? currentAdminCatalog[kind] : [];
+  const items = Array.isArray(currentAdminCatalog[kind]) ? currentAdminCatalog[kind] : [];
+  if (kind === 'users' && !guestLoginEnabled) {
+    return items.filter((item) => !item.is_guest_profile);
+  }
+  return items;
 }
 
 function renderEntityPickerBadges(kind, item) {
@@ -2288,8 +2293,11 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
   targetAssignmentsByUser.clear();
   const userList = document.getElementById('user-list');
   userList.innerHTML = '';
+  const visibleUsers = guestLoginEnabled
+    ? users
+    : users.filter((user) => !user.is_guest_profile);
 
-  for (const user of users) {
+  for (const user of visibleUsers) {
     const safeName = escapeHtml(user.name);
     const isAdmin = Boolean(user.is_admin);
     const isSuperadmin = Boolean(user.is_superadmin);
@@ -2434,12 +2442,12 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
     userList.appendChild(li);
   }
 
-  await Promise.all(users.map(async (user) => {
+  await Promise.all(visibleUsers.map(async (user) => {
     await updateUserConferenceOptions(user.id, conferences);
     await loadUserTargets(user.id, users, conferences, feeds);
   }));
   initializeBridgeEndpointForms();
-  await syncEntityMasterDetail('users', users);
+  await syncEntityMasterDetail('users', visibleUsers);
 }
 
 async function renderFeedList(feeds) {
@@ -2706,6 +2714,7 @@ async function loadRtcPortSettings() {
 async function loadGuestLoginSettings() {
   const payload = await fetchJSON('/admin/settings/guest-login');
   const enabled = payload?.enabled === true;
+  guestLoginEnabled = enabled;
   if (guestLoginEnabledInput) {
     guestLoginEnabledInput.checked = enabled;
   }
