@@ -161,6 +161,41 @@
         box-shadow: none;
       }
 
+      .admin-bar.has-expanded-message {
+        grid-template-rows: auto auto;
+      }
+
+      .admin-bar.has-expanded-message .admin-bar__actions {
+        display: contents;
+      }
+
+      .admin-bar.has-expanded-message .admin-bar__message-slot {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        justify-content: center;
+      }
+
+      .admin-bar.has-expanded-message #admin-logout {
+        grid-column: 3;
+        grid-row: 1;
+        justify-self: end;
+      }
+
+      .admin-bar.has-expanded-message .admin-bar__message-slot .flash-message {
+        width: min(100%, 64rem);
+        max-width: min(100%, 64rem);
+        overflow: visible;
+        text-align: center;
+        text-overflow: clip;
+        white-space: normal;
+        border-radius: 12px;
+        line-height: 1.35;
+      }
+
+      .admin-bar.has-expanded-message + main {
+        padding-top: calc(var(--admin-expanded-bar-height, 6.15rem) + 1rem);
+      }
+
       main {
         width: min(calc(100% - 3rem), var(--admin-content-width));
         padding: 4.55rem 0 3rem;
@@ -2149,6 +2184,17 @@
 
         .admin-bar.has-message .admin-bar__message-slot {
           justify-content: flex-start;
+        }
+
+        .admin-bar.has-expanded-message .admin-bar__message-slot {
+          grid-column: 1 / -1;
+          grid-row: 3;
+          justify-content: stretch;
+        }
+
+        .admin-bar.has-expanded-message #admin-logout {
+          grid-column: 2;
+          grid-row: 1;
         }
 
         .admin-bar__nav::-webkit-scrollbar {

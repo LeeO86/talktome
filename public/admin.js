@@ -109,6 +109,19 @@ const adminImageLightboxClose = document.getElementById('admin-image-lightbox-cl
 const adminImageLightboxImage = document.getElementById('admin-image-lightbox-image');
 const adminImageLightboxDownloadButton = document.getElementById('admin-image-lightbox-download');
 
+function syncExpandedAdminBarOffset() {
+  if (!adminBar?.classList.contains('has-expanded-message')) {
+    document.documentElement.style.removeProperty('--admin-expanded-bar-height');
+    return;
+  }
+  document.documentElement.style.setProperty(
+    '--admin-expanded-bar-height',
+    `${Math.ceil(adminBar.getBoundingClientRect().height)}px`
+  );
+}
+
+window.addEventListener('resize', syncExpandedAdminBarOffset);
+
 const collapsibleAdminSections = {
   status: {
     label: 'Status',
@@ -250,6 +263,14 @@ function showMessage(text, tone = 'error', scope = 'global') {
   el.classList.remove('flash-success', 'flash-error', 'flash-warning');
   el.classList.add('is-visible', toneClass);
   adminBar?.classList.add('has-message');
+  adminBar?.classList.remove('has-expanded-message');
+
+  window.requestAnimationFrame(() => {
+    if (!el.classList.contains('is-visible')) return;
+    const isTruncated = el.scrollWidth > el.clientWidth + 1;
+    adminBar?.classList.toggle('has-expanded-message', isTruncated);
+    syncExpandedAdminBarOffset();
+  });
 
   showMessage._timers = showMessage._timers || {};
   clearTimeout(showMessage._timers.adminBar);
@@ -257,7 +278,8 @@ function showMessage(text, tone = 'error', scope = 'global') {
     el.classList.remove('is-visible', toneClass);
     el.textContent = '';
     el.removeAttribute('title');
-    adminBar?.classList.remove('has-message');
+    adminBar?.classList.remove('has-message', 'has-expanded-message');
+    syncExpandedAdminBarOffset();
   }, 5000);
 }
 
