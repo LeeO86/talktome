@@ -12,6 +12,7 @@ const selfsigned = require("selfsigned");
 const QRCode = require("qrcode");
 const { getDataDir } = require("./dataPaths");
 const { ApplePttPushService } = require("./applePttPushService");
+const { normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
 const {
   producerDeliveryChanged,
@@ -3431,23 +3432,6 @@ function buildHttpsConnectUrl(host) {
   return `https://${trimmed}:${HTTPS_PORT}`;
 }
 
-function normalizePublicConnectUrl(value) {
-  if (typeof value !== "string") return "";
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-
-  try {
-    const url = new URL(trimmed);
-    if (!["http:", "https:"].includes(url.protocol)) return "";
-    url.pathname = "/";
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return "";
-  }
-}
-
 function getFirstForwardedValue(value) {
   if (Array.isArray(value)) {
     return getFirstForwardedValue(value[0]);
@@ -3456,12 +3440,13 @@ function getFirstForwardedValue(value) {
   return value.split(",")[0].trim();
 }
 
-function resolveAdminPublicConnectUrl(req) {
-  const configured = normalizePublicConnectUrl(
+function resolveConfiguredAdminPublicConnectUrl() {
+  return normalizeConnectUrl(
     process.env.TALKTOME_PUBLIC_URL || process.env.PUBLIC_URL
   );
-  if (configured) return configured;
+}
 
+function resolveAdminRequestConnectUrl(req) {
   const forwardedHost = getFirstForwardedValue(req?.headers?.["x-forwarded-host"]);
   const host = forwardedHost || getFirstForwardedValue(req?.headers?.host);
   if (!host) return "";
@@ -3470,7 +3455,7 @@ function resolveAdminPublicConnectUrl(req) {
   const proto = forwardedProto || (req?.socket?.encrypted ? "https" : "http");
   if (!["http", "https"].includes(proto)) return "";
 
-  return normalizePublicConnectUrl(`${proto}://${host}`);
+  return normalizeConnectUrl(`${proto}://${host}`);
 }
 
 function resolvePreferredAdminQrIpAddress(activeAddress) {
@@ -3494,8 +3479,15 @@ function resolvePreferredAdminQrIpAddress(activeAddress) {
 
 async function buildAdminMediaNetworkQrPayload(activeAddress, req = null) {
   const qrIpAddress = resolvePreferredAdminQrIpAddress(activeAddress);
-  const publicConnectUrl = resolveAdminPublicConnectUrl(req);
-  const qrUrl = publicConnectUrl || buildHttpsConnectUrl(qrIpAddress);
+  const configuredPublicConnectUrl = resolveConfiguredAdminPublicConnectUrl();
+  const requestConnectUrl = resolveAdminRequestConnectUrl(req);
+  const adapterConnectUrl = buildHttpsConnectUrl(qrIpAddress);
+  const qrUrl = selectAdminQrUrl({
+    configuredUrl: configuredPublicConnectUrl,
+    requestUrl: requestConnectUrl,
+    adapterUrl: adapterConnectUrl,
+  });
+  const publicConnectUrl = configuredPublicConnectUrl || requestConnectUrl;
   const activeMdnsHost = mdnsHostname || "off";
   const mdnsUrl = mdnsHostname ? buildHttpsConnectUrl(mdnsHostname) : "";
 
