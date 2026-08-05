@@ -128,9 +128,17 @@
 
       #admin-logout {
         flex: 0 0 auto;
-        min-height: 2.15rem;
-        padding: 0.34rem 0.8rem;
-        font-size: 0.86rem;
+        min-height: 0;
+        padding: 0.4rem 0.75rem;
+        border: 1px solid rgba(37, 99, 235, 0.35);
+        background: rgba(37, 99, 235, 0.18);
+        color: var(--text);
+        font-size: 0.8rem;
+      }
+
+      #admin-logout:hover {
+        border-color: rgba(59, 130, 246, 0.58);
+        background: rgba(37, 99, 235, 0.3);
       }
 
       .admin-bar__actions {
@@ -898,7 +906,6 @@
       }
 
       #media-network-form button {
-        width: var(--config-action-width);
         min-width: 0;
       }
 
@@ -906,8 +913,33 @@
       .api-key-actions button,
       .config-export-group button,
       .config-import-actions button {
-        width: var(--config-action-width);
         min-width: 0;
+      }
+
+      .config-panel button:not(.media-network-qr-button) {
+        min-height: 0;
+        padding: 0.4rem 0.75rem;
+        border: 1px solid rgba(37, 99, 235, 0.35);
+        background: rgba(37, 99, 235, 0.18);
+        color: var(--text);
+        font-size: 0.8rem;
+        box-shadow: none;
+      }
+
+      .config-panel button:not(.media-network-qr-button):hover {
+        border-color: rgba(59, 130, 246, 0.58);
+        background: rgba(37, 99, 235, 0.3);
+      }
+
+      .config-panel button.warning:not(.media-network-qr-button) {
+        border-color: rgba(245, 158, 11, 0.35);
+        background: rgba(245, 158, 11, 0.16);
+        color: var(--accent);
+      }
+
+      .config-panel button.warning:not(.media-network-qr-button):hover {
+        border-color: rgba(245, 158, 11, 0.55);
+        background: rgba(245, 158, 11, 0.24);
       }
 
       .rtc-port-form {
@@ -1163,7 +1195,8 @@
       .config-export-group,
       .config-import-group {
         display: grid;
-        gap: 0.4rem;
+        gap: 0.5rem;
+        align-content: end;
       }
 
       .config-import-actions {
@@ -1178,6 +1211,41 @@
         flex: 1 1 auto;
         min-width: 0;
         max-width: 100%;
+        height: 2.2rem;
+        padding: 0.2rem 0.45rem 0.2rem 0.2rem;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #111827;
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.7rem;
+      }
+
+      .config-import-actions input[type='file']::file-selector-button {
+        height: 1.7rem;
+        margin: 0 0.65rem 0 0;
+        padding: 0.15rem 0.65rem;
+        border: 1px solid rgba(37, 99, 235, 0.35);
+        border-radius: 6px;
+        background: rgba(37, 99, 235, 0.18);
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .config-import-actions input[type='file']::-webkit-file-upload-button {
+        height: 1.7rem;
+        margin: 0 0.65rem 0 0;
+        padding: 0.15rem 0.65rem;
+        border: 1px solid rgba(37, 99, 235, 0.35);
+        border-radius: 6px;
+        background: rgba(37, 99, 235, 0.18);
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
       }
 
       .drag-handle {
