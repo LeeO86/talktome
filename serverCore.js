@@ -748,6 +748,10 @@ function quoteWindowsCommandArgument(value) {
   return `"${String(value).replace(/(["\\])/g, "\\$1")}"`;
 }
 
+function isServerRestartSupported() {
+  return isRunningInContainer() || process.env.TALKTOME_MANAGED_SERVER === "1";
+}
+
 function restartServerProcess() {
   if (containerRestartScheduled) return;
   containerRestartScheduled = true;
@@ -3327,6 +3331,7 @@ function buildAdminStatusSnapshot() {
     generatedAt: new Date(now).toISOString(),
     serverStartedAt: statusIsoTimestamp(SERVER_STARTED_AT),
     runningInContainer: isRunningInContainer(),
+    restartSupported: isServerRestartSupported(),
     users,
     feeds,
     bridges,
@@ -3349,6 +3354,9 @@ app.get("/admin/status", requireAdmin, (req, res) => {
 });
 
 app.post("/admin/restart", requireAdmin, requireSuperAdmin, (req, res) => {
+  if (!isServerRestartSupported()) {
+    return res.status(409).json({ error: "Server restart is not available for unmanaged command-line starts" });
+  }
   if (containerRestartScheduled) {
     return res.status(409).json({ error: "A server restart is already in progress" });
   }

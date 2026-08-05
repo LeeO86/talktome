@@ -1212,8 +1212,8 @@ function formatStatusPacketLoss(networkStats) {
 }
 
 function renderAdminStatus(payload = {}) {
-  const canRestartContainer = Boolean(adminState.isSuperAdmin);
-  containerRestartPanel?.classList.toggle('is-hidden', !canRestartContainer);
+  const canRestartServer = Boolean(adminState.isSuperAdmin && payload.restartSupported);
+  containerRestartPanel?.classList.toggle('is-hidden', !canRestartServer);
   latestAdminStatus = payload;
   const users = Array.isArray(payload.users) ? [...payload.users] : [];
   const feeds = Array.isArray(payload.feeds) ? [...payload.feeds] : [];
