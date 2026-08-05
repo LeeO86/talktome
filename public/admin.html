@@ -1035,6 +1035,16 @@
         min-height: 2.2rem;
       }
 
+      .guest-login-content {
+        display: grid;
+        gap: 0.85rem;
+        margin-top: auto;
+      }
+
+      .config-panel .guest-login-content .setting-meta {
+        margin-bottom: 0;
+      }
+
       .guest-login-switch {
         position: relative;
         display: inline-flex;
@@ -3201,19 +3211,21 @@
             <section class="config-panel" aria-labelledby="config-guest-login-heading">
               <h3 id="config-guest-login-heading">Guest login</h3>
 
-              <div class="setting-meta">
-                <div>Status: <strong id="guest-login-status">Loading...</strong></div>
-                <div>Shared target profile: <strong id="guest-login-profile">Loading...</strong></div>
-              </div>
+              <div class="guest-login-content">
+                <div class="setting-meta">
+                  <div>Status: <strong id="guest-login-status">Loading...</strong></div>
+                  <div>Shared target profile: <strong id="guest-login-profile">Loading...</strong></div>
+                </div>
 
-              <form id="guest-login-form" class="guest-login-form" autocomplete="off">
-                <label class="guest-login-switch" for="guest-login-enabled">
-                  <span class="visually-hidden">Allow passwordless Guest login</span>
-                  <input type="checkbox" id="guest-login-enabled" role="switch" />
-                  <span class="guest-login-switch__track" aria-hidden="true"></span>
-                  <span class="guest-login-switch__state" aria-hidden="true"></span>
-                </label>
-              </form>
+                <form id="guest-login-form" class="guest-login-form" autocomplete="off">
+                  <label class="guest-login-switch" for="guest-login-enabled">
+                    <span class="visually-hidden">Allow passwordless Guest login</span>
+                    <input type="checkbox" id="guest-login-enabled" role="switch" />
+                    <span class="guest-login-switch__track" aria-hidden="true"></span>
+                    <span class="guest-login-switch__state" aria-hidden="true"></span>
+                  </label>
+                </form>
+              </div>
             </section>
 
             <section class="config-panel" aria-labelledby="config-network-heading">
