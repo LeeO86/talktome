@@ -1457,6 +1457,23 @@ function getEntityMasterDetailItems(kind) {
   return Array.isArray(currentAdminCatalog[kind]) ? currentAdminCatalog[kind] : [];
 }
 
+function renderEntityPickerBadges(kind, item) {
+  if (kind !== 'users') return '';
+  const badges = [];
+  if (item.is_superadmin) {
+    badges.push('<span class="badge superadmin">Superadmin</span>');
+  } else if (item.is_admin) {
+    badges.push('<span class="badge admin">Admin</span>');
+  }
+  if (item.bridge_enabled) {
+    badges.push('<span class="badge bridge">Bridge</span>');
+  }
+  if (item.is_guest_profile) {
+    badges.push('<span class="badge guest-profile">Guest</span>');
+  }
+  return badges.length ? `<span class="entity-picker-badges">${badges.join('')}</span>` : '';
+}
+
 function renderEntityMasterDetailPicker(kind, items = getEntityMasterDetailItems(kind)) {
   const config = getEntityMasterDetailConfig(kind);
   const state = entityMasterDetailState[kind];
@@ -1473,7 +1490,8 @@ function renderEntityMasterDetailPicker(kind, items = getEntityMasterDetailItems
     <li>
       <button type="button" data-entity-kind="${kind}" data-entity-select="${item.id}"
         aria-current="${Number(item.id) === Number(state.selectedId)}">
-        ${escapeHtml(item.name)}
+        <span class="entity-picker-name">${escapeHtml(item.name)}</span>
+        ${renderEntityPickerBadges(kind, item)}
       </button>
     </li>
   `).join('');

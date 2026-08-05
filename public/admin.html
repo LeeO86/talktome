@@ -1198,6 +1198,10 @@
         gap: 1rem;
       }
 
+      .entity-layout--users {
+        grid-template-columns: minmax(18rem, 26rem) minmax(0, 1fr);
+      }
+
       .entity-sidebar,
       .entity-detail-panel,
       .production-sidebar,
@@ -1313,6 +1317,31 @@
         background: rgba(59, 130, 246, 0.18);
       }
 
+      .entity-layout--users .entity-picker-list button {
+        justify-content: space-between;
+        gap: 0.55rem;
+      }
+
+      .entity-picker-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .entity-picker-badges {
+        display: inline-flex;
+        flex: 0 0 auto;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 0.25rem;
+      }
+
+      .entity-picker-badges .badge {
+        padding: 0.18rem 0.45rem;
+        font-size: 0.68rem;
+      }
+
       .entity-picker-empty,
       .entity-empty {
         color: var(--muted);
@@ -1336,6 +1365,18 @@
 
       .entity-detail-item .nested {
         display: block;
+      }
+
+      .entity-detail-item :is(.nested, .nested-block) > .inline-controls {
+        align-items: center;
+        margin-top: 0.55rem;
+      }
+
+      .entity-detail-item :is(.nested, .nested-block) > .inline-controls > :is(select, button) {
+        height: 2.2rem;
+        min-height: 2.2rem;
+        padding-top: 0.3rem;
+        padding-bottom: 0.3rem;
       }
 
       .entity-detail-item[hidden] {
@@ -2555,7 +2596,7 @@
         </div>
 
         <div id="users-section-body" class="card-section-body">
-          <div class="entity-layout">
+          <div class="entity-layout entity-layout--users">
             <aside class="entity-sidebar">
               <form id="user-form" class="inline-form entity-create-form" autocomplete="off">
               <div class="field-group">
@@ -2614,7 +2655,8 @@
             <aside class="entity-sidebar">
               <form id="conf-form" class="inline-form entity-create-form" autocomplete="off">
               <div class="field-group">
-                <input type="text" id="confname" aria-label="Conference name" required />
+                <label for="confname">Name</label>
+                <input type="text" id="confname" required />
               </div>
               <button type="submit">Add Conference</button>
               </form>
