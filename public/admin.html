@@ -1771,6 +1771,10 @@
         margin-top: 0;
       }
 
+      .production-members-panel .matrix-subheading {
+        margin: 0;
+      }
+
       .production-check-list,
       .production-order-list {
         display: grid;
@@ -3054,7 +3058,7 @@
 
               <div class="production-config-layout">
                 <section class="production-members-panel">
-                  <strong>Members</strong>
+                  <h3 class="matrix-subheading">Members</h3>
                   <ul id="production-members" class="production-check-list"></ul>
                 </section>
                 <section class="production-matrix-panel">
@@ -3063,8 +3067,8 @@
                 </section>
               </div>
 
-              <div class="production-order-row matrix-subheading matrix-subheading--secondary">
-                <h3>Button order</h3>
+              <div class="production-order-row matrix-subheading--secondary">
+                <h3 class="matrix-subheading">Button order</h3>
                 <select id="production-order-user" aria-label="Select member for button order"></select>
               </div>
               <ul id="production-order-list" class="production-order-list"></ul>
