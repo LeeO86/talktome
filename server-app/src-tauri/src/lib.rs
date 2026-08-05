@@ -34,6 +34,7 @@ const TRAY_QUIT_ID: &str = "quit";
 const MAX_LOG_LINES: usize = 200;
 const APP_DATA_DIR_NAME: &str = "talktome";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MANAGED_RESTART_EXIT_CODE: i32 = 75;
 const WINDOW_FOCUS_HIDE_DELAY: Duration = Duration::from_millis(150);
 
 #[derive(Default)]
@@ -43,6 +44,7 @@ struct ServerManager {
     logs: VecDeque<String>,
     started_at: Option<Instant>,
     last_error: Option<String>,
+    restart_requested: bool,
 }
 
 #[derive(Default)]
@@ -180,24 +182,43 @@ impl ServerManager {
         }
     }
 
-    fn refresh_child_state(&mut self) {
+    fn refresh_child_state(&mut self) -> bool {
+        let mut changed = false;
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    self.push_log(format!("Server exited with status {status}."));
+                    self.restart_requested = status.code() == Some(MANAGED_RESTART_EXIT_CODE);
+                    if self.restart_requested {
+                        self.push_log("Server requested a managed restart.");
+                    } else {
+                        self.push_log(format!("Server exited with status {status}."));
+                    }
                     self.child = None;
                     self.starting = false;
                     self.started_at = None;
+                    changed = true;
                 }
                 Ok(None) => {}
                 Err(err) => {
                     self.last_error = Some(format!("failed to read server status: {err}"));
+                    self.restart_requested = false;
                     self.child = None;
                     self.starting = false;
                     self.started_at = None;
+                    changed = true;
                 }
             }
         }
+        changed
+    }
+
+    fn take_restart_request(&mut self) -> bool {
+        if !self.restart_requested || self.child.is_some() || self.starting {
+            return false;
+        }
+
+        self.restart_requested = false;
+        true
     }
 }
 
@@ -608,6 +629,35 @@ fn spawn_log_reader(app: AppHandle, stream: impl std::io::Read + Send + 'static)
     });
 }
 
+fn spawn_server_supervisor(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(250));
+
+        let (state_changed, restart_requested) = {
+            let manager = app.state::<Mutex<ServerManager>>();
+            let Ok(mut state) = manager.lock() else {
+                continue;
+            };
+            let state_changed = state.refresh_child_state();
+            let restart_requested = state.take_restart_request();
+            (state_changed, restart_requested)
+        };
+
+        if restart_requested {
+            append_log(&app, "Restarting Talktome server…".to_string());
+            if let Err(err) = start_server_internal(&app) {
+                if let Ok(mut state) = app.state::<Mutex<ServerManager>>().lock() {
+                    state.last_error = Some(err.clone());
+                    state.push_log(err);
+                }
+            }
+            let _ = app.emit("server-status-changed", ());
+        } else if state_changed {
+            let _ = app.emit("server-status-changed", ());
+        }
+    });
+}
+
 fn start_server_internal(app: &AppHandle) -> Result<(), String> {
     let config_path = runtime_config_path();
     if !config_path.is_file() {
@@ -634,6 +684,7 @@ fn start_server_internal(app: &AppHandle) -> Result<(), String> {
 
     state.starting = true;
     state.last_error = None;
+    state.restart_requested = false;
     state.push_log(format!("Starting Talktome server v{APP_VERSION}…"));
     drop(state);
 
@@ -700,6 +751,7 @@ fn stop_server_internal(app: &AppHandle) -> Result<(), String> {
     }
     state.starting = false;
     state.started_at = None;
+    state.restart_requested = false;
     drop(state);
 
     let _ = app.emit("server-status-changed", ());
@@ -1026,6 +1078,64 @@ fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn child_exiting_with(code: i32) -> Child {
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("cmd")
+                .args(["/C", &format!("exit /B {code}")])
+                .spawn()
+                .expect("test child should start")
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            Command::new("sh")
+                .args(["-c", &format!("exit {code}")])
+                .spawn()
+                .expect("test child should start")
+        }
+    }
+
+    fn wait_for_child_exit(manager: &mut ServerManager) {
+        for _ in 0..100 {
+            if manager.refresh_child_state() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("test child did not exit in time");
+    }
+
+    #[test]
+    fn managed_restart_exit_requests_exactly_one_restart() {
+        let mut manager = ServerManager {
+            child: Some(child_exiting_with(MANAGED_RESTART_EXIT_CODE)),
+            ..ServerManager::default()
+        };
+
+        wait_for_child_exit(&mut manager);
+
+        assert!(manager.take_restart_request());
+        assert!(!manager.take_restart_request());
+    }
+
+    #[test]
+    fn normal_exit_does_not_request_restart() {
+        let mut manager = ServerManager {
+            child: Some(child_exiting_with(0)),
+            ..ServerManager::default()
+        };
+
+        wait_for_child_exit(&mut manager);
+
+        assert!(!manager.take_restart_request());
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -1128,6 +1238,8 @@ pub fn run() {
             }
 
             let _tray = tray_builder.build(app)?;
+
+            spawn_server_supervisor(app.handle().clone());
 
             if runtime_config_path().is_file() {
                 // Creating the packaged server process can take several seconds on

@@ -745,10 +745,6 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
-function quoteWindowsCommandArgument(value) {
-  return `"${String(value).replace(/(["\\])/g, "\\$1")}"`;
-}
-
 function isServerRestartSupported() {
   return isRunningInContainer() || process.env.TALKTOME_MANAGED_SERVER === "1";
 }
@@ -758,31 +754,16 @@ function restartServerProcess() {
   containerRestartScheduled = true;
 
   // Give the response a moment to reach the browser before ending the current
-  // process. Containers are restarted by their runtime; every other install
-  // starts an identical replacement process after this one has released its ports.
+  // process. Containers are restarted by their runtime. Native tray installs
+  // use a dedicated exit code so their supervisor retains ownership of the
+  // replacement process instead of the server spawning a detached child.
   setTimeout(() => {
     console.log("[ADMIN] Server restart requested.");
-    if (!isRunningInContainer()) {
-      const restartArgs = process.argv.slice(1);
-      const launcher = process.platform === "win32"
-        ? childProcess.spawn("cmd.exe", [
-          "/d", "/s", "/c",
-          `timeout /t 2 /nobreak >NUL & start \"\" /b ${[
-            process.execPath,
-            ...restartArgs,
-          ].map(quoteWindowsCommandArgument).join(" ")}`,
-        ], { detached: true, stdio: "ignore", windowsHide: true })
-        : childProcess.spawn("sh", [
-          "-c",
-          'sleep 2; exec "$@"',
-          "talktome-restart",
-          process.execPath,
-          ...restartArgs,
-        ], { detached: true, stdio: "ignore" });
-      launcher.unref();
-    }
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1_000).unref();
+    const exitCode = !isRunningInContainer() && process.env.TALKTOME_MANAGED_SERVER === "1"
+      ? 75
+      : 0;
+    server.close(() => process.exit(exitCode));
+    setTimeout(() => process.exit(exitCode), 1_000).unref();
   }, 150).unref();
 }
 
