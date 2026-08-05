@@ -1589,22 +1589,22 @@ async function saveProductionTargetOrder(userId, list) {
   }
 }
 
-function renderProductionDetail(payload) {
+function renderProductionDetail(payload, preferredOrderUserId = null) {
   selectedProductionPayload = payload;
   setProductionDetailVisible(true);
   if (productionDetailName) productionDetailName.textContent = payload.production.name;
   if (productionGlobalActions) productionGlobalActions.hidden = !payload.permissions.globalAdmin;
   renderProductionMembers(payload);
   renderProductionTargetMatrix(payload);
-  renderProductionOrder(payload);
+  renderProductionOrder(payload, preferredOrderUserId);
 }
 
-async function loadProductionDetail(productionId) {
+async function loadProductionDetail(productionId, { preferredOrderUserId = null } = {}) {
   selectedProductionId = Number(productionId);
   renderProductionSummaries();
   try {
     const payload = await fetchJSON(`/admin/productions/${selectedProductionId}`);
-    renderProductionDetail(payload);
+    renderProductionDetail(payload, preferredOrderUserId);
   } catch (error) {
     selectedProductionPayload = null;
     setProductionDetailVisible(false);
@@ -3797,7 +3797,9 @@ async function updateProductionMembership(button, shouldBeMember) {
     } else {
       await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}`, { method: 'DELETE' });
     }
-    await loadProductionDetail(selectedProductionId);
+    await loadProductionDetail(selectedProductionId, {
+      preferredOrderUserId: shouldBeMember ? userId : null,
+    });
   } catch (error) {
     button.disabled = false;
     showMessage(error.message || 'Failed to update member', 'error', 'productions');
