@@ -1314,7 +1314,8 @@
       }
 
       .production-check-row {
-        min-height: 2.45rem;
+        height: 2.55rem;
+        min-height: 2.55rem;
         cursor: pointer;
         transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease;
       }
@@ -1345,16 +1346,24 @@
         margin: 0;
       }
 
-      .production-admin-role-toggle {
+      .production-check-row button.production-admin-role-toggle {
         flex: 0 0 auto;
-        min-height: 1.8rem;
-        padding: 0.25rem 0.55rem;
+        height: 1.85rem;
+        min-height: 1.85rem;
+        padding: 0.15rem 0.55rem;
+        line-height: 1;
       }
 
       .production-check-row > span,
       .production-order-item > span {
         flex: 1;
         min-width: 0;
+      }
+
+      .production-check-row > span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .production-order-list button {
