@@ -1240,6 +1240,29 @@
         padding: 0.25rem 0.7rem;
       }
 
+      :is(#user-form, #conf-form, #feed-form) input:not([type='file']) {
+        height: 2.2rem;
+        padding-top: 0.3rem;
+        padding-bottom: 0.3rem;
+      }
+
+      :is(#user-form, #conf-form, #feed-form) > button[type='submit'] {
+        height: 2.2rem;
+        min-height: 2.2rem;
+        padding-top: 0.25rem;
+        padding-bottom: 0.25rem;
+      }
+
+      :is(#user-form, #feed-form) .password-input-wrap input {
+        padding-right: 2.5rem;
+      }
+
+      :is(#user-form, #feed-form) .password-toggle {
+        right: 0.2rem;
+        width: 1.9rem;
+        height: 1.9rem;
+      }
+
       .production-list {
         display: grid;
         gap: 0.45rem;
