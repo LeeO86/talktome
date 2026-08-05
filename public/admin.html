@@ -396,6 +396,18 @@
         color: var(--muted);
       }
 
+      .visually-hidden {
+        position: absolute !important;
+        width: 1px !important;
+        height: 1px !important;
+        padding: 0 !important;
+        margin: -1px !important;
+        overflow: hidden !important;
+        clip: rect(0, 0, 0, 0) !important;
+        white-space: nowrap !important;
+        border: 0 !important;
+      }
+
       input,
       select,
       button {
@@ -1193,13 +1205,9 @@
       .entity-layout,
       .production-layout {
         display: grid;
-        grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr);
+        grid-template-columns: minmax(18rem, 26rem) minmax(0, 1fr);
         align-items: start;
         gap: 1rem;
-      }
-
-      .entity-layout--users {
-        grid-template-columns: minmax(18rem, 26rem) minmax(0, 1fr);
       }
 
       .entity-sidebar,
@@ -2600,14 +2608,14 @@
             <aside class="entity-sidebar">
               <form id="user-form" class="inline-form entity-create-form" autocomplete="off">
               <div class="field-group">
-                <label for="username">Name</label>
-                <input type="text" id="username" required />
+                <label for="username" class="visually-hidden">Name</label>
+                <input type="text" id="username" placeholder="Name" required />
               </div>
 
               <div class="field-group">
-                <label for="password">Password</label>
+                <label for="password" class="visually-hidden">Password</label>
                 <div class="password-input-wrap">
-                  <input type="password" id="password" autocomplete="new-password" required />
+                  <input type="password" id="password" placeholder="Password" autocomplete="new-password" required />
                   <button type="button" class="password-toggle" data-password-toggle="password" aria-label="Show password" aria-controls="password" aria-pressed="false" title="Show password">
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <path d="M2.75 12S6.1 5.75 12 5.75 21.25 12 21.25 12 17.9 18.25 12 18.25 2.75 12 2.75 12Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
@@ -2618,7 +2626,7 @@
                 </div>
               </div>
 
-              <button type="submit">Add User</button>
+              <button type="submit" class="small">Add User</button>
               </form>
               <div class="entity-search">
                 <input id="user-search" type="search" placeholder="Search users" aria-label="Search users" autocomplete="off" />
@@ -2655,10 +2663,10 @@
             <aside class="entity-sidebar">
               <form id="conf-form" class="inline-form entity-create-form" autocomplete="off">
               <div class="field-group">
-                <label for="confname">Name</label>
-                <input type="text" id="confname" required />
+                <label for="confname" class="visually-hidden">Name</label>
+                <input type="text" id="confname" placeholder="Name" required />
               </div>
-              <button type="submit">Add Conference</button>
+              <button type="submit" class="small">Add Conference</button>
               </form>
               <div class="entity-search">
                 <input id="conference-search" type="search" placeholder="Search conferences" aria-label="Search conferences" autocomplete="off" />
@@ -2690,13 +2698,13 @@
             <aside class="entity-sidebar">
               <form id="feed-form" class="inline-form entity-create-form" autocomplete="off">
               <div class="field-group">
-                <label for="feedname">Name</label>
-                <input type="text" id="feedname" required />
+                <label for="feedname" class="visually-hidden">Name</label>
+                <input type="text" id="feedname" placeholder="Name" required />
               </div>
               <div class="field-group">
-                <label for="feedpassword">Password</label>
+                <label for="feedpassword" class="visually-hidden">Password</label>
                 <div class="password-input-wrap">
-                  <input type="password" id="feedpassword" autocomplete="new-password" required />
+                  <input type="password" id="feedpassword" placeholder="Password" autocomplete="new-password" required />
                   <button type="button" class="password-toggle" data-password-toggle="feedpassword" aria-label="Show password" aria-controls="feedpassword" aria-pressed="false" title="Show password">
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <path d="M2.75 12S6.1 5.75 12 5.75 21.25 12 21.25 12 17.9 18.25 12 18.25 2.75 12 2.75 12Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
@@ -2706,7 +2714,7 @@
                   </button>
                 </div>
               </div>
-              <button type="submit">Add Feed</button>
+              <button type="submit" class="small">Add Feed</button>
               </form>
               <div class="entity-search">
                 <input id="feed-search" type="search" placeholder="Search feeds" aria-label="Search feeds" autocomplete="off" />
@@ -2740,9 +2748,9 @@
           <div class="production-layout">
             <aside class="production-sidebar">
               <form id="production-create-form" class="inline-form" autocomplete="off">
-                <label for="production-create-name">New production</label>
+                <label for="production-create-name" class="visually-hidden">Name</label>
                 <div class="production-create-controls">
-                  <input id="production-create-name" type="text" maxlength="100" required />
+                  <input id="production-create-name" type="text" placeholder="Name" maxlength="100" required />
                   <button type="submit" class="small">Add</button>
                 </div>
               </form>
