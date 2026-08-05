@@ -1344,12 +1344,27 @@
         outline: none;
       }
 
-      .production-check-row input[type='checkbox'] {
-        width: 1rem;
-        height: 1rem;
-        min-width: 1rem;
+      .production-check-row button.production-member-toggle {
+        flex: 0 0 1.4rem;
+        width: 1.4rem;
+        height: 1.4rem;
+        min-width: 1.4rem;
+        min-height: 1.4rem;
         padding: 0;
         margin: 0;
+        border: 1px solid rgba(59, 130, 246, 0.55);
+        border-radius: 50%;
+        background: rgba(37, 99, 235, 0.16);
+        color: #93c5fd;
+        font-size: 1.05rem;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .production-check-row button.production-member-toggle.is-member {
+        background: rgba(37, 99, 235, 0.82);
+        border-color: rgba(96, 165, 250, 0.9);
+        color: #fff;
       }
 
       .production-check-row button.production-admin-role-toggle {

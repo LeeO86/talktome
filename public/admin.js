@@ -1449,7 +1449,10 @@ function renderProductionMembers(payload) {
         : '';
     return `
       <li class="production-check-row${member ? '' : ' is-inactive'}" data-production-member-row="${user.id}" tabindex="0">
-        <input type="checkbox" data-production-member="${user.id}" aria-label="Production membership for ${escapeHtml(user.name)}" ${member ? 'checked' : ''}>
+        <button type="button" class="production-member-toggle${member ? ' is-member' : ''}"
+          data-production-member="${user.id}" data-is-member="${member ? 'true' : 'false'}"
+          aria-label="${member ? 'Remove' : 'Add'} ${escapeHtml(user.name)} ${member ? 'from' : 'to'} this production"
+          title="${member ? 'Remove member' : 'Add member'}">${member ? '−' : '+'}</button>
         <span>${escapeHtml(user.name)}${user.is_guest_profile ? ' <span class="badge guest-profile">Guest</span>' : ''}</span>
         ${adminControl}
       </li>
@@ -3780,12 +3783,12 @@ productionDeleteButton?.addEventListener('click', async () => {
   }
 });
 
-async function updateProductionMembership(input) {
-  const userId = Number(input?.dataset.productionMember);
+async function updateProductionMembership(button, shouldBeMember) {
+  const userId = Number(button?.dataset.productionMember);
   if (!selectedProductionId || !Number.isFinite(userId)) return;
-  input.disabled = true;
+  button.disabled = true;
   try {
-    if (input.checked) {
+    if (shouldBeMember) {
       await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -3796,16 +3799,10 @@ async function updateProductionMembership(input) {
     }
     await loadProductionDetail(selectedProductionId);
   } catch (error) {
-    input.checked = !input.checked;
-    input.disabled = false;
+    button.disabled = false;
     showMessage(error.message || 'Failed to update member', 'error', 'productions');
   }
 }
-
-productionMembersList?.addEventListener('change', (event) => {
-  const memberInput = event.target.closest('[data-production-member]');
-  if (memberInput) updateProductionMembership(memberInput);
-});
 
 productionMembersList?.addEventListener('click', async (event) => {
   const adminButton = event.target.closest('[data-production-admin]');
@@ -3831,23 +3828,30 @@ productionMembersList?.addEventListener('click', async (event) => {
     return;
   }
 
+  const memberButton = event.target.closest('[data-production-member]');
+  if (memberButton) {
+    event.stopPropagation();
+    if (!memberButton.disabled) {
+      updateProductionMembership(memberButton, memberButton.dataset.isMember !== 'true');
+    }
+    return;
+  }
+
   if (event.target.closest('button, input, a, select')) return;
   const row = event.target.closest('[data-production-member-row]');
-  const input = row?.querySelector('[data-production-member]');
-  if (!input || input.disabled) return;
-  input.checked = !input.checked;
-  input.dispatchEvent(new Event('change', { bubbles: true }));
+  const button = row?.querySelector('[data-production-member]');
+  if (!button || button.disabled) return;
+  updateProductionMembership(button, button.dataset.isMember !== 'true');
 });
 
 productionMembersList?.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' && event.key !== ' ') return;
   if (event.target.closest('button, input, a, select')) return;
   const row = event.target.closest('[data-production-member-row]');
-  const input = row?.querySelector('[data-production-member]');
-  if (!input || input.disabled) return;
+  const button = row?.querySelector('[data-production-member]');
+  if (!button || button.disabled) return;
   event.preventDefault();
-  input.checked = !input.checked;
-  input.dispatchEvent(new Event('change', { bubbles: true }));
+  updateProductionMembership(button, button.dataset.isMember !== 'true');
 });
 
 productionOrderUser?.addEventListener('change', () => {
