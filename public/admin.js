@@ -2798,7 +2798,7 @@ async function renderUserConferenceList(userId) {
           <button type="button" class="small danger" onclick="confirmUnassign(${userId}, ${c.id})">Remove</button>
         </li>
       `).join('')
-    : '<li class="list-chip"><span class="chip-label">No conferences assigned yet</span></li>';
+    : '';
 }
 
 async function renderConferenceParticipantList(confId) {
@@ -2814,7 +2814,7 @@ async function renderConferenceParticipantList(confId) {
           <button type="button" class="small danger" onclick="confirmUnassign(${u.id},${confId})">Remove</button>
         </li>
       `).join('')
-    : '<li class="list-chip"><span class="chip-label">No participants yet</span></li>';
+    : '';
 }
 
 // Fetch and render targets + rebuild the “type → id” dropdown
