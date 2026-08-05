@@ -1193,6 +1193,7 @@
       .production-layout {
         display: grid;
         grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr);
+        align-items: start;
         gap: 1rem;
       }
 
@@ -1294,10 +1295,9 @@
       .production-order-list {
         display: grid;
         gap: 0.4rem;
-        max-height: 18rem;
         margin: 0.6rem 0 0;
         padding: 0;
-        overflow: auto;
+        overflow: visible;
         list-style: none;
       }
 
@@ -1320,8 +1320,10 @@
         transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease;
       }
 
-      #production-members {
-        max-height: min(36rem, 65vh);
+      .production-matrix-panel .target-matrix-wrap {
+        max-height: none;
+        overflow-x: auto;
+        overflow-y: visible;
       }
 
       .production-check-row.is-inactive {
