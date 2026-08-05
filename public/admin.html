@@ -1375,19 +1375,26 @@
         min-height: 1.4rem;
         padding: 0;
         margin: 0;
-        border: 1px solid rgba(59, 130, 246, 0.55);
-        border-radius: 50%;
-        background: rgba(37, 99, 235, 0.16);
-        color: #93c5fd;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--muted);
         font-size: 1.05rem;
         font-weight: 700;
         line-height: 1;
+        box-shadow: none;
       }
 
       .production-check-row button.production-member-toggle.is-member {
-        background: rgba(37, 99, 235, 0.82);
-        border-color: rgba(96, 165, 250, 0.9);
-        color: #fff;
+        background: transparent;
+        color: var(--muted);
+      }
+
+      .production-check-row button.production-member-toggle:hover,
+      .production-check-row button.production-member-toggle:focus-visible {
+        background: transparent;
+        color: var(--text);
+        transform: none;
       }
 
       .production-check-row button.production-admin-role-toggle {
