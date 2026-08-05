@@ -62,9 +62,23 @@ const statusBridgesBody = document.getElementById('status-bridges-body');
 const statusCompanionsBody = document.getElementById('status-companions-body');
 const targetMatrixContainer = document.getElementById('target-matrix-container');
 const conferenceMembershipMatrixContainer = document.getElementById('conference-membership-matrix-container');
+const userPicker = document.getElementById('user-picker');
+const userSearch = document.getElementById('user-search');
+const userSearchClear = document.getElementById('user-search-clear');
+const userEmpty = document.getElementById('user-empty');
+const conferencePicker = document.getElementById('conference-picker');
+const conferenceSearch = document.getElementById('conference-search');
+const conferenceSearchClear = document.getElementById('conference-search-clear');
+const conferenceEmpty = document.getElementById('conference-empty');
+const feedPicker = document.getElementById('feed-picker');
+const feedSearch = document.getElementById('feed-search');
+const feedSearchClear = document.getElementById('feed-search-clear');
+const feedEmpty = document.getElementById('feed-empty');
 const productionList = document.getElementById('production-list');
 const productionCreateForm = document.getElementById('production-create-form');
 const productionCreateName = document.getElementById('production-create-name');
+const productionSearch = document.getElementById('production-search');
+const productionSearchClear = document.getElementById('production-search-clear');
 const productionEmpty = document.getElementById('production-empty');
 const productionDetail = document.getElementById('production-detail');
 const productionDetailName = document.getElementById('production-detail-name');
@@ -167,6 +181,12 @@ let activeAdminView = null;
 let productionSummaries = [];
 let selectedProductionId = null;
 let selectedProductionPayload = null;
+const entityMasterDetailState = {
+  users: { selectedId: null, query: '' },
+  conferences: { selectedId: null, query: '' },
+  feeds: { selectedId: null, query: '' },
+};
+let productionSearchQuery = '';
 
 function focusAdminLoginNameField() {
   if (!adminNameInput) return;
@@ -349,31 +369,23 @@ window.openUserFromStatus = async function (userId) {
 
   activateAdminView('users');
 
-  let targetDiv = document.getElementById(`user-nested-${numericUserId}`);
-  if (!targetDiv) {
+  let listItem = document.querySelector(`#user-list [data-entity-id="${numericUserId}"]`);
+  if (!listItem) {
     await refreshAdminLists({ users: true });
-    targetDiv = document.getElementById(`user-nested-${numericUserId}`);
+    listItem = document.querySelector(`#user-list [data-entity-id="${numericUserId}"]`);
   }
-  if (!targetDiv) return;
+  if (!listItem) return;
 
-  const button = document.getElementById(`user-toggle-${numericUserId}`);
-  if (!targetDiv.classList.contains('is-open')) {
-    try {
-      await renderUserConferenceList(numericUserId);
-      targetDiv.classList.add('is-open');
-      button?.setAttribute('aria-expanded', 'true');
-    } catch (err) {
-      showMessage('❌ Failed to load user details', 'error', 'user');
-      console.error(err);
-      return;
-    }
+  try {
+    await selectAdminEntity('users', numericUserId);
+  } catch (err) {
+    showMessage('❌ Failed to load user details', 'error', 'user');
+    console.error(err);
+    return;
   }
-
-  const listItem = targetDiv.closest('.list-item');
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
-      const scrollTarget = listItem || targetDiv;
-      scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      listItem.scrollIntoView({ behavior: 'smooth', block: 'start' });
       listItem?.classList.add('list-item--jump-highlight');
       window.setTimeout(() => {
         listItem?.classList.remove('list-item--jump-highlight');
@@ -1399,6 +1411,149 @@ function stopStatusStream() {
   setServerReachability(null);
 }
 
+function normalizeAdminSearch(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function getEntityMasterDetailConfig(kind) {
+  if (kind === 'users') {
+    return {
+      picker: userPicker,
+      search: userSearch,
+      clear: userSearchClear,
+      empty: userEmpty,
+      detailList: document.getElementById('user-list'),
+      itemLabel: 'users',
+    };
+  }
+  if (kind === 'conferences') {
+    return {
+      picker: conferencePicker,
+      search: conferenceSearch,
+      clear: conferenceSearchClear,
+      empty: conferenceEmpty,
+      detailList: document.getElementById('conf-list'),
+      itemLabel: 'conferences',
+    };
+  }
+  if (kind === 'feeds') {
+    return {
+      picker: feedPicker,
+      search: feedSearch,
+      clear: feedSearchClear,
+      empty: feedEmpty,
+      detailList: document.getElementById('feed-list'),
+      itemLabel: 'feeds',
+    };
+  }
+  return null;
+}
+
+function getEntityMasterDetailItems(kind) {
+  return Array.isArray(currentAdminCatalog[kind]) ? currentAdminCatalog[kind] : [];
+}
+
+function renderEntityMasterDetailPicker(kind, items = getEntityMasterDetailItems(kind)) {
+  const config = getEntityMasterDetailConfig(kind);
+  const state = entityMasterDetailState[kind];
+  if (!config?.picker || !state) return;
+
+  const query = normalizeAdminSearch(state.query);
+  const matches = items.filter((item) => normalizeAdminSearch(item.name).includes(query));
+  if (!matches.length) {
+    config.picker.innerHTML = `<li class="entity-picker-empty">${items.length ? `No matching ${config.itemLabel}.` : `No ${config.itemLabel} configured.`}</li>`;
+    return;
+  }
+
+  config.picker.innerHTML = matches.map((item) => `
+    <li>
+      <button type="button" data-entity-kind="${kind}" data-entity-select="${item.id}"
+        aria-current="${Number(item.id) === Number(state.selectedId)}">
+        ${escapeHtml(item.name)}
+      </button>
+    </li>
+  `).join('');
+}
+
+async function syncEntityMasterDetail(kind, items = getEntityMasterDetailItems(kind), preferredId = null) {
+  const config = getEntityMasterDetailConfig(kind);
+  const state = entityMasterDetailState[kind];
+  if (!config || !state) return;
+
+  const requestedId = preferredId == null ? state.selectedId : preferredId;
+  const selected = items.find((item) => Number(item.id) === Number(requestedId)) || items[0] || null;
+  state.selectedId = selected?.id ?? null;
+  renderEntityMasterDetailPicker(kind, items);
+
+  config.empty?.classList.toggle('is-hidden', Boolean(selected));
+  config.detailList?.querySelectorAll('[data-entity-id]').forEach((item) => {
+    const isSelected = Number(item.dataset.entityId) === Number(state.selectedId);
+    item.hidden = !isSelected;
+    item.querySelector('.nested')?.classList.toggle('is-open', isSelected);
+  });
+
+  if (!selected) return;
+  try {
+    if (kind === 'users') {
+      await renderUserConferenceList(selected.id);
+    } else if (kind === 'conferences') {
+      await renderConferenceParticipantList(selected.id);
+    }
+  } catch (error) {
+    console.error(`Failed to load ${kind} detail`, error);
+    showMessage(`Failed to load ${kind} detail`, 'error', kind === 'conferences' ? 'conf' : kind);
+  }
+}
+
+async function selectAdminEntity(kind, entityId) {
+  const state = entityMasterDetailState[kind];
+  if (!state) return;
+  state.selectedId = Number(entityId);
+  await syncEntityMasterDetail(kind);
+}
+
+function bindEntitySearch(input, clearButton, onChange) {
+  if (!input) return;
+  const update = () => {
+    if (clearButton) clearButton.hidden = !input.value;
+    onChange(input.value);
+  };
+  input.addEventListener('input', update);
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !input.value) return;
+    input.value = '';
+    update();
+  });
+  clearButton?.addEventListener('click', () => {
+    input.value = '';
+    update();
+    input.focus();
+  });
+  update();
+}
+
+function clearEntitySearch(input) {
+  if (!input || !input.value) return;
+  input.value = '';
+  input.dispatchEvent(new Event('input'));
+}
+
+for (const kind of ['users', 'conferences', 'feeds']) {
+  const config = getEntityMasterDetailConfig(kind);
+  config?.picker?.addEventListener('click', (event) => {
+    const button = event.target.closest(`[data-entity-kind="${kind}"][data-entity-select]`);
+    if (button) selectAdminEntity(kind, button.dataset.entitySelect);
+  });
+  bindEntitySearch(config?.search, config?.clear, (query) => {
+    entityMasterDetailState[kind].query = query;
+    renderEntityMasterDetailPicker(kind);
+  });
+}
+
 async function productionRequest(url, options = undefined) {
   const response = await authedFetch(url, options);
   if (!response.ok) {
@@ -1411,10 +1566,16 @@ async function productionRequest(url, options = undefined) {
 function renderProductionSummaries() {
   if (!productionList) return;
   if (!productionSummaries.length) {
-    productionList.innerHTML = '<li class="section-note">No productions configured.</li>';
+    productionList.innerHTML = '<li class="entity-picker-empty">No productions configured.</li>';
     return;
   }
-  productionList.innerHTML = productionSummaries.map((production) => `
+  const query = normalizeAdminSearch(productionSearchQuery);
+  const matches = productionSummaries.filter((production) => normalizeAdminSearch(production.name).includes(query));
+  if (!matches.length) {
+    productionList.innerHTML = '<li class="entity-picker-empty">No matching productions.</li>';
+    return;
+  }
+  productionList.innerHTML = matches.map((production) => `
     <li>
       <button type="button" data-production-select="${production.id}" aria-current="${Number(production.id) === Number(selectedProductionId)}">
         ${escapeHtml(production.name)}
@@ -1422,6 +1583,11 @@ function renderProductionSummaries() {
     </li>
   `).join('');
 }
+
+bindEntitySearch(productionSearch, productionSearchClear, (query) => {
+  productionSearchQuery = query;
+  renderProductionSummaries();
+});
 
 function setProductionDetailVisible(visible) {
   productionEmpty?.classList.toggle('is-hidden', visible);
@@ -1640,7 +1806,7 @@ async function loadData() {
   await loadMediaNetworkSettings();
   await loadRtcPortSettings();
   await renderUserList(users, conferences, feeds, bridges);
-  renderFeedList(feeds);
+  await renderFeedList(feeds);
   await renderConferenceList(conferences, users);
   renderTargetMatrix(users, conferences, feeds);
   renderConferenceMembershipMatrix(users, conferences);
@@ -1657,6 +1823,11 @@ async function fetchAdminCollections() {
   ]);
   const bridges = Array.isArray(bridgePayload?.bridges) ? bridgePayload.bridges : [];
   currentBridgeRegistry = bridges;
+  currentAdminCatalog = {
+    users: Array.isArray(users) ? users : [],
+    conferences: Array.isArray(conferences) ? conferences : [],
+    feeds: Array.isArray(feeds) ? feeds : [],
+  };
 
   return { users, conferences, feeds, bridges };
 }
@@ -2053,14 +2224,13 @@ async function restoreOpenListState(state = {}) {
 }
 
 async function refreshAdminLists({ users: refreshUsers = false, conferences: refreshConferences = false, feeds: refreshFeeds = false } = {}) {
-  const openState = getOpenListState();
   const { users, conferences, feeds, bridges } = await fetchAdminCollections();
 
   if (refreshUsers) {
     await renderUserList(users, conferences, feeds, bridges);
   }
   if (refreshFeeds) {
-    renderFeedList(feeds);
+    await renderFeedList(feeds);
   }
   if (refreshConferences) {
     await renderConferenceList(conferences, users);
@@ -2071,7 +2241,6 @@ async function refreshAdminLists({ users: refreshUsers = false, conferences: ref
     renderConferenceMembershipMatrix(users, conferences);
   }
 
-  await restoreOpenListState(openState);
 }
 
 async function renderUserList(users, conferences, feeds, bridges = currentBridgeRegistry) {
@@ -2112,8 +2281,9 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
       ? 'disabled title="Guest profile cannot be deleted"'
       : isAdmin ? 'disabled title="Admin accounts cannot be deleted"' : '';
     const li = document.createElement('li');
-    li.className = 'list-item list-item--toggleable';
-    li.setAttribute('onclick', `toggleUserConfs(${user.id})`);
+    li.className = 'list-item entity-detail-item';
+    li.dataset.entityId = String(user.id);
+    li.hidden = true;
 
     const optionsHtml = conferences.length
       ? conferences.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')
@@ -2180,22 +2350,13 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
       : '';
 
     li.innerHTML = `
-      <div class="list-item-header list-item-header--toggleable">
-        <button
-          type="button"
-          class="list-item-title list-item-title--toggle"
-          id="user-toggle-${user.id}"
-          onclick="event.stopPropagation(); toggleUserConfs(${user.id}, this)"
-          aria-expanded="false"
-          aria-controls="user-nested-${user.id}"
-          aria-label="Toggle details for ${safeName}"
-        >
-          <span class="list-item-disclosure" aria-hidden="true"></span>
+      <div class="list-item-header">
+        <div class="list-item-title">
           <span>${safeName}</span>
           ${adminBadge}
           ${guestBadge}
           ${bridgeBadge}
-        </button>
+        </div>
         <div class="inline-controls" onclick="event.stopPropagation()">
           <button type="button" class="small" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>
           <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
@@ -2238,9 +2399,10 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
     await loadUserTargets(user.id, users, conferences, feeds);
   }));
   initializeBridgeEndpointForms();
+  await syncEntityMasterDetail('users', users);
 }
 
-function renderFeedList(feeds) {
+async function renderFeedList(feeds) {
   const feedList = document.getElementById('feed-list');
   feedList.innerHTML = '';
 
@@ -2252,23 +2414,15 @@ function renderFeedList(feeds) {
       ? '<span class="badge bridge">Bridge</span>'
       : '';
     const li = document.createElement('li');
-    li.className = 'list-item list-item--toggleable';
-    li.setAttribute('onclick', `toggleFeedBridge(${feed.id})`);
+    li.className = 'list-item entity-detail-item';
+    li.dataset.entityId = String(feed.id);
+    li.hidden = true;
     li.innerHTML = `
-      <div class="list-item-header list-item-header--toggleable">
-        <button
-          type="button"
-          class="list-item-title list-item-title--toggle"
-          id="feed-toggle-${feed.id}"
-          onclick="event.stopPropagation(); toggleFeedBridge(${feed.id}, this)"
-          aria-expanded="false"
-          aria-controls="feed-nested-${feed.id}"
-          aria-label="Toggle details for ${safeName}"
-        >
-          <span class="list-item-disclosure" aria-hidden="true"></span>
+      <div class="list-item-header">
+        <div class="list-item-title">
           <span>${safeName}</span>
           ${bridgeBadge}
-        </button>
+        </div>
         <div class="inline-controls" onclick="event.stopPropagation()">
           <button type="button" class="small warning" onclick='editFeed(${feed.id}, ${JSON.stringify(feed.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetFeedPassword(${feed.id}, ${JSON.stringify(feed.name)})'>Reset Password</button>
@@ -2308,6 +2462,7 @@ function renderFeedList(feeds) {
     feedList.appendChild(li);
   }
   initializeBridgeEndpointForms();
+  await syncEntityMasterDetail('feeds', feeds);
 }
 
 async function renderConferenceList(conferences, users) {
@@ -2318,23 +2473,14 @@ async function renderConferenceList(conferences, users) {
   for (const conf of conferences) {
     const safeName = escapeHtml(conf.name);
     const li = document.createElement('li');
-    li.className = 'list-item list-item--toggleable';
-    li.dataset.confId = String(conf.id);
-    li.setAttribute('onclick', `toggleConfUsers(${conf.id})`);
+    li.className = 'list-item entity-detail-item';
+    li.dataset.entityId = String(conf.id);
+    li.hidden = true;
     li.innerHTML = `
-      <div class="list-item-header list-item-header--toggleable">
-        <button
-          type="button"
-          class="list-item-title list-item-title--toggle"
-          id="conf-toggle-${conf.id}"
-          onclick="event.stopPropagation(); toggleConfUsers(${conf.id}, this)"
-          aria-expanded="false"
-          aria-controls="conf-controls-${conf.id}"
-          aria-label="Toggle details for ${safeName}"
-        >
-          <span class="list-item-disclosure" aria-hidden="true"></span>
+      <div class="list-item-header">
+        <div class="list-item-title">
           <span>${safeName}</span>
-        </button>
+        </div>
         <div class="inline-controls" onclick="event.stopPropagation()">
           <button type="button" class="small warning" onclick='editConference(${conf.id}, ${JSON.stringify(conf.name)})'>Rename</button>
           <button type="button" class="small danger" onclick="deleteConference(${conf.id})">Delete</button>
@@ -2353,6 +2499,7 @@ async function renderConferenceList(conferences, users) {
   }
 
   await Promise.all(conferences.map(conf => updateConferenceParticipantOptions(conf.id, users)));
+  await syncEntityMasterDetail('conferences', conferences);
 }
 
 async function loadMdnsSettings() {
@@ -3248,6 +3395,10 @@ document.getElementById('user-form').addEventListener('submit', async (e) => {
     if (res.status === 409) {
       showMessage('⚠️ Username already exists!', 'warning', 'user');
     } else if (res.ok) {
+      const created = await res.json().catch(() => ({}));
+      entityMasterDetailState.users.selectedId = created.id ?? null;
+      document.getElementById('user-form')?.reset();
+      clearEntitySearch(userSearch);
       showMessage('✅ User created', 'success', 'user');
       await refreshAdminLists({ users: true, conferences: true });
     } else {
@@ -3273,6 +3424,10 @@ document.getElementById('conf-form').addEventListener('submit', async (e) => {
     if (res.status === 409) {
       showMessage('⚠️ Conference already exists!', 'warning', 'conf');
     } else if (res.ok) {
+      const created = await res.json().catch(() => ({}));
+      entityMasterDetailState.conferences.selectedId = created.id ?? null;
+      document.getElementById('conf-form')?.reset();
+      clearEntitySearch(conferenceSearch);
       showMessage('✅ Conference created', 'success', 'conf');
       await refreshAdminLists({ users: true, conferences: true });
     } else {
@@ -3299,6 +3454,10 @@ document.getElementById('feed-form').addEventListener('submit', async (e) => {
     if (res.status === 409) {
       showMessage('⚠️ Feed already exists!', 'warning', 'feed');
     } else if (res.ok) {
+      const created = await res.json().catch(() => ({}));
+      entityMasterDetailState.feeds.selectedId = created.id ?? null;
+      document.getElementById('feed-form')?.reset();
+      clearEntitySearch(feedSearch);
       showMessage('✅ Feed created', 'success', 'feed');
       await refreshAdminLists({ users: true, feeds: true });
     } else {
@@ -3746,6 +3905,7 @@ productionCreateForm?.addEventListener('submit', async (event) => {
     });
     const created = await response.json();
     productionCreateForm.reset();
+    clearEntitySearch(productionSearch);
     await loadProductions({ selectId: created.id });
     showMessage('Production created.', 'success', 'productions');
   } catch (error) {

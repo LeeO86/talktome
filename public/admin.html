@@ -1190,6 +1190,7 @@
         cursor: crosshair;
       }
 
+      .entity-layout,
       .production-layout {
         display: grid;
         grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr);
@@ -1197,12 +1198,148 @@
         gap: 1rem;
       }
 
+      .entity-sidebar,
+      .entity-detail-panel,
       .production-sidebar,
       .production-panel {
         padding: 0.9rem;
         border: 1px solid rgba(148, 163, 184, 0.18);
         border-radius: 10px;
         background: rgba(15, 23, 42, 0.32);
+      }
+
+      .entity-sidebar .entity-create-form {
+        display: grid;
+        gap: 0.45rem;
+        align-items: stretch;
+        margin: 0 0 0.7rem;
+      }
+
+      .entity-sidebar .entity-create-form .field-group {
+        display: grid;
+        align-items: stretch;
+        gap: 0.25rem;
+      }
+
+      .entity-sidebar .entity-create-form input,
+      .entity-sidebar .entity-create-form button {
+        width: 100%;
+        min-width: 0;
+        height: 2.2rem;
+        min-height: 2.2rem;
+      }
+
+      .entity-sidebar .entity-create-form button {
+        padding-top: 0.25rem;
+        padding-bottom: 0.25rem;
+      }
+
+      .entity-search {
+        position: relative;
+        margin-bottom: 0.7rem;
+      }
+
+      .entity-search::before {
+        content: '';
+        position: absolute;
+        left: 0.65rem;
+        top: 50%;
+        z-index: 1;
+        width: 0.9rem;
+        height: 0.9rem;
+        background: center / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-4-4'/%3E%3C/svg%3E");
+        pointer-events: none;
+        transform: translateY(-50%);
+      }
+
+      .entity-search input {
+        width: 100%;
+        min-width: 0;
+        height: 2.2rem;
+        padding: 0.3rem 2rem 0.3rem 1.9rem;
+      }
+
+      .entity-search input::-webkit-search-cancel-button {
+        display: none;
+      }
+
+      .entity-search button {
+        position: absolute;
+        top: 50%;
+        right: 0.25rem;
+        width: 1.7rem;
+        min-width: 1.7rem;
+        height: 1.7rem;
+        min-height: 1.7rem;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: 1.2rem;
+        line-height: 1;
+        transform: translateY(-50%);
+      }
+
+      .entity-search button:hover,
+      .entity-search button:focus-visible {
+        background: transparent;
+        color: var(--text);
+        transform: translateY(-50%);
+      }
+
+      .entity-search button[hidden] {
+        display: none;
+      }
+
+      .entity-picker-list {
+        display: grid;
+        gap: 0.45rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .entity-picker-list button {
+        width: 100%;
+        min-height: 2.55rem;
+        padding: 0.4rem 0.7rem;
+        justify-content: flex-start;
+        text-align: left;
+        background: rgba(30, 41, 59, 0.72);
+      }
+
+      .entity-picker-list button[aria-current='true'] {
+        border-color: #3b82f6;
+        background: rgba(59, 130, 246, 0.18);
+      }
+
+      .entity-picker-empty,
+      .entity-empty {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .entity-picker-empty {
+        padding: 0.45rem 0.25rem;
+      }
+
+      .entity-detail-panel {
+        min-width: 0;
+      }
+
+      .entity-detail-list > .entity-detail-item {
+        border: 0;
+        padding: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .entity-detail-item .nested {
+        display: block;
+      }
+
+      .entity-detail-item[hidden] {
+        display: none;
       }
 
       #production-create-form {
@@ -1261,20 +1398,14 @@
         right: 0.2rem;
         width: 1.9rem;
         height: 1.9rem;
-      }
-
-      .production-list {
-        display: grid;
-        gap: 0.45rem;
-        margin: 0;
+        min-width: 0;
+        min-height: 0;
         padding: 0;
-        list-style: none;
       }
 
       .production-list button {
-        width: 100%;
-        text-align: left;
-        background: rgba(30, 41, 59, 0.72);
+        justify-content: center;
+        text-align: center;
       }
 
       .production-list button[aria-current="true"] {
@@ -1438,6 +1569,7 @@
       }
 
       @media (max-width: 900px) {
+        .entity-layout,
         .production-layout {
           grid-template-columns: 1fr;
         }
@@ -2423,8 +2555,9 @@
         </div>
 
         <div id="users-section-body" class="card-section-body">
-          <div class="form-grid">
-            <form id="user-form" class="inline-form" autocomplete="off">
+          <div class="entity-layout">
+            <aside class="entity-sidebar">
+              <form id="user-form" class="inline-form entity-create-form" autocomplete="off">
               <div class="field-group">
                 <label for="username">Name</label>
                 <input type="text" id="username" required />
@@ -2445,10 +2578,18 @@
               </div>
 
               <button type="submit">Add User</button>
-            </form>
+              </form>
+              <div class="entity-search">
+                <input id="user-search" type="search" placeholder="Search users" aria-label="Search users" autocomplete="off" />
+                <button id="user-search-clear" type="button" aria-label="Clear user search" title="Clear search" hidden>&times;</button>
+              </div>
+              <ul id="user-picker" class="entity-picker-list" aria-label="Users"></ul>
+            </aside>
+            <div class="entity-detail-panel">
+              <div id="user-empty" class="entity-empty">Select a user to configure it.</div>
+              <ul id="user-list" class="item-list entity-detail-list" aria-live="polite"></ul>
+            </div>
           </div>
-
-          <ul id="user-list" class="item-list" aria-live="polite"></ul>
         </div>
       </section>
 
@@ -2469,16 +2610,25 @@
             Add the conference as a target as well if the user should also get a PTT button for it.
           </div>
 
-          <div class="form-grid">
-            <form id="conf-form" class="inline-form" autocomplete="off">
+          <div class="entity-layout">
+            <aside class="entity-sidebar">
+              <form id="conf-form" class="inline-form entity-create-form" autocomplete="off">
               <div class="field-group">
                 <input type="text" id="confname" aria-label="Conference name" required />
               </div>
               <button type="submit">Add Conference</button>
-            </form>
+              </form>
+              <div class="entity-search">
+                <input id="conference-search" type="search" placeholder="Search conferences" aria-label="Search conferences" autocomplete="off" />
+                <button id="conference-search-clear" type="button" aria-label="Clear conference search" title="Clear search" hidden>&times;</button>
+              </div>
+              <ul id="conference-picker" class="entity-picker-list" aria-label="Conferences"></ul>
+            </aside>
+            <div class="entity-detail-panel">
+              <div id="conference-empty" class="entity-empty">Select a conference to configure it.</div>
+              <ul id="conf-list" class="item-list entity-detail-list" aria-live="polite"></ul>
+            </div>
           </div>
-
-          <ul id="conf-list" class="item-list" aria-live="polite"></ul>
         </div>
       </section>
 
@@ -2494,8 +2644,9 @@
         </div>
 
         <div id="feeds-section-body" class="card-section-body">
-          <div class="form-grid">
-            <form id="feed-form" class="inline-form" autocomplete="off">
+          <div class="entity-layout">
+            <aside class="entity-sidebar">
+              <form id="feed-form" class="inline-form entity-create-form" autocomplete="off">
               <div class="field-group">
                 <label for="feedname">Name</label>
                 <input type="text" id="feedname" required />
@@ -2514,10 +2665,18 @@
                 </div>
               </div>
               <button type="submit">Add Feed</button>
-            </form>
+              </form>
+              <div class="entity-search">
+                <input id="feed-search" type="search" placeholder="Search feeds" aria-label="Search feeds" autocomplete="off" />
+                <button id="feed-search-clear" type="button" aria-label="Clear feed search" title="Clear search" hidden>&times;</button>
+              </div>
+              <ul id="feed-picker" class="entity-picker-list" aria-label="Feeds"></ul>
+            </aside>
+            <div class="entity-detail-panel">
+              <div id="feed-empty" class="entity-empty">Select a feed to configure it.</div>
+              <ul id="feed-list" class="item-list entity-detail-list" aria-live="polite"></ul>
+            </div>
           </div>
-
-          <ul id="feed-list" class="item-list" aria-live="polite"></ul>
         </div>
       </section>
 
@@ -2545,7 +2704,11 @@
                   <button type="submit" class="small">Add</button>
                 </div>
               </form>
-              <ul id="production-list" class="production-list" aria-label="Productions"></ul>
+              <div class="entity-search">
+                <input id="production-search" type="search" placeholder="Search productions" aria-label="Search productions" autocomplete="off" />
+                <button id="production-search-clear" type="button" aria-label="Clear production search" title="Clear search" hidden>&times;</button>
+              </div>
+              <ul id="production-list" class="production-list entity-picker-list" aria-label="Productions"></ul>
             </aside>
 
             <div id="production-empty" class="production-panel">Select a production to configure it.</div>
