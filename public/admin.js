@@ -93,6 +93,7 @@ const configExportBtn = document.getElementById('config-export-btn');
 const configImportBtn = document.getElementById('config-import-btn');
 const configImportFile = document.getElementById('config-import-file');
 const apiKeyCopyBtn = document.getElementById('api-key-copy-btn');
+const apiKeyValueInput = document.getElementById('api-key-value');
 const containerRestartPanel = document.getElementById('container-restart-panel');
 const containerRestartBtn = document.getElementById('container-restart-btn');
 const mediaNetworkMeta = document.getElementById('media-network-meta');
@@ -195,6 +196,7 @@ let productionSummaries = [];
 let selectedProductionId = null;
 let selectedProductionPayload = null;
 let guestLoginEnabled = false;
+let currentApiKey = '';
 const entityMasterDetailState = {
   users: { selectedId: null, query: '' },
   conferences: { selectedId: null, query: '' },
@@ -215,6 +217,7 @@ function focusAdminLoginNameField() {
 function showLogin(message) {
   stopStatusStream();
   closeAdminImageLightbox();
+  clearApiKeyField();
   if (adminLogin) adminLogin.classList.remove('is-hidden');
   if (adminApp) adminApp.classList.add('is-hidden');
   if (adminBar) adminBar.classList.add('is-hidden');
@@ -1850,6 +1853,7 @@ async function loadData() {
   await loadMdnsSettings();
   await loadMediaNetworkSettings();
   await loadRtcPortSettings();
+  await loadApiKeyField();
   await renderUserList(users, conferences, feeds, bridges);
   await renderFeedList(feeds);
   await renderConferenceList(conferences, users);
@@ -2726,6 +2730,41 @@ async function loadGuestLoginSettings() {
     guestLoginProfile.textContent = profileName;
   }
   return payload;
+}
+
+function clearApiKeyField() {
+  currentApiKey = '';
+  if (!apiKeyValueInput) return;
+  apiKeyValueInput.value = '';
+  apiKeyValueInput.type = 'password';
+  apiKeyValueInput.placeholder = 'Loading…';
+  const toggle = document.querySelector('[data-password-toggle="api-key-value"]');
+  if (toggle) {
+    toggle.setAttribute('aria-label', 'Show API key');
+    toggle.setAttribute('aria-pressed', 'false');
+    toggle.title = 'Show API key';
+  }
+}
+
+async function loadApiKeyField() {
+  if (!apiKeyValueInput) return '';
+  try {
+    const res = await authedFetch('/admin/api-key');
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || !payload.apiKey) {
+      throw new Error(payload.error || 'Failed to load API key');
+    }
+    currentApiKey = payload.apiKey;
+    apiKeyValueInput.value = currentApiKey;
+    apiKeyValueInput.placeholder = '';
+    return currentApiKey;
+  } catch (err) {
+    currentApiKey = '';
+    apiKeyValueInput.value = '';
+    apiKeyValueInput.placeholder = 'API key unavailable';
+    console.error('Failed to load API key:', err);
+    return '';
+  }
 }
 
 async function updateUserConferenceOptions(userId, allConfs, previousIndex) {
@@ -3689,14 +3728,13 @@ if (apiKeyCopyBtn) {
     apiKeyCopyBtn.disabled = true;
 
     try {
-      const res = await authedFetch('/admin/api-key');
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok || !payload.apiKey) {
-        showMessage(payload.error || 'Failed to load API key', 'error', 'config');
+      const apiKey = currentApiKey || await loadApiKeyField();
+      if (!apiKey) {
+        showMessage('Failed to load API key', 'error', 'config');
         return;
       }
 
-      await copyTextToClipboard(payload.apiKey);
+      await copyTextToClipboard(apiKey);
       apiKeyCopyBtn.textContent = 'Copied';
       showMessage('✅ API key copied', 'success', 'config');
       window.setTimeout(() => {

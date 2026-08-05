@@ -943,6 +943,49 @@
         background: rgba(245, 158, 11, 0.24);
       }
 
+      .api-key-controls {
+        display: grid;
+        gap: 0.6rem;
+        justify-items: start;
+      }
+
+      .api-key-field {
+        width: min(100%, 34rem);
+      }
+
+      .api-key-field input {
+        width: 100%;
+        height: 2.2rem;
+        padding: 0.3rem 2.5rem 0.3rem 0.7rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.82rem;
+      }
+
+      .config-panel .api-key-field .password-toggle {
+        right: 0.2rem;
+        width: 1.9rem;
+        height: 1.9rem;
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: inherit;
+        transform: translateY(-50%);
+      }
+
+      .config-panel .api-key-field .password-toggle:hover {
+        border: 0;
+        background: rgba(148, 163, 184, 0.12);
+        color: var(--text);
+        transform: translateY(-50%);
+      }
+
+      .api-key-actions {
+        display: flex;
+      }
+
       .rtc-port-form {
         display: grid;
         grid-template-columns: repeat(2, minmax(8rem, 12rem)) minmax(var(--config-action-width), 1fr);
@@ -3072,11 +3115,23 @@
               <h3 id="config-api-key-heading">API key</h3>
 
               <div class="setting-meta">
-                <div>Copy the global API key for Companion, Bridge and automation clients.</div>
+                <div>View or copy the global API key for Companion, Bridge and automation clients.</div>
               </div>
 
-              <div class="api-key-actions">
-                <button type="button" id="api-key-copy-btn">Copy API key</button>
+              <div class="api-key-controls">
+                <div class="password-input-wrap api-key-field">
+                  <input type="password" id="api-key-value" value="" placeholder="Loading…" readonly autocomplete="off" spellcheck="false" aria-label="Global API key" />
+                  <button type="button" class="password-toggle" data-password-toggle="api-key-value" aria-label="Show API key" aria-controls="api-key-value" aria-pressed="false" title="Show API key">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M2.75 12S6.15 6.75 12 6.75S21.25 12 21.25 12S17.85 17.25 12 17.25S2.75 12 2.75 12Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                      <circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.8"/>
+                      <path class="password-toggle__slash" d="M4.75 4.75L19.25 19.25" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+                <div class="api-key-actions">
+                  <button type="button" id="api-key-copy-btn">Copy API key</button>
+                </div>
               </div>
             </section>
 
