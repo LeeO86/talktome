@@ -1029,10 +1029,92 @@
       }
 
       .guest-login-form {
-        display: grid;
-        grid-template-columns: minmax(12rem, 1fr) minmax(var(--config-action-width), auto);
-        gap: 0.9rem 1rem;
-        align-items: end;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        min-height: 2.2rem;
+      }
+
+      .guest-login-switch {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        color: var(--muted);
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .guest-login-switch input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .guest-login-switch__track {
+        position: relative;
+        width: 2.8rem;
+        height: 1.5rem;
+        flex: 0 0 auto;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+
+      .guest-login-switch__track::after {
+        content: '';
+        position: absolute;
+        top: 0.17rem;
+        left: 0.17rem;
+        width: 1.05rem;
+        height: 1.05rem;
+        border-radius: 50%;
+        background: #cbd5e1;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.5);
+        transition: transform 0.15s ease, background 0.15s ease;
+      }
+
+      .guest-login-switch__state {
+        min-width: 1.7rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+        font-weight: 700;
+      }
+
+      .guest-login-switch__state::before {
+        content: 'Off';
+      }
+
+      .guest-login-switch input:checked + .guest-login-switch__track {
+        border-color: rgba(59, 130, 246, 0.75);
+        background: rgba(37, 99, 235, 0.75);
+      }
+
+      .guest-login-switch input:checked + .guest-login-switch__track::after {
+        background: #fff;
+        transform: translateX(1.3rem);
+      }
+
+      .guest-login-switch input:checked ~ .guest-login-switch__state {
+        color: var(--text);
+      }
+
+      .guest-login-switch input:checked ~ .guest-login-switch__state::before {
+        content: 'On';
+      }
+
+      .guest-login-switch input:focus-visible + .guest-login-switch__track {
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+      }
+
+      .guest-login-switch:has(input:disabled) {
+        cursor: wait;
+        opacity: 0.6;
       }
 
       .toggle-row {
@@ -1048,10 +1130,6 @@
         width: 1.15rem;
         height: 1.15rem;
         accent-color: var(--primary);
-      }
-
-      .guest-login-form button {
-        justify-self: end;
       }
 
       @media (min-width: 1280px) {
@@ -3125,11 +3203,12 @@
               </div>
 
               <form id="guest-login-form" class="guest-login-form" autocomplete="off">
-                <label class="toggle-row" for="guest-login-enabled">
-                  <input type="checkbox" id="guest-login-enabled" />
-                  <span>Allow passwordless Guest login</span>
+                <label class="guest-login-switch" for="guest-login-enabled">
+                  <span class="visually-hidden">Allow passwordless Guest login</span>
+                  <input type="checkbox" id="guest-login-enabled" role="switch" />
+                  <span class="guest-login-switch__track" aria-hidden="true"></span>
+                  <span class="guest-login-switch__state" aria-hidden="true"></span>
                 </label>
-                <button type="submit">Save</button>
               </form>
             </section>
 

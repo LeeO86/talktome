@@ -101,7 +101,6 @@ const mediaNetworkQrContainer = document.getElementById('media-network-qr');
 const mediaNetworkQrButton = document.getElementById('media-network-qr-button');
 const mediaNetworkQrImage = document.getElementById('media-network-qr-image');
 const mediaNetworkQrDownloadButton = document.getElementById('media-network-qr-download');
-const guestLoginForm = document.getElementById('guest-login-form');
 const guestLoginEnabledInput = document.getElementById('guest-login-enabled');
 const guestLoginStatus = document.getElementById('guest-login-status');
 const guestLoginProfile = document.getElementById('guest-login-profile');
@@ -3671,30 +3670,39 @@ document.getElementById('rtc-ports-form')?.addEventListener('submit', async (e) 
   }
 });
 
-if (guestLoginForm) {
-  guestLoginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
+if (guestLoginEnabledInput) {
+  guestLoginEnabledInput.addEventListener('change', async () => {
+    const enabled = Boolean(guestLoginEnabledInput.checked);
+    guestLoginEnabledInput.disabled = true;
+    let saved = false;
     try {
       const res = await authedFetch('/admin/settings/guest-login', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: Boolean(guestLoginEnabledInput?.checked) })
+        body: JSON.stringify({ enabled })
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        showMessage(payload.error || 'Failed to save Guest login', 'error', 'config');
-        return;
+        throw new Error(payload.error || 'Failed to save Guest login');
       }
+      saved = true;
       showMessage(
         payload.enabled ? '✅ Guest login enabled' : '✅ Guest login disabled',
         'success',
         'config'
       );
-      await loadGuestLoginSettings();
-      await refreshAdminLists({ users: true, conferences: true });
+      try {
+        await loadGuestLoginSettings();
+        await refreshAdminLists({ users: true, conferences: true });
+      } catch (refreshError) {
+        console.error('Failed to refresh Guest login UI:', refreshError);
+      }
     } catch (err) {
+      if (!saved) guestLoginEnabledInput.checked = !enabled;
       console.error('Failed to save Guest login:', err);
-      showMessage('❌ Failed to save Guest login', 'error', 'config');
+      showMessage(`❌ ${err.message || 'Failed to save Guest login'}`, 'error', 'config');
+    } finally {
+      guestLoginEnabledInput.disabled = false;
     }
   });
 }
