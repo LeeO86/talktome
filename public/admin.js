@@ -1266,7 +1266,7 @@ function renderAdminStatus(payload = {}) {
                 online: bridge.online,
                 warning: bridge.online && bridge.deviceMissing,
                 onlineLabel: 'Online',
-                offlineLabel: 'Stale',
+                offlineLabel: 'Offline',
                 warningLabel: 'Device missing',
               })}</td>
               <td><span class="status-primary">${escapeHtml(bridge.name)}</span></td>
