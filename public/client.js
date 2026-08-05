@@ -1023,6 +1023,14 @@ function formatDbDisplay(dbValue) {
   return `${sign}${normalized.toFixed(1)} dB`;
 }
 
+function formatLinearLevelDb(level) {
+  const linearLevel = Math.max(0, Math.min(1, Number(level)));
+  if (!Number.isFinite(linearLevel) || linearLevel <= 0) return '-inf dB';
+  const rounded = Math.round((20 * Math.log10(linearLevel)) * 10) / 10;
+  if (rounded >= 0) return '0 dB';
+  return `${rounded.toFixed(1)} dB`;
+}
+
 function syncDimAmountSelect(value) {
   if (!dimAmountSelect) return;
   const valueStr = String(value);
@@ -8559,8 +8567,9 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         const levelOutput = document.createElement('output');
         levelOutput.className = 'conference-member-level__value';
         const updateLevelOutput = (nextLevel) => {
-          levelOutput.value = `${Math.round(nextLevel * 100)}%`;
+          levelOutput.value = formatLinearLevelDb(nextLevel);
           levelOutput.textContent = levelOutput.value;
+          levelSlider.setAttribute('aria-valuetext', levelOutput.value);
         };
         updateLevelOutput(level);
         levelSlider.addEventListener('input', () => {
