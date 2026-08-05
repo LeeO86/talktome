@@ -3725,6 +3725,7 @@ if (configExportBtn) {
 if (apiKeyCopyBtn) {
   apiKeyCopyBtn.addEventListener('click', async () => {
     const originalLabel = apiKeyCopyBtn.textContent;
+    const originalWidth = Math.ceil(apiKeyCopyBtn.getBoundingClientRect().width);
     apiKeyCopyBtn.disabled = true;
 
     try {
@@ -3735,10 +3736,12 @@ if (apiKeyCopyBtn) {
       }
 
       await copyTextToClipboard(apiKey);
+      apiKeyCopyBtn.style.width = `${originalWidth}px`;
       apiKeyCopyBtn.textContent = 'Copied';
       showMessage('✅ API key copied', 'success', 'config');
       window.setTimeout(() => {
         apiKeyCopyBtn.textContent = originalLabel;
+        apiKeyCopyBtn.style.removeProperty('width');
       }, 1200);
     } catch (err) {
       console.error('Failed to copy API key:', err);
