@@ -7,9 +7,9 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const os = require("os");
 const dgram = require("dgram");
-const childProcess = require("child_process");
 const selfsigned = require("selfsigned");
 const QRCode = require("qrcode");
+const { resolveServerAppVersion } = require("./appVersion");
 const { getDataDir } = require("./dataPaths");
 const { ApplePttPushService } = require("./applePttPushService");
 const { normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
@@ -19,36 +19,6 @@ const {
   resolveProducerReconciliationDelivery,
   shouldAnnounceProducerDelivery,
 } = require("./producerReconciliation");
-
-function resolveServerAppVersion() {
-  let version = process.env.TALKTOME_VERSION || process.env.npm_package_version || "";
-
-  try {
-    version = version || require("./package.json").version || "";
-  } catch {
-    // Keep status endpoint available even if package metadata is unavailable in a packaged build.
-  }
-
-  if (!process.pkg) {
-    try {
-      const gitVersion = childProcess.execFileSync(
-        "git",
-        ["describe", "--tags", "--always", "--dirty"],
-        {
-          cwd: __dirname,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 1000,
-        }
-      ).trim();
-      if (gitVersion) version = gitVersion;
-    } catch {
-      // Git metadata is not available in packaged installs.
-    }
-  }
-
-  return version || "unknown";
-}
 
 const SERVER_APP_VERSION = resolveServerAppVersion();
 const CLIENT_ICE_CONFIG = resolveClientIceConfig(process.env);

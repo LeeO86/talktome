@@ -1,5 +1,7 @@
 FROM node:18-bookworm-slim
 
+ARG TALKTOME_VERSION=""
+
 WORKDIR /app
 
 # Native modules such as better-sqlite3 may need a compiler toolchain during npm ci.
@@ -18,6 +20,7 @@ COPY LICENSE ./
 COPY README.md ./
 
 ENV NODE_ENV=production \
+  TALKTOME_VERSION=${TALKTOME_VERSION} \
   TALKTOME_NO_WIZARD=1 \
   TALKTOME_DATA_DIR=/data \
   MDNS_HOST=off \

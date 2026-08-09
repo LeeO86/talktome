@@ -112,6 +112,27 @@ function formatProcessResult(result) {
   return `exitCode=${result.code ?? "null"} signal=${result.signal ?? "none"}`;
 }
 
+function verifyPackagedServerVersion(executable, expectedVersion) {
+  const environment = { ...process.env };
+  delete environment.TALKTOME_VERSION;
+  delete environment.npm_package_version;
+
+  const result = spawnSync(executable, ["--version"], {
+    cwd: path.dirname(executable),
+    env: environment,
+    encoding: "utf8",
+    timeout: 15000,
+    windowsHide: true,
+  });
+  const actualVersion = String(result.stdout || "").trim();
+  if (result.status !== 0 || actualVersion !== expectedVersion) {
+    throw new Error(
+      `Expected packaged server version ${expectedVersion}, found ${actualVersion || "no version"} `
+      + `(${formatProcessResult({ code: result.status, signal: result.signal, error: result.error })})`
+    );
+  }
+}
+
 async function terminateProcessTree(child, processResult) {
   if (!child?.pid || processResult.value) return;
 
@@ -180,6 +201,7 @@ async function main() {
 
   const executable = path.resolve(requireArgument("--executable"));
   const timeoutSeconds = Number(readArgument("--timeout-seconds") || 120);
+  const expectedVersion = readArgument("--expected-version");
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 5) {
     throw new Error("--timeout-seconds must be at least 5");
   }
@@ -195,6 +217,10 @@ async function main() {
   const launchedExecutable = mode === "server"
     ? await stageServerRuntime(executable, tempRoot)
     : executable;
+
+  if (mode === "server" && expectedVersion) {
+    verifyPackagedServerVersion(launchedExecutable, expectedVersion);
+  }
 
   const httpsPort = await getFreeTcpPort();
   const rtcPortStart = 45000 + Math.floor(Math.random() * 5000);
@@ -278,8 +304,11 @@ async function main() {
       const startupLog = mode === "tray" ? lastTrayLog : output.join("");
       const routerReady = startupLog.includes("[INIT] Router created");
       const healthReady = await requestHealth(httpsPort);
+      const versionReady = !expectedVersion
+        || mode !== "tray"
+        || startupLog.includes(`Starting Talktome server v${expectedVersion}…`);
 
-      if (routerReady && healthReady) {
+      if (routerReady && healthReady && versionReady) {
         console.log(
           `${mode === "tray" ? "Tray app" : "Server binary"} started successfully: `
           + `HTTPS ${httpsPort}, mediasoup router ready.`
@@ -289,8 +318,11 @@ async function main() {
       await delay(500);
     }
 
+    const versionExpectation = expectedVersion
+      ? ` with version ${expectedVersion}`
+      : "";
     throw new Error(
-      `${mode} startup did not become ready within ${timeoutSeconds} seconds`
+      `${mode} startup did not become ready${versionExpectation} within ${timeoutSeconds} seconds`
     );
   } catch (error) {
     console.error(error.message);

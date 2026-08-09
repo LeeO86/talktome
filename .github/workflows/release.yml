@@ -35,9 +35,48 @@ permissions:
   packages: write
 
 jobs:
+  version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release-version.outputs.version }}
+      app_version: ${{ steps.release-version.outputs.app_version }}
+      safe_version: ${{ steps.release-version.outputs.safe_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve version from release tag
+        id: release-version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+            VERSION="v${PACKAGE_VERSION}"
+          fi
+
+          APP_VERSION="${VERSION#v}"
+          if [[ ! "${APP_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            printf 'Invalid Talktome release version: %s\n' "${APP_VERSION}" >&2
+            exit 1
+          fi
+
+          SAFE_VERSION="${VERSION//\//-}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "safe_version=$SAFE_VERSION" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.name }}
+    needs: version
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      APP_VERSION: ${{ needs.version.outputs.app_version }}
+      SAFE_VERSION: ${{ needs.version.outputs.safe_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,19 +110,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Determine release version
+      - name: Apply release version to build metadata
         shell: bash
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-          else
-            PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-            VERSION="v${PACKAGE_VERSION}"
-          fi
-
-          SAFE_VERSION="${VERSION//\//-}"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "SAFE_VERSION=$SAFE_VERSION" >> "$GITHUB_ENV"
+          printf '{"version":"%s"}\n' "$APP_VERSION" > server-app/tauri.release-version.json
+          npm version "$APP_VERSION" --no-git-tag-version --allow-same-version --force
+          (cd server-app && npm version "$APP_VERSION" --no-git-tag-version --allow-same-version --force)
 
       - name: Build package
         run: npm run ${{ matrix.build_script }}
@@ -94,6 +126,7 @@ jobs:
           node scripts/native-startup-smoke-test.mjs
           --mode server
           --executable "${{ matrix.executable_name }}"
+          --expected-version "$APP_VERSION"
           --timeout-seconds 120
 
       - name: Setup Node for server app
@@ -165,6 +198,7 @@ jobs:
           node scripts/native-startup-smoke-test.mjs
           --mode tray
           --executable "$TRAY_EXECUTABLE"
+          --expected-version "$APP_VERSION"
           --timeout-seconds 120
 
       - name: Prepare server app artifact
@@ -215,7 +249,10 @@ jobs:
 
   docker-smoke:
     name: Verify Docker image startup
+    needs: version
     runs-on: ubuntu-latest
+    env:
+      APP_VERSION: ${{ needs.version.outputs.app_version }}
 
     steps:
       - name: Checkout
@@ -223,16 +260,20 @@ jobs:
 
       - name: Build Docker image
         shell: bash
-        run: docker build --tag talktome:smoke-test .
+        run: >-
+          docker build
+          --build-arg "TALKTOME_VERSION=$APP_VERSION"
+          --tag talktome:smoke-test
+          .
 
       - name: Start and verify Docker image
         shell: bash
-        run: scripts/docker-smoke-test.sh talktome:smoke-test
+        run: scripts/docker-smoke-test.sh talktome:smoke-test "$APP_VERSION"
 
   docker:
     name: Build Docker image (${{ matrix.arch }})
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-    needs: docker-smoke
+    needs: [version, docker-smoke]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -271,6 +312,7 @@ jobs:
         run: |
           docker buildx build \
             --platform "${{ matrix.platform }}" \
+            --build-arg "TALKTOME_VERSION=${{ needs.version.outputs.app_version }}" \
             --tag "talktome:${IMAGE_TAG}-${{ matrix.arch }}" \
             --cache-from "type=gha,scope=talktome-${{ matrix.arch }}" \
             --cache-to "type=gha,mode=max,scope=talktome-${{ matrix.arch }}" \
@@ -279,7 +321,7 @@ jobs:
   docker-publish:
     name: Publish Docker image
     if: startsWith(github.ref, 'refs/tags/')
-    needs: docker-smoke
+    needs: [version, docker-smoke]
     runs-on: ubuntu-latest
 
     steps:
@@ -322,6 +364,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            TALKTOME_VERSION=${{ needs.version.outputs.app_version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=talktome-multiarch

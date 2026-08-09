@@ -3,7 +3,15 @@ const path = require("path");
 const net = require("net");
 const os = require("os");
 const readline = require("readline");
+const { resolveServerAppVersion } = require("./appVersion");
 const { getDataDir } = require("./dataPaths");
+
+const printVersionOnly = process.argv.slice(2).includes("--version");
+
+if (printVersionOnly) {
+  fs.writeSync(process.stdout.fd, `${resolveServerAppVersion()}\n`);
+  process.exit(0);
+}
 
 const execDir = path.dirname(process.execPath);
 const dataDir = getDataDir();

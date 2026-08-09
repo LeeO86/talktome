@@ -33,7 +33,6 @@ const TRAY_OPEN_ADMIN_ID: &str = "open-admin";
 const TRAY_QUIT_ID: &str = "quit";
 const MAX_LOG_LINES: usize = 200;
 const APP_DATA_DIR_NAME: &str = "talktome";
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MANAGED_RESTART_EXIT_CODE: i32 = 75;
 const WINDOW_FOCUS_HIDE_DELAY: Duration = Duration::from_millis(150);
 
@@ -659,6 +658,7 @@ fn spawn_server_supervisor(app: AppHandle) {
 }
 
 fn start_server_internal(app: &AppHandle) -> Result<(), String> {
+    let app_version = app.package_info().version.to_string();
     let config_path = runtime_config_path();
     if !config_path.is_file() {
         return Err(format!(
@@ -685,14 +685,14 @@ fn start_server_internal(app: &AppHandle) -> Result<(), String> {
     state.starting = true;
     state.last_error = None;
     state.restart_requested = false;
-    state.push_log(format!("Starting Talktome server v{APP_VERSION}…"));
+    state.push_log(format!("Starting Talktome server v{app_version}…"));
     drop(state);
 
     let mut command = Command::new(&binary);
     command
         .env("TALKTOME_NO_WIZARD", "1")
         .env("TALKTOME_MANAGED_SERVER", "1")
-        .env("TALKTOME_VERSION", APP_VERSION)
+        .env("TALKTOME_VERSION", &app_version)
         .env("TALKTOME_DATA_DIR", talktome_data_dir())
         .current_dir(binary.parent().unwrap_or_else(|| Path::new(".")))
         .stdin(Stdio::null())

@@ -3,7 +3,16 @@
 set -euo pipefail
 
 image="${1:-talktome:smoke-test}"
+expected_version="${2:-}"
 container_name="talktome-smoke-${RANDOM}-$$"
+
+if [[ -n "$expected_version" ]]; then
+  actual_version="$(docker run --rm "$image" node server.js --version)"
+  if [[ "$actual_version" != "$expected_version" ]]; then
+    echo "Expected Docker server version $expected_version, found $actual_version." >&2
+    exit 1
+  fi
+fi
 
 cleanup() {
   docker rm --force --volumes "$container_name" >/dev/null 2>&1 || true
