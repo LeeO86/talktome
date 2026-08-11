@@ -2807,6 +2807,7 @@ app.get("/api/v1/health", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({
     ok: true,
+    appVersion: SERVER_APP_VERSION,
     serverStartedAt: new Date(SERVER_STARTED_AT).toISOString(),
   });
 });

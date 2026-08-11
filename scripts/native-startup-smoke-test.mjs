@@ -51,13 +51,13 @@ function getFreeTcpPort() {
   });
 }
 
-function requestHealth(port) {
+function requestHealth(port, expectedVersion = null) {
   return new Promise((resolve) => {
     const request = https.get(
       {
         hostname: "127.0.0.1",
         port,
-        path: "/login/options",
+        path: "/api/v1/health",
         rejectUnauthorized: false,
         timeout: 2000,
       },
@@ -77,7 +77,10 @@ function requestHealth(port) {
           }
           try {
             const payload = JSON.parse(body);
-            resolve(payload && typeof payload.guestLogin === "object");
+            resolve(
+              payload?.ok === true
+              && (!expectedVersion || payload.appVersion === expectedVersion)
+            );
           } catch {
             resolve(false);
           }
@@ -303,12 +306,9 @@ async function main() {
       }
       const startupLog = mode === "tray" ? lastTrayLog : output.join("");
       const routerReady = startupLog.includes("[INIT] Router created");
-      const healthReady = await requestHealth(httpsPort);
-      const versionReady = !expectedVersion
-        || mode !== "tray"
-        || startupLog.includes(`Starting Talktome server v${expectedVersion}…`);
+      const healthReady = await requestHealth(httpsPort, expectedVersion);
 
-      if (routerReady && healthReady && versionReady) {
+      if (routerReady && healthReady) {
         console.log(
           `${mode === "tray" ? "Tray app" : "Server binary"} started successfully: `
           + `HTTPS ${httpsPort}, mediasoup router ready.`
