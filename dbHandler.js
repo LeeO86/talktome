@@ -263,6 +263,10 @@ function getAllFeeds() {
   `).all();
 }
 
+function getFeedById(id) {
+  return db.prepare('SELECT id, name FROM feeds WHERE id = ?').get(id) || null;
+}
+
 function normalizeProductionName(value) {
   const name = String(value || '').trim();
   if (!name) throw new Error('Production name is required');
@@ -1723,6 +1727,7 @@ module.exports = {
   getOrCreateGuestProfile,
   getAllConferences,
   getAllFeeds,
+  getFeedById,
   getAllProductions,
   getProductionById,
   getProductionsForUser,
@@ -1763,6 +1768,7 @@ module.exports = {
   deleteConference,
   deleteFeed,
   verifyUser,
+  getUserByName,
   verifyFeed,
   getUserTargets,
   addUserTargetToUser,

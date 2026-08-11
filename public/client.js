@@ -3601,6 +3601,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .map((result) => result.value);
   };
   let guestLoginEnabled = false;
+  let ssoLoginEnabled = false;
   const isMobileLoginViewport = () => (
     window.matchMedia?.('(pointer: coarse)').matches
     || window.matchMedia?.('(max-width: 700px)').matches
@@ -3677,7 +3678,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function loadLoginOptions() {
-    if (!guestLoginPanel || !guestLoginButton) return;
     try {
       const res = await fetch('/login/options');
       if (!res.ok) throw new Error(`Login options failed: ${res.status}`);
@@ -3685,16 +3685,20 @@ document.addEventListener("DOMContentLoaded", () => {
       const guestLogin = payload?.guestLogin || {};
       const enabled = guestLogin.enabled === true;
       guestLoginEnabled = enabled;
-      guestLoginPanel.classList.toggle('is-hidden', !enabled);
-      guestLoginButton.disabled = !enabled;
-      guestLoginButton.textContent = `Login as ${guestLogin.label || 'Guest'}`;
-      return { guestLoginEnabled: enabled };
+      ssoLoginEnabled = payload?.sso?.enabled === true;
+      guestLoginPanel?.classList.toggle('is-hidden', !enabled);
+      if (guestLoginButton) {
+        guestLoginButton.disabled = !enabled;
+        guestLoginButton.textContent = `Login as ${guestLogin.label || 'Guest'}`;
+      }
+      return { guestLoginEnabled: enabled, ssoLoginEnabled };
     } catch (err) {
       console.warn('Failed to load login options:', err);
       guestLoginEnabled = false;
-      guestLoginPanel.classList.add('is-hidden');
-      guestLoginButton.disabled = true;
-      return { guestLoginEnabled: false };
+      ssoLoginEnabled = false;
+      guestLoginPanel?.classList.add('is-hidden');
+      if (guestLoginButton) guestLoginButton.disabled = true;
+      return { guestLoginEnabled: false, ssoLoginEnabled: false };
     }
   }
   recoverExistingIncomingPlayback = ({ forceRetryAll = false } = {}) => {
@@ -5996,10 +6000,10 @@ let cachedOperatorTargets = null;
   }
 
   function sendLogoutBeacon() {
-    if (session?.kind !== 'user' || !session?.userId) return;
+    if (!session?.name || session?.kind === 'guest') return;
     if (typeof navigator?.sendBeacon !== 'function') return;
     const payload = JSON.stringify({
-      userId: Number(session.userId),
+      userId: session.kind === 'user' ? Number(session.userId) : null,
       socketId: socket?.id || null,
     });
     try {
@@ -6009,7 +6013,7 @@ let cachedOperatorTargets = null;
   }
 
   async function notifyServerLogoutViaHttp({ timeoutMs = 800 } = {}) {
-    if (session?.kind !== 'user' || !session?.userId) return;
+    if (!session?.name || session?.kind === 'guest') return;
 
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = controller
@@ -6026,7 +6030,7 @@ let cachedOperatorTargets = null;
         headers: { 'Content-Type': 'application/json' },
         keepalive: true,
         body: JSON.stringify({
-          userId: Number(session.userId),
+          userId: session.kind === 'user' ? Number(session.userId) : null,
           socketId: socket?.id || null,
         }),
         signal: controller?.signal,
@@ -6100,7 +6104,6 @@ let cachedOperatorTargets = null;
 
   window.addEventListener("pagehide", () => {
     if (suppressLogoutBeacon) return;
-    sendLogoutBeacon();
     if (socket?.connected) {
       try {
         socket.disconnect();
@@ -6241,6 +6244,13 @@ let cachedOperatorTargets = null;
     return /guest login is disabled|invalid guest profile/i.test(String(result?.error || ''));
   }
 
+  function isPermanentCredentialRegistrationFailure(result) {
+    if (session?.kind !== 'user' && session?.kind !== 'feed') return false;
+    return /authenticated identity does not match|authenticated account no longer exists/i.test(
+      String(result?.error || '')
+    );
+  }
+
   async function recoverConnectedSession(reason = 'socket-connect') {
     if (reconnectRecoveryPromise) return reconnectRecoveryPromise;
 
@@ -6270,6 +6280,10 @@ let cachedOperatorTargets = null;
             }
             if (isPermanentGuestRegistrationFailure(registration)) {
               await hardLogoutAndReload('Guest login is no longer available.');
+              return false;
+            }
+            if (isPermanentCredentialRegistrationFailure(registration)) {
+              await hardLogoutAndReload('Your login session is no longer valid.');
               return false;
             }
             setSessionDisplay('Reconnecting...', { connectionStatus: true });
@@ -6424,6 +6438,35 @@ let cachedOperatorTargets = null;
     else localStorage.setItem(storageKey, DEFAULT_PRODUCTION_STORAGE_VALUE);
   }
 
+  function reconnectSocketWithBrowserSession({ timeoutMs = 10000 } = {}) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        socket.off('connect', handleConnect);
+        socket.off('connect_error', handleError);
+      };
+      const finish = (error = null) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve();
+      };
+      const handleConnect = () => finish();
+      const handleError = (error) => finish(error || new Error('Unable to connect'));
+      const timer = setTimeout(
+        () => finish(new Error('Timed out while applying the login session')),
+        timeoutMs
+      );
+
+      socket.once('connect', handleConnect);
+      socket.once('connect_error', handleError);
+      if (socket.connected) socket.disconnect();
+      socket.connect();
+    });
+  }
+
   async function completeCredentialLogin(user, { preferStoredProduction = false } = {}) {
     const kind = user.kind === 'feed' ? 'feed' : 'user';
     const production = kind === 'user'
@@ -6439,6 +6482,15 @@ let cachedOperatorTargets = null;
       name: user.name,
     };
 
+    try {
+      await reconnectSocketWithBrowserSession();
+    } catch (error) {
+      console.error('Failed to apply browser login session:', error);
+      restoreCredentialLoginView(kind);
+      setLoginError('Unable to connect after signing in');
+      return false;
+    }
+
     const reg = await registerIdentity({
       id: kind === 'feed' ? nextSession.feedId : nextSession.userId,
       name: nextSession.name,
@@ -6447,7 +6499,7 @@ let cachedOperatorTargets = null;
     });
     if (!reg?.ok) {
       restoreCredentialLoginView(kind);
-      if (!reg?.cancelled) setLoginError("Unable to sign in");
+      if (!reg?.cancelled) setLoginError(reg?.error || "Unable to sign in");
       return false;
     }
 
@@ -6515,86 +6567,27 @@ let cachedOperatorTargets = null;
 
   const loginToken = consumeLoginTokenFromHash();
 
-  // Check Auto-Login
-  const storedName = localStorage.getItem("userName");
-  const storedKindRaw = localStorage.getItem(IDENTITY_KIND_KEY);
-  const fallbackKind = localStorage.getItem("userId") ? "user" : "guest";
-  const storedKind = storedKindRaw || fallbackKind;
-  const storedGuestSession = !storedName && storedKind !== "user" && storedKind !== "feed"
-    ? loadStoredGuestSession()
-    : null;
+  function clearStoredCredentialIdentity() {
+    localStorage.removeItem("userId");
+    localStorage.removeItem(FEED_ID_STORAGE_KEY);
+    localStorage.removeItem("userName");
+    localStorage.removeItem(IDENTITY_KIND_KEY);
+  }
 
-  if (loginToken) {
-    clearStoredIdentity();
-    setLoginError("");
-    (async () => {
-      try {
-        const res = await fetch('/login/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: loginToken }),
-        });
-        const user = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setLoginError(user.error || 'This login link is invalid or expired');
-          return;
-        }
-        await completeCredentialLogin(user);
-      } catch (err) {
-        setLoginError('Unable to use this login link');
-        console.error('Login link failed:', err);
-      }
-    })();
-  } else if (storedKind === "user") {
-    const storedId = localStorage.getItem("userId");
-    if (storedId && storedName) {
-      (async () => {
-        let productions = [];
-        try {
-          productions = await fetchJSON(`/users/${storedId}/productions`);
-        } catch (error) {
-          console.warn('Unable to restore production selection:', error);
-        }
-        const identity = { id: storedId, userId: storedId, kind: 'user', name: storedName, productions };
-        const production = await chooseProduction(identity, { preferStored: true });
-        session = {
-          kind: "user",
-          userId: storedId,
-          feedId: null,
-          name: storedName,
-          productionId: production?.id ? String(production.id) : null,
-          productionName: production?.name || null,
-          productions,
-        };
-        persistActiveProduction(identity, production);
-        console.log("Auto-login as:", storedName);
-        loginContainer.style.display = "none";
-        intercomApp.style.display = "flex";
-        setSessionDisplay(storedName);
-        applyProductionSessionUI();
-        applySessionUI();
-        shouldInitializeAfterConnect = true;
-        requestSessionRecovery('auto-login-user');
-        requestInitialMicrophoneAccess({ reason: 'auto-login-user' });
-      })();
+  async function fetchLoginIdentity(url, options = {}) {
+    const response = await fetch(url, options);
+    if (response.status === 204) return null;
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(payload?.error || `Login request failed: ${response.status}`);
+      error.status = response.status;
+      throw error;
     }
-  } else if (storedKind === "feed") {
-    const storedFeedId = localStorage.getItem(FEED_ID_STORAGE_KEY);
-    if (storedFeedId && storedName) {
-      session = { ...createAnonymousSession(), kind: "feed", userId: null, feedId: storedFeedId, name: storedName };
-      console.log("Auto-login feed:", storedName);
-      loginContainer.style.display = "none";
-      intercomApp.style.display = "flex";
-      setSessionDisplay(storedName);
-      applyProductionSessionUI();
-      feedManualStop = false;
-      shouldStartFeedWhenReady = true;
-      applySessionUI();
-      shouldInitializeAfterConnect = true;
-      requestSessionRecovery('auto-login-feed');
-      requestInitialMicrophoneAccess({ reason: 'auto-login-feed' });
-    }
-  } else if (storedGuestSession) {
+    return payload;
+  }
+
+  function restoreStoredGuestLogin(storedGuestSession) {
+    if (!storedGuestSession) return false;
     session = storedGuestSession;
     console.log("Auto-login Guest:", storedGuestSession.name);
     loginContainer.style.display = "none";
@@ -6605,10 +6598,61 @@ let cachedOperatorTargets = null;
     shouldInitializeAfterConnect = true;
     requestSessionRecovery('auto-login-guest');
     requestInitialMicrophoneAccess({ reason: 'auto-login-guest' });
+    return true;
   }
 
-  loadLoginOptions()
-    .catch(() => ({ guestLoginEnabled: false }))
+  async function bootstrapLogin() {
+    await loadLoginOptions();
+
+    if (loginToken) {
+      clearStoredIdentity();
+      setLoginError("");
+      try {
+        const user = await fetchLoginIdentity('/login/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: loginToken }),
+        });
+        await completeCredentialLogin(user);
+      } catch (err) {
+        setLoginError(err?.message || 'Unable to use this login link');
+        console.error('Login link failed:', err);
+      }
+      return;
+    }
+
+    if (ssoLoginEnabled) {
+      try {
+        const ssoIdentity = await fetchLoginIdentity('/login/sso', { method: 'POST' });
+        if (ssoIdentity) {
+          await completeCredentialLogin(ssoIdentity, { preferStoredProduction: true });
+          return;
+        }
+      } catch (err) {
+        console.warn('Trusted-header SSO login failed:', err);
+      }
+    }
+
+    try {
+      const browserIdentity = await fetchLoginIdentity('/login/session');
+      if (browserIdentity) {
+        await completeCredentialLogin(browserIdentity, { preferStoredProduction: true });
+        return;
+      }
+    } catch (err) {
+      console.warn('Unable to restore browser login session:', err);
+    }
+
+    const storedGuestSession = loadStoredGuestSession();
+    clearStoredCredentialIdentity();
+    restoreStoredGuestLogin(storedGuestSession);
+  }
+
+  bootstrapLogin()
+    .catch((err) => {
+      console.error('Login initialization failed:', err);
+      setLoginError('Unable to initialize login');
+    })
     .finally(() => focusLoginNameField());
 
   // Login Handler

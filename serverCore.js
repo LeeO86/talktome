@@ -10,6 +10,8 @@ const dgram = require("dgram");
 const selfsigned = require("selfsigned");
 const QRCode = require("qrcode");
 const { resolveServerAppVersion } = require("./appVersion");
+const { createBrowserSessionStore } = require("./browserSessions");
+const { loadProxySsoConfig, resolveProxySsoIdentity } = require("./proxySso");
 const { getDataDir } = require("./dataPaths");
 const { ApplePttPushService } = require("./applePttPushService");
 const { normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
@@ -133,6 +135,7 @@ const {
   getFeedBridgeEndpointsForDevice,
   getAllConferences,
   getAllFeeds,
+  getFeedById,
   getAllProductions,
   getProductionById,
   getProductionsForUser,
@@ -152,6 +155,7 @@ const {
   deleteConference,
   deleteFeed,
   verifyUser,
+  getUserByName,
   verifyFeed,
   getUserTargets,
   addUserTargetToUser,
@@ -176,6 +180,14 @@ const {
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
+const PROXY_SSO_CONFIG = loadProxySsoConfig(process.env);
+
+if (PROXY_SSO_CONFIG.enabled) {
+  console.log(
+    `[SSO] Trusted-header login enabled with ${PROXY_SSO_CONFIG.header} from `
+    + PROXY_SSO_CONFIG.trustedProxies.join(", ")
+  );
+}
 
 const execDir = path.dirname(process.execPath);
 const execPublicDir = path.join(execDir, "public");
@@ -625,7 +637,10 @@ if (fs.existsSync(nodeModulesDir)) {
 }
 
 const ADMIN_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+const BROWSER_SESSION_COOKIE = "talktome_session";
+const BROWSER_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const adminSessions = new Map();
+const browserSessions = createBrowserSessionStore({ ttlMs: BROWSER_SESSION_TTL_MS });
 const adminStatusStreams = new Set();
 let adminStatusBroadcastTimer = null;
 let pendingAdminStatusReason = "status-changed";
@@ -642,7 +657,11 @@ function parseCookieHeader(header) {
     if (eqIdx === -1) return;
     const key = trimmed.slice(0, eqIdx);
     const value = trimmed.slice(eqIdx + 1);
-    cookies[key] = decodeURIComponent(value);
+    try {
+      cookies[key] = decodeURIComponent(value);
+    } catch {
+      // Ignore malformed client-controlled cookie values.
+    }
   });
   return cookies;
 }
@@ -658,6 +677,54 @@ function getAdminSession(req) {
     return null;
   }
   return { token, session };
+}
+
+function getBrowserSessionFromCookieHeader(cookieHeader) {
+  const cookies = parseCookieHeader(cookieHeader || "");
+  return browserSessions.get(cookies[BROWSER_SESSION_COOKIE]);
+}
+
+function getBrowserSession(req) {
+  return getBrowserSessionFromCookieHeader(req?.headers?.cookie || "");
+}
+
+function setBrowserSessionCookie(res, token) {
+  res.cookie(BROWSER_SESSION_COOKIE, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+    maxAge: BROWSER_SESSION_TTL_MS,
+  });
+}
+
+function clearBrowserSession(req, res) {
+  const result = getBrowserSession(req);
+  if (result?.token) browserSessions.revoke(result.token);
+  res.clearCookie(BROWSER_SESSION_COOKIE, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+  });
+}
+
+function createUserBrowserSession(res, user, source = "password") {
+  const { token } = browserSessions.create({
+    kind: "user",
+    userId: Number(user.id),
+    name: user.name,
+    source,
+  });
+  setBrowserSessionCookie(res, token);
+}
+
+function createFeedBrowserSession(res, feed) {
+  const { token } = browserSessions.create({
+    kind: "feed",
+    feedId: Number(feed.id),
+    name: feed.name,
+    source: "password",
+  });
+  setBrowserSessionCookie(res, token);
 }
 
 function createAdminSession(user) {
@@ -2584,6 +2651,25 @@ function buildLoginIdentity(user, kind = "user") {
   };
 }
 
+function buildBrowserSessionIdentity(result) {
+  const browserSession = result?.session;
+  if (!browserSession) return null;
+
+  if (browserSession.kind === "user") {
+    const user = getUserById(browserSession.userId);
+    if (!user || user.is_guest_profile) return null;
+    return buildLoginIdentity(user);
+  }
+
+  if (browserSession.kind === "feed") {
+    const feed = getFeedById(browserSession.feedId);
+    if (!feed) return null;
+    return { id: feed.id, name: feed.name, kind: "feed" };
+  }
+
+  return null;
+}
+
 // === POST ===
 app.get("/login/options", (req, res) => {
   try {
@@ -2593,11 +2679,56 @@ app.get("/login/options", (req, res) => {
         enabled: settings.enabled,
         label: settings.profileName || "Guest",
       },
+      sso: {
+        enabled: PROXY_SSO_CONFIG.enabled,
+      },
     });
   } catch (err) {
     console.error("Login options error:", err);
-    res.json({ guestLogin: { enabled: false, label: "Guest" } });
+    res.json({
+      guestLogin: { enabled: false, label: "Guest" },
+      sso: { enabled: PROXY_SSO_CONFIG.enabled },
+    });
   }
+});
+
+app.get("/login/session", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const result = getBrowserSession(req);
+  const identity = buildBrowserSessionIdentity(result);
+  if (!identity) {
+    if (result?.token) browserSessions.revoke(result.token);
+    res.clearCookie(BROWSER_SESSION_COOKIE, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: true,
+    });
+    return res.sendStatus(204);
+  }
+  return res.json(identity);
+});
+
+app.post("/login/sso", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const resolved = resolveProxySsoIdentity(req, PROXY_SSO_CONFIG);
+  if (resolved.status !== "authenticated") {
+    return res.sendStatus(204);
+  }
+
+  // Identity matching is deliberately exact. There is no implicit account
+  // creation and privileged/Guest profiles cannot be entered through SSO.
+  const user = getUserByName(resolved.identity);
+  if (!user || user.is_guest_profile || user.is_superadmin) {
+    clearBrowserSession(req, res);
+    console.warn(`[SSO] No eligible Talktome user for identity ${JSON.stringify(resolved.identity)}`);
+    return res.sendStatus(204);
+  }
+
+  const currentSession = getBrowserSession(req);
+  if (currentSession?.token) browserSessions.revoke(currentSession.token);
+  createUserBrowserSession(res, user, "trusted-header");
+  console.log(`[SSO] Login successful for user: ${user.name}`);
+  return res.json(buildLoginIdentity(user));
 });
 
 app.post("/login", (req, res) => {
@@ -2611,12 +2742,14 @@ app.post("/login", (req, res) => {
         return res.status(401).json({ error: "Invalid credentials" });
       }
       console.log("Login successful for user:", user.name);
+      createUserBrowserSession(res, user);
       return res.json(buildLoginIdentity(user));
     }
 
     const feed = verifyFeed(name, password);
     if (feed) {
       console.log("Login successful for feed:", feed.name);
+      createFeedBrowserSession(res, feed);
       return res.json({ id: feed.id, name: feed.name, kind: "feed" });
     }
 
@@ -2636,6 +2769,7 @@ app.post("/login/token", (req, res) => {
     }
     console.log("Login URL used for user:", user.name);
     res.setHeader("Cache-Control", "no-store");
+    createUserBrowserSession(res, user, "login-token");
     return res.json(buildLoginIdentity(user));
   } catch (err) {
     console.error("Login URL error:", err);
@@ -4758,6 +4892,7 @@ app.get("/api/v1/companion/users/:id/targets", requireCompanionApiKey, (req, res
 });
 
 app.post("/api/v1/client/logout", (req, res) => {
+  clearBrowserSession(req, res);
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const userId = Number(body.userId);
   const socketId = typeof body.socketId === "string" ? body.socketId : null;
@@ -6618,7 +6753,43 @@ io.on("connection", (socket) => {
 
     const normalizedKind = kind === "feed" ? "feed" : kind === "guest" ? "guest" : "user";
     const numericId = Number(id);
-    const effectiveId = Number.isFinite(numericId) ? numericId : id;
+    let effectiveId = Number.isFinite(numericId) ? numericId : id;
+    let effectiveName = name;
+
+    if (normalizedKind === "user" || normalizedKind === "feed") {
+      const browserSession = getBrowserSessionFromCookieHeader(socket.handshake?.headers?.cookie || "");
+      const expectedKind = browserSession?.session?.kind;
+      const expectedId = normalizedKind === "user"
+        ? browserSession?.session?.userId
+        : browserSession?.session?.feedId;
+      const browserSessionMatches = expectedKind === normalizedKind
+        && String(expectedId) === String(effectiveId);
+      const companionAuth = resolveCompanionAuth(extractCompanionApiKeyFromSocket(socket));
+      const apiCredentialMatches = !!companionAuth && (
+        companionAuth.type === "api-key"
+        || (
+          normalizedKind === "user"
+          && companionAuth.userId != null
+          && String(companionAuth.userId) === String(effectiveId)
+        )
+      );
+      if (!browserSessionMatches && !apiCredentialMatches) {
+        if (typeof callback === "function") {
+          callback({ error: "Authenticated identity does not match registration" });
+        }
+        return;
+      }
+
+      const identity = normalizedKind === "user"
+        ? getUserById(effectiveId)
+        : getFeedById(effectiveId);
+      if (!identity || (normalizedKind === "user" && identity.is_guest_profile)) {
+        if (typeof callback === "function") callback({ error: "Authenticated account no longer exists" });
+        return;
+      }
+      effectiveId = identity.id;
+      effectiveName = identity.name;
+    }
 
     if (normalizedKind === "user") {
       const existing = Array.from(peers.entries()).find(([sid, p]) => (
@@ -6654,14 +6825,14 @@ io.on("connection", (socket) => {
         } catch {}
       }
 
-      peer.name = name;
+      peer.name = effectiveName;
       peer.kind = normalizedKind;
       peer.userId = effectiveId;
       peer.feedId = null;
       peer.guestId = null;
       peer.guestProfileUserId = null;
-      console.log(`[USER] Registered operator ${name} (${effectiveId}) on socket ${socket.id}`);
-      socket.emit("cut-camera", name === cutCameraUser);
+      console.log(`[USER] Registered operator ${effectiveName} (${effectiveId}) on socket ${socket.id}`);
+      socket.emit("cut-camera", effectiveName === cutCameraUser);
     } else if (normalizedKind === "feed") {
       const existingFeed = Array.from(peers.entries()).find(([sid, p]) => (
         sid !== socket.id
@@ -6683,13 +6854,13 @@ io.on("connection", (socket) => {
         } catch {}
       }
 
-      peer.name = name;
+      peer.name = effectiveName;
       peer.kind = normalizedKind;
       peer.feedId = effectiveId;
       peer.userId = null;
       peer.guestId = null;
       peer.guestProfileUserId = null;
-      console.log(`[USER] Registered feed ${name} (${effectiveId}) on socket ${socket.id}`);
+      console.log(`[USER] Registered feed ${effectiveName} (${effectiveId}) on socket ${socket.id}`);
     } else {
       const settings = resolveGuestLoginSettings(loadRuntimeConfig() || {}, { createProfile: false });
       const requestedProfileId = Number(guestProfileUserId);

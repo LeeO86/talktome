@@ -111,9 +111,12 @@ Useful environment overrides:
 - `TALKTOME_ICE_TRANSPORT_POLICY`: browser ICE policy, `all` (default) or `relay`
 - `TALKTOME_TURN_URLS`, `TALKTOME_TURN_USERNAME` and `TALKTOME_TURN_CREDENTIAL`: simple TURN-only alternative to the JSON setting
 - `TALKTOME_DATA_DIR`: data directory override
+- `TALKTOME_SSO_ENABLED`: enable trusted reverse-proxy header SSO (`true`, default: disabled)
+- `TALKTOME_SSO_HEADER`: identity header set by the proxy (default: `X-Forwarded-User`)
+- `TALKTOME_SSO_TRUSTED_PROXIES`: required comma-separated proxy IP/CIDR allowlist when SSO is enabled
 - `COMPANION_API_KEY`: fixed Companion/API key
 
-Changing media-network, RTC-port or browser ICE environment settings requires a server restart. Guest login changes apply immediately.
+Changing media-network, RTC-port, browser ICE or SSO environment settings requires a server restart. Guest login changes apply immediately.
 
 ## Data
 
@@ -136,6 +139,36 @@ Back up this directory before upgrades if you need to preserve accounts and rout
 - Guest profiles cannot be direct targets, admins, deleted, or password-reset.
 - Online Guests can still be answered through `Reply`.
 - Guest login is passwordless and stored only in browser `sessionStorage`, so page refresh keeps it, but closing the browser session clears it.
+
+## Trusted reverse-proxy SSO
+
+The first SSO integration stage supports an authentication proxy such as
+Traefik ForwardAuth or oauth2-proxy. It is disabled by default. To enable it:
+
+```text
+TALKTOME_SSO_ENABLED=true
+TALKTOME_SSO_HEADER=X-Forwarded-User
+TALKTOME_SSO_TRUSTED_PROXIES=172.18.0.0/16,127.0.0.1
+```
+
+The proxy-provided identity is matched exactly and case-sensitively against an
+existing Talktome username. Talktome does not provision users automatically.
+Unknown identities, Guest profiles and Super Admins fall back to the normal
+login page. Because the username is the chosen mapping key, renaming it in
+Talktome or changing the upstream identity breaks the mapping until both values
+match again.
+
+Only direct connections from `TALKTOME_SSO_TRUSTED_PROXIES` may supply the
+identity header. The Talktome backend must not be directly reachable by clients,
+and the reverse proxy must replace or remove any client-supplied copy of the
+configured header. Browser and Socket.IO registrations are backed by the same
+HttpOnly server session; a client cannot select a different user ID locally.
+
+SSO applies to operator login at `/`. Feeds, Guests, Admin, Companion and Bridge
+retain their existing authentication paths. Browser sessions are held in memory
+for 12 hours and are invalidated by a server restart; with SSO, the next page
+load creates a new session automatically. Logging out of Talktome does not end
+the upstream identity-provider session, so a reload can sign the user in again.
 
 ## Productions
 
@@ -188,6 +221,18 @@ Socket.IO namespace: `/companion` with `snapshot`, `user-state`, `command-result
 
 Guest profiles are intentionally hidden from Companion and cannot be controlled as direct targets.
 
+### Enabling SSO
+
+To use SSO, configure the authentication proxy to remove any client-supplied
+copy of the identity header and, after successful authentication, set
+`X-Forwarded-User` (or the header selected with `TALKTOME_SSO_HEADER`) to the
+exact, case-sensitive name of an existing Talktome user. Enable SSO with
+`TALKTOME_SSO_ENABLED=true`, add the proxy IP or network to
+`TALKTOME_SSO_TRUSTED_PROXIES`, and ensure clients cannot reach the Talktome
+backend without passing through that proxy. No user synchronization or
+automatic provisioning is required; unknown identities see the normal login
+page.
+
 ## Camera Tally
 
 ```bash
@@ -226,10 +271,14 @@ npm run radio:play -- test.wav
 npm run radio:monitor
 npm run radio:record
 npm run radio:calibrate
-TALKTOME_SERVER_URL=https://<SERVER-IP>:8443 TALKTOME_GATEWAY_USER_ID=<USER-ID> TALKTOME_GATEWAY_CONFERENCE_ID=<CONFERENCE-ID> npm run radio:stream
+TALKTOME_SERVER_URL=https://<SERVER-IP>:8443 TALKTOME_GATEWAY_API_KEY=<COMPANION-API-KEY> TALKTOME_GATEWAY_USER_ID=<USER-ID> TALKTOME_GATEWAY_CONFERENCE_ID=<CONFERENCE-ID> npm run radio:stream
 ```
 
 Run `npm run radio:calibrate` on the gateway host to measure idle noise, remote PTT without speech, and quiet speech. It writes `gateway/radio-config.json`; environment variables still override that file.
+
+The streaming gateway authenticates with the Companion API key shown in the
+Admin UI. Set it through `TALKTOME_GATEWAY_API_KEY` (or `COMPANION_API_KEY`)
+before starting `radio:stream`.
 
 Defaults can be configured in `gateway/radio-config.json` or overridden with environment variables:
 
@@ -250,6 +299,7 @@ TALKTOME_RADIO_TX_RTP_PORT=5006
 TALKTOME_RADIO_TX_GAIN_DB=0
 TALKTOME_RADIO_RX_SEGMENTS_DIR=gateway/rx-segments
 TALKTOME_SERVER_URL=https://talktome.local:8443
+TALKTOME_GATEWAY_API_KEY=<COMPANION-API-KEY>
 TALKTOME_GATEWAY_USER_ID=1
 TALKTOME_GATEWAY_CONFERENCE_ID=1
 TALKTOME_GATEWAY_NAME=Radio Gateway

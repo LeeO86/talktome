@@ -71,6 +71,11 @@ const config = {
   txRxMuteTailMs: numberSetting("TALKTOME_RADIO_TX_RX_MUTE_TAIL_MS", "txRxMuteTailMs", 600),
   rxSegmentsDir: stringSetting("TALKTOME_RADIO_RX_SEGMENTS_DIR", "rxSegmentsDir", "gateway/rx-segments"),
   talkToMeUrl: stringSetting("TALKTOME_SERVER_URL", "talkToMeUrl", "https://localhost:8443"),
+  gatewayApiKey: stringSetting(
+    "TALKTOME_GATEWAY_API_KEY",
+    "gatewayApiKey",
+    process.env.COMPANION_API_KEY || ""
+  ),
   gatewayUserId: stringSetting("TALKTOME_GATEWAY_USER_ID", "gatewayUserId", ""),
   gatewayConferenceId: stringSetting("TALKTOME_GATEWAY_CONFERENCE_ID", "gatewayConferenceId", ""),
   gatewayName: stringSetting("TALKTOME_GATEWAY_NAME", "gatewayName", "Baofeng Gateway"),
@@ -166,6 +171,7 @@ function createSocket() {
   return io(config.talkToMeUrl, {
     transports: ["websocket"],
     rejectUnauthorized: false,
+    auth: config.gatewayApiKey ? { apiKey: config.gatewayApiKey } : {},
   });
 }
 
