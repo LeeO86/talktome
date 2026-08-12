@@ -1,12 +1,14 @@
 mod audio;
 mod bridge_media;
 mod model;
+mod ndi;
 mod probe;
 
 use audio::{AudioDeviceSnapshot, AudioInventory};
 use bridge_media::{
-    ActivateBridgeOutputRequest, BridgeMediaManager, BridgeMediaStatus, ReserveBridgeOutputRequest,
-    ReservedBridgeOutput, SetBridgeOutputLevelRequest, StartBridgeInputRequest,
+    ActivateBridgeOutputRequest, BridgeMediaManager, BridgeMediaStatus,
+    EnsureBridgeOutputEndpointRequest, ReserveBridgeOutputRequest, ReservedBridgeOutput,
+    SetBridgeOutputLevelRequest, StartBridgeInputRequest,
 };
 use futures_util::StreamExt;
 use model::BridgeStatus;
@@ -352,6 +354,11 @@ fn get_audio_device_snapshot() -> Result<AudioDeviceSnapshot, String> {
 }
 
 #[tauri::command]
+fn get_ndi_status() -> ndi::NdiStatus {
+    ndi::status(Duration::from_millis(250))
+}
+
+#[tauri::command]
 fn get_bridge_status() -> BridgeStatus {
     BridgeStatus::default()
 }
@@ -546,6 +553,22 @@ fn reserve_bridge_output(
     manager: tauri::State<'_, BridgeMediaManager>,
 ) -> Result<ReservedBridgeOutput, String> {
     manager.reserve_output(request)
+}
+
+#[tauri::command]
+fn ensure_bridge_output_endpoint(
+    request: EnsureBridgeOutputEndpointRequest,
+    manager: tauri::State<'_, BridgeMediaManager>,
+) -> Result<BridgeMediaStatus, String> {
+    manager.ensure_output_endpoint(request)
+}
+
+#[tauri::command]
+fn release_bridge_output_endpoint(
+    endpoint_id: String,
+    manager: tauri::State<'_, BridgeMediaManager>,
+) -> Result<BridgeMediaStatus, String> {
+    manager.release_output_endpoint(endpoint_id)
 }
 
 #[tauri::command]
@@ -888,6 +911,7 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_opener::init())
         .manage(ProbeManager::default())
         .manage(BridgeMediaManager::default())
         .manage(BridgeEventStreamManager::default())
@@ -997,8 +1021,11 @@ pub fn run() {
             get_autostart_enabled,
             get_bridge_media_status,
             get_bridge_status,
+            get_ndi_status,
+            ensure_bridge_output_endpoint,
             list_audio_devices,
             reserve_bridge_output,
+            release_bridge_output_endpoint,
             resize_main_window_to_content,
             set_bridge_output_level,
             set_autostart_enabled,

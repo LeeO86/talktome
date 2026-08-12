@@ -1,3 +1,5 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
+
 const deviceList = document.getElementById("device-list");
 const deviceSummary = document.getElementById("device-summary");
 const refreshButton = document.getElementById("refresh-devices");
@@ -13,6 +15,10 @@ const announceStatus = document.getElementById("announce-status");
 const announceError = document.getElementById("announce-error");
 const autostartInput = document.getElementById("autostart-enabled");
 const autostartStatus = document.getElementById("autostart-status");
+const ndiRuntime = document.getElementById("ndi-runtime");
+const ndiRuntimeDetail = document.getElementById("ndi-runtime-detail");
+const refreshNdiButton = document.getElementById("refresh-ndi");
+const ndiRuntimeLink = document.getElementById("ndi-runtime-link");
 
 const invoke = window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI__?.event?.listen;
@@ -39,6 +45,10 @@ const MANAGED_LEVEL_TRIGGER_MAX_THRESHOLD_DB = -10;
 const MANAGED_DEFAULT_TARGET_VOLUME = 0.9;
 const MIN_WINDOW_HEIGHT = 260;
 const MAX_WINDOW_HEIGHT = 820;
+const ALLOWED_NDI_INFORMATION_URLS = new Set([
+  "https://ndi.video/",
+  "https://ndi.video/tools/"
+]);
 
 let currentInventory = null;
 let portRows = [];
@@ -193,6 +203,60 @@ function setBridgeConnectionError(error = null) {
     announceError.textContent = message;
   }
   requestBridgeWindowResize();
+}
+
+function renderNdiStatus(status) {
+  if (!ndiRuntime || !ndiRuntimeDetail) return;
+  const available = Boolean(status?.available);
+  ndiRuntime.dataset.state = available ? "available" : "unavailable";
+  if (!available) {
+    ndiRuntimeDetail.textContent = "Runtime not installed. NDI devices are hidden until the current NDI Runtime is installed.";
+    ndiRuntimeDetail.title = String(status?.error || "NDI Runtime not found");
+    if (ndiRuntimeLink) {
+      ndiRuntimeLink.href = "https://ndi.video/tools/";
+      ndiRuntimeLink.textContent = "Download NDI\nRuntime";
+    }
+    return;
+  }
+  const version = String(status?.version || "installed runtime");
+  const sourceCount = Number(status?.sourceCount || 0);
+  ndiRuntimeDetail.textContent = `${version} · ${sourceCount} source${sourceCount === 1 ? "" : "s"} found`;
+  ndiRuntimeDetail.title = String(status?.runtimePath || "");
+  if (ndiRuntimeLink) {
+    ndiRuntimeLink.href = "https://ndi.video/";
+    ndiRuntimeLink.textContent = "NDI® information";
+  }
+}
+
+async function refreshNdiDevices() {
+  if (!invoke || !refreshNdiButton) return;
+  refreshNdiButton.disabled = true;
+  refreshNdiButton.textContent = "Refreshing…";
+  if (ndiRuntime) ndiRuntime.dataset.state = "checking";
+  if (ndiRuntimeDetail) ndiRuntimeDetail.textContent = "Discovering NDI sources…";
+  try {
+    await refreshDevices();
+  } finally {
+    refreshNdiButton.disabled = false;
+    refreshNdiButton.textContent = "Refresh";
+  }
+}
+
+async function openNdiInformation(event) {
+  event.preventDefault();
+  const url = ndiRuntimeLink?.href;
+  if (!url || !ALLOWED_NDI_INFORMATION_URLS.has(url)) return;
+
+  try {
+    await suppressWindowFocusHide(750);
+    await openUrl(url);
+  } catch (error) {
+    console.error("Could not open NDI information", error);
+    if (ndiRuntimeDetail) {
+      ndiRuntimeDetail.textContent = `Could not open the NDI website: ${String(error)}`;
+    }
+    requestBridgeWindowResize();
+  }
 }
 
 async function loadAutostartState() {
@@ -2119,6 +2183,7 @@ function createManagedSession(port) {
     sessionId: null,
     producerId: null,
     inputStreamId: `${port.id}:input`,
+    outputEndpointId: null,
     outputs: new Map(),
     ready: false,
     talking: false,
@@ -2218,6 +2283,15 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
     session.inputStartedAt = Date.now();
     const producer = await bridgeApi("POST", managedSessionPath(session, "/producers"), rtp);
     session.producerId = producer.id;
+    if (bridgePortHasOutput(port) && String(port.output?.deviceId || "").startsWith("ndi:send:")) {
+      session.outputEndpointId = `${port.id}:ndi-output`;
+      await invoke("ensure_bridge_output_endpoint", {
+        request: {
+          endpointId: session.outputEndpointId,
+          assignment: port.output
+        }
+      });
+    }
     session.ready = true;
     recordManagedLifecycle(session, "producer-started", `reason=${reason}`);
     await startManagedEventStream(session);
@@ -2247,12 +2321,18 @@ async function stopManagedSession(session, { remove = true, reason = "client-sto
   for (const output of [...session.outputs.values()]) {
     await stopManagedConsumer(session, output).catch(() => {});
   }
+  if (session.outputEndpointId) {
+    await invoke("release_bridge_output_endpoint", {
+      endpointId: session.outputEndpointId
+    }).catch(() => {});
+  }
   await invoke("stop_bridge_input", { streamId: session.inputStreamId }).catch(() => {});
   if (session.sessionId) {
     await bridgeApi("DELETE", managedSessionPath(session), { reason }).catch(() => {});
   }
   session.sessionId = null;
   session.producerId = null;
+  session.outputEndpointId = null;
   session.inputStartedAt = 0;
   session.outputs.clear();
   session.talking = false;
@@ -2322,8 +2402,12 @@ async function reconcileManagedBridgeConfig(config) {
 async function refreshManagedInventoryOnly() {
   if (!invoke) return;
   await suppressWindowFocusHide(250);
-  const inventory = await invoke("list_audio_devices");
+  const [inventory, ndiStatus] = await Promise.all([
+    invoke("list_audio_devices"),
+    invoke("get_ndi_status")
+  ]);
   renderInventory(inventory);
+  renderNdiStatus(ndiStatus);
   return inventory;
 }
 
@@ -3170,14 +3254,16 @@ async function refreshDevices() {
   }
   try {
     await suppressWindowFocusHide(250);
-    const [inventory, bridgeStatus, portStatuses] = await Promise.all([
+    const [inventory, bridgeStatus, portStatuses, ndiStatus] = await Promise.all([
       invoke("list_audio_devices"),
       invoke("get_bridge_status"),
-      localPortList ? invoke("get_audio_probe_ports_status") : Promise.resolve([])
+      localPortList ? invoke("get_audio_probe_ports_status") : Promise.resolve([]),
+      invoke("get_ndi_status")
     ]);
     renderBridgeStatus(bridgeStatus);
     renderInventory(inventory);
     renderPortStatuses(portStatuses);
+    renderNdiStatus(ndiStatus);
     if (serverUrlInput.value.trim() && getBridgeCredential()) {
       try {
         await announceBridge({ quiet: true });
@@ -3208,6 +3294,8 @@ async function refreshDevices() {
 addPortButton?.addEventListener("click", addPort);
 stopAllPortsButton?.addEventListener("click", stopAllPorts);
 refreshButton?.addEventListener("click", refreshDevices);
+refreshNdiButton?.addEventListener("click", refreshNdiDevices);
+ndiRuntimeLink?.addEventListener("click", openNdiInformation);
 autostartInput.addEventListener("change", setAutostartState);
 bridgePorts?.addEventListener("change", handleManagedPortControlChange);
 bridgePorts?.addEventListener("input", handleManagedPortControlChange);

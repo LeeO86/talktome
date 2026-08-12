@@ -200,6 +200,73 @@ h3 {
   font-size: 0.78rem;
 }
 
+.ndi-runtime-row {
+  align-items: center;
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: auto minmax(0, 1fr) calc((100% - 1.3rem) / 3.5);
+  margin-top: 0.65rem;
+}
+
+.ndi-runtime-row > div:not(.ndi-runtime-actions) {
+  display: grid;
+  gap: 0.05rem;
+}
+
+.ndi-runtime-row strong {
+  font-size: 0.8rem;
+}
+
+.ndi-runtime-row small {
+  color: #9fb0c0;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.ndi-runtime-actions {
+  align-items: stretch;
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
+  width: 100%;
+}
+
+.ndi-runtime-actions button,
+.ndi-runtime-link {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 2rem;
+  padding: 0.3rem 0.45rem;
+  text-align: center;
+}
+
+.ndi-runtime-link {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  background: #3a3a40;
+  color: #93c5fd;
+  font-size: 0.72rem;
+  text-decoration: none;
+  line-height: 1.1;
+  white-space: pre-line;
+}
+
+.ndi-runtime-dot {
+  background: #718096;
+  border-radius: 999px;
+  height: 0.52rem;
+  width: 0.52rem;
+}
+
+.ndi-runtime-row[data-state="available"] .ndi-runtime-dot {
+  background: #22c55e;
+}
+
+.ndi-runtime-row[data-state="unavailable"] .ndi-runtime-dot {
+  background: #f59e0b;
+}
+
 .startup-row {
   margin-top: 0;
 }

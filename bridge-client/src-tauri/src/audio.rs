@@ -1,6 +1,9 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, SampleRate, SupportedBufferSize, SupportedStreamConfigRange};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+use crate::ndi;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AudioInventory {
@@ -91,6 +94,8 @@ pub fn list_audio_devices() -> Result<AudioInventory, String> {
         Err(err) => eprintln!("failed to enumerate output devices: {err}"),
     }
 
+    devices.extend(ndi::audio_devices(Duration::from_millis(250)));
+
     Ok(AudioInventory {
         host: host_name,
         devices,
@@ -138,6 +143,17 @@ pub fn list_audio_device_snapshot() -> Result<AudioDeviceSnapshot, String> {
         Err(err) => eprintln!("failed to enumerate output devices: {err}"),
     }
 
+    devices.extend(
+        ndi::audio_devices(Duration::from_millis(100))
+            .into_iter()
+            .map(|device| AudioDeviceSnapshotEntry {
+                id: device.id,
+                name: device.name,
+                direction: device.direction,
+                is_default: false,
+            }),
+    );
+
     Ok(AudioDeviceSnapshot {
         host: host_name,
         devices,
@@ -182,7 +198,8 @@ fn describe_device(
     device: Device,
     default_name: Option<&str>,
 ) -> Result<AudioDeviceInfo, String> {
-    let name = device.to_string();
+    let native_name = device.to_string();
+    let name = display_name_for_native_device(&native_name);
     let supported_configs = supported_configs_for(&device, direction)?;
     let max_channels = supported_configs
         .iter()
@@ -194,7 +211,7 @@ fn describe_device(
         .any(|config| config.min_sample_rate <= 48_000 && config.max_sample_rate >= 48_000);
     let channel_pairs = build_channel_pairs(max_channels);
     let id = device_id_for(host_name, direction, index, &device);
-    let is_default = default_name.is_some_and(|default| default == name);
+    let is_default = default_name.is_some_and(|default| default == native_name);
 
     Ok(AudioDeviceInfo {
         id,
@@ -208,6 +225,14 @@ fn describe_device(
     })
 }
 
+fn display_name_for_native_device(name: &str) -> String {
+    if name.trim().to_ascii_lowercase().starts_with("ndi audio") {
+        format!("System audio · {name}")
+    } else {
+        name.to_string()
+    }
+}
+
 fn snapshot_device(
     host_name: &str,
     direction: &str,
@@ -215,9 +240,10 @@ fn snapshot_device(
     device: Device,
     default_name: Option<&str>,
 ) -> AudioDeviceSnapshotEntry {
-    let name = device.to_string();
+    let native_name = device.to_string();
+    let name = display_name_for_native_device(&native_name);
     let id = device_id_for(host_name, direction, index, &device);
-    let is_default = default_name.is_some_and(|default| default == name);
+    let is_default = default_name.is_some_and(|default| default == native_name);
 
     AudioDeviceSnapshotEntry {
         id,

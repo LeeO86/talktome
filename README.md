@@ -257,6 +257,24 @@ CoreAudio/WASAPI devices. It is configured from the Admin UI and can be assigned
 to users or feeds. Developer and packaging notes live in
 `bridge-client/README.md`.
 
+The Bridge also supports optional NDI® Audio without bundling proprietary NDI
+software. Install the current [NDI Runtime](https://ndi.video/for-developers/)
+on the Bridge computer and restart or refresh the Bridge. Discovered NDI
+sources then appear as input devices, while `Talktome Bridge 1` through
+`Talktome Bridge 8` appear as stereo NDI output devices. Select them for a
+managed Bridge port exactly like a local audio interface. The initial
+implementation accepts uncompressed 48 kHz floating-point NDI audio; NDI HX and
+compressed Advanced SDK audio are not supported. The runtime can alternatively
+be selected explicitly with `TALKTOME_NDI_RUNTIME=/path/to/libndi`.
+
+NDI® is a registered trademark of Vizrt NDI AB. Talktome does not distribute
+the NDI SDK, NDI Runtime or NDI Tools; installing the runtime is subject to
+NDI's own license terms.
+
+For OBS routing details and the distinction between NDI network sources and
+NDI's virtual system-audio drivers, see the Bridge client's
+[NDI Audio documentation](bridge-client/README.md#ndi-audio).
+
 ## Radio Gateway Prototype
 
 The repository includes a generic hardware gateway helper for bridging Talktome to an external radio or intercom device. It expects a Linux gateway host with ALSA audio I/O, an audio interface connected to the external device, and an optional GPIO-controlled PTT circuit.

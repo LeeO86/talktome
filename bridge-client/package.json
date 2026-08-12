@@ -15,6 +15,9 @@
     "build:ui": "vite build",
     "prepare:ffmpeg": "node scripts/prepare-ffmpeg-sidecar.mjs"
   },
+  "dependencies": {
+    "@tauri-apps/plugin-opener": "^2"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.4",
     "vite": "^7.0.0"

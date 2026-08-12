@@ -13,6 +13,7 @@ The current bridge path includes:
 - Server registration and automatic loading of Admin bridge assignments.
 - One managed headless user session per configured bridge endpoint.
 - Native CPAL input/output on the exact configured channel pairs.
+- Optional NDI® Audio receive/send through a separately installed NDI Runtime.
 - Opus/RTP transport to and from mediasoup through the server's plain RTP API.
 - Companion press, release and lock commands for managed bridge users.
 - Bundled FFmpeg sidecar support for Opus encoding/decoding.
@@ -21,6 +22,53 @@ FFmpeg is used only for Opus encoding/decoding; audio device and channel access
 remain native through CPAL. Packaged builds use a platform-specific FFmpeg
 sidecar. Development builds can also use `ffmpeg` from `PATH` or an explicit
 binary path via `TALKTOME_FFMPEG`.
+
+## NDI Audio
+
+NDI support is optional and dynamically loaded at runtime. Talktome does not
+bundle the NDI SDK, NDI Runtime or NDI Tools. Install the current
+[NDI Runtime](https://ndi.video/for-developers/) separately, then use the
+Bridge's `Refresh` action. The Bridge reports the loaded runtime version and
+discovered source count in its window.
+
+If no runtime is found, the Bridge shows an orange NDI status and a `Download
+NDI Runtime` button leading to NDI's official Tools download. While refreshing,
+the button changes to `Refreshing…` and the status reads `Discovering NDI
+sources…`; discovery can take a few seconds.
+
+Discovered NDI sources are exposed as Bridge input devices. Eight stereo send
+slots named `Talktome Bridge 1` through `Talktome Bridge 8` are exposed as
+Bridge output devices. Both use the existing managed Bridge-port configuration,
+so no server-side NDI component is required. The first implementation supports
+uncompressed planar floating-point audio at 48 kHz. It intentionally does not
+use NDI HX, compressed audio or Advanced SDK functionality.
+
+Runtime lookup honors `TALKTOME_NDI_RUNTIME` first, followed by the standard
+`NDI_RUNTIME_DIR_V6`/`V5`/`V4` variables and common installation paths. The
+value can point either to the runtime library itself or its directory.
+
+The macOS Bridge has library validation disabled in its signing entitlements so
+that an independently signed NDI Runtime can be loaded. Keep this limited to the
+Bridge process and install runtimes only from NDI's official distribution.
+
+NDI® is a registered trademark of Vizrt NDI AB. Use and installation of the
+runtime are governed by NDI's license terms.
+
+### OBS routing
+
+For Talktome to OBS, assign one of the `NDI network output · Talktome Bridge N`
+devices to a managed Bridge user. That configured NDI sender remains visible
+even while no one is speaking. In OBS, add an `NDI Source` and select the
+network source named like `COMPUTER (Talktome Bridge N)`. The similarly named
+macOS devices `System audio · NDI Audio` are NDI's virtual CoreAudio drivers,
+not Talktome's native NDI network integration.
+
+For OBS to Talktome, enable an NDI program output in OBS (usually under
+`Tools > NDI Output Settings`) or add a `Dedicated NDI Output` filter to the
+desired OBS source. Refresh the Bridge, then select the resulting
+`NDI network input · COMPUTER (OBS source name)` as the managed Bridge input.
+The OBS output must contain an audio track; a video-only NDI test signal is
+discoverable but produces silence in this audio-only Bridge integration.
 
 ## Development
 
@@ -139,3 +187,4 @@ set `ALLOW_NON_PORTABLE_FFMPEG=1` explicitly.
 3. Add per-return-path gain/mute handling for Companion volume commands.
 4. Add device-reconnect recovery and long-running soak tests.
 5. Add signed Bridge installer builds for macOS and Windows.
+6. Add configurable NDI output names and multichannel NDI routing.

@@ -21,6 +21,7 @@ use cpal::{
 use serde::{Deserialize, Serialize};
 
 use crate::audio;
+use crate::ndi;
 
 const OUTPUT_QUEUE_LIMIT_FRAMES: usize = 9_600;
 const DECODER_STARTUP_GRACE_MS: u64 = 10;
@@ -164,6 +165,13 @@ pub struct ReserveBridgeOutputRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EnsureBridgeOutputEndpointRequest {
+    pub endpoint_id: String,
+    pub assignment: BridgeChannelAssignment,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActivateBridgeOutputRequest {
     pub stream_id: String,
     pub payload_type: u8,
@@ -257,6 +265,7 @@ struct BridgeMediaState {
     inputs: HashMap<String, BridgeInputRuntime>,
     outputs: HashMap<String, BridgeOutputRuntime>,
     mixers: HashMap<OutputMixerKey, BridgeOutputMixerRuntime>,
+    output_endpoints: HashMap<String, OutputMixerKey>,
     pending_outputs: HashMap<String, PendingBridgeOutput>,
 }
 
@@ -267,7 +276,7 @@ struct PendingBridgeOutput {
 }
 
 struct BridgeInputRuntime {
-    _stream: Stream,
+    stream: BridgeInputStreamRuntime,
     child: Arc<Mutex<Child>>,
     last_error: Arc<Mutex<Option<String>>>,
     level_milli_db: Arc<AtomicI32>,
@@ -301,28 +310,42 @@ struct OutputMixerKey {
 }
 
 struct BridgeOutputMixerRuntime {
-    _stream: Stream,
+    stream: BridgeOutputStreamRuntime,
     sample_rate: SampleRate,
     sources: Arc<Mutex<HashMap<String, BridgeOutputMixerSource>>>,
     last_error: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Clone)]
-struct BridgeOutputMixerSource {
-    queue: Arc<Mutex<VecDeque<StereoFrame>>>,
-    level: Arc<Mutex<BridgeOutputLevel>>,
+pub(crate) struct BridgeOutputMixerSource {
+    pub(crate) queue: Arc<Mutex<VecDeque<StereoFrame>>>,
+    pub(crate) level: Arc<Mutex<BridgeOutputLevel>>,
+    pub(crate) left_channel: u16,
+    pub(crate) right_channel: u16,
 }
 
 #[derive(Clone, Copy)]
-struct BridgeOutputLevel {
-    volume: f32,
-    muted: bool,
+pub(crate) struct BridgeOutputLevel {
+    pub(crate) volume: f32,
+    pub(crate) muted: bool,
 }
 
 #[derive(Clone, Copy)]
-struct StereoFrame {
-    left: f32,
-    right: f32,
+pub(crate) struct StereoFrame {
+    pub(crate) left: f32,
+    pub(crate) right: f32,
+}
+
+#[allow(dead_code)]
+enum BridgeInputStreamRuntime {
+    Native(Stream),
+    Ndi(ndi::NdiInputRuntime),
+}
+
+#[allow(dead_code)]
+enum BridgeOutputStreamRuntime {
+    Native(Stream),
+    Ndi(ndi::NdiOutputRuntime),
 }
 
 impl BridgeMediaManager {
@@ -381,6 +404,39 @@ impl BridgeMediaManager {
         })
     }
 
+    pub fn ensure_output_endpoint(
+        &self,
+        request: EnsureBridgeOutputEndpointRequest,
+    ) -> Result<BridgeMediaStatus, String> {
+        validate_stream_id(&request.endpoint_id)?;
+        validate_assignment(&request.assignment, "output")?;
+        let mixer_key = OutputMixerKey::from_assignment(&request.assignment);
+        let mut state = self.lock()?;
+
+        if let Some(previous_key) = state.output_endpoints.remove(request.endpoint_id.trim()) {
+            Self::remove_mixer_if_unused_locked(&mut state, &previous_key);
+        }
+        if !state.mixers.contains_key(&mixer_key) {
+            let mixer = BridgeOutputMixerRuntime::start(&request.assignment)?;
+            state.mixers.insert(mixer_key.clone(), mixer);
+        }
+        state
+            .output_endpoints
+            .insert(request.endpoint_id.trim().to_string(), mixer_key);
+        Ok(status_from(&state))
+    }
+
+    pub fn release_output_endpoint(
+        &self,
+        endpoint_id: String,
+    ) -> Result<BridgeMediaStatus, String> {
+        let mut state = self.lock()?;
+        if let Some(mixer_key) = state.output_endpoints.remove(endpoint_id.trim()) {
+            Self::remove_mixer_if_unused_locked(&mut state, &mixer_key);
+        }
+        Ok(status_from(&state))
+    }
+
     pub fn activate_output(
         &self,
         request: ActivateBridgeOutputRequest,
@@ -403,7 +459,7 @@ impl BridgeMediaManager {
             .get(&mixer_key)
             .ok_or_else(|| "bridge output mixer was not created".to_string())?;
         let output_sample_rate = mixer.sample_rate;
-        let source_queue = mixer.add_source(stream_id.clone())?;
+        let source_queue = mixer.add_source(stream_id.clone(), &pending.request.assignment)?;
         let runtime = match BridgeOutputRuntime::start(
             pending,
             &request,
@@ -453,6 +509,7 @@ impl BridgeMediaManager {
         let inputs = std::mem::take(&mut state.inputs);
         let outputs = std::mem::take(&mut state.outputs);
         let mixers = std::mem::take(&mut state.mixers);
+        state.output_endpoints.clear();
         state.pending_outputs.clear();
         for (_, runtime) in inputs {
             runtime.stop();
@@ -498,6 +555,20 @@ impl BridgeMediaManager {
             false
         };
         if should_remove {
+            Self::remove_mixer_if_unused_locked(state, mixer_key);
+        }
+    }
+
+    fn remove_mixer_if_unused_locked(state: &mut BridgeMediaState, mixer_key: &OutputMixerKey) {
+        let has_endpoint = state
+            .output_endpoints
+            .values()
+            .any(|endpoint_key| endpoint_key == mixer_key);
+        let has_sources = state
+            .mixers
+            .get(mixer_key)
+            .is_some_and(|mixer| !mixer.is_empty());
+        if !has_endpoint && !has_sources {
             if let Some(mixer) = state.mixers.remove(mixer_key) {
                 mixer.stop();
             }
@@ -507,19 +578,6 @@ impl BridgeMediaManager {
 
 impl BridgeInputRuntime {
     fn start(request: &StartBridgeInputRequest) -> Result<Self, String> {
-        let device = audio::find_audio_device("input", &request.assignment.device_id)?;
-        let config = choose_f32_config(
-            &device,
-            "input",
-            request
-                .assignment
-                .left_channel
-                .max(request.assignment.right_channel),
-        )?;
-        let input_sample_rate = config.sample_rate.to_string();
-        let channels = usize::from(config.channels);
-        let left_index = usize::from(request.assignment.left_channel - 1);
-        let right_index = usize::from(request.assignment.right_channel - 1);
         let destination = format!(
             "rtp://{}:{}?pkt_size=1200",
             request.rtp_ip.trim(),
@@ -537,49 +595,81 @@ impl BridgeInputRuntime {
         let callback_dropped_chunks = Arc::clone(&dropped_chunks);
         let dropped_frames = Arc::new(AtomicU64::new(0));
         let callback_dropped_frames = Arc::clone(&dropped_frames);
-        let stream = device
-            .build_input_stream::<f32, _, _>(
-                config,
-                move |data, _| {
-                    if channels == 0 || left_index >= channels || right_index >= channels {
-                        return;
-                    }
-                    let frames = data.len() / channels;
-                    let mut bytes = Vec::with_capacity(frames * 2 * std::mem::size_of::<f32>());
-                    let mut sum_squares = 0.0_f64;
-                    let mut sample_count = 0_usize;
-                    for frame in data.chunks_exact(channels) {
-                        let left = frame[left_index];
-                        let right = frame[right_index];
-                        sum_squares += f64::from(left * left);
-                        sum_squares += f64::from(right * right);
-                        sample_count += 2;
-                        bytes.extend_from_slice(&left.to_le_bytes());
-                        bytes.extend_from_slice(&right.to_le_bytes());
-                    }
-                    callback_level
-                        .store(rms_milli_db(sum_squares, sample_count), Ordering::Relaxed);
-                    callback_captured_frames.fetch_add(frames as u64, Ordering::Relaxed);
-                    if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) =
-                        callback_sender.try_send(bytes)
-                    {
-                        callback_dropped_chunks.fetch_add(1, Ordering::Relaxed);
-                        callback_dropped_frames.fetch_add(frames as u64, Ordering::Relaxed);
-                    }
-                },
-                move |err| {
-                    let message = format!("bridge input stream error: {err}");
-                    eprintln!("{message}");
-                    if let Ok(mut last_error) = stream_error.lock() {
-                        *last_error = Some(message);
-                    }
-                },
-                None,
+        let (stream, input_sample_rate) = if ndi::is_input_device(&request.assignment.device_id) {
+            let runtime = ndi::NdiInputRuntime::start(
+                request.assignment.device_id.clone(),
+                request.assignment.left_channel,
+                request.assignment.right_channel,
+                callback_sender,
+                Arc::clone(&last_error),
+                callback_level,
+                callback_captured_frames,
+                callback_dropped_chunks,
+                callback_dropped_frames,
+            )?;
+            (BridgeInputStreamRuntime::Ndi(runtime), "48000".to_string())
+        } else {
+            let device = audio::find_audio_device("input", &request.assignment.device_id)?;
+            let config = choose_f32_config(
+                &device,
+                "input",
+                request
+                    .assignment
+                    .left_channel
+                    .max(request.assignment.right_channel),
+            )?;
+            let input_sample_rate = config.sample_rate.to_string();
+            let channels = usize::from(config.channels);
+            let left_index = usize::from(request.assignment.left_channel - 1);
+            let right_index = usize::from(request.assignment.right_channel - 1);
+            let native_stream = device
+                .build_input_stream::<f32, _, _>(
+                    config,
+                    move |data, _| {
+                        if channels == 0 || left_index >= channels || right_index >= channels {
+                            return;
+                        }
+                        let frames = data.len() / channels;
+                        let mut bytes = Vec::with_capacity(frames * 2 * std::mem::size_of::<f32>());
+                        let mut sum_squares = 0.0_f64;
+                        let mut sample_count = 0_usize;
+                        for frame in data.chunks_exact(channels) {
+                            let left = frame[left_index];
+                            let right = frame[right_index];
+                            sum_squares += f64::from(left * left);
+                            sum_squares += f64::from(right * right);
+                            sample_count += 2;
+                            bytes.extend_from_slice(&left.to_le_bytes());
+                            bytes.extend_from_slice(&right.to_le_bytes());
+                        }
+                        callback_level
+                            .store(rms_milli_db(sum_squares, sample_count), Ordering::Relaxed);
+                        callback_captured_frames.fetch_add(frames as u64, Ordering::Relaxed);
+                        if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) =
+                            callback_sender.try_send(bytes)
+                        {
+                            callback_dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                            callback_dropped_frames.fetch_add(frames as u64, Ordering::Relaxed);
+                        }
+                    },
+                    move |err| {
+                        let message = format!("bridge input stream error: {err}");
+                        eprintln!("{message}");
+                        if let Ok(mut last_error) = stream_error.lock() {
+                            *last_error = Some(message);
+                        }
+                    },
+                    None,
+                )
+                .map_err(|err| format!("failed to build bridge input stream: {err}"))?;
+            native_stream
+                .play()
+                .map_err(|err| format!("failed to start bridge input stream: {err}"))?;
+            (
+                BridgeInputStreamRuntime::Native(native_stream),
+                input_sample_rate,
             )
-            .map_err(|err| format!("failed to build bridge input stream: {err}"))?;
-        stream
-            .play()
-            .map_err(|err| format!("failed to start bridge input stream: {err}"))?;
+        };
 
         let mut child = ffmpeg_command()
             .args([
@@ -647,7 +737,7 @@ impl BridgeInputRuntime {
         });
 
         Ok(Self {
-            _stream: stream,
+            stream,
             child,
             last_error,
             level_milli_db,
@@ -663,7 +753,7 @@ impl BridgeInputRuntime {
     }
 
     fn stop(mut self) {
-        drop(self._stream);
+        drop(self.stream);
         self.sender.take();
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
@@ -680,95 +770,119 @@ impl BridgeInputRuntime {
 
 impl OutputMixerKey {
     fn from_assignment(assignment: &BridgeChannelAssignment) -> Self {
+        let (left_channel, right_channel) = if ndi::is_output_device(&assignment.device_id) {
+            // One NDI sender owns all channel routes for a named output slot.
+            // Individual stream assignments are retained on the mixer sources.
+            (0, 0)
+        } else {
+            (assignment.left_channel, assignment.right_channel)
+        };
         Self {
             device_id: assignment.device_id.trim().to_string(),
-            left_channel: assignment.left_channel,
-            right_channel: assignment.right_channel,
+            left_channel,
+            right_channel,
         }
     }
 }
 
 impl BridgeOutputMixerRuntime {
     fn start(assignment: &BridgeChannelAssignment) -> Result<Self, String> {
-        let device = audio::find_audio_device("output", &assignment.device_id)?;
-        let config = choose_f32_config(
-            &device,
-            "output",
-            assignment.left_channel.max(assignment.right_channel),
-        )?;
-        let sample_rate = config.sample_rate;
-        let channels = usize::from(config.channels);
-        let left_index = usize::from(assignment.left_channel - 1);
-        let right_index = usize::from(assignment.right_channel - 1);
         let sources = Arc::new(Mutex::new(HashMap::<String, BridgeOutputMixerSource>::new()));
         let output_sources = Arc::clone(&sources);
         let last_error = Arc::new(Mutex::new(None));
         let stream_error = Arc::clone(&last_error);
-        let stream = device
-            .build_output_stream::<f32, _, _>(
-                config,
-                move |data, _| {
-                    data.fill(0.0);
-                    if channels == 0 || left_index >= channels || right_index >= channels {
-                        return;
-                    }
-                    let source_queues = output_sources
-                        .lock()
-                        .map(|sources| sources.values().cloned().collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    if source_queues.is_empty() {
-                        return;
-                    }
-                    for frame in data.chunks_exact_mut(channels) {
-                        let mut left = 0.0_f32;
-                        let mut right = 0.0_f32;
-                        for source in &source_queues {
-                            let level = source.level.lock().map(|level| *level).unwrap_or(
-                                BridgeOutputLevel {
-                                    volume: 1.0,
-                                    muted: false,
-                                },
-                            );
-                            if level.muted || level.volume <= 0.0 {
-                                continue;
-                            }
-                            if let Ok(mut queue) = source.queue.lock() {
-                                if let Some(stereo) = queue.pop_front() {
-                                    left += stereo.left * level.volume;
-                                    right += stereo.right * level.volume;
+        let (stream, sample_rate) = if ndi::is_output_device(&assignment.device_id) {
+            let runtime = ndi::NdiOutputRuntime::start(
+                assignment.device_id.clone(),
+                Arc::clone(&sources),
+                Arc::clone(&last_error),
+            )?;
+            (BridgeOutputStreamRuntime::Ndi(runtime), SAMPLE_RATE_48K)
+        } else {
+            let device = audio::find_audio_device("output", &assignment.device_id)?;
+            let config = choose_f32_config(
+                &device,
+                "output",
+                assignment.left_channel.max(assignment.right_channel),
+            )?;
+            let sample_rate = config.sample_rate;
+            let channels = usize::from(config.channels);
+            let left_index = usize::from(assignment.left_channel - 1);
+            let right_index = usize::from(assignment.right_channel - 1);
+            let native_stream = device
+                .build_output_stream::<f32, _, _>(
+                    config,
+                    move |data, _| {
+                        data.fill(0.0);
+                        if channels == 0 || left_index >= channels || right_index >= channels {
+                            return;
+                        }
+                        let source_queues = output_sources
+                            .lock()
+                            .map(|sources| sources.values().cloned().collect::<Vec<_>>())
+                            .unwrap_or_default();
+                        if source_queues.is_empty() {
+                            return;
+                        }
+                        for frame in data.chunks_exact_mut(channels) {
+                            let mut left = 0.0_f32;
+                            let mut right = 0.0_f32;
+                            for source in &source_queues {
+                                let level = source.level.lock().map(|level| *level).unwrap_or(
+                                    BridgeOutputLevel {
+                                        volume: 1.0,
+                                        muted: false,
+                                    },
+                                );
+                                if level.muted || level.volume <= 0.0 {
+                                    continue;
+                                }
+                                if let Ok(mut queue) = source.queue.lock() {
+                                    if let Some(stereo) = queue.pop_front() {
+                                        left += stereo.left * level.volume;
+                                        right += stereo.right * level.volume;
+                                    }
                                 }
                             }
+                            if left_index == right_index {
+                                frame[left_index] = ((left + right) * 0.5).clamp(-1.0, 1.0);
+                            } else {
+                                frame[left_index] = left.clamp(-1.0, 1.0);
+                                frame[right_index] = right.clamp(-1.0, 1.0);
+                            }
                         }
-                        if left_index == right_index {
-                            frame[left_index] = ((left + right) * 0.5).clamp(-1.0, 1.0);
-                        } else {
-                            frame[left_index] = left.clamp(-1.0, 1.0);
-                            frame[right_index] = right.clamp(-1.0, 1.0);
+                    },
+                    move |err| {
+                        let message = format!("bridge output stream error: {err}");
+                        eprintln!("{message}");
+                        if let Ok(mut last_error) = stream_error.lock() {
+                            *last_error = Some(message);
                         }
-                    }
-                },
-                move |err| {
-                    let message = format!("bridge output stream error: {err}");
-                    eprintln!("{message}");
-                    if let Ok(mut last_error) = stream_error.lock() {
-                        *last_error = Some(message);
-                    }
-                },
-                None,
+                    },
+                    None,
+                )
+                .map_err(|err| format!("failed to build bridge output stream: {err}"))?;
+            native_stream
+                .play()
+                .map_err(|err| format!("failed to start bridge output stream: {err}"))?;
+            (
+                BridgeOutputStreamRuntime::Native(native_stream),
+                sample_rate,
             )
-            .map_err(|err| format!("failed to build bridge output stream: {err}"))?;
-        stream
-            .play()
-            .map_err(|err| format!("failed to start bridge output stream: {err}"))?;
+        };
         Ok(Self {
-            _stream: stream,
+            stream,
             sample_rate,
             sources,
             last_error,
         })
     }
 
-    fn add_source(&self, stream_id: String) -> Result<Arc<Mutex<VecDeque<StereoFrame>>>, String> {
+    fn add_source(
+        &self,
+        stream_id: String,
+        assignment: &BridgeChannelAssignment,
+    ) -> Result<Arc<Mutex<VecDeque<StereoFrame>>>, String> {
         let queue = Arc::new(Mutex::new(VecDeque::<StereoFrame>::new()));
         let source = BridgeOutputMixerSource {
             queue: Arc::clone(&queue),
@@ -776,6 +890,8 @@ impl BridgeOutputMixerRuntime {
                 volume: 1.0,
                 muted: false,
             })),
+            left_channel: assignment.left_channel,
+            right_channel: assignment.right_channel,
         };
         let mut sources = self
             .sources
@@ -821,7 +937,7 @@ impl BridgeOutputMixerRuntime {
     }
 
     fn stop(self) {
-        drop(self._stream);
+        drop(self.stream);
     }
 }
 
@@ -1229,6 +1345,51 @@ mod tests {
         let packet = build_rtcp_receiver_report(0x1234_5678);
 
         assert_eq!(packet, [0x80, 201, 0, 1, 0x12, 0x34, 0x56, 0x78]);
+    }
+
+    #[test]
+    fn ndi_output_channels_share_one_named_sender() {
+        let left = OutputMixerKey::from_assignment(&BridgeChannelAssignment {
+            device_id: "ndi:send:2".to_string(),
+            left_channel: 1,
+            right_channel: 1,
+        });
+        let right = OutputMixerKey::from_assignment(&BridgeChannelAssignment {
+            device_id: "ndi:send:2".to_string(),
+            left_channel: 2,
+            right_channel: 2,
+        });
+        let other_slot = OutputMixerKey::from_assignment(&BridgeChannelAssignment {
+            device_id: "ndi:send:3".to_string(),
+            left_channel: 1,
+            right_channel: 2,
+        });
+
+        assert_eq!(left, right);
+        assert_ne!(left, other_slot);
+    }
+
+    #[test]
+    #[ignore = "requires an installed NDI Runtime and local NDI networking"]
+    fn configured_ndi_endpoint_stays_discoverable_without_return_audio() {
+        let manager = BridgeMediaManager::default();
+        manager
+            .ensure_output_endpoint(EnsureBridgeOutputEndpointRequest {
+                endpoint_id: "test-persistent-output".to_string(),
+                assignment: BridgeChannelAssignment {
+                    device_id: "ndi:send:7".to_string(),
+                    left_channel: 1,
+                    right_channel: 2,
+                },
+            })
+            .unwrap();
+        thread::sleep(Duration::from_millis(750));
+
+        crate::ndi::tests::run_external_audio_probe("Talktome Bridge 7");
+
+        manager
+            .release_output_endpoint("test-persistent-output".to_string())
+            .unwrap();
     }
 
     #[test]
