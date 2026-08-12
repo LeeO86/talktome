@@ -1170,13 +1170,16 @@ function shouldUsePersistentRemotePlaybackBus() {
 }
 
 function shouldUseAdaptiveReceivePlayback() {
-  return isiOS || isSafariBrowser;
+  return window.TalktomeReceivePlaybackPolicy?.shouldUseAdaptiveReceivePlayback({ isiOS })
+    ?? isiOS;
 }
 
 function shouldUseAdaptivePlainReceivePlayback() {
-  return shouldUseAdaptiveReceivePlayback()
-    && typeof document !== 'undefined'
-    && document.visibilityState === 'hidden';
+  return window.TalktomeReceivePlaybackPolicy?.shouldUsePlainReceivePlayback({
+    isiOS,
+    isSafariBrowser,
+    visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'visible',
+  }) ?? (isiOS && typeof document !== 'undefined' && document.visibilityState === 'hidden');
 }
 
 function disposeRemotePlaybackBus() {
@@ -4819,11 +4822,11 @@ let cachedOperatorTargets = null;
 
   function targetKeyFromProducerPayload(payload) {
     if (!payload || typeof payload !== 'object') return null;
-    const { peerId, appData } = payload;
+    const { peerId, speakerUserId, appData } = payload;
     if (!appData || typeof appData !== 'object') return null;
     if (appData.type === 'conference') return `conf-${appData.id}`;
     if (appData.type === 'feed') return `feed-${appData.id}`;
-    return `user-${peerId}`;
+    return resolveRenderedUserTargetKey({ userId: speakerUserId, peerId });
   }
 
   function streamKeyFromProducerPayload(payload) {
@@ -5480,14 +5483,31 @@ let cachedOperatorTargets = null;
     return user?.socketId || null;
   }
 
+  function getRenderedUserTargetIdentities() {
+    return Array.from(document.querySelectorAll('#targets-list .user-target')).map((target) => ({
+      key: target.id || null,
+      userId: target.dataset.id || null,
+      socketId: target.dataset.socketId || null,
+    }));
+  }
+
+  function resolveRenderedUserTargetKey({ userId = null, peerId = null } = {}) {
+    return window.TalktomeTargetIdentity?.resolveRenderedUserTargetKey({
+      userId,
+      peerId,
+      renderedTargets: getRenderedUserTargetIdentities(),
+    }) ?? (peerId ? `user-${peerId}` : userId != null ? `user-${userId}` : null);
+  }
+
   function targetKeyFromIncomingAddressedEntry(entry) {
     if (!entry) return null;
     if (entry.targetType === 'conference') {
       return `conf-${entry.targetId}`;
     }
     if (entry.targetType === 'user') {
-      const socketId = resolveUserSocketId(entry.targetId);
-      return `user-${socketId || entry.targetId}`;
+      return resolveRenderedUserTargetKey({
+        userId: entry.fromUserId ?? entry.targetId,
+      });
     }
     if (entry.targetType === 'guest') {
       return `guest-${entry.targetId}`;
@@ -9223,9 +9243,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       volumeStorageKey = `volume_feed_${normalizedAppData.id}`;
     } else {
       const stableUserId = Number(
-        cachedUsers.find((entry) => String(entry?.socketId) === String(peerId))?.userId ?? peerId
+        speakerUserId
+          ?? cachedUsers.find((entry) => String(entry?.socketId) === String(peerId))?.userId
+          ?? peerId
       );
-      targetKey = `user-${peerId}`;
+      targetKey = resolveRenderedUserTargetKey({ userId: speakerUserId, peerId });
       volumeStorageKey = Number.isFinite(stableUserId)
         ? `volume_user_${stableUserId}`
         : `volume_user_${peerId}`;
@@ -10034,7 +10056,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   });
 
 
-  socket.on("producer-closed", ({ peerId, producerId, appData }) => {
+  socket.on("producer-closed", ({ peerId, speakerUserId = null, producerId, appData }) => {
     // 1️⃣ Compute the key like always
     let key;
     if (appData?.type === "conference") {
@@ -10042,7 +10064,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     } else if (appData?.type === "feed") {
       key = `feed-${appData.id}`;
     } else {
-      key = `user-${peerId}`;
+      key = resolveRenderedUserTargetKey({ userId: speakerUserId, peerId });
     }
 
     const closedProducerId = producerId || appData?.producerId || null;

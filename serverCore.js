@@ -21,6 +21,9 @@ const {
   resolveProducerReconciliationDelivery,
   shouldAnnounceProducerDelivery,
 } = require("./producerReconciliation");
+const {
+  shouldCloseBridgeSessionAfterEventStreamClose,
+} = require("./bridgeSessionLiveness");
 
 const SERVER_APP_VERSION = resolveServerAppVersion();
 const CLIENT_ICE_CONFIG = resolveClientIceConfig(process.env);
@@ -4471,9 +4474,12 @@ app.get(
       }
     }, 25_000);
 
-    req.on("close", () => {
+    res.on("close", () => {
       session.eventStreams.delete(stream);
       clearInterval(stream.heartbeat);
+      if (shouldCloseBridgeSessionAfterEventStreamClose(session)) {
+        closeBridgeControlSession(session.id, "bridge-event-stream-disconnected");
+      }
     });
   }
 );
@@ -7274,6 +7280,7 @@ io.on("connection", (socket) => {
     // 3. Broadcast to all other clients immediately, including appData
     socket.broadcast.emit("producer-closed", {
       peerId:     socket.id,
+      speakerUserId: peer?.userId ?? null,
       producerId,
       appData
     });
@@ -7607,6 +7614,7 @@ io.on("connection", (socket) => {
         broadcastRuntimeUserStates("plain-produce-closed");
         socket.broadcast.emit("producer-closed", {
           peerId: socket.id,
+          speakerUserId: peer?.userId ?? null,
           producerId: producer.id,
           appData,
         });
@@ -7845,6 +7853,7 @@ io.on("connection", (socket) => {
             broadcastRuntimeUserStates("produce-closed");
             socket.broadcast.emit("producer-closed", {
               peerId:     socket.id,
+              speakerUserId: peer?.userId ?? null,
               producerId: producer.id,
               appData     // included now
             });
