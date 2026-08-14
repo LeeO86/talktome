@@ -57,6 +57,9 @@
     ],
     "externalBin": [
       "binaries/ffmpeg"
-    ]
+    ],
+    "resources": {
+      "resources/omt/": "omt/"
+    }
   }
 }

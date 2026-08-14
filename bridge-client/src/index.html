@@ -42,15 +42,26 @@
             <input id="bridge-name" type="text" autocomplete="off" />
           </label>
         </div>
-        <div class="ndi-runtime-row" id="ndi-runtime" data-state="checking">
-          <span class="ndi-runtime-dot" aria-hidden="true"></span>
+        <div class="network-audio-runtime-row" id="ndi-runtime" data-state="checking">
+          <span class="network-audio-runtime-dot" aria-hidden="true"></span>
           <div>
             <strong>NDI Audio</strong>
             <small id="ndi-runtime-detail">Checking optional NDI Runtime…</small>
           </div>
-          <div class="ndi-runtime-actions">
+          <div class="network-audio-runtime-actions">
             <button id="refresh-ndi" type="button">Refresh</button>
-            <a id="ndi-runtime-link" class="ndi-runtime-link" href="https://ndi.video/tools/" target="_blank" rel="noreferrer">Download NDI Runtime</a>
+            <a id="ndi-runtime-link" class="network-audio-runtime-link" href="https://ndi.video/tools/" target="_blank" rel="noreferrer">Download NDI Runtime</a>
+          </div>
+        </div>
+        <div class="network-audio-runtime-row" id="omt-runtime" data-state="checking">
+          <span class="network-audio-runtime-dot" aria-hidden="true"></span>
+          <div>
+            <strong>OMT Audio</strong>
+            <small id="omt-runtime-detail">Checking bundled OMT backend…</small>
+          </div>
+          <div class="network-audio-runtime-actions">
+            <button id="refresh-omt" type="button">Refresh</button>
+            <a id="omt-runtime-link" class="network-audio-runtime-link" href="https://www.openmediatransport.org/" target="_blank" rel="noreferrer">OMT information</a>
           </div>
         </div>
         <div class="connection-error" id="announce-error" role="status"></div>

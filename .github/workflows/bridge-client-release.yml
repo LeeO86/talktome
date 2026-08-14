@@ -132,6 +132,7 @@ jobs:
           FFMPEG_SIDECAR_SOURCE: ${{ github.workspace }}/bridge-client/.ffmpeg-sidecars/ffmpeg-aarch64-apple-darwin
         run: |
           npm run prepare:ffmpeg -- --release --force
+          npm run prepare:omt -- --release --force
           npm exec tauri build -- --bundles dmg --config tauri.release-version.json
           scripts/hide-macos-dmg-app-extension.sh
 
@@ -148,6 +149,7 @@ jobs:
           FFMPEG_SIDECAR_SOURCE: ${{ github.workspace }}/bridge-client/.ffmpeg-sidecars/ffmpeg-x86_64-pc-windows-msvc.exe
         run: |
           npm run prepare:ffmpeg -- --release --force
+          npm run prepare:omt -- --release --force
           npm exec tauri build -- --bundles nsis --config tauri.release-version.json
 
       - name: Verify macOS Bridge version

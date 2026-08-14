@@ -19,6 +19,10 @@ const ndiRuntime = document.getElementById("ndi-runtime");
 const ndiRuntimeDetail = document.getElementById("ndi-runtime-detail");
 const refreshNdiButton = document.getElementById("refresh-ndi");
 const ndiRuntimeLink = document.getElementById("ndi-runtime-link");
+const omtRuntime = document.getElementById("omt-runtime");
+const omtRuntimeDetail = document.getElementById("omt-runtime-detail");
+const refreshOmtButton = document.getElementById("refresh-omt");
+const omtRuntimeLink = document.getElementById("omt-runtime-link");
 
 const invoke = window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI__?.event?.listen;
@@ -48,6 +52,9 @@ const MAX_WINDOW_HEIGHT = 820;
 const ALLOWED_NDI_INFORMATION_URLS = new Set([
   "https://ndi.video/",
   "https://ndi.video/tools/"
+]);
+const ALLOWED_OMT_INFORMATION_URLS = new Set([
+  "https://www.openmediatransport.org/"
 ]);
 
 let currentInventory = null;
@@ -228,6 +235,21 @@ function renderNdiStatus(status) {
   }
 }
 
+function renderOmtStatus(status) {
+  if (!omtRuntime || !omtRuntimeDetail) return;
+  const available = Boolean(status?.available);
+  omtRuntime.dataset.state = available ? "available" : "unavailable";
+  const version = String(status?.version || "OMT");
+  if (!available) {
+    omtRuntimeDetail.textContent = "Bundled backend unavailable. Reinstall the Bridge to restore OMT devices.";
+    omtRuntimeDetail.title = String(status?.error || "Bundled OMT backend not found");
+    return;
+  }
+  const sourceCount = Number(status?.sourceCount || 0);
+  omtRuntimeDetail.textContent = `${version} · ${sourceCount} source${sourceCount === 1 ? "" : "s"} found`;
+  omtRuntimeDetail.title = String(status?.runtimePath || "Bundled with Talktome Bridge");
+}
+
 async function refreshNdiDevices() {
   if (!invoke || !refreshNdiButton) return;
   refreshNdiButton.disabled = true;
@@ -239,6 +261,20 @@ async function refreshNdiDevices() {
   } finally {
     refreshNdiButton.disabled = false;
     refreshNdiButton.textContent = "Refresh";
+  }
+}
+
+async function refreshOmtDevices() {
+  if (!invoke || !refreshOmtButton) return;
+  refreshOmtButton.disabled = true;
+  refreshOmtButton.textContent = "Refreshing…";
+  if (omtRuntime) omtRuntime.dataset.state = "checking";
+  if (omtRuntimeDetail) omtRuntimeDetail.textContent = "Discovering OMT sources…";
+  try {
+    await refreshDevices();
+  } finally {
+    refreshOmtButton.disabled = false;
+    refreshOmtButton.textContent = "Refresh";
   }
 }
 
@@ -254,6 +290,23 @@ async function openNdiInformation(event) {
     console.error("Could not open NDI information", error);
     if (ndiRuntimeDetail) {
       ndiRuntimeDetail.textContent = `Could not open the NDI website: ${String(error)}`;
+    }
+    requestBridgeWindowResize();
+  }
+}
+
+async function openOmtInformation(event) {
+  event.preventDefault();
+  const url = omtRuntimeLink?.href;
+  if (!url || !ALLOWED_OMT_INFORMATION_URLS.has(url)) return;
+
+  try {
+    await suppressWindowFocusHide(750);
+    await openUrl(url);
+  } catch (error) {
+    console.error("Could not open OMT information", error);
+    if (omtRuntimeDetail) {
+      omtRuntimeDetail.textContent = `Could not open the OMT website: ${String(error)}`;
     }
     requestBridgeWindowResize();
   }
@@ -447,6 +500,12 @@ function bridgePortKey(port) {
 
 function bridgePortHasOutput(port) {
   return port?.kind === "user";
+}
+
+function bridgePortHasPersistentNetworkOutput(port) {
+  if (!bridgePortHasOutput(port)) return false;
+  const deviceId = String(port.output?.deviceId || "");
+  return deviceId.startsWith("ndi:send:") || deviceId.startsWith("omt:send:");
 }
 
 function bridgePortTargetId(port) {
@@ -1460,6 +1519,13 @@ function getManagedTriggerTarget(port) {
   return null;
 }
 
+function managedTalkTargetsMatch(currentTargets, nextTarget) {
+  if (!nextTarget || !Array.isArray(currentTargets) || currentTargets.length !== 1) return false;
+  const current = currentTargets[0] || {};
+  return String(current.type || "").toLowerCase() === nextTarget.type
+    && Number(current.id) === Number(nextTarget.id);
+}
+
 function getManagedLevelTriggerThreshold(port) {
   const threshold = Number(port?.trigger?.thresholdDb);
   if (!Number.isFinite(threshold)) return MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB;
@@ -2079,6 +2145,9 @@ async function processManagedLevelTriggers() {
       session.levelTriggerState = state;
       if (state.pending) continue;
       const triggerRevision = Number(state.revision || 0);
+      const inputStats = levels.get(session.inputStreamId);
+      updateManagedInputLevelDisplay(session, inputStats);
+      const levelDb = Number(inputStats?.rmsDb);
 
       if (!triggerTarget) {
         if (state.active && session.talking && session.talkSource === "level") {
@@ -2097,9 +2166,6 @@ async function processManagedLevelTriggers() {
         continue;
       }
 
-      const inputStats = levels.get(session.inputStreamId);
-      updateManagedInputLevelDisplay(session, inputStats);
-      const levelDb = Number(inputStats?.rmsDb);
       if (!Number.isFinite(levelDb)) continue;
       const thresholdDb = getManagedLevelTriggerThreshold(effectivePort);
 
@@ -2283,8 +2349,8 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
     session.inputStartedAt = Date.now();
     const producer = await bridgeApi("POST", managedSessionPath(session, "/producers"), rtp);
     session.producerId = producer.id;
-    if (bridgePortHasOutput(port) && String(port.output?.deviceId || "").startsWith("ndi:send:")) {
-      session.outputEndpointId = `${port.id}:ndi-output`;
+    if (bridgePortHasPersistentNetworkOutput(port)) {
+      session.outputEndpointId = `${port.id}:network-output`;
       await invoke("ensure_bridge_output_endpoint", {
         request: {
           endpointId: session.outputEndpointId,
@@ -2386,6 +2452,28 @@ async function reconcileManagedBridgeConfig(config) {
       }).catch((error) => {
         setManagedSessionError(session, error);
       });
+    } else if (session.talking && session.talkSource === "level") {
+      const nextTarget = getManagedTriggerTarget(nextPort);
+      if (nextTarget && !managedTalkTargetsMatch(session.targets, nextTarget)) {
+        const state = session.levelTriggerState;
+        if (state) state.pending = true;
+        try {
+          await applyManagedTalkState(session, {
+            talking: true,
+            targets: [nextTarget],
+            source: "level"
+          });
+          recordManagedLifecycle(
+            session,
+            "level-trigger-target-updated",
+            `${nextTarget.type}:${nextTarget.id}`
+          );
+        } catch (error) {
+          setManagedSessionError(session, error);
+        } finally {
+          if (state) state.pending = false;
+        }
+      }
     }
   }
   for (const [key, port] of wanted) {
@@ -2402,12 +2490,14 @@ async function reconcileManagedBridgeConfig(config) {
 async function refreshManagedInventoryOnly() {
   if (!invoke) return;
   await suppressWindowFocusHide(250);
-  const [inventory, ndiStatus] = await Promise.all([
+  const [inventory, ndiStatus, omtStatus] = await Promise.all([
     invoke("list_audio_devices"),
-    invoke("get_ndi_status")
+    invoke("get_ndi_status"),
+    invoke("get_omt_status")
   ]);
   renderInventory(inventory);
   renderNdiStatus(ndiStatus);
+  renderOmtStatus(omtStatus);
   return inventory;
 }
 
@@ -3254,16 +3344,18 @@ async function refreshDevices() {
   }
   try {
     await suppressWindowFocusHide(250);
-    const [inventory, bridgeStatus, portStatuses, ndiStatus] = await Promise.all([
+    const [inventory, bridgeStatus, portStatuses, ndiStatus, omtStatus] = await Promise.all([
       invoke("list_audio_devices"),
       invoke("get_bridge_status"),
       localPortList ? invoke("get_audio_probe_ports_status") : Promise.resolve([]),
-      invoke("get_ndi_status")
+      invoke("get_ndi_status"),
+      invoke("get_omt_status")
     ]);
     renderBridgeStatus(bridgeStatus);
     renderInventory(inventory);
     renderPortStatuses(portStatuses);
     renderNdiStatus(ndiStatus);
+    renderOmtStatus(omtStatus);
     if (serverUrlInput.value.trim() && getBridgeCredential()) {
       try {
         await announceBridge({ quiet: true });
@@ -3296,6 +3388,8 @@ stopAllPortsButton?.addEventListener("click", stopAllPorts);
 refreshButton?.addEventListener("click", refreshDevices);
 refreshNdiButton?.addEventListener("click", refreshNdiDevices);
 ndiRuntimeLink?.addEventListener("click", openNdiInformation);
+refreshOmtButton?.addEventListener("click", refreshOmtDevices);
+omtRuntimeLink?.addEventListener("click", openOmtInformation);
 autostartInput.addEventListener("change", setAutostartState);
 bridgePorts?.addEventListener("change", handleManagedPortControlChange);
 bridgePorts?.addEventListener("input", handleManagedPortControlChange);

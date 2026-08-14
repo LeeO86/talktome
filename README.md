@@ -9,9 +9,8 @@ Local WebRTC intercom app built with Node.js, mediasoup and Socket.IO.
 - Browser-based intercom with direct targets, conferences, reply and talk lock.
 - Admin UI for users, feeds, conferences, target order, network config, RTC port range, backups and Guest login.
 - Program-audio feeds with volume and mute controls.
-- Camera tally and remote control through HTTP API.
-- Remote control via Bitfocus Companion module and keyboard shortcuts.
-- Bridge Desktop Application to integrate hardware intercom systems, audio interfaces or mixing consoles.
+- Camera tally and remote control through Bitfocus Companion, HTTP API, module and keyboard shortcuts.
+- Bridge Desktop Application to integrate NDI, OMT, hardware intercom systems, audio interfaces and mixing consoles.
 - Optional Productions with per-user target layouts and scoped production admins.
 
 ## Quick Start
@@ -252,14 +251,12 @@ The matching user UI turns red while on-air. Also intergrated as action in compa
 ## Native Bridge App
 
 Talktome Bridge is the optional macOS/Windows tray app for connecting local
-audio interfaces such as Dante Virtual Soundcard, RME devices and other
-CoreAudio/WASAPI devices. It is configured from the Admin UI and can be assigned
-to users or feeds. Developer and packaging notes live in
+audio interfaces such as Dante Virtual Soundcard, NDI, OMT and other
+CoreAudio/WASAPI devices. Developer and packaging notes live in
 `bridge-client/README.md`.
 
-The Bridge also supports optional NDI® Audio without bundling proprietary NDI
-software. Install the current [NDI Runtime](https://ndi.video/for-developers/)
-on the Bridge computer and restart or refresh the Bridge. Discovered NDI
+The Bridge also supports NDI® Audio without bundling proprietary NDI
+software. Install the current [NDI Runtime](https://ndi.video/for-developers/) for this feature. Discovered NDI
 sources then appear as input devices, while `Talktome Bridge 1` through
 `Talktome Bridge 8` appear as stereo NDI output devices. Select them for a
 managed Bridge port exactly like a local audio interface. The initial
@@ -271,9 +268,13 @@ NDI® is a registered trademark of Vizrt NDI AB. Talktome does not distribute
 the NDI SDK, NDI Runtime or NDI Tools; installing the runtime is subject to
 NDI's own license terms.
 
-For OBS routing details and the distinction between NDI network sources and
-NDI's virtual system-audio drivers, see the Bridge client's
-[NDI Audio documentation](bridge-client/README.md#ndi-audio).
+The Bridge also includes royalty-free Open Media Transport (OMT) Audio support.
+No separate runtime is required. Discovered OMT sources can be selected as
+Bridge inputs, and eight `Talktome Bridge N` stereo OMT send slots are available
+as outputs. OBS 31 or newer can send and receive them using the official
+[OMT plugin](https://github.com/openmediatransport/omtplugin). Setup and network
+requirements are documented in the Bridge client's
+[OMT Audio documentation](bridge-client/README.md#omt-audio).
 
 ## Radio Gateway Prototype
 

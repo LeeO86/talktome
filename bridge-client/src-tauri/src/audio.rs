@@ -3,7 +3,7 @@ use cpal::{Device, SampleRate, SupportedBufferSize, SupportedStreamConfigRange};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::ndi;
+use crate::network_audio;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AudioInventory {
@@ -94,7 +94,7 @@ pub fn list_audio_devices() -> Result<AudioInventory, String> {
         Err(err) => eprintln!("failed to enumerate output devices: {err}"),
     }
 
-    devices.extend(ndi::audio_devices(Duration::from_millis(250)));
+    devices.extend(network_audio::audio_devices(Duration::from_millis(250)));
 
     Ok(AudioInventory {
         host: host_name,
@@ -143,16 +143,9 @@ pub fn list_audio_device_snapshot() -> Result<AudioDeviceSnapshot, String> {
         Err(err) => eprintln!("failed to enumerate output devices: {err}"),
     }
 
-    devices.extend(
-        ndi::audio_devices(Duration::from_millis(100))
-            .into_iter()
-            .map(|device| AudioDeviceSnapshotEntry {
-                id: device.id,
-                name: device.name,
-                direction: device.direction,
-                is_default: false,
-            }),
-    );
+    devices.extend(network_audio::audio_device_snapshot(Duration::from_millis(
+        100,
+    )));
 
     Ok(AudioDeviceSnapshot {
         host: host_name,

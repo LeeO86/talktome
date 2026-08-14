@@ -21,7 +21,7 @@ use cpal::{
 use serde::{Deserialize, Serialize};
 
 use crate::audio;
-use crate::ndi;
+use crate::network_audio;
 
 const OUTPUT_QUEUE_LIMIT_FRAMES: usize = 9_600;
 const DECODER_STARTUP_GRACE_MS: u64 = 10;
@@ -339,13 +339,13 @@ pub(crate) struct StereoFrame {
 #[allow(dead_code)]
 enum BridgeInputStreamRuntime {
     Native(Stream),
-    Ndi(ndi::NdiInputRuntime),
+    Network(network_audio::NetworkAudioInputRuntime),
 }
 
 #[allow(dead_code)]
 enum BridgeOutputStreamRuntime {
     Native(Stream),
-    Ndi(ndi::NdiOutputRuntime),
+    Network(network_audio::NetworkAudioOutputRuntime),
 }
 
 impl BridgeMediaManager {
@@ -595,81 +595,86 @@ impl BridgeInputRuntime {
         let callback_dropped_chunks = Arc::clone(&dropped_chunks);
         let dropped_frames = Arc::new(AtomicU64::new(0));
         let callback_dropped_frames = Arc::clone(&dropped_frames);
-        let (stream, input_sample_rate) = if ndi::is_input_device(&request.assignment.device_id) {
-            let runtime = ndi::NdiInputRuntime::start(
-                request.assignment.device_id.clone(),
-                request.assignment.left_channel,
-                request.assignment.right_channel,
-                callback_sender,
-                Arc::clone(&last_error),
-                callback_level,
-                callback_captured_frames,
-                callback_dropped_chunks,
-                callback_dropped_frames,
-            )?;
-            (BridgeInputStreamRuntime::Ndi(runtime), "48000".to_string())
-        } else {
-            let device = audio::find_audio_device("input", &request.assignment.device_id)?;
-            let config = choose_f32_config(
-                &device,
-                "input",
-                request
-                    .assignment
-                    .left_channel
-                    .max(request.assignment.right_channel),
-            )?;
-            let input_sample_rate = config.sample_rate.to_string();
-            let channels = usize::from(config.channels);
-            let left_index = usize::from(request.assignment.left_channel - 1);
-            let right_index = usize::from(request.assignment.right_channel - 1);
-            let native_stream = device
-                .build_input_stream::<f32, _, _>(
-                    config,
-                    move |data, _| {
-                        if channels == 0 || left_index >= channels || right_index >= channels {
-                            return;
-                        }
-                        let frames = data.len() / channels;
-                        let mut bytes = Vec::with_capacity(frames * 2 * std::mem::size_of::<f32>());
-                        let mut sum_squares = 0.0_f64;
-                        let mut sample_count = 0_usize;
-                        for frame in data.chunks_exact(channels) {
-                            let left = frame[left_index];
-                            let right = frame[right_index];
-                            sum_squares += f64::from(left * left);
-                            sum_squares += f64::from(right * right);
-                            sample_count += 2;
-                            bytes.extend_from_slice(&left.to_le_bytes());
-                            bytes.extend_from_slice(&right.to_le_bytes());
-                        }
-                        callback_level
-                            .store(rms_milli_db(sum_squares, sample_count), Ordering::Relaxed);
-                        callback_captured_frames.fetch_add(frames as u64, Ordering::Relaxed);
-                        if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) =
-                            callback_sender.try_send(bytes)
-                        {
-                            callback_dropped_chunks.fetch_add(1, Ordering::Relaxed);
-                            callback_dropped_frames.fetch_add(frames as u64, Ordering::Relaxed);
-                        }
-                    },
-                    move |err| {
-                        let message = format!("bridge input stream error: {err}");
-                        eprintln!("{message}");
-                        if let Ok(mut last_error) = stream_error.lock() {
-                            *last_error = Some(message);
-                        }
-                    },
-                    None,
+        let (stream, input_sample_rate) =
+            if network_audio::is_input_device(&request.assignment.device_id) {
+                let runtime = network_audio::start_input(network_audio::InputStartRequest {
+                    device_id: request.assignment.device_id.clone(),
+                    left_channel: request.assignment.left_channel,
+                    right_channel: request.assignment.right_channel,
+                    sender: callback_sender,
+                    last_error: Arc::clone(&last_error),
+                    level_milli_db: callback_level,
+                    captured_frames: callback_captured_frames,
+                    dropped_chunks: callback_dropped_chunks,
+                    dropped_frames: callback_dropped_frames,
+                })?;
+                (
+                    BridgeInputStreamRuntime::Network(runtime),
+                    "48000".to_string(),
                 )
-                .map_err(|err| format!("failed to build bridge input stream: {err}"))?;
-            native_stream
-                .play()
-                .map_err(|err| format!("failed to start bridge input stream: {err}"))?;
-            (
-                BridgeInputStreamRuntime::Native(native_stream),
-                input_sample_rate,
-            )
-        };
+            } else {
+                let device = audio::find_audio_device("input", &request.assignment.device_id)?;
+                let config = choose_f32_config(
+                    &device,
+                    "input",
+                    request
+                        .assignment
+                        .left_channel
+                        .max(request.assignment.right_channel),
+                )?;
+                let input_sample_rate = config.sample_rate.to_string();
+                let channels = usize::from(config.channels);
+                let left_index = usize::from(request.assignment.left_channel - 1);
+                let right_index = usize::from(request.assignment.right_channel - 1);
+                let native_stream = device
+                    .build_input_stream::<f32, _, _>(
+                        config,
+                        move |data, _| {
+                            if channels == 0 || left_index >= channels || right_index >= channels {
+                                return;
+                            }
+                            let frames = data.len() / channels;
+                            let mut bytes =
+                                Vec::with_capacity(frames * 2 * std::mem::size_of::<f32>());
+                            let mut sum_squares = 0.0_f64;
+                            let mut sample_count = 0_usize;
+                            for frame in data.chunks_exact(channels) {
+                                let left = frame[left_index];
+                                let right = frame[right_index];
+                                sum_squares += f64::from(left * left);
+                                sum_squares += f64::from(right * right);
+                                sample_count += 2;
+                                bytes.extend_from_slice(&left.to_le_bytes());
+                                bytes.extend_from_slice(&right.to_le_bytes());
+                            }
+                            callback_level
+                                .store(rms_milli_db(sum_squares, sample_count), Ordering::Relaxed);
+                            callback_captured_frames.fetch_add(frames as u64, Ordering::Relaxed);
+                            if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) =
+                                callback_sender.try_send(bytes)
+                            {
+                                callback_dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                                callback_dropped_frames.fetch_add(frames as u64, Ordering::Relaxed);
+                            }
+                        },
+                        move |err| {
+                            let message = format!("bridge input stream error: {err}");
+                            eprintln!("{message}");
+                            if let Ok(mut last_error) = stream_error.lock() {
+                                *last_error = Some(message);
+                            }
+                        },
+                        None,
+                    )
+                    .map_err(|err| format!("failed to build bridge input stream: {err}"))?;
+                native_stream
+                    .play()
+                    .map_err(|err| format!("failed to start bridge input stream: {err}"))?;
+                (
+                    BridgeInputStreamRuntime::Native(native_stream),
+                    input_sample_rate,
+                )
+            };
 
         let mut child = ffmpeg_command()
             .args([
@@ -770,13 +775,14 @@ impl BridgeInputRuntime {
 
 impl OutputMixerKey {
     fn from_assignment(assignment: &BridgeChannelAssignment) -> Self {
-        let (left_channel, right_channel) = if ndi::is_output_device(&assignment.device_id) {
-            // One NDI sender owns all channel routes for a named output slot.
-            // Individual stream assignments are retained on the mixer sources.
-            (0, 0)
-        } else {
-            (assignment.left_channel, assignment.right_channel)
-        };
+        let (left_channel, right_channel) =
+            if network_audio::is_output_device(&assignment.device_id) {
+                // One network sender owns all channel routes for a named output slot.
+                // Individual stream assignments are retained on the mixer sources.
+                (0, 0)
+            } else {
+                (assignment.left_channel, assignment.right_channel)
+            };
         Self {
             device_id: assignment.device_id.trim().to_string(),
             left_channel,
@@ -791,13 +797,13 @@ impl BridgeOutputMixerRuntime {
         let output_sources = Arc::clone(&sources);
         let last_error = Arc::new(Mutex::new(None));
         let stream_error = Arc::clone(&last_error);
-        let (stream, sample_rate) = if ndi::is_output_device(&assignment.device_id) {
-            let runtime = ndi::NdiOutputRuntime::start(
+        let (stream, sample_rate) = if network_audio::is_output_device(&assignment.device_id) {
+            let runtime = network_audio::start_output(
                 assignment.device_id.clone(),
                 Arc::clone(&sources),
                 Arc::clone(&last_error),
             )?;
-            (BridgeOutputStreamRuntime::Ndi(runtime), SAMPLE_RATE_48K)
+            (BridgeOutputStreamRuntime::Network(runtime), SAMPLE_RATE_48K)
         } else {
             let device = audio::find_audio_device("output", &assignment.device_id)?;
             let config = choose_f32_config(
@@ -1348,7 +1354,7 @@ mod tests {
     }
 
     #[test]
-    fn ndi_output_channels_share_one_named_sender() {
+    fn network_output_channels_share_one_named_sender() {
         let left = OutputMixerKey::from_assignment(&BridgeChannelAssignment {
             device_id: "ndi:send:2".to_string(),
             left_channel: 1,
@@ -1367,6 +1373,18 @@ mod tests {
 
         assert_eq!(left, right);
         assert_ne!(left, other_slot);
+
+        let omt_left = OutputMixerKey::from_assignment(&BridgeChannelAssignment {
+            device_id: "omt:send:2".to_string(),
+            left_channel: 1,
+            right_channel: 1,
+        });
+        let omt_right = OutputMixerKey::from_assignment(&BridgeChannelAssignment {
+            device_id: "omt:send:2".to_string(),
+            left_channel: 2,
+            right_channel: 2,
+        });
+        assert_eq!(omt_left, omt_right);
     }
 
     #[test]
@@ -1389,6 +1407,29 @@ mod tests {
 
         manager
             .release_output_endpoint("test-persistent-output".to_string())
+            .unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires the bundled OMT runtime and local OMT networking"]
+    fn configured_omt_endpoint_stays_discoverable_without_return_audio() {
+        let manager = BridgeMediaManager::default();
+        manager
+            .ensure_output_endpoint(EnsureBridgeOutputEndpointRequest {
+                endpoint_id: "test-persistent-omt-output".to_string(),
+                assignment: BridgeChannelAssignment {
+                    device_id: "omt:send:7".to_string(),
+                    left_channel: 1,
+                    right_channel: 2,
+                },
+            })
+            .unwrap();
+        thread::sleep(Duration::from_millis(750));
+
+        crate::omt::tests::run_external_audio_probe("Talktome Bridge 7", false);
+
+        manager
+            .release_output_endpoint("test-persistent-omt-output".to_string())
             .unwrap();
     }
 

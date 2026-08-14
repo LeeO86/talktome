@@ -14,6 +14,7 @@ The current bridge path includes:
 - One managed headless user session per configured bridge endpoint.
 - Native CPAL input/output on the exact configured channel pairs.
 - Optional NDI® Audio receive/send through a separately installed NDI Runtime.
+- Bundled Open Media Transport (OMT) Audio receive/send.
 - Opus/RTP transport to and from mediasoup through the server's plain RTP API.
 - Companion press, release and lock commands for managed bridge users.
 - Bundled FFmpeg sidecar support for Opus encoding/decoding.
@@ -70,6 +71,35 @@ desired OBS source. Refresh the Bridge, then select the resulting
 The OBS output must contain an audio track; a video-only NDI test signal is
 discoverable but produces silence in this audio-only Bridge integration.
 
+## OMT Audio
+
+Open Media Transport support is bundled with the macOS and Windows Bridge, so
+users do not need to install a separate runtime. The Bridge window reports the
+bundled backend version and the number of discovered OMT sources. Its `Refresh`
+button updates OMT discovery and the available Bridge devices.
+
+Discovered OMT sources are exposed as `OMT network input` devices. Eight stereo
+send slots named `Talktome Bridge 1` through `Talktome Bridge 8` are exposed as
+`OMT network output` devices. OMT supports up to 32 input channels; the initial
+Talktome output implementation remains stereo. Audio is transported as
+uncompressed planar 32-bit floating point at 48 kHz.
+
+For Talktome to OBS, install the official
+[OMT plugin](https://github.com/openmediatransport/omtplugin), assign an
+`OMT network output · Talktome Bridge N` device to a managed Bridge port, then
+add an `OMT Source` in OBS and select the corresponding network source.
+
+For OBS to Talktome, enable the OMT main output from OBS's OMT Output settings,
+refresh the Bridge and select the resulting `OMT network input` device. The OBS
+output must contain an audio track. OMT discovery uses DNS-SD/mDNS on UDP 5353;
+active senders use a TCP port from OMT's default range 6400–6600.
+
+The build pins the official `libomt`/`libvmx` binary release and verifies the
+archive and individual library SHA256 hashes before packaging. Both libraries
+are distributed under the MIT License; their license text is included in the
+Bridge resources. `TALKTOME_OMT_RUNTIME` can point to a different `libomt`
+library or directory for development and compatibility testing.
+
 ## Development
 
 Install a Rust toolchain and Node.js dependencies, then run:
@@ -91,6 +121,7 @@ Useful checks:
 ```bash
 npm run build:ui
 npm run prepare:ffmpeg -- --optional
+npm run prepare:omt
 npm run build:ffmpeg:macos
 npm run build:ffmpeg:windows # requires an MSYS2 MinGW shell
 npm run build:release
@@ -187,4 +218,4 @@ set `ALLOW_NON_PORTABLE_FFMPEG=1` explicitly.
 3. Add per-return-path gain/mute handling for Companion volume commands.
 4. Add device-reconnect recovery and long-running soak tests.
 5. Add signed Bridge installer builds for macOS and Windows.
-6. Add configurable NDI output names and multichannel NDI routing.
+6. Add configurable NDI/OMT output names and multichannel network routing.

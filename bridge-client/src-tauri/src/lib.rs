@@ -2,6 +2,8 @@ mod audio;
 mod bridge_media;
 mod model;
 mod ndi;
+mod network_audio;
+mod omt;
 mod probe;
 
 use audio::{AudioDeviceSnapshot, AudioInventory};
@@ -356,6 +358,11 @@ fn get_audio_device_snapshot() -> Result<AudioDeviceSnapshot, String> {
 #[tauri::command]
 fn get_ndi_status() -> ndi::NdiStatus {
     ndi::status(Duration::from_millis(250))
+}
+
+#[tauri::command]
+fn get_omt_status() -> omt::OmtStatus {
+    omt::status(Duration::from_millis(250))
 }
 
 #[tauri::command]
@@ -1022,6 +1029,7 @@ pub fn run() {
             get_bridge_media_status,
             get_bridge_status,
             get_ndi_status,
+            get_omt_status,
             ensure_bridge_output_endpoint,
             list_audio_devices,
             reserve_bridge_output,

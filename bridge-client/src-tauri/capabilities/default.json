@@ -9,7 +9,8 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://ndi.video/" },
-        { "url": "https://ndi.video/tools/" }
+        { "url": "https://ndi.video/tools/" },
+        { "url": "https://www.openmediatransport.org/" }
       ]
     }
   ]
