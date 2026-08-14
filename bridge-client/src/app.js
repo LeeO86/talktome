@@ -166,6 +166,10 @@ function saveBridgeSettings() {
   localStorage.setItem(STORAGE_KEYS.bridgeName, bridgeNameInput.value.trim());
 }
 
+function isBridgeSettingsControlFocused() {
+  return [serverUrlInput, apiKeyInput, bridgeNameInput].includes(document.activeElement);
+}
+
 function setServerConnectionState(state) {
   if (!announceStatus) return;
   const normalizedState = ["connected", "connecting", "disconnected"].includes(state)
@@ -2536,6 +2540,10 @@ async function retryDueManagedSessions() {
 
 async function syncManagedBridge() {
   if (managedSyncRunning) return;
+  // Do not reconnect with a partially edited address or credential. Apart from
+  // producing avoidable failures, programmatic connection updates can disturb
+  // the text selection in Windows WebView2 while the user is still typing.
+  if (isBridgeSettingsControlFocused()) return;
   const bridgeId = localStorage.getItem(STORAGE_KEYS.bridgeId) || "";
   if (!bridgeId || !serverUrlInput.value.trim() || !getBridgeCredential()) return;
   managedSyncRunning = true;
@@ -2572,6 +2580,7 @@ async function syncManagedBridge() {
 
 async function watchManagedInventory() {
   if (managedInventoryWatchRunning || managedSyncRunning || !invoke) return;
+  if (isBridgeSettingsControlFocused()) return;
   if (!serverUrlInput.value.trim() || !getBridgeCredential()) return;
 
   managedInventoryWatchRunning = true;
@@ -2786,7 +2795,6 @@ async function announceBridge({ quiet = false, syncConfig = true } = {}) {
     throw new Error("API key or bridge token is required");
   }
 
-  serverUrlInput.value = serverUrl;
   saveBridgeSettings();
   if (!quiet) {
     setBridgeConnectionError();
@@ -3397,7 +3405,13 @@ bridgePorts?.addEventListener("pointerdown", startManagedRangeInteraction);
 window.addEventListener("pointerup", finishManagedRangeInteraction);
 window.addEventListener("pointercancel", finishManagedRangeInteraction);
 [serverUrlInput, apiKeyInput, bridgeNameInput].forEach((input) => {
-  input.addEventListener("input", () => scheduleBridgeSettingsApply());
+  input.addEventListener("input", () => {
+    saveBridgeSettings();
+    if (bridgeSettingsApplyTimer) {
+      window.clearTimeout(bridgeSettingsApplyTimer);
+      bridgeSettingsApplyTimer = null;
+    }
+  });
   input.addEventListener("change", () => scheduleBridgeSettingsApply(0));
 });
 window.addEventListener("beforeunload", () => {
