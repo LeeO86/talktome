@@ -3412,6 +3412,11 @@ window.addEventListener("pointercancel", finishManagedRangeInteraction);
       bridgeSettingsApplyTimer = null;
     }
   });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    scheduleBridgeSettingsApply(0);
+  });
   input.addEventListener("change", () => scheduleBridgeSettingsApply(0));
 });
 window.addEventListener("beforeunload", () => {
