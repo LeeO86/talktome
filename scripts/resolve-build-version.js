@@ -51,6 +51,26 @@ function createVersionInfo({ exactTag, baseTag, distance, sha, dirty = false }) 
   };
 }
 
+function createPropagatedVersionInfo({ appVersion, safeVersion = "", sha = "" }) {
+  const normalizedVersion = parseVersionTag(appVersion);
+  const version = `v${normalizedVersion}`;
+  const normalizedSha = /^[0-9a-f]+$/i.test(String(sha).trim())
+    ? String(sha).trim().slice(0, 8)
+    : "";
+  const normalizedSafeVersion = String(safeVersion || version).replace(/[^0-9A-Za-z._-]/g, "-");
+
+  return {
+    version,
+    appVersion: normalizedVersion,
+    safeVersion: normalizedSafeVersion,
+    baseVersion: normalizedVersion.split(/[+-]/)[0],
+    release: !normalizedVersion.includes("-"),
+    sha: normalizedSha,
+    dirty: false,
+    distance: 0,
+  };
+}
+
 function git(args, options = {}) {
   try {
     return execFileSync("git", args, {
@@ -66,6 +86,16 @@ function git(args, options = {}) {
 }
 
 function resolveBuildVersion(options = {}) {
+  const environment = options.environment || process.env;
+  const propagatedVersion = String(environment.TALKTOME_BUILD_VERSION || "").trim();
+  if (propagatedVersion) {
+    return createPropagatedVersionInfo({
+      appVersion: propagatedVersion,
+      safeVersion: environment.TALKTOME_BUILD_SAFE_VERSION,
+      sha: environment.GITHUB_SHA,
+    });
+  }
+
   const cwd = options.cwd || path.resolve(__dirname, "..");
   const runGit = options.runGit || ((args, runOptions = {}) => git(args, { cwd, ...runOptions }));
   const exactTag = runGit(
@@ -149,7 +179,7 @@ function main() {
   ) {
     process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
   } else {
-    process.stdout.write(`Resolved Talktome version ${info.appVersion} from Git tags.\n`);
+    process.stdout.write(`Resolved Talktome version ${info.appVersion}.\n`);
   }
 }
 
@@ -165,6 +195,7 @@ if (require.main === module) {
 module.exports = {
   appendGithubEnv,
   appendGithubOutput,
+  createPropagatedVersionInfo,
   createVersionInfo,
   developmentVersion,
   parseVersionTag,

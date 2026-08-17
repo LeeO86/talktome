@@ -24,9 +24,35 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    name: Resolve build version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.build-version.outputs.version }}
+      app_version: ${{ steps.build-version.outputs.app_version }}
+      safe_version: ${{ steps.build-version.outputs.safe_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version from Git tags
+        id: build-version
+        shell: bash
+        run: node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"
+
   build:
     name: Build Bridge ${{ matrix.name }}
+    needs: version
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      APP_VERSION: ${{ needs.version.outputs.app_version }}
+      SAFE_VERSION: ${{ needs.version.outputs.safe_version }}
+      TALKTOME_BUILD_VERSION: ${{ needs.version.outputs.app_version }}
+      TALKTOME_BUILD_SAFE_VERSION: ${{ needs.version.outputs.safe_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -69,11 +95,10 @@ jobs:
         working-directory: bridge-client
         run: npm ci
 
-      - name: Resolve version from Git tags
+      - name: Apply resolved version to build metadata
         shell: bash
         run: >-
           node scripts/resolve-build-version.js
-          --github-env "$GITHUB_ENV"
           --tauri-config bridge-client/tauri.release-version.json
 
       - name: Restore LGPL FFmpeg sidecar

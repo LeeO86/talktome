@@ -79,3 +79,28 @@ test("reads all version data from Git", () => {
   assert.equal(info.appVersion, "2.0.0-dev.3");
   assert.deepEqual(calls, [...responses.keys()]);
 });
+
+test("reuses a workflow version without consulting mutable Git refs", () => {
+  const info = resolveBuildVersion({
+    environment: {
+      TALKTOME_BUILD_VERSION: "1.2.5-dev.1",
+      TALKTOME_BUILD_SAFE_VERSION: "v1.2.5-dev.1-1234abcd",
+      GITHUB_SHA: "1234abcd5678",
+    },
+    runGit() {
+      assert.fail("Git must not be queried after the workflow version was resolved");
+    },
+  });
+
+  assert.equal(info.appVersion, "1.2.5-dev.1");
+  assert.equal(info.safeVersion, "v1.2.5-dev.1-1234abcd");
+  assert.equal(info.sha, "1234abcd");
+  assert.equal(info.release, false);
+});
+
+test("rejects an invalid propagated workflow version", () => {
+  assert.throws(
+    () => resolveBuildVersion({ environment: { TALKTOME_BUILD_VERSION: "latest" } }),
+    /Invalid Talktome version tag/,
+  );
+});

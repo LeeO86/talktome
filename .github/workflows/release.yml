@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   version:
-    name: Resolve release version
+    name: Resolve build version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.release-version.outputs.version }}
@@ -64,6 +64,8 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       APP_VERSION: ${{ needs.version.outputs.app_version }}
       SAFE_VERSION: ${{ needs.version.outputs.safe_version }}
+      TALKTOME_BUILD_VERSION: ${{ needs.version.outputs.app_version }}
+      TALKTOME_BUILD_SAFE_VERSION: ${{ needs.version.outputs.safe_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,9 +101,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Apply release version to build metadata
+      - name: Apply resolved version to build metadata
         shell: bash
-        run: printf '{"version":"%s"}\n' "$APP_VERSION" > server-app/tauri.release-version.json
+        run: >-
+          node scripts/resolve-build-version.js
+          --tauri-config server-app/tauri.release-version.json
 
       - name: Build package
         run: npm run ${{ matrix.build_script }}
