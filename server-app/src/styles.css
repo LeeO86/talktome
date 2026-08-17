@@ -250,22 +250,74 @@ select {
 }
 
 .server-grid span,
-.checkbox-row span {
+.switch-label {
   color: #9fb0c0;
   font-size: 0.78rem;
 }
 
-.checkbox-row {
+.switch-row {
   align-items: center;
+  cursor: pointer;
   display: inline-flex;
-  gap: 0.45rem;
+  gap: 0.5rem;
+  position: relative;
   white-space: nowrap;
 }
 
-.checkbox-row input {
-  width: 1rem;
-  height: 1rem;
+.switch-row input {
+  border: 0;
+  height: 1px;
   margin: 0;
+  min-height: 0;
+  opacity: 0;
+  padding: 0;
+  pointer-events: none;
+  position: absolute;
+  width: 1px;
+}
+
+.switch-track {
+  background: #4b5563;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  flex: 0 0 auto;
+  height: 1.25rem;
+  position: relative;
+  transition: background-color 150ms ease, border-color 150ms ease;
+  width: 2.25rem;
+}
+
+.switch-track::after {
+  background: #d1d5db;
+  border-radius: 50%;
+  content: "";
+  height: 0.85rem;
+  left: 0.15rem;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  transition: background-color 150ms ease, transform 150ms ease;
+  width: 0.85rem;
+}
+
+.switch-row input:checked + .switch-track {
+  background: #2563eb;
+  border-color: #3b82f6;
+}
+
+.switch-row input:checked + .switch-track::after {
+  background: #ffffff;
+  transform: translate(1rem, -50%);
+}
+
+.switch-row input:focus-visible + .switch-track {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.switch-row:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .readonly-value {

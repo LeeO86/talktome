@@ -24,9 +24,10 @@
               <span id="status-dot" class="status-dot offline"></span>
               <strong id="status-label">Stopped</strong>
             </div>
-            <label class="checkbox-row startup-row">
-              <input id="run-at-login" type="checkbox" />
-              <span>Run at login</span>
+            <label class="switch-row startup-row" for="run-at-login">
+              <input id="run-at-login" type="checkbox" role="switch" />
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="switch-label">Run at login</span>
             </label>
           </div>
           <div class="button-row">
@@ -44,9 +45,10 @@
             <input id="https-port" type="number" min="1" max="65535" value="8443" />
           </label>
           <div class="field">
-            <label class="checkbox-row mdns-toggle" for="mdns-enabled">
-              <input id="mdns-enabled" type="checkbox" checked />
-              <span>mDNS</span>
+            <label class="switch-row mdns-toggle" for="mdns-enabled">
+              <input id="mdns-enabled" type="checkbox" role="switch" checked />
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="switch-label">mDNS</span>
             </label>
             <div class="mdns-control">
               <input id="mdns-host" value="intercom.local" spellcheck="false" />
