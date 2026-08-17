@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["TalkToMeForegroundServiceModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.talktomefgs.TalkToMeForegroundServiceModule"]
+  }
+}

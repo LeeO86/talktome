@@ -1,0 +1,1530 @@
+import { create } from 'zustand';
+
+import { ApiClient } from '../auth/apiClient';
+import type { CookieMap } from '../auth/cookieJar';
+import { SessionConflictError, SessionCookieUnavailableError, TlsUntrustedError } from '../auth/errors';
+import { TalkToMeHttp } from '../auth/http';
+import { hasSessionCookie, readNativeCookies } from '../auth/nativeCookies';
+import { MediaEngine } from '../media/engine';
+import {
+  defaultAudioPreference,
+  normalizeAudioPreference,
+  talkTargetIdentity,
+  type IncomingTalkState,
+  type LoginOptions,
+  type OperatorIdentity,
+  type PeerSession,
+  type Production,
+  type TargetAudioPreference,
+  type TalkTarget,
+} from '../protocol';
+import { isLikelyLocalHost, parseServerAddress } from '../servers/parseServerAddress';
+import {
+  hydrateTlsPins,
+  probeServerCertificate,
+  rememberTlsPin,
+  storedPinForHost,
+  type CertificateProbe,
+} from '../servers/tlsTrust';
+import { isRegisterConflict, isRegisterOk, SignalingClient } from '../signaling/client';
+import {
+  activateForIntercom,
+  audioSessionAvailable,
+  deactivateAudioSession,
+  prepareForSystemManagedIntercom,
+  reactivateForOutgoingTalkCapture,
+  setWebRTCAudioEnabled,
+  startBackgroundKeepalive,
+  stopBackgroundKeepalive,
+} from '../audio/session';
+import {
+  iosPttEnabled,
+  shouldOwnAudioSession,
+  shouldReactivateCaptureForTalk,
+  shouldStartBackgroundKeepalive,
+} from '../audio/policy';
+import { advertisedCapability } from '../background/capability';
+import {
+  foregroundServiceAvailable,
+  openBatterySettings,
+  startForegroundService,
+  stopForegroundService,
+  subscribeForegroundService,
+  updateForegroundService,
+} from '../background/foregroundService';
+import { requestAndroidBlePermissions, requestAndroidSessionPermissions } from '../background/permissions';
+import { shouldStartForegroundService } from '../background/fgs';
+import { BleButtonPolicy } from '../ble/button';
+import {
+  disconnectBle,
+  scanAndConnectBle,
+  startBleNative,
+  subscribeBleNative,
+  type BleConnectionKind,
+  type BleConnectionState,
+} from '../ble/native';
+import { loadBlePreferences, saveBlePreferences } from '../ble/preferences';
+import {
+  DEFAULT_BLE_TARGET,
+  bleTalkCandidates,
+  describeBleTarget,
+  resolveBleTalkTarget,
+  type BleTargetSelection,
+} from '../ble/target';
+import { resolveReplyTalkTarget } from '../talk/replyTarget';
+import { slideToLockHint } from '../talk/slideToLock';
+import { addTalkTarget, removeTalkTarget, talkTargetKeys } from '../talk/talkSet';
+import { loadAudioPreferences, saveAudioPreferences } from './audioPrefs';
+import {
+  isHexPushToken,
+  parseApplePttBootstrap,
+  shouldUseSystemPtt,
+} from '../ptt/policy';
+import {
+  leavePttChannel,
+  pttNativeAvailable,
+  subscribePttNative,
+  updatePttChannel,
+  updatePttRemoteParticipant,
+} from '../ptt/native';
+import { loadRememberedProfile, saveRememberedProfile } from './remembered';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
+
+export type SessionUiState = {
+  hydrated: boolean;
+  status: 'idle' | 'connecting' | 'choose-production' | 'ready' | 'error';
+  statusMessage: string;
+  serverAddress: string;
+  username: string;
+  rememberPassword: boolean;
+  allowInsecureLocalTLS: boolean;
+  leftHanded: boolean;
+  replyTarget: TalkTarget | null;
+  loginOptions: LoginOptions | null;
+  pendingCertificate: CertificateProbe | null;
+  identity: OperatorIdentity | null;
+  productions: Production[];
+  productionId: number | null;
+  productionName: string | null;
+  operatorReady: boolean;
+  targets: TalkTarget[];
+  talkingTargetKey: string | null;
+  talkingTargetKeys: string[];
+  talking: boolean;
+  talkLocked: boolean;
+  incoming: IncomingTalkState;
+  peers: PeerSession[];
+  audioPreferences: Record<string, TargetAudioPreference>;
+  speakingTargetKeys: string[];
+  stoppedFeedKeys: string[];
+  conflictName?: string;
+  error: string | null;
+  capabilityReason: string;
+  overBudget: boolean;
+  activeRemoteCount: number;
+  signalingLabel: string;
+  fgsRunning: boolean;
+  fgsAvailable: boolean;
+  audioSessionAvailable: boolean;
+  audioSessionActive: boolean;
+  audioKeepalive: boolean;
+  pttAvailable: boolean;
+  pttBootstrapEnabled: boolean;
+  pttJoined: boolean;
+  pttVerified: boolean;
+  pttChannelName: string;
+  bleKind: BleConnectionKind;
+  bleName: string;
+  bleMessage: string;
+  bleShortPressLocks: boolean;
+  bleTargetKind: 'reply' | 'target';
+  bleTargetType: string;
+  bleTargetId: string;
+  bleTargetLabel: string;
+};
+
+const FOREGROUND_REASON =
+  'Foreground only on this build. iOS audio background mode is declared; lock-screen idle is still expected to die until Tier A.';
+const HOLD_HINT = 'Hold to talk. Slide to lock.';
+
+const initialState: SessionUiState = {
+  hydrated: false,
+  status: 'idle',
+  statusMessage: '',
+  serverAddress: '',
+  username: '',
+  rememberPassword: true,
+  allowInsecureLocalTLS: false,
+  leftHanded: false,
+  replyTarget: null,
+  loginOptions: null,
+  pendingCertificate: null,
+  identity: null,
+  productions: [],
+  productionId: null,
+  productionName: null,
+  operatorReady: false,
+  targets: [],
+  talkingTargetKey: null,
+  talkingTargetKeys: [],
+  talking: false,
+  talkLocked: false,
+  incoming: { addressedNow: [] },
+  peers: [],
+  audioPreferences: {},
+  speakingTargetKeys: [],
+  stoppedFeedKeys: [],
+  error: null,
+  capabilityReason: FOREGROUND_REASON,
+  overBudget: false,
+  activeRemoteCount: 0,
+  signalingLabel: 'disconnected',
+  fgsRunning: false,
+  fgsAvailable: false,
+  audioSessionAvailable: false,
+  audioSessionActive: false,
+  audioKeepalive: false,
+  pttAvailable: false,
+  pttBootstrapEnabled: false,
+  pttJoined: false,
+  pttVerified: false,
+  pttChannelName: '',
+  bleKind: 'idle',
+  bleName: '',
+  bleMessage: '',
+  bleShortPressLocks: true,
+  bleTargetKind: 'reply',
+  bleTargetType: '',
+  bleTargetId: '',
+  bleTargetLabel: '',
+};
+
+type SessionStore = SessionUiState & {
+  setField: <K extends keyof SessionUiState>(key: K, value: SessionUiState[K]) => void;
+};
+
+export const useSessionStore = create<SessionStore>((set) => ({
+  ...initialState,
+  setField: (key, value) => set({ [key]: value } as Pick<SessionStore, typeof key>),
+}));
+
+class SessionController {
+  private cookies: CookieMap = {};
+  private http: TalkToMeHttp | null = null;
+  private api: ApiClient | null = null;
+  private signaling: SignalingClient | null = null;
+  private media: MediaEngine | null = null;
+  private lastSocketId?: string;
+  private pendingPassword?: string;
+  private talkingTargets: TalkTarget[] = [];
+  private lockedTargets: TalkTarget[] = [];
+  private overrideFrom: TalkTarget[] | null = null;
+  private reconnecting = false;
+  private hardwareBound = false;
+  private appStateSubscription: { remove: () => void } | null = null;
+  private pttChannelUUID: string | null = null;
+  private readonly blePolicy = new BleButtonPolicy();
+
+  async hydrate(): Promise<void> {
+    const [remembered, audioPreferences, blePreferences] = await Promise.all([
+      loadRememberedProfile(),
+      loadAudioPreferences(),
+      loadBlePreferences(),
+      hydrateTlsPins(),
+    ]);
+    useSessionStore.setState({
+      hydrated: true,
+      serverAddress: remembered?.serverAddress ?? '',
+      username: remembered?.username ?? '',
+      rememberPassword: remembered?.rememberPassword ?? true,
+      allowInsecureLocalTLS: remembered?.allowInsecureLocalTLS ?? false,
+      leftHanded: remembered?.leftHanded ?? false,
+      audioSessionAvailable: audioSessionAvailable(),
+      pttAvailable: pttNativeAvailable(),
+      capabilityReason: this.capabilityReason({
+        audioSessionAvailable: audioSessionAvailable(),
+        pttAvailable: pttNativeAvailable(),
+      }),
+      audioPreferences,
+      ...bleFieldsFromSelection(blePreferences.target, blePreferences.shortPressLocksTalk),
+    });
+    this.pendingPassword = remembered?.password;
+    this.bindHardware();
+    void startBleNative().then((state) => this.publishBleState(state));
+    if (remembered?.serverAddress) {
+      void this.refreshLoginOptions(remembered.serverAddress);
+    }
+  }
+
+  rememberedPassword(): string {
+    return this.pendingPassword ?? '';
+  }
+
+  async refreshLoginOptions(serverAddress = useSessionStore.getState().serverAddress): Promise<void> {
+    if (!serverAddress.trim()) {
+      useSessionStore.setState({ loginOptions: null });
+      return;
+    }
+    try {
+      this.prepareHttp(serverAddress);
+      const loginOptions = await this.api?.loginOptions();
+      useSessionStore.setState({
+        loginOptions: loginOptions ?? { guestLogin: { enabled: false, label: 'Guest' }, sso: { enabled: false } },
+      });
+    } catch {
+      useSessionStore.setState({
+        loginOptions: { guestLogin: { enabled: false, label: 'Guest' }, sso: { enabled: false } },
+      });
+    }
+  }
+
+  async login(input: {
+    serverAddress: string;
+    username: string;
+    password: string;
+    rememberPassword: boolean;
+    force?: boolean;
+  }): Promise<void> {
+    this.pendingPassword = input.password;
+    this.beginConnect(input.serverAddress, input.username, input.rememberPassword);
+    await this.probeAndHealth();
+    useSessionStore.setState({ statusMessage: 'Signing in…' });
+    const identity = await this.requireApi().login(input.username, input.password);
+    const parsed = parseServerAddress(input.serverAddress);
+    const nativeCookies = await readNativeCookies(parsed.baseUrl);
+    this.cookies = { ...nativeCookies, ...this.cookies };
+    if (!hasSessionCookie(this.cookies)) {
+      throw new SessionCookieUnavailableError();
+    }
+    await this.finishIdentity(identity, input.force === true);
+    await saveRememberedProfile(
+      {
+        serverAddress: input.serverAddress,
+        username: input.username,
+        rememberPassword: input.rememberPassword,
+        allowInsecureLocalTLS: useSessionStore.getState().allowInsecureLocalTLS,
+        leftHanded: useSessionStore.getState().leftHanded,
+      },
+      input.password,
+    );
+  }
+
+  async loginGuest(input: { serverAddress: string; displayName?: string; force?: boolean }): Promise<void> {
+    this.beginConnect(input.serverAddress, input.displayName ?? useSessionStore.getState().username, false);
+    await this.probeAndHealth();
+    useSessionStore.setState({ statusMessage: 'Signing in as guest…' });
+    const identity = await this.requireApi().loginGuest(input.displayName);
+    await this.finishIdentity(identity, input.force === true);
+    const state = useSessionStore.getState();
+    await saveRememberedProfile({
+      serverAddress: input.serverAddress,
+      username: state.username,
+      rememberPassword: state.rememberPassword,
+      allowInsecureLocalTLS: state.allowInsecureLocalTLS,
+      leftHanded: state.leftHanded,
+      guest: {
+        guestId: String(identity.guestId ?? identity.id),
+        guestProfileUserId: identity.guestProfileUserId ?? 0,
+        name: identity.name,
+      },
+    });
+  }
+
+  async acceptCertificateAndRetry(kind: 'user' | 'guest' = 'user'): Promise<void> {
+    const pending = useSessionStore.getState().pendingCertificate;
+    if (!pending) {
+      return;
+    }
+    await rememberTlsPin({ hostname: pending.hostname, sha256: pending.sha256 });
+    useSessionStore.setState({ pendingCertificate: null, error: null });
+    const state = useSessionStore.getState();
+    if (kind === 'guest') {
+      await this.loginGuest({ serverAddress: state.serverAddress, displayName: state.username });
+      return;
+    }
+    await this.login({
+      serverAddress: state.serverAddress,
+      username: state.username,
+      password: this.pendingPassword ?? '',
+      rememberPassword: state.rememberPassword,
+    });
+  }
+
+  async selectProduction(production: Production | null): Promise<void> {
+    try {
+      await this.enterOperator(production);
+    } catch (error) {
+      useSessionStore.setState({
+        status: 'choose-production',
+        operatorReady: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  reopenProductionPicker(): void {
+    if ((useSessionStore.getState().productions ?? []).length === 0) {
+      return;
+    }
+    useSessionStore.setState({
+      operatorReady: false,
+      status: 'choose-production',
+      statusMessage: 'Choose a production',
+    });
+  }
+
+  async takeOver(): Promise<void> {
+    const state = useSessionStore.getState();
+    if (state.identity?.kind === 'guest') {
+      await this.loginGuest({
+        serverAddress: state.serverAddress,
+        displayName: state.identity.name,
+        force: true,
+      });
+      return;
+    }
+    await this.login({
+      serverAddress: state.serverAddress,
+      username: state.username,
+      password: this.pendingPassword ?? '',
+      rememberPassword: state.rememberPassword,
+      force: true,
+    });
+  }
+
+  async logout(statusMessage = 'Signed out.'): Promise<void> {
+    const identity = useSessionStore.getState().identity;
+    try {
+      await this.media?.stopTalking();
+    } catch {
+      // ignore
+    }
+    try {
+      await this.media?.stop();
+    } catch {
+      // ignore
+    }
+    try {
+      await this.signaling?.logout();
+    } catch {
+      // ignore
+    }
+    try {
+      await this.api?.logout(identity?.id, this.signaling?.socketId);
+    } catch {
+      // ignore
+    }
+    this.signaling?.disconnect();
+    this.media = null;
+    this.signaling = null;
+    this.api = null;
+    this.http = null;
+    this.cookies = {};
+    this.talkingTargets = [];
+    this.lockedTargets = [];
+    this.overrideFrom = null;
+    this.blePolicy.reset();
+    await this.leaveSystemPtt();
+    await this.teardownAudioSession();
+    await stopForegroundService();
+    const next = useSessionStore.getState();
+    useSessionStore.setState({
+      ...initialState,
+      hydrated: true,
+      serverAddress: next.serverAddress,
+      username: next.username,
+      rememberPassword: next.rememberPassword,
+      allowInsecureLocalTLS: next.allowInsecureLocalTLS,
+      leftHanded: next.leftHanded,
+      loginOptions: next.loginOptions,
+      audioPreferences: next.audioPreferences,
+      bleKind: next.bleKind,
+      bleName: next.bleName,
+      bleMessage: next.bleMessage,
+      bleShortPressLocks: next.bleShortPressLocks,
+      bleTargetKind: next.bleTargetKind,
+      bleTargetType: next.bleTargetType,
+      bleTargetId: next.bleTargetId,
+      bleTargetLabel: next.bleTargetLabel,
+      fgsAvailable: next.fgsAvailable,
+      audioSessionAvailable: next.audioSessionAvailable,
+      pttAvailable: next.pttAvailable,
+      statusMessage,
+    });
+  }
+
+  canTalkTo(target: TalkTarget): boolean {
+    if (!target.canTalk || target.type === 'feed') {
+      return false;
+    }
+    if (target.type === 'user') {
+      return useSessionStore.getState().peers.some((peer) => peer.kind === 'user' && peer.userId === target.id);
+    }
+    if (target.type === 'guest') {
+      return useSessionStore.getState().peers.some(
+        (peer) => peer.kind === 'guest' && (peer.socketId === String(target.id) || String(peer.userId) === String(target.id)),
+      );
+    }
+    return true;
+  }
+
+  audioPreference(target: TalkTarget): TargetAudioPreference {
+    return (
+      useSessionStore.getState().audioPreferences[talkTargetIdentity(target)] ?? defaultAudioPreference()
+    );
+  }
+
+  setTargetVolume(target: TalkTarget, volume: number): void {
+    this.updateAudioPreference(target, { volume });
+  }
+
+  toggleTargetMuted(target: TalkTarget): void {
+    const current = this.audioPreference(target);
+    this.updateAudioPreference(target, { muted: !current.muted });
+  }
+
+  toggleFeedReception(target: TalkTarget): void {
+    if (target.type !== 'feed') {
+      return;
+    }
+    const key = talkTargetIdentity(target);
+    const current = new Set(useSessionStore.getState().stoppedFeedKeys);
+    if (current.has(key)) {
+      current.delete(key);
+    } else {
+      current.add(key);
+    }
+    const stoppedFeedKeys = [...current];
+    useSessionStore.setState({ stoppedFeedKeys });
+    void this.media?.setStoppedFeedKeys(stoppedFeedKeys, this.consumerContext()).then(() => {
+      this.publishMediaSnapshot();
+    });
+  }
+
+  async pressTalk(target: TalkTarget): Promise<void> {
+    if (!this.canTalkTo(target)) {
+      useSessionStore.setState({
+        error: target.type === 'user' ? 'This target is currently offline.' : 'This target is listen-only.',
+      });
+      return;
+    }
+    if (!this.media) {
+      useSessionStore.setState({ error: 'Media is not ready.' });
+      return;
+    }
+
+    await this.prepareAudioForTalk();
+
+    const key = talkTargetIdentity(target);
+    const state = useSessionStore.getState();
+    if (state.talkLocked && state.talkingTargetKeys.includes(key) && this.overrideFrom === null) {
+      await this.unlockTalk();
+      return;
+    }
+
+    if (state.talkLocked && !state.talkingTargetKeys.includes(key)) {
+      this.overrideFrom = this.lockedTargets.length > 0 ? this.lockedTargets : this.talkingTargets;
+      this.talkingTargets = [target];
+      this.publishTalkState(true);
+      try {
+        await this.media.startTalking(this.talkingTargets, false);
+      } catch (error) {
+        this.failTalk(error);
+      }
+      return;
+    }
+
+    this.talkingTargets = addTalkTarget(this.talkingTargets, target);
+    this.rememberSpokenTarget(target);
+    this.publishTalkState(state.talkLocked);
+    try {
+      await this.media.startTalking(this.talkingTargets, state.talkLocked);
+    } catch (error) {
+      this.failTalk(error);
+    }
+  }
+
+  async lockTalk(target: TalkTarget): Promise<void> {
+    if (!this.canTalkTo(target) || !this.media) {
+      return;
+    }
+    await this.prepareAudioForTalk();
+    this.talkingTargets = addTalkTarget(this.talkingTargets, target);
+    this.rememberSpokenTarget(target);
+    this.lockedTargets = this.talkingTargets;
+    this.overrideFrom = null;
+    this.publishTalkState(true);
+    try {
+      await this.media.startTalking(this.talkingTargets, true);
+      useSessionStore.setState({ statusMessage: `Locked to ${this.talkingTargets.map((item) => item.label).join(', ')}.` });
+    } catch (error) {
+      this.failTalk(error);
+    }
+  }
+
+  async releaseTalk(target?: TalkTarget): Promise<void> {
+    if (this.overrideFrom) {
+      this.talkingTargets = this.overrideFrom;
+      this.lockedTargets = this.overrideFrom;
+      this.overrideFrom = null;
+      this.publishTalkState(true);
+      this.media?.syncTalkTargets(this.talkingTargets, true);
+      useSessionStore.setState({
+        statusMessage: `Locked to ${this.talkingTargets.map((item) => item.label).join(', ')}.`,
+      });
+      return;
+    }
+
+    if (useSessionStore.getState().talkLocked) {
+      return;
+    }
+
+    if (target) {
+      this.talkingTargets = removeTalkTarget(this.talkingTargets, target);
+      if (this.talkingTargets.length > 0) {
+        this.publishTalkState(false);
+        this.media?.syncTalkTargets(this.talkingTargets, false);
+        return;
+      }
+    }
+
+    try {
+      await this.media?.stopTalking();
+    } finally {
+      this.talkingTargets = [];
+      this.lockedTargets = [];
+      this.publishTalkState(false);
+      useSessionStore.setState({ statusMessage: HOLD_HINT });
+    }
+  }
+
+  async pressReply(): Promise<void> {
+    const reply = this.replyTalkTarget();
+    if (!reply) {
+      useSessionStore.setState({ error: 'No one to reply to.' });
+      return;
+    }
+    await this.pressTalk(reply);
+  }
+
+  async lockReply(): Promise<void> {
+    const reply = this.replyTalkTarget();
+    if (!reply) {
+      return;
+    }
+    await this.lockTalk(reply);
+  }
+
+  replyTalkTarget(): TalkTarget | null {
+    return useSessionStore.getState().replyTarget;
+  }
+
+  setLeftHanded(leftHanded: boolean): void {
+    useSessionStore.setState({ leftHanded, statusMessage: slideToLockHint(leftHanded) });
+    const state = useSessionStore.getState();
+    void saveRememberedProfile(
+      {
+        serverAddress: state.serverAddress,
+        username: state.username,
+        rememberPassword: state.rememberPassword,
+        allowInsecureLocalTLS: state.allowInsecureLocalTLS,
+        leftHanded,
+      },
+      this.pendingPassword,
+    );
+  }
+
+  bluetoothButtonCandidates(): TalkTarget[] {
+    return bleTalkCandidates(useSessionStore.getState().targets);
+  }
+
+  bluetoothButtonSelection(): BleTargetSelection {
+    return bleSelectionFromState(useSessionStore.getState());
+  }
+
+  setBluetoothButtonTarget(selection: BleTargetSelection): void {
+    useSessionStore.setState({
+      ...bleFieldsFromSelection(selection, useSessionStore.getState().bleShortPressLocks),
+      statusMessage: `Bluetooth Button target set to ${describeBleTarget(selection)}.`,
+    });
+    this.persistBlePreferences();
+  }
+
+  setBluetoothButtonShortPressLocks(enabled: boolean): void {
+    useSessionStore.setState({
+      bleShortPressLocks: enabled,
+      statusMessage: enabled
+        ? 'Bluetooth Button short press now locks talk.'
+        : 'Bluetooth Button short press lock disabled.',
+    });
+    this.persistBlePreferences();
+  }
+
+  async connectBluetoothButton(): Promise<void> {
+    await requestAndroidBlePermissions();
+    const state = await scanAndConnectBle();
+    this.publishBleState(state);
+  }
+
+  async disconnectBluetoothButton(): Promise<void> {
+    const state = await disconnectBle();
+    this.publishBleState(state);
+    await this.syncForegroundService();
+  }
+
+  async openBatteryEducation(): Promise<void> {
+    const opened = await openBatterySettings();
+    useSessionStore.setState({
+      statusMessage: opened
+        ? 'Opened battery settings. Set TalkToMe to Unrestricted if the OEM offers it.'
+        : 'Could not open battery settings from this build.',
+    });
+  }
+
+  private rememberSpokenTarget(target: TalkTarget): void {
+    useSessionStore.setState({ replyTarget: target });
+  }
+
+  private refreshReplyTarget(): void {
+    const state = useSessionStore.getState();
+    const replyTarget = resolveReplyTalkTarget({
+      incoming: state.incoming,
+      targets: state.targets,
+      peers: state.peers,
+      lastReply: state.replyTarget,
+    });
+    useSessionStore.setState({ replyTarget });
+    const incomingName = latestIncomingName(state.incoming);
+    void updatePttRemoteParticipant(incomingName ?? replyTarget?.label ?? null);
+  }
+
+  private async unlockTalk(): Promise<void> {
+    try {
+      await this.media?.stopTalking();
+    } finally {
+      this.talkingTargets = [];
+      this.lockedTargets = [];
+      this.overrideFrom = null;
+      this.publishTalkState(false);
+      useSessionStore.setState({ statusMessage: HOLD_HINT });
+    }
+  }
+
+  private failTalk(error: unknown): void {
+    this.talkingTargets = [];
+    this.lockedTargets = [];
+    this.overrideFrom = null;
+    this.publishTalkState(false);
+    useSessionStore.setState({
+      error: error instanceof Error ? error.message : String(error),
+      statusMessage: 'PTT could not start.',
+    });
+  }
+
+  private publishTalkState(locked: boolean): void {
+    const keys = talkTargetKeys(this.talkingTargets);
+    useSessionStore.setState({
+      talking: this.talkingTargets.length > 0,
+      talkLocked: locked && this.talkingTargets.length > 0,
+      talkingTargetKey: keys[0] ?? null,
+      talkingTargetKeys: keys,
+      error: null,
+      statusMessage:
+        this.talkingTargets.length > 0
+          ? locked
+            ? `Locked to ${this.talkingTargets.map((item) => item.label).join(', ')}.`
+            : `Talking to ${this.talkingTargets.map((item) => item.label).join(', ')}…`
+          : HOLD_HINT,
+    });
+  }
+
+  private async enterOperator(production: Production | null): Promise<void> {
+    const identity = useSessionStore.getState().identity;
+    if (!identity || !this.api || !this.signaling) {
+      throw new Error('Not signed in.');
+    }
+
+    useSessionStore.setState({
+      status: 'connecting',
+      statusMessage: 'Loading targets…',
+      productionId: production?.id ?? null,
+      productionName: production?.name ?? (useSessionStore.getState().productions.length > 0 ? 'Default' : null),
+      error: null,
+    });
+
+    const targets = await this.loadTargets(identity, production?.id ?? null);
+
+    if (!this.media) {
+      this.media = new MediaEngine(this.signaling);
+      this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
+      useSessionStore.setState({ statusMessage: 'Starting media…' });
+      await this.media.start();
+      try {
+        await this.media.warmTalkProducer();
+      } catch (error) {
+        useSessionStore.setState({
+          statusMessage: `Microphone not ready: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+    } else {
+      this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
+    }
+
+    const producers = await this.signaling.requestActiveProducers();
+    await this.media.syncProducers(producers, this.consumerContext());
+    this.publishMediaSnapshot();
+
+    useSessionStore.setState({
+      status: 'ready',
+      operatorReady: true,
+      targets,
+      talking: false,
+      talkLocked: false,
+      talkingTargetKey: null,
+      talkingTargetKeys: [],
+      statusMessage: HOLD_HINT,
+    });
+    this.refreshReplyTarget();
+    await this.syncAudioSession(AppState.currentState);
+    await this.syncForegroundService();
+    await this.syncSystemPtt();
+  }
+
+  private async loadTargets(identity: OperatorIdentity, productionId: number | null): Promise<TalkTarget[]> {
+    if (identity.kind === 'guest') {
+      return this.requireApi().fetchGuestTargets(productionId);
+    }
+    return this.requireApi().fetchTargets(Number(identity.id), productionId);
+  }
+
+  private updateAudioPreference(target: TalkTarget, patch: Partial<TargetAudioPreference>): void {
+    const key = talkTargetIdentity(target);
+    const next = {
+      ...useSessionStore.getState().audioPreferences,
+      [key]: normalizeAudioPreference({
+        ...this.audioPreference(target),
+        ...patch,
+      }),
+    };
+    useSessionStore.setState({ audioPreferences: next });
+    this.media?.setAudioPreferences(next);
+    void saveAudioPreferences(next);
+  }
+
+  private publishMediaSnapshot(): void {
+    useSessionStore.setState({
+      overBudget: this.media?.overBudget ?? false,
+      activeRemoteCount: this.media?.activeRemoteCount ?? 0,
+      speakingTargetKeys: this.media?.speakingTargetKeys ?? [],
+    });
+  }
+
+  private bindSignaling(signaling: SignalingClient): void {
+    signaling.handlers = {
+      onStateChange: (state) => {
+        if (state.status === 'connected') {
+          useSessionStore.setState({ signalingLabel: `connected ${state.socketId ?? ''}`.trim() });
+        } else if (state.status === 'connecting') {
+          useSessionStore.setState({ signalingLabel: 'reconnecting' });
+        } else if (state.status === 'failed') {
+          useSessionStore.setState({ signalingLabel: `failed: ${state.message}` });
+        } else {
+          useSessionStore.setState({ signalingLabel: 'disconnected' });
+        }
+      },
+      onReconnect: () => {
+        void this.handleReconnect();
+      },
+      onUserList: (peers) => {
+        useSessionStore.setState({ peers });
+      },
+      onSessionKicked: (info) => {
+        const message =
+          info.reason === 'duplicate-login'
+            ? 'This session was disconnected because another login took over.'
+            : 'The session was disconnected by the server.';
+        void this.logout(message);
+      },
+      onTargetsUpdated: () => {
+        void this.refreshTargets();
+      },
+      onIncomingTalkState: (incoming) => {
+        useSessionStore.setState({ incoming });
+        this.refreshReplyTarget();
+      },
+      onProducerStarted: (producer) => {
+        void this.media?.consumeProducer(producer, this.consumerContext()).then(() => {
+          this.publishMediaSnapshot();
+        });
+      },
+      onProducerClosed: (producer) => {
+        void this.media?.dropProducer(producer.producerId).then(() => {
+          this.publishMediaSnapshot();
+        });
+      },
+    };
+  }
+
+  private async handleReconnect(): Promise<void> {
+    if (this.reconnecting) {
+      return;
+    }
+    this.reconnecting = true;
+    useSessionStore.setState({ statusMessage: 'Reconnecting…' });
+    try {
+      const identity = useSessionStore.getState().identity;
+      if (!identity || !this.signaling) {
+        return;
+      }
+      let register = await this.signaling.register(identity, false);
+      if (isRegisterConflict(register)) {
+        const sameStaleSocket =
+          Boolean(this.lastSocketId) && register.existing?.socketId === this.lastSocketId;
+        if (!sameStaleSocket) {
+          await this.logout('Could not re-register after reconnect.');
+          return;
+        }
+        register = await this.signaling.register(identity, true);
+      }
+      if (!isRegisterOk(register) && identity.kind === 'user' && this.pendingPassword) {
+        await this.reauthenticateUser();
+        return;
+      }
+      if (!isRegisterOk(register)) {
+        await this.logout('Could not re-register after reconnect.');
+        return;
+      }
+      await this.rebuildMediaAfterReconnect();
+    } catch (error) {
+      if (useSessionStore.getState().identity?.kind === 'user' && this.pendingPassword) {
+        try {
+          await this.reauthenticateUser();
+          return;
+        } catch {
+          // fall through
+        }
+      }
+      useSessionStore.setState({
+        error: error instanceof Error ? error.message : String(error),
+        statusMessage: 'Reconnect failed. Retrying…',
+      });
+    } finally {
+      this.reconnecting = false;
+    }
+  }
+
+  private async reauthenticateUser(): Promise<void> {
+    const state = useSessionStore.getState();
+    await this.login({
+      serverAddress: state.serverAddress,
+      username: state.username,
+      password: this.pendingPassword ?? '',
+      rememberPassword: state.rememberPassword,
+      force: true,
+    });
+  }
+
+  private async rebuildMediaAfterReconnect(): Promise<void> {
+    if (!this.signaling) {
+      return;
+    }
+    this.lastSocketId = this.signaling.socketId;
+    const locked = useSessionStore.getState().talkLocked;
+    const resumeTargets = locked ? this.lockedTargets : [];
+    try {
+      await this.media?.stop();
+    } catch {
+      // ignore
+    }
+    this.media = new MediaEngine(this.signaling);
+    this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
+    await this.media.start();
+    await this.media.warmTalkProducer();
+    const producers = await this.signaling.requestActiveProducers();
+    await this.media.syncProducers(producers, this.consumerContext());
+    this.publishMediaSnapshot();
+    await this.syncAudioSession(AppState.currentState);
+    await this.syncSystemPtt();
+    if (resumeTargets.length > 0) {
+      await this.prepareAudioForTalk();
+      this.talkingTargets = resumeTargets;
+      await this.media.startTalking(resumeTargets, true);
+      this.publishTalkState(true);
+    }
+    useSessionStore.setState({
+      status: useSessionStore.getState().operatorReady ? 'ready' : useSessionStore.getState().status,
+      statusMessage: resumeTargets.length > 0 ? useSessionStore.getState().statusMessage : 'Reconnected.',
+    });
+  }
+
+  private async refreshTargets(): Promise<void> {
+    const identity = useSessionStore.getState().identity;
+    if (!identity || !this.api) {
+      return;
+    }
+    const targets = await this.loadTargets(identity, useSessionStore.getState().productionId);
+    useSessionStore.setState({ targets });
+    this.refreshReplyTarget();
+  }
+
+  private consumerContext() {
+    const state = useSessionStore.getState();
+    return { talkTargetKey: state.talkingTargetKey };
+  }
+
+  private beginConnect(serverAddress: string, username: string, rememberPassword: boolean): void {
+    useSessionStore.setState({
+      status: 'connecting',
+      error: null,
+      conflictName: undefined,
+      pendingCertificate: null,
+      statusMessage: 'Contacting server…',
+      serverAddress,
+      username,
+      rememberPassword,
+    });
+    this.prepareHttp(serverAddress);
+  }
+
+  private prepareHttp(serverAddress: string): void {
+    const parsed = parseServerAddress(serverAddress);
+    this.cookies = {};
+    this.http = new TalkToMeHttp({
+      baseUrl: parsed.baseUrl,
+      getCookies: () => this.cookies,
+      setCookies: (next) => {
+        this.cookies = next;
+      },
+    });
+    this.api = new ApiClient(this.http);
+  }
+
+  private async probeAndHealth(): Promise<void> {
+    const state = useSessionStore.getState();
+    const parsed = parseServerAddress(state.serverAddress);
+    const hostname = new URL(parsed.baseUrl).hostname;
+    try {
+      await this.requireApi().health();
+    } catch (error) {
+      if (looksLikeTlsFailure(error)) {
+        if (state.allowInsecureLocalTLS) {
+          const probe = await probeServerCertificate(parsed.baseUrl);
+          if (probe) {
+            const known = storedPinForHost(probe.hostname);
+            if (known && known.sha256 === probe.sha256.replace(/[^0-9a-fA-F]/g, '').toLowerCase()) {
+              useSessionStore.setState({
+                statusMessage: 'Health check failed; pinned certificate is already trusted. Trying login.',
+              });
+              return;
+            }
+            useSessionStore.setState({
+              status: 'idle',
+              pendingCertificate: probe,
+              error: null,
+              statusMessage: 'This certificate is not in the system trust store.',
+            });
+            throw new TlsUntrustedError(hostname, isLikelyLocalHost(hostname));
+          }
+        }
+        throw new TlsUntrustedError(hostname, isLikelyLocalHost(hostname));
+      }
+      useSessionStore.setState({
+        statusMessage: 'Health check failed; trying login anyway.',
+      });
+    }
+  }
+
+  private async finishIdentity(identity: OperatorIdentity, force: boolean): Promise<void> {
+    const parsed = parseServerAddress(useSessionStore.getState().serverAddress);
+    this.signaling?.disconnect();
+    this.signaling = new SignalingClient(parsed.baseUrl, () => this.cookies);
+    this.bindSignaling(this.signaling);
+
+    useSessionStore.setState({ statusMessage: 'Connecting signaling…' });
+    await this.signaling.connect();
+    const register = await this.signaling.register(identity, force);
+
+    if (isRegisterConflict(register)) {
+      this.signaling.disconnect();
+      this.signaling = null;
+      useSessionStore.setState({
+        status: 'idle',
+        conflictName: register.existing?.name,
+        statusMessage: '',
+      });
+      throw new SessionConflictError(register.existing);
+    }
+    if (!isRegisterOk(register)) {
+      throw new Error('error' in register ? register.error : 'register-user failed');
+    }
+
+    this.lastSocketId = this.signaling.socketId;
+    const productions = Array.isArray(identity.productions) ? identity.productions : [];
+    useSessionStore.setState({
+      identity,
+      productions,
+      productionId: null,
+      productionName: null,
+      operatorReady: false,
+      signalingLabel: 'connected',
+    });
+
+    if (productions.length > 0) {
+      useSessionStore.setState({
+        status: 'choose-production',
+        statusMessage: 'Choose a production',
+      });
+      return;
+    }
+
+    await this.enterOperator(null);
+  }
+
+  private bindHardware(): void {
+    if (this.hardwareBound) {
+      return;
+    }
+    this.hardwareBound = true;
+    subscribeForegroundService({
+      onStopRequested: () => {
+        void this.logout('Session stopped from the notification.');
+      },
+      onStarted: () => {
+        useSessionStore.setState({
+          fgsRunning: true,
+          fgsAvailable: true,
+          capabilityReason: this.capabilityReason({ fgsRunning: true }),
+        });
+      },
+      onStopped: () => {
+        useSessionStore.setState({
+          fgsRunning: false,
+          capabilityReason: this.capabilityReason({ fgsRunning: false }),
+        });
+      },
+    });
+    subscribeBleNative({
+      onState: (state) => {
+        this.publishBleState(state);
+        void this.syncForegroundService();
+      },
+      onButton: (pressed) => {
+        void this.handleBleButton(pressed);
+      },
+    });
+    this.appStateSubscription?.remove();
+    this.appStateSubscription = AppState.addEventListener('change', (next) => {
+      void this.syncAudioSession(next);
+    });
+    subscribePttNative({
+      onDiagnostic: (message) => {
+        useSessionStore.setState({ statusMessage: message });
+      },
+      onPushToken: (event) => {
+        void this.registerPttToken(event.token, event.channelUUID);
+      },
+      onBeginTransmitting: () => {
+        void this.pressReply();
+      },
+      onEndTransmitting: () => {
+        void this.releaseTalk();
+      },
+      onAudioActivated: () => {
+        void this.handlePttAudioActivated();
+      },
+      onServiceUpdate: () => {
+        void this.refreshProducersFromPtt();
+      },
+      onJoined: () => {
+        useSessionStore.setState({
+          pttJoined: true,
+          capabilityReason: this.capabilityReason({ pttJoined: true }),
+        });
+      },
+      onLeft: () => {
+        useSessionStore.setState({
+          pttJoined: false,
+          capabilityReason: this.capabilityReason({ pttJoined: false }),
+        });
+      },
+      onIncomingPush: () => {
+        useSessionStore.setState({
+          pttVerified: true,
+          capabilityReason: this.capabilityReason({ pttVerified: true }),
+        });
+      },
+    });
+    useSessionStore.setState({
+      fgsAvailable: foregroundServiceAvailable(),
+      audioSessionAvailable: audioSessionAvailable(),
+      pttAvailable: pttNativeAvailable(),
+    });
+  }
+
+  private publishBleState(state: BleConnectionState): void {
+    useSessionStore.setState({
+      bleKind: state.kind,
+      bleName: state.name ?? '',
+      bleMessage: state.message ?? '',
+    });
+  }
+
+  private async handleBleButton(pressed: boolean): Promise<void> {
+    const action = this.blePolicy.handle(pressed, useSessionStore.getState().bleShortPressLocks);
+    if (!action) {
+      return;
+    }
+    const target = resolveBleTalkTarget({
+      selection: bleSelectionFromState(useSessionStore.getState()),
+      replyTarget: useSessionStore.getState().replyTarget,
+      targets: useSessionStore.getState().targets,
+    });
+    if (!target) {
+      useSessionStore.setState({
+        error:
+          bleSelectionFromState(useSessionStore.getState()).kind === 'reply'
+            ? 'No one to reply to. Pick a Bluetooth Button target in Settings.'
+            : 'Choose a Bluetooth Button target in Settings first.',
+      });
+      return;
+    }
+    if (action === 'startTalk') {
+      await this.pressTalk(target);
+      return;
+    }
+    if (action === 'lockTalk') {
+      await this.lockTalk(target);
+      return;
+    }
+    await this.releaseTalk(target);
+  }
+
+  private async syncForegroundService(): Promise<void> {
+    const state = useSessionStore.getState();
+    if (!shouldStartForegroundService(Platform.OS, state.operatorReady)) {
+      if (state.fgsRunning) {
+        await stopForegroundService();
+      }
+      return;
+    }
+    await requestAndroidSessionPermissions();
+    const includeConnectedDevice = state.bleKind === 'connected' || state.bleKind === 'connecting';
+    if (state.fgsRunning) {
+      await updateForegroundService(includeConnectedDevice);
+      return;
+    }
+    const started = await startForegroundService(includeConnectedDevice);
+    useSessionStore.setState({
+      fgsRunning: started,
+      fgsAvailable: started || foregroundServiceAvailable(),
+      capabilityReason: this.capabilityReason({ fgsRunning: started }),
+    });
+  }
+
+  private async syncAudioSession(appState: AppStateStatus = AppState.currentState): Promise<void> {
+    const state = useSessionStore.getState();
+    const pttEnabled = iosPttEnabled();
+    const available = audioSessionAvailable();
+    if (
+      !shouldOwnAudioSession({
+        platform: Platform.OS,
+        pttEnabled,
+        operatorReady: state.operatorReady,
+      })
+    ) {
+      if (state.audioSessionActive || state.audioKeepalive) {
+        await this.teardownAudioSession();
+      } else {
+        useSessionStore.setState({
+          audioSessionAvailable: available,
+          capabilityReason: this.capabilityReason({ audioSessionAvailable: available }),
+        });
+      }
+      return;
+    }
+
+    if (
+      shouldStartBackgroundKeepalive({
+        platform: Platform.OS,
+        pttEnabled,
+        operatorReady: state.operatorReady,
+        appState,
+      })
+    ) {
+      const started = await startBackgroundKeepalive();
+      useSessionStore.setState({
+        audioSessionAvailable: available,
+        audioSessionActive: started || state.audioSessionActive,
+        audioKeepalive: started,
+        capabilityReason: this.capabilityReason({
+          audioSessionAvailable: available,
+          audioSessionActive: started || state.audioSessionActive,
+          audioKeepalive: started,
+        }),
+      });
+      return;
+    }
+
+    if (state.audioKeepalive) {
+      await stopBackgroundKeepalive();
+    }
+    const active = await activateForIntercom();
+    if (active) {
+      await setWebRTCAudioEnabled(true);
+    }
+    useSessionStore.setState({
+      audioSessionAvailable: available,
+      audioSessionActive: active,
+      audioKeepalive: false,
+      capabilityReason: this.capabilityReason({
+        audioSessionAvailable: available,
+        audioSessionActive: active,
+        audioKeepalive: false,
+      }),
+    });
+  }
+
+  private async prepareAudioForTalk(): Promise<void> {
+    const state = useSessionStore.getState();
+    const ownsSession = shouldOwnAudioSession({
+      platform: Platform.OS,
+      pttEnabled: iosPttEnabled(),
+      operatorReady: state.operatorReady,
+    });
+    if (
+      !shouldReactivateCaptureForTalk({
+        ownsSession,
+        keepalive: state.audioKeepalive,
+        appState: AppState.currentState,
+      })
+    ) {
+      return;
+    }
+    const ok = await reactivateForOutgoingTalkCapture();
+    if (ok) {
+      useSessionStore.setState({
+        audioSessionActive: true,
+        audioKeepalive: false,
+        capabilityReason: this.capabilityReason({ audioSessionActive: true, audioKeepalive: false }),
+      });
+    }
+  }
+
+  private async teardownAudioSession(): Promise<void> {
+    try {
+      await stopBackgroundKeepalive();
+    } catch {
+      // ignore
+    }
+    try {
+      await deactivateAudioSession();
+    } catch {
+      // ignore
+    }
+    useSessionStore.setState({
+      audioSessionActive: false,
+      audioKeepalive: false,
+      capabilityReason: this.capabilityReason({ audioSessionActive: false, audioKeepalive: false }),
+    });
+  }
+
+  private async syncSystemPtt(): Promise<void> {
+    const state = useSessionStore.getState();
+    if (
+      !shouldUseSystemPtt({
+        platform: Platform.OS,
+        pttEnabled: iosPttEnabled(),
+        operatorReady: state.operatorReady,
+        identityKind: state.identity?.kind,
+      })
+    ) {
+      await this.leaveSystemPtt();
+      return;
+    }
+    if (!this.signaling) {
+      return;
+    }
+    try {
+      const bootstrap = parseApplePttBootstrap(await this.signaling.requestApplePttBootstrap());
+      if (!bootstrap.enabled) {
+        this.pttChannelUUID = null;
+        await updatePttChannel(null, null);
+        useSessionStore.setState({
+          pttAvailable: pttNativeAvailable(),
+          pttBootstrapEnabled: false,
+          pttJoined: false,
+          pttChannelName: '',
+          capabilityReason: this.capabilityReason({ pttBootstrapEnabled: false, pttJoined: false }),
+        });
+        return;
+      }
+      this.pttChannelUUID = bootstrap.channel.channelUUID;
+      await updatePttChannel(bootstrap.channel.channelUUID, bootstrap.channel.channelName);
+      useSessionStore.setState({
+        pttAvailable: pttNativeAvailable(),
+        pttBootstrapEnabled: true,
+        pttChannelName: bootstrap.channel.channelName,
+        capabilityReason: this.capabilityReason({ pttBootstrapEnabled: true }),
+      });
+    } catch (error) {
+      useSessionStore.setState({
+        pttAvailable: pttNativeAvailable(),
+        statusMessage: error instanceof Error ? error.message : String(error),
+        capabilityReason: this.capabilityReason(),
+      });
+    }
+  }
+
+  private async leaveSystemPtt(): Promise<void> {
+    const channelUUID = this.pttChannelUUID;
+    this.pttChannelUUID = null;
+    if (channelUUID && this.signaling) {
+      try {
+        await this.signaling.unregisterApplePttPushToken(channelUUID);
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      await leavePttChannel();
+    } catch {
+      // ignore
+    }
+    useSessionStore.setState({
+      pttJoined: false,
+      pttBootstrapEnabled: false,
+      pttVerified: false,
+      pttChannelName: '',
+    });
+  }
+
+  private async registerPttToken(token: string, channelUUID: string): Promise<void> {
+    if (!this.signaling || !isHexPushToken(token)) {
+      return;
+    }
+    try {
+      await this.signaling.registerApplePttPushToken(channelUUID, token);
+      useSessionStore.setState({ statusMessage: 'System PTT push token registered.' });
+    } catch (error) {
+      useSessionStore.setState({
+        statusMessage:
+          error instanceof Error ? error.message : 'System PTT push token registration failed.',
+      });
+    }
+  }
+
+  private async handlePttAudioActivated(): Promise<void> {
+    await prepareForSystemManagedIntercom();
+    await setWebRTCAudioEnabled(true);
+    await this.refreshProducersFromPtt();
+  }
+
+  private async refreshProducersFromPtt(): Promise<void> {
+    if (!this.signaling || !this.media) {
+      return;
+    }
+    try {
+      const producers = await this.signaling.requestActiveProducers();
+      await this.media.syncProducers(producers, this.consumerContext());
+      this.publishMediaSnapshot();
+    } catch {
+      // Keep the channel; media will retry on the next event.
+    }
+  }
+
+  private capabilityReason(
+    overrides: {
+      fgsRunning?: boolean;
+      audioSessionAvailable?: boolean;
+      audioSessionActive?: boolean;
+      audioKeepalive?: boolean;
+      pttAvailable?: boolean;
+      pttBootstrapEnabled?: boolean;
+      pttJoined?: boolean;
+      pttVerified?: boolean;
+    } = {},
+  ): string {
+    const state = useSessionStore.getState();
+    return advertisedCapability({
+      fgsRunning: overrides.fgsRunning ?? state.fgsRunning,
+      audioSessionAvailable: overrides.audioSessionAvailable ?? state.audioSessionAvailable,
+      audioSessionActive: overrides.audioSessionActive ?? state.audioSessionActive,
+      audioKeepalive: overrides.audioKeepalive ?? state.audioKeepalive,
+      pttAvailable: overrides.pttAvailable ?? state.pttAvailable,
+      pttBootstrapEnabled: overrides.pttBootstrapEnabled ?? state.pttBootstrapEnabled,
+      pttJoined: overrides.pttJoined ?? state.pttJoined,
+      pttVerified: overrides.pttVerified ?? state.pttVerified,
+    }).reason;
+  }
+
+  private persistBlePreferences(): void {
+    const state = useSessionStore.getState();
+    void saveBlePreferences({
+      shortPressLocksTalk: state.bleShortPressLocks,
+      target: bleSelectionFromState(state),
+    });
+  }
+
+  private requireApi(): ApiClient {
+    if (!this.api) {
+      throw new Error('Not signed in.');
+    }
+    return this.api;
+  }
+}
+
+function bleSelectionFromState(state: SessionUiState): BleTargetSelection {
+  if (state.bleTargetKind !== 'target' || !state.bleTargetType || state.bleTargetId === '') {
+    return DEFAULT_BLE_TARGET;
+  }
+  return {
+    kind: 'target',
+    type: state.bleTargetType as TalkTarget['type'],
+    id: state.bleTargetId,
+    label: state.bleTargetLabel || state.bleTargetId,
+  };
+}
+
+function bleFieldsFromSelection(
+  selection: BleTargetSelection,
+  shortPressLocks: boolean,
+): Pick<
+  SessionUiState,
+  | 'bleShortPressLocks'
+  | 'bleTargetKind'
+  | 'bleTargetType'
+  | 'bleTargetId'
+  | 'bleTargetLabel'
+> {
+  if (selection.kind === 'reply') {
+    return {
+      bleShortPressLocks: shortPressLocks,
+      bleTargetKind: 'reply',
+      bleTargetType: '',
+      bleTargetId: '',
+      bleTargetLabel: '',
+    };
+  }
+  return {
+    bleShortPressLocks: shortPressLocks,
+    bleTargetKind: 'target',
+    bleTargetType: selection.type,
+    bleTargetId: String(selection.id),
+    bleTargetLabel: selection.label,
+  };
+}
+
+function latestIncomingName(incoming: IncomingTalkState): string | null {
+  const latest = incoming.addressedNow
+    .slice()
+    .sort((left, right) => (right.at ?? 0) - (left.at ?? 0))[0];
+  const name = latest?.fromName?.trim();
+  return name ? name : null;
+}
+
+function looksLikeTlsFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /ssl|tls|cert|trust|self.signed|handshake/i.test(message);
+}
+
+export const session = new SessionController();

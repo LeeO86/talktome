@@ -1,0 +1,37 @@
+// Derived from talktome-apple IntercomProtocol.SocketEvent @ 004d6e76 by Daniel Jocher.
+
+export const SocketEvent = {
+  registerUser: 'register-user',
+  requestSnapshot: 'request-snapshot',
+  userList: 'user-list',
+  userTargetsUpdated: 'user-targets-updated',
+  requestActiveProducers: 'request-active-producers',
+  requestApplePttBootstrap: 'request-apple-ptt-bootstrap',
+  registerApplePttPushToken: 'register-apple-ptt-push-token',
+  unregisterApplePttPushToken: 'unregister-apple-ptt-push-token',
+  pttState: 'ptt-state',
+  talkTargetsUpdated: 'talk-targets-updated',
+  incomingTalkState: 'incoming-talk-state',
+  newProducer: 'new-producer',
+  producerClosed: 'producer-closed',
+  consumerClosed: 'consumer-closed',
+  conferenceList: 'conference-list',
+  conferenceMembersUpdated: 'conference-members-updated',
+  cutCamera: 'cut-camera',
+  sessionKicked: 'session-kicked',
+  getRouterRtpCapabilities: 'get-router-rtp-capabilities',
+  createSendTransport: 'create-send-transport',
+  createRecvTransport: 'create-recv-transport',
+  connectSendTransport: 'connect-send-transport',
+  connectRecvTransport: 'connect-recv-transport',
+  produce: 'produce',
+  pauseProducer: 'pause-producer',
+  resumeProducer: 'resume-producer',
+  producerClose: 'producer-close',
+  consume: 'consume',
+  resumeConsumer: 'resume-consumer',
+  closeConsumer: 'close-consumer',
+  userLogout: 'user-logout',
+} as const;
+
+export type SocketEventName = (typeof SocketEvent)[keyof typeof SocketEvent];

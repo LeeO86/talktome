@@ -1,0 +1,71 @@
+import type { ExpoConfig } from 'expo/config';
+
+const enableIosPtt = process.env.EXPO_PUBLIC_ENABLE_IOS_PTT === '1';
+
+const config: ExpoConfig = {
+  name: 'TalkToMe',
+  slug: 'talktome-mobile',
+  version: '0.1.0',
+  orientation: 'default',
+  icon: './assets/icon.png',
+  userInterfaceStyle: 'dark',
+  scheme: 'talktome',
+  ios: {
+    supportsTablet: true,
+    bundleIdentifier: 'io.github.leeo86.talktome-mobile',
+    infoPlist: {
+      NSMicrophoneUsageDescription:
+        'TalkToMe uses the microphone so you can talk to other operators.',
+      NSLocalNetworkUsageDescription:
+        'TalkToMe connects to your self-hosted intercom on the local network.',
+      NSBluetoothAlwaysUsageDescription: 'TalkToMe connects to wireless PTT buttons.',
+      UIBackgroundModes: ['audio', 'bluetooth-central'],
+    },
+  },
+  android: {
+    // Android Java packages cannot contain a hyphen.
+    package: 'io.github.leeo86.talktomemobile',
+    adaptiveIcon: {
+      backgroundColor: '#0B1220',
+      foregroundImage: './assets/android-icon-foreground.png',
+      backgroundImage: './assets/android-icon-background.png',
+      monochromeImage: './assets/android-icon-monochrome.png',
+    },
+    permissions: [
+      'RECORD_AUDIO',
+      'MODIFY_AUDIO_SETTINGS',
+      'INTERNET',
+      'FOREGROUND_SERVICE',
+      'FOREGROUND_SERVICE_MICROPHONE',
+      'FOREGROUND_SERVICE_MEDIA_PLAYBACK',
+      'FOREGROUND_SERVICE_CONNECTED_DEVICE',
+      'POST_NOTIFICATIONS',
+      'BLUETOOTH',
+      'BLUETOOTH_ADMIN',
+      'BLUETOOTH_SCAN',
+      'BLUETOOTH_CONNECT',
+      'ACCESS_FINE_LOCATION',
+    ],
+    predictiveBackGestureEnabled: false,
+  },
+  plugins: [
+    '@preeternal/react-native-cookie-manager',
+    [
+      '@config-plugins/react-native-webrtc',
+      {
+        cameraPermission:
+          'TalkToMe does not use the camera in Phase 0. This permission is required by the WebRTC plugin.',
+        microphonePermission:
+          'TalkToMe uses the microphone so you can talk to other operators.',
+      },
+    ],
+    './plugins/withTalkToMeFgs',
+    './plugins/withTalkToMeBle',
+    './plugins/withTalkToMePtt',
+  ],
+  extra: {
+    enableIosPtt,
+  },
+};
+
+export default config;
