@@ -63,6 +63,11 @@ lerna-debug.log*
 
 # Generated runtime assets
 public/socket.io.js
+build-version.json
+bridge-client/tauri.local-version.json
+bridge-client/tauri.release-version.json
+server-app/tauri.local-version.json
+server-app/tauri.release-version.json
 
 # local build artifacts
 talktome_win64_bundle/

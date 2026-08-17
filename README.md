@@ -86,6 +86,16 @@ xattr -dr com.apple.quarantine "/Applications/Talktome Bridge.app"
 Use the first command for the Talktome server app and the second command for the
 native Bridge app.
 
+### Versioning and releases
+
+Git release tags are the single source of truth for every Server, Bridge and
+Docker build. Create a tag such as `v1.2.5` to produce version `1.2.5`; commits
+after the latest tag receive a development version such as `1.2.5-dev.3`.
+Package, Cargo and Tauri manifests intentionally contain only the neutral
+`0.0.0` placeholder and must not be edited for a release. The shared
+`scripts/resolve-build-version.js` resolver supplies the version to local and
+GitHub builds.
+
 ## Configuration
 
 On first interactive start, Talktome creates `config.json` and asks for:

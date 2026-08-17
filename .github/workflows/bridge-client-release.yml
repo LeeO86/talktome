@@ -13,6 +13,7 @@ on:
     paths:
       - ".github/workflows/bridge-client-release.yml"
       - "bridge-client/**"
+      - "scripts/resolve-build-version.js"
 
 concurrency:
   group: bridge-builds-${{ github.workflow }}-${{ github.ref }}
@@ -45,6 +46,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -65,35 +68,12 @@ jobs:
         working-directory: bridge-client
         run: npm ci
 
-      - name: Determine release version
+      - name: Resolve version from Git tags
         shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-          else
-            PACKAGE_VERSION="$(node -p "require('./bridge-client/package.json').version")"
-            VERSION="v${PACKAGE_VERSION}"
-          fi
-
-          APP_VERSION="${VERSION#v}"
-          if [[ ! "${APP_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-            printf 'Invalid Bridge app version: %s\n' "${APP_VERSION}" >&2
-            exit 1
-          fi
-
-          SAFE_VERSION="${VERSION//\//-}"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
-          echo "SAFE_VERSION=$SAFE_VERSION" >> "$GITHUB_ENV"
-          printf '{"version":"%s"}\n' "$APP_VERSION" > bridge-client/tauri.release-version.json
-
-      - name: Set macOS Bridge bundle version
-        if: matrix.ffmpeg_source == 'macos-lgpl'
-        shell: bash
-        run: |
-          PLIST="bridge-client/src-tauri/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$PLIST"
+        run: >-
+          node scripts/resolve-build-version.js
+          --github-env "$GITHUB_ENV"
+          --tauri-config bridge-client/tauri.release-version.json
 
       - name: Restore LGPL FFmpeg sidecar
         id: ffmpeg-sidecar
