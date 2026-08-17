@@ -611,14 +611,6 @@ function findInventoryDevice(direction, assignment) {
   )) || null;
 }
 
-function validateManagedPortInventory(port) {
-  if (!currentInventory?.devices?.length) return;
-  const unavailableReason = getManagedPortUnavailableReason(port);
-  if (unavailableReason) {
-    throw new Error(unavailableReason);
-  }
-}
-
 function getManagedAssignmentUnavailableReason(direction, assignment) {
   const label = direction === "output" ? "Output" : "Input";
   if (!assignment?.deviceId) {
@@ -643,19 +635,73 @@ function getManagedAssignmentUnavailableReason(direction, assignment) {
   return "";
 }
 
-function getManagedPortUnavailableReason(port) {
-  if (!currentInventory?.devices?.length) return "";
-  return getManagedAssignmentUnavailableReason("input", port.input)
-    || getManagedAssignmentUnavailableReason("output", port.output);
+function getManagedOutputUnavailableReason(port) {
+  if (!currentInventory?.devices?.length || !bridgePortHasOutput(port)) return "";
+  return getManagedAssignmentUnavailableReason("output", port.output);
+}
+
+function setManagedInputError(session, error) {
+  const classified = classifyManagedPortError(error);
+  recordManagedLifecycle(session, "input-error", classified.detail);
+  session.inputError = classified.detail;
+  session.inputRetryable = classified.retryable;
+  session.inputRetryAt = classified.retryable
+    ? Date.now() + getManagedRetryDelay(session)
+    : null;
+}
+
+function clearManagedInputError(session) {
+  session.inputError = null;
+  session.inputRetryAt = null;
+  session.inputRetryable = true;
+}
+
+async function stopManagedInputPath(session, reason = "input-stop") {
+  if (session.talking) {
+    await applyManagedTalkState(session, {
+      talking: false,
+      targets: [],
+      source: session.talkSource || "external"
+    }).catch((error) => {
+      recordManagedLifecycle(session, "input-talk-release-error", String(error?.message || error));
+    });
+  }
+  await invoke("stop_bridge_input", { streamId: session.inputStreamId }).catch(() => {});
+  session.producerId = null;
+  session.inputStartedAt = 0;
+  session.inputReady = false;
+  session.inputStarting = false;
+  if (session.levelTriggerState) {
+    session.levelTriggerState.revision = Number(session.levelTriggerState.revision || 0) + 1;
+    session.levelTriggerState.active = false;
+    session.levelTriggerState.aboveSince = 0;
+    session.levelTriggerState.belowSince = 0;
+    session.levelTriggerState.pending = false;
+    session.levelTriggerState.releaseRequired = false;
+  }
+  recordManagedLifecycle(session, "input-stopped", reason);
 }
 
 async function auditManagedSessionDevices() {
   for (const session of managedSessions.values()) {
     if (!session.ready || session.starting) continue;
-    const unavailableReason = getManagedPortUnavailableReason(session.port);
-    if (!unavailableReason) continue;
-    await stopManagedSession(session, { remove: false, reason: "device-unavailable" });
-    setManagedSessionError(session, new Error(unavailableReason));
+    const outputUnavailableReason = getManagedOutputUnavailableReason(session.port);
+    if (outputUnavailableReason) {
+      await stopManagedSession(session, { remove: false, reason: "output-device-unavailable" });
+      setManagedSessionError(session, new Error(outputUnavailableReason));
+      continue;
+    }
+
+    if (!currentInventory?.devices?.length) continue;
+    const inputUnavailableReason = getManagedAssignmentUnavailableReason("input", session.port.input);
+    if (inputUnavailableReason) {
+      if (session.inputReady || session.inputStarting) {
+        await stopManagedInputPath(session, "input-device-unavailable");
+      }
+      if (session.inputError !== inputUnavailableReason) {
+        setManagedInputError(session, new Error(inputUnavailableReason));
+      }
+    }
   }
 }
 
@@ -680,7 +726,7 @@ async function auditManagedNativeMediaStatus(status = null) {
 
   for (const session of managedSessions.values()) {
     if (!session.ready || session.starting) continue;
-    const inputError = inputErrors.get(session.inputStreamId);
+    const inputError = session.inputReady ? inputErrors.get(session.inputStreamId) : null;
     let outputError = null;
     for (const output of session.outputs.values()) {
       const stats = outputStats.get(output.streamId);
@@ -691,10 +737,14 @@ async function auditManagedNativeMediaStatus(status = null) {
       outputError = outputErrors.get(output.streamId);
       if (outputError) break;
     }
-    const message = inputError || outputError;
-    if (!message) continue;
-    await stopManagedSession(session, { remove: false, reason: "native-media-error" });
-    setManagedSessionError(session, new Error(message));
+    if (inputError) {
+      await stopManagedInputPath(session, "native-input-error");
+      setManagedInputError(session, new Error(inputError));
+    }
+    if (outputError) {
+      await stopManagedSession(session, { remove: false, reason: "native-output-error" });
+      setManagedSessionError(session, new Error(outputError));
+    }
   }
 }
 
@@ -792,6 +842,12 @@ function getManagedSessionState(session, port) {
     };
   }
   if (!session.ready) return { label: "Waiting", className: "warning" };
+  if (session.inputError) {
+    return {
+      label: "Input unavailable",
+      className: session.inputRetryable === false ? "error" : "warning"
+    };
+  }
   if (port.kind === "feed") return { label: "Streaming", className: "" };
   if (session.talking) return { label: "Transmitting", className: "" };
   const addressedNow = Array.isArray(session.addressedNow) ? session.addressedNow : [];
@@ -1340,7 +1396,9 @@ function renderManagedBridgePorts() {
     const state = editState.saving
       ? { label: "Saving", className: "warning" }
       : getManagedSessionState(session, port);
-    const sessionError = session?.error && session.error !== state.label ? session.error : "";
+    const sessionError = (session?.error || session?.inputError) !== state.label
+      ? (session?.error || session?.inputError || "")
+      : "";
     return `
       <article class="managed-port-card" data-managed-port-key="${escapeHtml(key)}">
       <div class="managed-port-title">
@@ -1695,6 +1753,9 @@ async function performManagedTalkState(session, { talking, targets, lockActive =
     throw new Error("Feed bridge ports do not support talk state");
   }
   if (talking) {
+    if (!session.inputReady || !session.producerId) {
+      throw new Error(session.inputError || "Input device is unavailable");
+    }
     await bridgeApi("POST", managedSessionPath(session, "/talk-state"), {
       talking: true,
       targets,
@@ -1706,11 +1767,13 @@ async function performManagedTalkState(session, { talking, targets, lockActive =
       {}
     );
   } else {
-    await bridgeApi(
-      "POST",
-      managedSessionPath(session, `/producers/${encodeURIComponent(session.producerId)}/pause`),
-      {}
-    );
+    if (session.producerId) {
+      await bridgeApi(
+        "POST",
+        managedSessionPath(session, `/producers/${encodeURIComponent(session.producerId)}/pause`),
+        {}
+      );
+    }
     await bridgeApi("POST", managedSessionPath(session, "/talk-state"), {
       talking: false,
       targets: [],
@@ -1792,6 +1855,13 @@ async function handleManagedTalkCommand(session, payload) {
     }
 
     if (payload.action === "press" || payload.action === "lock-toggle") {
+      if (!session.inputReady || !session.producerId) {
+        await sendManagedCommandResult(session, payload, {
+          ok: false,
+          reason: "input-device-unavailable"
+        });
+        return;
+      }
       const lockActive = payload.action === "lock-toggle";
       await applyManagedTalkState(session, { talking: true, targets, lockActive });
       await sendManagedCommandResult(session, payload, {
@@ -2145,6 +2215,7 @@ async function processManagedLevelTriggers() {
   if (managedLevelTriggerRunning || !invoke || !managedSessions.size) return;
   const sessions = [...managedSessions.values()].filter((session) => (
     session.ready
+    && session.inputReady
     && !session.starting
     && isManagedLevelTriggerEnabledForSession(session)
   ));
@@ -2283,6 +2354,12 @@ function createManagedSession(port) {
     sessionId: null,
     producerId: null,
     inputStreamId: `${port.id}:input`,
+    inputReady: false,
+    inputStarting: false,
+    inputStartedAt: 0,
+    inputError: null,
+    inputRetryAt: null,
+    inputRetryable: true,
     outputEndpointId: null,
     outputs: new Map(),
     ready: false,
@@ -2314,6 +2391,60 @@ function createManagedSession(port) {
     error: null,
     lifecycleEvents: []
   };
+}
+
+async function startManagedInputPath(session, { reason = "input-start" } = {}) {
+  if (session.inputReady || session.inputStarting) return session.inputReady;
+  if (!session.sessionId) throw new Error("Bridge session is not ready for input");
+
+  if (currentInventory?.devices?.length) {
+    const unavailableReason = getManagedAssignmentUnavailableReason("input", session.port.input);
+    if (unavailableReason) {
+      setManagedInputError(session, new Error(unavailableReason));
+      return false;
+    }
+  }
+
+  session.inputStarting = true;
+  session.inputRetryAt = null;
+  try {
+    const transport = await bridgeApi(
+      "POST",
+      managedSessionPath(session, "/plain-send-transport"),
+      {}
+    );
+    const rtp = buildProducerRtpParameters(transport);
+    await invoke("start_bridge_input", {
+      request: {
+        streamId: session.inputStreamId,
+        assignment: session.port.input,
+        rtpIp: transport.ip,
+        rtpPort: Number(transport.port),
+        payloadType: rtp.payloadType,
+        ssrc: rtp.ssrc
+      }
+    });
+    session.inputStartedAt = Date.now();
+    const producer = await bridgeApi("POST", managedSessionPath(session, "/producers"), rtp);
+    session.producerId = producer.id;
+    session.inputReady = true;
+    clearManagedInputError(session);
+    recordManagedLifecycle(session, "producer-started", `reason=${reason}`);
+    return true;
+  } catch (error) {
+    await invoke("stop_bridge_input", { streamId: session.inputStreamId }).catch(() => {});
+    session.producerId = null;
+    session.inputStartedAt = 0;
+    session.inputReady = false;
+    const classified = classifyManagedPortError(error);
+    if (["Server offline", "Reconnecting", "Session replaced"].includes(classified.label)) {
+      throw error;
+    }
+    setManagedInputError(session, error);
+    return false;
+  } finally {
+    session.inputStarting = false;
+  }
 }
 
 async function startManagedSession(port, { reuse = false, silentRetry = false, reason = "initial-start" } = {}) {
@@ -2355,7 +2486,10 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
   }
 
   try {
-    validateManagedPortInventory(port);
+    const outputUnavailableReason = getManagedOutputUnavailableReason(port);
+    if (outputUnavailableReason) {
+      throw new Error(outputUnavailableReason);
+    }
     const registered = await bridgeApi("POST", "/api/v1/bridge/sessions", {
       bridgeId: managedBridgeConfig.bridgeId,
       portId: port.id,
@@ -2364,25 +2498,7 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
     });
     session.sessionId = registered.sessionId;
     recordManagedLifecycle(session, "session-created", `reason=${reason}`);
-    const transport = await bridgeApi(
-      "POST",
-      managedSessionPath(session, "/plain-send-transport"),
-      {}
-    );
-    const rtp = buildProducerRtpParameters(transport);
-    await invoke("start_bridge_input", {
-      request: {
-        streamId: session.inputStreamId,
-        assignment: port.input,
-        rtpIp: transport.ip,
-        rtpPort: Number(transport.port),
-        payloadType: rtp.payloadType,
-        ssrc: rtp.ssrc
-      }
-    });
-    session.inputStartedAt = Date.now();
-    const producer = await bridgeApi("POST", managedSessionPath(session, "/producers"), rtp);
-    session.producerId = producer.id;
+    await startManagedInputPath(session, { reason });
     if (bridgePortHasPersistentNetworkOutput(port)) {
       session.outputEndpointId = `${port.id}:network-output`;
       await invoke("ensure_bridge_output_endpoint", {
@@ -2393,7 +2509,11 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
       });
     }
     session.ready = true;
-    recordManagedLifecycle(session, "producer-started", `reason=${reason}`);
+    recordManagedLifecycle(
+      session,
+      "session-ready",
+      `reason=${reason} input=${session.inputReady ? "ready" : "unavailable"}`
+    );
     await startManagedEventStream(session);
     if (bridgePortHasOutput(port)) {
       const active = await bridgeApi("GET", managedSessionPath(session, "/active-producers"));
@@ -2434,6 +2554,11 @@ async function stopManagedSession(session, { remove = true, reason = "client-sto
   session.producerId = null;
   session.outputEndpointId = null;
   session.inputStartedAt = 0;
+  session.inputReady = false;
+  session.inputStarting = false;
+  session.inputError = null;
+  session.inputRetryAt = null;
+  session.inputRetryable = true;
   session.outputs.clear();
   session.talking = false;
   session.talkSource = null;
@@ -2562,7 +2687,15 @@ async function retryDueManagedSessions() {
     && session.retryAt
     && session.retryAt <= now
   ));
-  if (!due.length) {
+  const inputDue = [...managedSessions.values()].filter((session) => (
+    session.ready
+    && !session.starting
+    && !session.inputReady
+    && !session.inputStarting
+    && session.inputRetryable !== false
+    && (!session.inputRetryAt || session.inputRetryAt <= now)
+  ));
+  if (!due.length && !inputDue.length) {
     renderManagedBridgePorts();
     return;
   }
@@ -2570,6 +2703,18 @@ async function retryDueManagedSessions() {
   managedRetryRunning = true;
   try {
     const portsByKey = new Map((managedBridgeConfig?.ports || []).map((port) => [bridgePortKey(port), port]));
+    for (const session of inputDue) {
+      const port = portsByKey.get(bridgePortKey(session.port));
+      if (!port || bridgePortSignature(port) !== session.signature) continue;
+      try {
+        await startManagedInputPath(session, { reason: "input-retry" });
+      } catch (error) {
+        setManagedInputError(session, error);
+        if (isServerOfflineError(error)) {
+          setManagedSessionError(session, error);
+        }
+      }
+    }
     for (const session of due) {
       const port = portsByKey.get(bridgePortKey(session.port));
       if (!port || bridgePortSignature(port) !== session.signature) continue;
