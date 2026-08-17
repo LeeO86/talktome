@@ -25,6 +25,7 @@ on:
       - "scripts/postbuild-pkg.js"
       - "scripts/create-macos-dmg.sh"
       - "scripts/resolve-build-version.js"
+      - "scripts/upload-release-asset.sh"
       - "server-app/**"
 
 concurrency:
@@ -221,16 +222,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          TITLE="${TAG} - macOS + Windows"
-
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --draft --title "$TITLE" || true
-          fi
-
-          gh release edit "$TAG" --draft=true --title "$TITLE"
-          gh release upload "$TAG" "$INSTALLER_PATH" --clobber
+        run: >-
+          bash scripts/upload-release-asset.sh
+          "$GITHUB_REF_NAME"
+          "$INSTALLER_PATH"
+          "$GITHUB_REF_NAME - macOS + Windows"
 
   docker-smoke:
     name: Verify Docker image startup

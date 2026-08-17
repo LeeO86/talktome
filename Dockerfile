@@ -15,6 +15,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Keep all root-level runtime modules together so a newly required module cannot
 # be omitted from the image by an incomplete list of COPY instructions.
 COPY *.js ./
+COPY scripts/resolve-build-version.js ./scripts/resolve-build-version.js
 COPY public ./public
 COPY LICENSE ./
 COPY README.md ./
