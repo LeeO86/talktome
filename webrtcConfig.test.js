@@ -88,6 +88,22 @@ test("builds modern UDP and TCP listen infos", () => {
   ]);
 });
 
+test("builds UDP and TCP listen infos for every automatic interface", () => {
+  assert.deepEqual(buildWebRtcListenInfos({
+    mediaRoute: {
+      mode: "auto",
+      announcedAddress: "192.168.10.20",
+      candidateAddresses: ["192.168.10.20", "10.20.30.40", "192.168.10.20"],
+    },
+    env: { TALKTOME_MEDIA_INTERNAL_IP: "172.16.0.10" },
+  }), [
+    { protocol: "udp", ip: "192.168.10.20" },
+    { protocol: "udp", ip: "10.20.30.40" },
+    { protocol: "tcp", ip: "192.168.10.20" },
+    { protocol: "tcp", ip: "10.20.30.40" },
+  ]);
+});
+
 test("optionally exposes a separately bound internal address", () => {
   assert.deepEqual(buildWebRtcListenInfos({
     mediaRoute: { announcedAddress: "203.0.113.20" },

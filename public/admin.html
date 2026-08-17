@@ -871,6 +871,16 @@
         margin-bottom: 0;
       }
 
+      .media-network-warning {
+        border: 1px solid rgba(245, 158, 11, 0.42);
+        border-radius: 8px;
+        background: rgba(245, 158, 11, 0.12);
+        color: #fbbf24;
+        font-size: 0.8rem;
+        line-height: 1.4;
+        padding: 0.65rem 0.75rem;
+      }
+
       .media-network-top {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
@@ -3144,11 +3154,12 @@
                   <h3 id="config-media-network-heading">Media network</h3>
                   <div class="setting-meta">
                     <div>Active media network: <strong id="media-network-active-mode">Loading...</strong></div>
-                    <div>Active announced address: <strong id="media-network-active-address">Loading...</strong></div>
+                    <div>Active RTC addresses: <strong id="media-network-active-address">Loading...</strong></div>
                     <div>Saved media network: <strong id="media-network-saved-mode">Loading...</strong></div>
                     <div id="media-network-restart-hint">Changes require a server restart to take effect.</div>
                     <div id="media-network-override-hint" class="is-hidden">An environment override is active. Saved changes will only apply after restart without `PUBLIC_IP` or `TALKTOME_MEDIA_INTERFACE` overrides.</div>
                   </div>
+                  <div id="media-network-warning" class="media-network-warning is-hidden" role="status"></div>
                 </div>
 
                 <div id="media-network-qr" class="media-network-qr-card is-hidden">
@@ -3171,7 +3182,7 @@
                 <div class="field-group field-group--stacked" id="media-network-mode-group">
                   <label for="media-network-mode">Mode</label>
                   <select id="media-network-mode" required>
-                    <option value="auto">Automatic</option>
+                    <option value="auto">Automatic (all adapters)</option>
                     <option value="interface">Preferred network adapter</option>
                     <option value="manual">Manual announced IP / hostname</option>
                   </select>

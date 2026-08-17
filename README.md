@@ -93,9 +93,16 @@ On first interactive start, Talktome creates `config.json` and asks for:
 - HTTPS port
 - mDNS hostname, or `off`
 - RTC port range: start port and number of ports
-- WebRTC media network mode: automatic, preferred adapter, or manual announced IP/hostname
+- WebRTC media network mode: automatic (all usable adapters), preferred adapter, or manual announced IP/hostname
 
 The same settings can be changed later in Admin `Config`.
+
+In automatic media-network mode, Talktome offers every usable non-internal
+IPv4 adapter as a WebRTC ICE candidate. Clients on different attached networks
+can therefore select the server address they can reach and communicate through
+the same Talktome router. Link-local addresses are only used as a fallback when
+no regular adapter address is available. Preferred-adapter and manual modes
+remain single-address modes for deterministic or NAT-facing deployments.
 
 Useful environment overrides:
 

@@ -2585,7 +2585,7 @@ function describeMediaNetworkMode(mode, detail = '') {
   if (mode === 'manual') {
     return detail ? `Manual (${detail})` : 'Manual';
   }
-  return 'Automatic';
+  return detail ? `Automatic (${detail})` : 'Automatic (all adapters)';
 }
 
 function updateMediaNetworkFormVisibility() {
@@ -2612,15 +2612,21 @@ async function loadMediaNetworkSettings() {
   const addressEl = document.getElementById('media-announced-address');
   const restartHintEl = document.getElementById('media-network-restart-hint');
   const overrideHintEl = document.getElementById('media-network-override-hint');
+  const warningEl = document.getElementById('media-network-warning');
 
   const activeMode = payload?.activeMediaNetworkMode || 'auto';
   const activeInterfaceName = payload?.activeMediaInterfaceName || '';
   const activeAddress = payload?.activeAnnouncedAddress || 'Unavailable';
+  const activeRtcAddresses = Array.isArray(payload?.activeRtcAddresses)
+    ? payload.activeRtcAddresses.filter(Boolean)
+    : [activeAddress].filter(Boolean);
   const savedMode = payload?.mediaNetworkMode || 'auto';
   const savedInterfaceName = payload?.mediaInterfaceName || '';
   const savedAddress = payload?.mediaAnnouncedAddress || '';
   const availableInterfaces = Array.isArray(payload?.availableInterfaces) ? payload.availableInterfaces : [];
-  const activeDetail = activeMode === 'interface'
+  const activeDetail = activeMode === 'auto'
+    ? `${activeRtcAddresses.length} RTC address${activeRtcAddresses.length === 1 ? '' : 'es'}`
+    : activeMode === 'interface'
     ? activeInterfaceName
     : activeMode === 'manual'
       ? activeAddress
@@ -2632,7 +2638,9 @@ async function loadMediaNetworkSettings() {
       : '';
 
   if (activeModeEl) activeModeEl.textContent = describeMediaNetworkMode(activeMode, activeDetail);
-  if (activeAddressEl) activeAddressEl.textContent = payload?.activeResolutionError || activeAddress;
+  if (activeAddressEl) {
+    activeAddressEl.textContent = payload?.activeResolutionError || activeRtcAddresses.join(', ') || activeAddress;
+  }
   if (savedModeEl) savedModeEl.textContent = describeMediaNetworkMode(savedMode, savedDetail);
 
   if (modeEl) {
@@ -2665,6 +2673,10 @@ async function loadMediaNetworkSettings() {
   }
   if (overrideHintEl) {
     overrideHintEl.classList.toggle('is-hidden', !payload?.environmentOverride);
+  }
+  if (warningEl) {
+    warningEl.textContent = payload?.mediaNetworkWarning || '';
+    warningEl.classList.toggle('is-hidden', !payload?.mediaNetworkWarning);
   }
 
   renderMediaNetworkQr(payload);

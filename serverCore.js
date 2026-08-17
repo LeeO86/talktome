@@ -17,6 +17,12 @@ const { ApplePttPushService } = require("./applePttPushService");
 const { normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
 const {
+  listMediaNetworkInterfaces,
+  normalizeSocketAddress,
+  resolveTransportMediaRoute,
+  selectMediaRouteAddress,
+} = require("./mediaNetwork");
+const {
   producerDeliveryChanged,
   resolveProducerReconciliationDelivery,
   shouldAnnounceProducerDelivery,
@@ -489,68 +495,28 @@ function resolveSavedMediaNetworkConfig(config) {
 }
 
 function getAvailableMediaNetworkInterfaces() {
-  const interfaces = os.networkInterfaces();
-  const entries = [];
-  for (const [name, candidates] of Object.entries(interfaces)) {
-    for (const iface of candidates || []) {
-      if (!iface || iface.internal || iface.family !== "IPv4") continue;
-      entries.push({
-        name,
-        address: iface.address,
-        label: `${name} - ${iface.address}`,
-      });
-    }
-  }
-  return entries;
+  return listMediaNetworkInterfaces(os.networkInterfaces());
 }
 
 function resolveTransportAnnouncedAddress() {
-  const explicitPublicIp = typeof process.env.PUBLIC_IP === "string"
-    ? process.env.PUBLIC_IP.trim()
-    : "";
-  if (explicitPublicIp) {
-    return {
-      announcedAddress: explicitPublicIp,
-      mode: "manual",
-      interfaceName: "",
-      source: process.env.TALKTOME_MEDIA_NETWORK_SOURCE || "env",
-      error: null,
-    };
-  }
-
-  const preferredInterfaceName = typeof process.env.TALKTOME_MEDIA_INTERFACE === "string"
-    ? process.env.TALKTOME_MEDIA_INTERFACE.trim()
-    : "";
   const availableInterfaces = getAvailableMediaNetworkInterfaces();
+  return resolveTransportMediaRoute({ env: process.env, availableInterfaces });
+}
 
-  if (preferredInterfaceName) {
-    const match = availableInterfaces.find((entry) => entry.name === preferredInterfaceName);
-    if (match) {
-      return {
-        announcedAddress: match.address,
-        mode: "interface",
-        interfaceName: preferredInterfaceName,
-        source: process.env.TALKTOME_MEDIA_NETWORK_SOURCE || "config",
-        error: null,
-      };
-    }
-    return {
-      announcedAddress: null,
-      mode: "interface",
-      interfaceName: preferredInterfaceName,
-      source: process.env.TALKTOME_MEDIA_NETWORK_SOURCE || "config",
-      error: `Configured media interface "${preferredInterfaceName}" has no usable IPv4 address`,
-    };
-  }
+function getActiveRtcAddresses(mediaRoute) {
+  const candidates = Array.isArray(mediaRoute?.candidateAddresses)
+    ? mediaRoute.candidateAddresses
+    : [];
+  return [...new Set(candidates.map((address) => String(address || "").trim()).filter(Boolean))];
+}
 
-  const first = availableInterfaces[0] || null;
-  return {
-    announcedAddress: first?.address || null,
-    mode: "auto",
-    interfaceName: first?.name || "",
-    source: process.env.TALKTOME_MEDIA_NETWORK_SOURCE || "auto",
-    error: first ? null : "No usable non-internal IPv4 interface found",
-  };
+function buildMediaNetworkRequestWarning(mediaRoute, req) {
+  if (mediaRoute?.mode === "manual") return null;
+  const requestLocalAddress = normalizeSocketAddress(req?.socket?.localAddress);
+  if (!requestLocalAddress || ["127.0.0.1", "0.0.0.0", "::"].includes(requestLocalAddress)) return null;
+  const activeAddresses = getActiveRtcAddresses(mediaRoute);
+  if (activeAddresses.includes(requestLocalAddress)) return null;
+  return `This Admin page was reached through ${requestLocalAddress}, but RTC currently offers ${activeAddresses.join(", ") || "no usable address"}. Audio from this network may not connect.`;
 }
 
 app.get("/", (req, res) => {
@@ -3617,8 +3583,8 @@ app.get("/admin/settings/media-network", requireAdmin, async (req, res) => {
     ? false
     : (
       saved.mode !== active.mode
-      || saved.interfaceName !== active.interfaceName
-      || (saved.mode === "manual" ? saved.announcedAddress : "") !== (active.mode === "manual" ? (active.announcedAddress || "") : "")
+      || (saved.mode === "interface" && saved.interfaceName !== active.interfaceName)
+      || (saved.mode === "manual" && saved.announcedAddress !== (active.announcedAddress || ""))
     );
   const qrPayload = await buildAdminMediaNetworkQrPayload(active.announcedAddress, req);
 
@@ -3629,7 +3595,10 @@ app.get("/admin/settings/media-network", requireAdmin, async (req, res) => {
     activeMediaNetworkMode: active.mode,
     activeMediaInterfaceName: active.interfaceName,
     activeAnnouncedAddress: active.announcedAddress,
+    activeRtcAddresses: getActiveRtcAddresses(active),
     activeResolutionError: active.error,
+    mediaNetworkWarning: buildMediaNetworkRequestWarning(active, req),
+    requestLocalAddress: normalizeSocketAddress(req.socket?.localAddress) || null,
     availableInterfaces: getAvailableMediaNetworkInterfaces(),
     restartRequired,
     environmentOverride,
@@ -3743,6 +3712,7 @@ app.put("/admin/settings/media-network", requireAdmin, (req, res) => {
       activeMediaNetworkMode: active.mode,
       activeMediaInterfaceName: active.interfaceName,
       activeAnnouncedAddress: active.announcedAddress,
+      activeRtcAddresses: getActiveRtcAddresses(active),
       activeResolutionError: active.error,
       availableInterfaces: getAvailableMediaNetworkInterfaces(),
       restartRequired: !environmentOverride,
@@ -4507,6 +4477,7 @@ app.post(
       if (mediaRoute.error || !mediaRoute.announcedAddress) {
         return res.status(500).json({ error: mediaRoute.error || "No announced media IP" });
       }
+      const mediaAddress = selectMediaRouteAddress(mediaRoute, req.socket?.localAddress);
       if (peer.plainSendTransport && !peer.plainSendTransport.closed) {
         try {
           peer.plainSendTransport.close();
@@ -4515,7 +4486,7 @@ app.post(
       const transport = await router.createPlainTransport({
         listenIp: {
           ip: "0.0.0.0",
-          announcedIp: mediaRoute.announcedAddress,
+          announcedIp: mediaAddress,
         },
         rtcpMux: true,
         comedia: true,
@@ -4526,7 +4497,7 @@ app.post(
       });
       res.json({
         id: transport.id,
-        ip: mediaRoute.announcedAddress,
+        ip: mediaAddress,
         port: transport.tuple.localPort,
         protocol: transport.tuple.protocol,
         payloadType: GATEWAY_OPUS_PAYLOAD_TYPE,
@@ -4769,9 +4740,12 @@ app.post(
       if (useRtpHandshake && (mediaRoute?.error || !mediaRoute?.announcedAddress)) {
         return res.status(500).json({ error: mediaRoute?.error || "No announced media IP" });
       }
+      const mediaAddress = useRtpHandshake
+        ? selectMediaRouteAddress(mediaRoute, req.socket?.localAddress)
+        : "";
       const transport = await router.createPlainTransport({
         listenIp: useRtpHandshake
-          ? { ip: "0.0.0.0", announcedIp: mediaRoute.announcedAddress }
+          ? { ip: "0.0.0.0", announcedIp: mediaAddress }
           : { ip: "0.0.0.0" },
         rtcpMux: true,
         comedia: useRtpHandshake,
@@ -4796,7 +4770,7 @@ app.post(
         });
         console.log(
           `[BRIDGE][RTP] Waiting for return-path handshake on `
-          + `${mediaRoute.announcedAddress}:${transport.tuple.localPort} for consumer ${consumer.id}`
+          + `${mediaAddress}:${transport.tuple.localPort} for consumer ${consumer.id}`
         );
       }
       const cleanup = () => {
@@ -4819,7 +4793,7 @@ app.post(
         kind: consumer.kind,
         rtpParameters: consumer.rtpParameters,
         transport: useRtpHandshake ? {
-          ip: mediaRoute.announcedAddress,
+          ip: mediaAddress,
           port: transport.tuple.localPort,
           protocol: transport.tuple.protocol,
           rtcpMux: true,
@@ -6274,10 +6248,7 @@ function logBridgeMediaDiagnostics(session, payload) {
 
 function resolveBridgeRequestIp(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  let address = forwarded || req.socket?.remoteAddress || "";
-  if (address.startsWith("::ffff:")) address = address.slice(7);
-  if (address === "::1") address = "127.0.0.1";
-  return address;
+  return normalizeSocketAddress(forwarded || req.socket?.remoteAddress);
 }
 
 function waitForBridgeRtpHandshake(transport) {
@@ -7368,11 +7339,11 @@ io.on("connection", (socket) => {
       }
 
       if (mediaRoute.mode === "auto" && mediaRoute.interfaceName) {
-        console.log(`[TRANSPORT] Auto-detected IP: ${mediaRoute.announcedAddress} (${mediaRoute.interfaceName})`);
+        console.log(`[TRANSPORT] Auto-detected RTC addresses: ${getActiveRtcAddresses(mediaRoute).join(", ")}`);
       } else if (mediaRoute.mode === "interface") {
         console.log(`[TRANSPORT] Using configured interface: ${mediaRoute.interfaceName}`);
       }
-      console.log(`[TRANSPORT] Using announced IP: ${mediaRoute.announcedAddress}`);
+      console.log(`[TRANSPORT] Offering RTC address(es): ${getActiveRtcAddresses(mediaRoute).join(", ")}`);
       warnIfDockerAnnouncedIpLooksInternal(mediaRoute.announcedAddress);
 
       const transport = await router.createWebRtcTransport({
@@ -7414,11 +7385,11 @@ io.on("connection", (socket) => {
       }
 
       if (mediaRoute.mode === "auto" && mediaRoute.interfaceName) {
-        console.log(`[TRANSPORT] Auto-detected IP: ${mediaRoute.announcedAddress} (${mediaRoute.interfaceName})`);
+        console.log(`[TRANSPORT] Auto-detected RTC addresses: ${getActiveRtcAddresses(mediaRoute).join(", ")}`);
       } else if (mediaRoute.mode === "interface") {
         console.log(`[TRANSPORT] Using configured interface: ${mediaRoute.interfaceName}`);
       }
-      console.log(`[TRANSPORT] Using announced IP: ${mediaRoute.announcedAddress}`);
+      console.log(`[TRANSPORT] Offering RTC address(es): ${getActiveRtcAddresses(mediaRoute).join(", ")}`);
       warnIfDockerAnnouncedIpLooksInternal(mediaRoute.announcedAddress);
 
       const transport = await router.createWebRtcTransport({
@@ -7492,6 +7463,10 @@ io.on("connection", (socket) => {
         console.error("[GATEWAY] No usable announced IP:", mediaRoute.error || "unknown media network error");
         return callback({ error: mediaRoute.error || "No usable announced IP available" });
       }
+      const mediaAddress = selectMediaRouteAddress(
+        mediaRoute,
+        socket.request?.socket?.localAddress || socket.conn?.transport?.socket?.localAddress
+      );
 
       if (peer.plainSendTransport && !peer.plainSendTransport.closed) {
         try {
@@ -7502,7 +7477,7 @@ io.on("connection", (socket) => {
       const transport = await router.createPlainTransport({
         listenIp: {
           ip: "0.0.0.0",
-          announcedIp: mediaRoute.announcedAddress,
+          announcedIp: mediaAddress,
         },
         rtcpMux: true,
         comedia: true,
@@ -7517,7 +7492,7 @@ io.on("connection", (socket) => {
 
       callback({
         id: transport.id,
-        ip: mediaRoute.announcedAddress,
+        ip: mediaAddress,
         port: transport.tuple.localPort,
         protocol: transport.tuple.protocol,
         rtcpMux: true,
@@ -8123,7 +8098,10 @@ server.listen(HTTPS_PORT, () => {
   } else if (mediaRoute.mode === "manual") {
     console.log(`🎛️ Media network: manual → ${mediaRoute.announcedAddress}`);
   } else if (mediaRoute.announcedAddress) {
-    console.log(`🎛️ Media network: automatic → ${mediaRoute.interfaceName || "auto"} (${mediaRoute.announcedAddress})`);
+    const routes = (mediaRoute.interfaces || [])
+      .map((entry) => `${entry.name} → ${entry.address}`)
+      .join(", ");
+    console.log(`🎛️ Media network: automatic → ${routes || mediaRoute.announcedAddress}`);
   }
   console.log("");
   console.log("⚠️  Browsers will show a certificate warning.");

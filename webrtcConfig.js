@@ -130,6 +130,19 @@ function buildWebRtcListenInfos({ mediaRoute, env = process.env } = {}) {
     throw new Error("A WebRTC announced address is required.");
   }
 
+  const automaticAddresses = mediaRoute?.mode === "auto"
+    ? [...new Set(
+        (Array.isArray(mediaRoute?.candidateAddresses) ? mediaRoute.candidateAddresses : [])
+          .map((address) => String(address || "").trim())
+          .filter((address) => net.isIP(address) !== 0)
+      )]
+    : [];
+  if (automaticAddresses.length) {
+    return ["udp", "tcp"].flatMap((protocol) => (
+      automaticAddresses.map((ip) => ({ protocol, ip }))
+    ));
+  }
+
   const internalIp = readFirstEnvironmentValue(env, ["TALKTOME_MEDIA_INTERNAL_IP"]);
   if (internalIp && net.isIP(internalIp) === 0) {
     throw new Error("TALKTOME_MEDIA_INTERNAL_IP must be a bindable IPv4 or IPv6 address.");
