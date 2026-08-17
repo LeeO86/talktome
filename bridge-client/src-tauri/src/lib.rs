@@ -357,12 +357,12 @@ fn get_audio_device_snapshot() -> Result<AudioDeviceSnapshot, String> {
 
 #[tauri::command]
 fn get_ndi_status() -> ndi::NdiStatus {
-    ndi::status(Duration::from_millis(250))
+    network_audio::ndi_status(Duration::from_millis(250))
 }
 
 #[tauri::command]
 fn get_omt_status() -> omt::OmtStatus {
-    omt::status(Duration::from_millis(250))
+    network_audio::omt_status(Duration::from_millis(250))
 }
 
 #[tauri::command]

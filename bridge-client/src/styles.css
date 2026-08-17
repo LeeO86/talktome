@@ -701,6 +701,17 @@ ul {
   padding: 1rem;
 }
 
+.audio-scan-status {
+  color: #d8b56a;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  margin-top: 0.45rem;
+}
+
+.audio-scan-status:empty {
+  display: none;
+}
+
 .muted {
   color: #81909d;
 }

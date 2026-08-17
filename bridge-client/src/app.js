@@ -23,6 +23,7 @@ const omtRuntime = document.getElementById("omt-runtime");
 const omtRuntimeDetail = document.getElementById("omt-runtime-detail");
 const refreshOmtButton = document.getElementById("refresh-omt");
 const omtRuntimeLink = document.getElementById("omt-runtime-link");
+const audioScanStatus = document.getElementById("audio-scan-status");
 
 const invoke = window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI__?.event?.listen;
@@ -47,6 +48,8 @@ const MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB = -45;
 const MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB = -120;
 const MANAGED_LEVEL_TRIGGER_MAX_THRESHOLD_DB = -10;
 const MANAGED_DEFAULT_TARGET_VOLUME = 0.9;
+const AUDIO_INVENTORY_TIMEOUT_MS = 10_000;
+const AUDIO_STATUS_TIMEOUT_MS = 5_000;
 const MIN_WINDOW_HEIGHT = 260;
 const MAX_WINDOW_HEIGHT = 820;
 const ALLOWED_NDI_INFORMATION_URLS = new Set([
@@ -72,6 +75,7 @@ let managedLevelTriggerTimer = null;
 let managedRetryRunning = false;
 let managedLevelTriggerRunning = false;
 let managedInventoryWatchRunning = false;
+let managedInventoryWatchDisabled = false;
 let managedRangeInteractionActive = false;
 let lastAnnouncedInventorySignature = "";
 let lastAudioDeviceSnapshotSignature = "";
@@ -90,6 +94,24 @@ const managedPortDraftRevisions = new Map();
 const managedPortAutoSaveTimers = new Map();
 const managedPortSaveInFlight = new Set();
 const managedPortSaveQueued = new Set();
+
+function withTimeout(promise, milliseconds, label) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`${label} did not respond within ${Math.ceil(milliseconds / 1000)} seconds`));
+    }, milliseconds);
+    Promise.resolve(promise).then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 function measureBridgeWindowContentHeight() {
   const shell = document.querySelector(".shell");
@@ -221,11 +243,15 @@ function renderNdiStatus(status) {
   const available = Boolean(status?.available);
   ndiRuntime.dataset.state = available ? "available" : "unavailable";
   if (!available) {
-    ndiRuntimeDetail.textContent = "Runtime not installed. NDI devices are hidden until the current NDI Runtime is installed.";
-    ndiRuntimeDetail.title = String(status?.error || "NDI Runtime not found");
+    const error = String(status?.error || "NDI Runtime not found");
+    const timedOut = /timed out|did not respond/i.test(error);
+    ndiRuntimeDetail.textContent = timedOut
+      ? "Backend did not respond. NDI devices were skipped for this session."
+      : "Runtime not installed. NDI devices are hidden until the current NDI Runtime is installed.";
+    ndiRuntimeDetail.title = error;
     if (ndiRuntimeLink) {
-      ndiRuntimeLink.href = "https://ndi.video/tools/";
-      ndiRuntimeLink.textContent = "Download NDI\nRuntime";
+      ndiRuntimeLink.href = timedOut ? "https://ndi.video/" : "https://ndi.video/tools/";
+      ndiRuntimeLink.textContent = timedOut ? "NDI® information" : "Download NDI\nRuntime";
     }
     return;
   }
@@ -245,8 +271,12 @@ function renderOmtStatus(status) {
   omtRuntime.dataset.state = available ? "available" : "unavailable";
   const version = String(status?.version || "OMT");
   if (!available) {
-    omtRuntimeDetail.textContent = "Bundled backend unavailable. Reinstall the Bridge to restore OMT devices.";
-    omtRuntimeDetail.title = String(status?.error || "Bundled OMT backend not found");
+    const error = String(status?.error || "Bundled OMT backend not found");
+    const timedOut = /timed out|did not respond/i.test(error);
+    omtRuntimeDetail.textContent = timedOut
+      ? "Backend did not respond. OMT devices were skipped for this session."
+      : "Bundled backend unavailable. Reinstall the Bridge to restore OMT devices.";
+    omtRuntimeDetail.title = error;
     return;
   }
   const sourceCount = Number(status?.sourceCount || 0);
@@ -2494,14 +2524,27 @@ async function reconcileManagedBridgeConfig(config) {
 async function refreshManagedInventoryOnly() {
   if (!invoke) return;
   await suppressWindowFocusHide(250);
-  const [inventory, ndiStatus, omtStatus] = await Promise.all([
+  const inventory = await withTimeout(
     invoke("list_audio_devices"),
-    invoke("get_ndi_status"),
-    invoke("get_omt_status")
-  ]);
+    AUDIO_INVENTORY_TIMEOUT_MS,
+    "Audio device scan"
+  );
+  managedInventoryWatchDisabled = false;
   renderInventory(inventory);
-  renderNdiStatus(ndiStatus);
-  renderOmtStatus(omtStatus);
+  const [ndiResult, omtResult] = await Promise.allSettled([
+    withTimeout(invoke("get_ndi_status"), AUDIO_STATUS_TIMEOUT_MS, "NDI status check"),
+    withTimeout(invoke("get_omt_status"), AUDIO_STATUS_TIMEOUT_MS, "OMT status check")
+  ]);
+  if (ndiResult.status === "fulfilled") {
+    renderNdiStatus(ndiResult.value);
+  } else {
+    renderNdiStatus({ available: false, error: String(ndiResult.reason) });
+  }
+  if (omtResult.status === "fulfilled") {
+    renderOmtStatus(omtResult.value);
+  } else {
+    renderOmtStatus({ available: false, error: String(omtResult.reason) });
+  }
   return inventory;
 }
 
@@ -2579,13 +2622,17 @@ async function syncManagedBridge() {
 }
 
 async function watchManagedInventory() {
-  if (managedInventoryWatchRunning || managedSyncRunning || !invoke) return;
+  if (managedInventoryWatchRunning || managedInventoryWatchDisabled || managedSyncRunning || !invoke) return;
   if (isBridgeSettingsControlFocused()) return;
   if (!serverUrlInput.value.trim() || !getBridgeCredential()) return;
 
   managedInventoryWatchRunning = true;
   try {
-    const snapshot = await invoke("get_audio_device_snapshot");
+    const snapshot = await withTimeout(
+      invoke("get_audio_device_snapshot"),
+      AUDIO_INVENTORY_TIMEOUT_MS,
+      "Audio device snapshot"
+    );
     const nextSnapshotSignature = audioDeviceSnapshotSignature(snapshot);
     if (!lastAudioDeviceSnapshotSignature) {
       lastAudioDeviceSnapshotSignature = nextSnapshotSignature;
@@ -2602,6 +2649,9 @@ async function watchManagedInventory() {
     renderManagedBridgePorts();
   } catch (error) {
     console.warn("managed inventory watch failed", error);
+    if (/audio device snapshot did not respond/i.test(String(error?.message || error))) {
+      managedInventoryWatchDisabled = true;
+    }
   } finally {
     managedInventoryWatchRunning = false;
   }
@@ -2767,6 +2817,14 @@ function renderInventory(inventory) {
   currentInventory = inventory;
   lastAudioDeviceSnapshotSignature = audioDeviceSnapshotSignature(inventory);
   renderSummary(inventory);
+  if (audioScanStatus) {
+    const warnings = Array.isArray(inventory?.warnings) ? inventory.warnings : [];
+    audioScanStatus.textContent = warnings.length
+      ? `${warnings.length} audio component${warnings.length === 1 ? " was" : "s were"} skipped because ${warnings.length === 1 ? "it" : "they"} could not be queried safely.`
+      : "";
+    audioScanStatus.title = warnings.join("\n");
+    requestBridgeWindowResize();
+  }
   if (!deviceList) {
     renderAllPortControls();
     return;
@@ -3352,29 +3410,67 @@ async function refreshDevices() {
   }
   try {
     await suppressWindowFocusHide(250);
-    const [inventory, bridgeStatus, portStatuses, ndiStatus, omtStatus] = await Promise.all([
-      invoke("list_audio_devices"),
-      invoke("get_bridge_status"),
-      localPortList ? invoke("get_audio_probe_ports_status") : Promise.resolve([]),
-      invoke("get_ndi_status"),
-      invoke("get_omt_status")
+    // Inventory probes each backend with a native timeout first. Status checks
+    // run afterwards so a quarantined backend cannot block the other results.
+    const inventoryResult = await Promise.allSettled([
+      withTimeout(invoke("list_audio_devices"), AUDIO_INVENTORY_TIMEOUT_MS, "Audio device scan")
     ]);
-    renderBridgeStatus(bridgeStatus);
-    renderInventory(inventory);
-    renderPortStatuses(portStatuses);
-    renderNdiStatus(ndiStatus);
-    renderOmtStatus(omtStatus);
-    if (serverUrlInput.value.trim() && getBridgeCredential()) {
-      try {
-        await announceBridge({ quiet: true });
-      } catch (announceError) {
-        console.warn("auto announce failed", announceError);
-        if (isServerOfflineError(announceError)) {
-          setServerConnectionState("disconnected");
-        }
-        setBridgeConnectionError(announceError);
-      }
+    const inventory = inventoryResult[0].status === "fulfilled"
+      ? inventoryResult[0].value
+      : { host: "Unavailable", devices: [], warnings: [String(inventoryResult[0].reason)] };
+    if (inventoryResult[0].status === "fulfilled") {
+      managedInventoryWatchDisabled = false;
     }
+    renderInventory(inventory);
+
+    const bridgeStatusPromise = invoke("get_bridge_status").then((status) => {
+      renderBridgeStatus(status);
+      return status;
+    });
+    const portStatusesPromise = (localPortList
+      ? invoke("get_audio_probe_ports_status")
+      : Promise.resolve([])).then((statuses) => {
+        renderPortStatuses(statuses);
+        return statuses;
+      });
+    const ndiStatusPromise = withTimeout(
+      invoke("get_ndi_status"),
+      AUDIO_STATUS_TIMEOUT_MS,
+      "NDI status check"
+    ).then((status) => {
+      renderNdiStatus(status);
+      return status;
+    });
+    const omtStatusPromise = withTimeout(
+      invoke("get_omt_status"),
+      AUDIO_STATUS_TIMEOUT_MS,
+      "OMT status check"
+    ).then((status) => {
+      renderOmtStatus(status);
+      return status;
+    });
+    const announcePromise = serverUrlInput.value.trim() && getBridgeCredential()
+      ? announceBridge({ quiet: true }).catch((announceError) => {
+          console.warn("auto announce failed", announceError);
+          if (isServerOfflineError(announceError)) {
+            setServerConnectionState("disconnected");
+          }
+          setBridgeConnectionError(announceError);
+        })
+      : Promise.resolve();
+    const statusResults = await Promise.allSettled([
+      bridgeStatusPromise,
+      portStatusesPromise,
+      ndiStatusPromise,
+      omtStatusPromise
+    ]);
+    if (statusResults[2].status === "rejected") {
+      renderNdiStatus({ available: false, error: String(statusResults[2].reason) });
+    }
+    if (statusResults[3].status === "rejected") {
+      renderOmtStatus({ available: false, error: String(statusResults[3].reason) });
+    }
+    await announcePromise;
   } catch (error) {
     console.error(error);
     if (connectionStatus) {
