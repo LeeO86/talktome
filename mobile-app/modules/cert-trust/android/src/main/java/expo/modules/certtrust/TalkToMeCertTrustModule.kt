@@ -5,6 +5,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import java.net.URL
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
+import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
@@ -38,7 +39,7 @@ private fun probeCertificate(url: String): Map<String, String> {
   val context = SSLContext.getInstance("TLS")
   context.init(null, arrayOf(capturing), null)
   connection.sslSocketFactory = context.socketFactory
-  connection.hostnameVerifier = { _, _ -> true }
+  connection.hostnameVerifier = HostnameVerifier { _, _ -> true }
   connection.requestMethod = "HEAD"
   connection.connectTimeout = 8000
   connection.readTimeout = 8000

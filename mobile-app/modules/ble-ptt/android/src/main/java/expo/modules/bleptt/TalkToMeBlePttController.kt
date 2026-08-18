@@ -16,6 +16,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelUuid
 import java.util.UUID
 
 /// Ported GATT map from talktome-apple BluetoothButtonController @ 004d6e76 by Daniel Jocher.
