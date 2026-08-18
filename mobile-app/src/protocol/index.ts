@@ -1,4 +1,5 @@
 export * from './audioPreference';
+export * from './conferenceMembers';
 export * from './events';
 export * from './incomingTalk';
 export * from './producers';

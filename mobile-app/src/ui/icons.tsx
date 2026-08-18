@@ -38,23 +38,69 @@ export function PersonIcon({ color = colors.muted, size = 22 }: IconProps) {
   );
 }
 
-export function SpeakerIcon({ color = colors.text, muted = false, size = 18 }: IconProps & { muted?: boolean }) {
+export function SpeakerIcon({ color = colors.text, muted = false, size = 20 }: IconProps & { muted?: boolean }) {
+  const cone = size * 0.34;
+  const bodyWidth = size * 0.22;
+  const bodyHeight = size * 0.34;
+  const wave1 = size * 0.42;
+  const wave2 = size * 0.62;
   return (
     <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View style={[styles.speakerBody, { backgroundColor: color, left: size * 0.12, height: size * 0.42 }]} />
+      <View
+        style={[
+          styles.speakerBody,
+          {
+            backgroundColor: color,
+            width: bodyWidth,
+            height: bodyHeight,
+            left: size * 0.08,
+            borderRadius: 2,
+          },
+        ]}
+      />
       <View
         style={[
           styles.speakerCone,
           {
-            left: size * 0.34,
-            borderTopWidth: size * 0.28,
-            borderBottomWidth: size * 0.28,
-            borderLeftWidth: size * 0.36,
+            left: size * 0.24,
+            borderTopWidth: cone,
+            borderBottomWidth: cone,
+            borderLeftWidth: cone * 1.15,
             borderLeftColor: color,
           },
         ]}
       />
-      {muted ? <View style={[styles.slash, { backgroundColor: color, width: size * 0.86 }]} /> : null}
+      {!muted ? (
+        <>
+          <View
+            style={[
+              styles.speakerWave,
+              {
+                width: wave1,
+                height: wave1,
+                borderColor: color,
+                right: size * 0.22,
+              },
+            ]}
+          />
+          <View
+            style={[
+              styles.speakerWave,
+              {
+                width: wave2,
+                height: wave2,
+                borderColor: color,
+                right: size * 0.04,
+              },
+            ]}
+          />
+        </>
+      ) : (
+        <>
+          <View style={[styles.slashCut, { width: size * 0.92, backgroundColor: colors.mute }]} />
+          <View style={[styles.slash, { width: size * 0.92, backgroundColor: color }]} />
+        </>
+      )}
     </View>
   );
 }
@@ -156,8 +202,6 @@ const styles = StyleSheet.create({
   },
   speakerBody: {
     position: 'absolute',
-    width: 5,
-    borderRadius: 1,
   },
   speakerCone: {
     position: 'absolute',
@@ -165,6 +209,20 @@ const styles = StyleSheet.create({
     height: 0,
     borderTopColor: 'transparent',
     borderBottomColor: 'transparent',
+  },
+  speakerWave: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderRadius: 999,
+    borderLeftColor: 'transparent',
+    borderBottomColor: 'transparent',
+    transform: [{ rotate: '45deg' }],
+  },
+  slashCut: {
+    position: 'absolute',
+    height: 5,
+    borderRadius: 2,
+    transform: [{ rotate: '-38deg' }],
   },
   slash: {
     position: 'absolute',

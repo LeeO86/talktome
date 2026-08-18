@@ -32,11 +32,17 @@ export type HealthResponse = {
   serverStartedAt?: string;
 };
 
+export type ConferenceMember = {
+  userId: number;
+  name: string;
+};
+
 export type TalkTarget = {
   type: TalkTargetType;
   id: number | string;
   label: string;
   canTalk: boolean;
+  members?: ConferenceMember[];
 };
 
 export type TalkTargetResponse = {
@@ -44,6 +50,7 @@ export type TalkTargetResponse = {
   targetId: number;
   name: string;
   canTalk?: boolean;
+  members?: unknown;
 };
 
 export type SignalingTalkTarget = {
@@ -136,10 +143,38 @@ export function talkTargetIdentity(target: Pick<TalkTarget, 'type' | 'id'>): str
 }
 
 export function talkTargetFromResponse(row: TalkTargetResponse): TalkTarget {
-  return {
+  const target: TalkTarget = {
     type: row.targetType,
     id: row.targetId,
     label: row.name,
     canTalk: row.canTalk ?? true,
   };
+  if (row.targetType === 'conference') {
+    target.members = parseConferenceMemberList(row.members);
+  }
+  return target;
+}
+
+function parseConferenceMemberList(value: unknown): ConferenceMember[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<number>();
+  const members: ConferenceMember[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const row = item as { userId?: unknown; id?: unknown; name?: unknown };
+    const userId = Number(row.userId ?? row.id);
+    if (!Number.isFinite(userId) || seen.has(userId)) {
+      continue;
+    }
+    seen.add(userId);
+    members.push({
+      userId,
+      name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : `User ${userId}`,
+    });
+  }
+  return members;
 }

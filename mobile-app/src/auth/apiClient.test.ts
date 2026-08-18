@@ -91,7 +91,7 @@ describe('ApiClient', () => {
 
     await expect(client.fetchTargets(7)).resolves.toEqual([
       { type: 'user', id: 11, label: 'Stage Left', canTalk: true },
-      { type: 'conference', id: 2, label: 'All', canTalk: false },
+      { type: 'conference', id: 2, label: 'All', canTalk: false, members: [] },
       { type: 'feed', id: 5, label: 'Program', canTalk: true },
     ]);
   });
@@ -131,7 +131,7 @@ describe('ApiClient', () => {
       }),
     );
     await expect(client.fetchGuestTargets(2)).resolves.toEqual([
-      { type: 'conference', id: 1, label: 'All', canTalk: true },
+      { type: 'conference', id: 1, label: 'All', canTalk: true, members: [] },
     ]);
   });
 

@@ -16,6 +16,7 @@ export type RememberedProfile = {
   rememberPassword: boolean;
   allowInsecureLocalTLS?: boolean;
   leftHanded?: boolean;
+  talkSelectMode?: boolean;
   guest?: RememberedGuest;
 };
 

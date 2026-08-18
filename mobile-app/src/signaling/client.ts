@@ -30,6 +30,7 @@ export type SignalingHandlers = {
   onUserList?: (peers: PeerSession[]) => void;
   onSessionKicked?: (info: SessionKickInfo) => void;
   onTargetsUpdated?: () => void;
+  onConferenceMembersUpdated?: (conferenceId?: number | null) => void;
   onIncomingTalkState?: (state: IncomingTalkState) => void;
   onProducerStarted?: (producer: ActiveProducer) => void;
   onProducerClosed?: (producer: ActiveProducer) => void;
@@ -304,6 +305,11 @@ export class SignalingClient {
     });
     socket.on(SocketEvent.userTargetsUpdated, () => {
       this.handlers.onTargetsUpdated?.();
+    });
+    socket.on(SocketEvent.conferenceMembersUpdated, (payload) => {
+      const record = payload && typeof payload === 'object' ? (payload as { conferenceId?: unknown }) : {};
+      const conferenceId = Number(record.conferenceId);
+      this.handlers.onConferenceMembersUpdated?.(Number.isFinite(conferenceId) ? conferenceId : null);
     });
     socket.on(SocketEvent.incomingTalkState, (payload) => {
       const state = parseIncomingTalkState(payload);

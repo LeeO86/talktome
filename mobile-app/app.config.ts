@@ -20,6 +20,17 @@ const config: ExpoConfig = {
         'TalkToMe connects to your self-hosted intercom on the local network.',
       NSBluetoothAlwaysUsageDescription: 'TalkToMe connects to wireless PTT buttons.',
       UIBackgroundModes: ['audio', 'bluetooth-central'],
+      UISupportedInterfaceOrientations: [
+        'UIInterfaceOrientationPortrait',
+        'UIInterfaceOrientationLandscapeLeft',
+        'UIInterfaceOrientationLandscapeRight',
+      ],
+      'UISupportedInterfaceOrientations~ipad': [
+        'UIInterfaceOrientationPortrait',
+        'UIInterfaceOrientationPortraitUpsideDown',
+        'UIInterfaceOrientationLandscapeLeft',
+        'UIInterfaceOrientationLandscapeRight',
+      ],
     },
   },
   android: {
@@ -62,6 +73,7 @@ const config: ExpoConfig = {
     './plugins/withTalkToMeFgs',
     './plugins/withTalkToMeBle',
     './plugins/withTalkToMePtt',
+    './plugins/withTalkToMeOrientation',
   ],
   extra: {
     enableIosPtt,

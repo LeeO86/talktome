@@ -10,6 +10,11 @@ import {
 } from '../protocol/audioPreference';
 import type { ActiveProducer, IceServer, TalkTarget } from '../protocol/types';
 import {
+  EMPTY_CONFERENCE_LISTEN,
+  conferenceMemberGain,
+  type ConferenceListenState,
+} from '../session/conferenceListen';
+import {
   applyConsumerBudget,
   MAX_RESUMED_CONSUMERS,
   producerTargetKey,
@@ -34,6 +39,7 @@ export class MediaEngine {
   private iceOverride: IceServer[] = [];
   private audioPreferences: Record<string, TargetAudioPreference> = {};
   private stoppedFeedKeys = new Set<string>();
+  private conferenceListen: ConferenceListenState = EMPTY_CONFERENCE_LISTEN;
   overBudget = false;
 
   constructor(private readonly signaling: SignalingClient) {}
@@ -238,9 +244,12 @@ export class MediaEngine {
 
   setAudioPreferences(preferences: Record<string, TargetAudioPreference>): void {
     this.audioPreferences = preferences;
-    for (const remote of this.remotes.values()) {
-      this.applyTrackGain(remote.producer);
-    }
+    this.applyAllTrackGain();
+  }
+
+  setConferenceListen(state: ConferenceListenState): void {
+    this.conferenceListen = state;
+    this.applyAllTrackGain();
   }
 
   async setStoppedFeedKeys(keys: string[], ctx: ConsumerPriorityContext = {}): Promise<void> {
@@ -278,11 +287,21 @@ export class MediaEngine {
     this.overBudget = false;
   }
 
+  private applyAllTrackGain(): void {
+    for (const remote of this.remotes.values()) {
+      this.applyTrackGain(remote.producer);
+    }
+  }
+
   private applyTrackGain(producer: ActiveProducer): void {
     const remote = this.remotes.get(producer.producerId);
     const track = remote?.stream.getAudioTracks()[0] as { _setVolume?: (volume: number) => void } | undefined;
     const preference = normalizeAudioPreference(this.audioPreferences[producerTargetKey(producer)]);
-    track?._setVolume?.(playbackGain(preference));
+    const memberGain =
+      producer.route.kind === 'conference'
+        ? conferenceMemberGain(this.conferenceListen, producer.route.id, producer.speakerUserId)
+        : 1;
+    track?._setVolume?.(playbackGain(preference) * memberGain);
   }
 
   private async applyBudget(ctx: ConsumerPriorityContext): Promise<void> {

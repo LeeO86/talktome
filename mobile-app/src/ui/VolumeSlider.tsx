@@ -7,9 +7,10 @@ type Props = {
   value: number;
   disabled?: boolean;
   onChange: (value: number) => void;
+  flex?: boolean;
 };
 
-export function VolumeSlider({ value, disabled, onChange }: Props) {
+export function VolumeSlider({ value, disabled, onChange, flex = false }: Props) {
   const width = useRef(1);
 
   const setFromX = (x: number) => {
@@ -23,7 +24,7 @@ export function VolumeSlider({ value, disabled, onChange }: Props) {
     <View
       accessibilityRole="adjustable"
       accessibilityLabel="Volume"
-      style={[styles.track, disabled && styles.disabled]}
+      style={[styles.track, flex && styles.flex, disabled && styles.disabled]}
       onLayout={(event) => {
         width.current = event.nativeEvent.layout.width || 1;
       }}
@@ -45,6 +46,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 88,
     flexGrow: 0,
+  },
+  flex: {
+    width: undefined,
+    flexGrow: 1,
+    flexShrink: 1,
   },
   disabled: {
     opacity: 0.4,

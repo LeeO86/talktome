@@ -7,9 +7,11 @@ import { TalkToMeHttp } from '../auth/http';
 import { hasSessionCookie, readNativeCookies } from '../auth/nativeCookies';
 import { MediaEngine } from '../media/engine';
 import {
+  activeFeedKeysFromProducers,
   defaultAudioPreference,
   normalizeAudioPreference,
   talkTargetIdentity,
+  type ActiveProducer,
   type IncomingTalkState,
   type LoginOptions,
   type OperatorIdentity,
@@ -18,6 +20,14 @@ import {
   type TargetAudioPreference,
   type TalkTarget,
 } from '../protocol';
+import {
+  EMPTY_CONFERENCE_LISTEN,
+  loadConferenceListen,
+  saveConferenceListen,
+  setConferenceMemberLevel as nextConferenceMemberLevel,
+  setConferenceMemberListening as nextConferenceMemberListening,
+  type ConferenceListenState,
+} from './conferenceListen';
 import { isLikelyLocalHost, parseServerAddress } from '../servers/parseServerAddress';
 import {
   hydrateTlsPins,
@@ -99,6 +109,8 @@ export type SessionUiState = {
   rememberPassword: boolean;
   allowInsecureLocalTLS: boolean;
   leftHanded: boolean;
+  talkSelectMode: boolean;
+  selectedTalkTarget: TalkTarget | null;
   replyTarget: TalkTarget | null;
   loginOptions: LoginOptions | null;
   pendingCertificate: CertificateProbe | null;
@@ -116,7 +128,9 @@ export type SessionUiState = {
   peers: PeerSession[];
   audioPreferences: Record<string, TargetAudioPreference>;
   speakingTargetKeys: string[];
+  activeFeedKeys: string[];
   stoppedFeedKeys: string[];
+  conferenceListen: ConferenceListenState;
   conflictName?: string;
   error: string | null;
   capabilityReason: string;
@@ -156,6 +170,8 @@ const initialState: SessionUiState = {
   rememberPassword: true,
   allowInsecureLocalTLS: false,
   leftHanded: false,
+  talkSelectMode: false,
+  selectedTalkTarget: null,
   replyTarget: null,
   loginOptions: null,
   pendingCertificate: null,
@@ -173,7 +189,9 @@ const initialState: SessionUiState = {
   peers: [],
   audioPreferences: {},
   speakingTargetKeys: [],
+  activeFeedKeys: [],
   stoppedFeedKeys: [],
+  conferenceListen: EMPTY_CONFERENCE_LISTEN,
   error: null,
   capabilityReason: FOREGROUND_REASON,
   overBudget: false,
@@ -221,15 +239,17 @@ class SessionController {
   private overrideFrom: TalkTarget[] | null = null;
   private reconnecting = false;
   private hardwareBound = false;
+  private liveProducers = new Map<string, ActiveProducer>();
   private appStateSubscription: { remove: () => void } | null = null;
   private pttChannelUUID: string | null = null;
   private readonly blePolicy = new BleButtonPolicy();
 
   async hydrate(): Promise<void> {
-    const [remembered, audioPreferences, blePreferences] = await Promise.all([
+    const [remembered, audioPreferences, blePreferences, conferenceListen] = await Promise.all([
       loadRememberedProfile(),
       loadAudioPreferences(),
       loadBlePreferences(),
+      loadConferenceListen(),
       hydrateTlsPins(),
     ]);
     useSessionStore.setState({
@@ -239,6 +259,7 @@ class SessionController {
       rememberPassword: remembered?.rememberPassword ?? true,
       allowInsecureLocalTLS: remembered?.allowInsecureLocalTLS ?? false,
       leftHanded: remembered?.leftHanded ?? false,
+      talkSelectMode: remembered?.talkSelectMode ?? false,
       audioSessionAvailable: audioSessionAvailable(),
       pttAvailable: pttNativeAvailable(),
       capabilityReason: this.capabilityReason({
@@ -246,6 +267,7 @@ class SessionController {
         pttAvailable: pttNativeAvailable(),
       }),
       audioPreferences,
+      conferenceListen,
       ...bleFieldsFromSelection(blePreferences.target, blePreferences.shortPressLocksTalk),
     });
     this.pendingPassword = remembered?.password;
@@ -304,6 +326,7 @@ class SessionController {
         rememberPassword: input.rememberPassword,
         allowInsecureLocalTLS: useSessionStore.getState().allowInsecureLocalTLS,
         leftHanded: useSessionStore.getState().leftHanded,
+        talkSelectMode: useSessionStore.getState().talkSelectMode,
       },
       input.password,
     );
@@ -322,6 +345,7 @@ class SessionController {
       rememberPassword: state.rememberPassword,
       allowInsecureLocalTLS: state.allowInsecureLocalTLS,
       leftHanded: state.leftHanded,
+      talkSelectMode: state.talkSelectMode,
       guest: {
         guestId: String(identity.guestId ?? identity.id),
         guestProfileUserId: identity.guestProfileUserId ?? 0,
@@ -423,6 +447,7 @@ class SessionController {
     this.talkingTargets = [];
     this.lockedTargets = [];
     this.overrideFrom = null;
+    this.liveProducers = new Map();
     this.blePolicy.reset();
     await this.leaveSystemPtt();
     await this.teardownAudioSession();
@@ -436,6 +461,8 @@ class SessionController {
       rememberPassword: next.rememberPassword,
       allowInsecureLocalTLS: next.allowInsecureLocalTLS,
       leftHanded: next.leftHanded,
+      talkSelectMode: next.talkSelectMode,
+      conferenceListen: next.conferenceListen,
       loginOptions: next.loginOptions,
       audioPreferences: next.audioPreferences,
       bleKind: next.bleKind,
@@ -621,6 +648,102 @@ class SessionController {
 
   setLeftHanded(leftHanded: boolean): void {
     useSessionStore.setState({ leftHanded, statusMessage: slideToLockHint(leftHanded) });
+    this.persistLayout();
+  }
+
+  setTalkSelectMode(talkSelectMode: boolean): void {
+    const state = useSessionStore.getState();
+    const selectedTalkTarget = talkSelectMode
+      ? state.selectedTalkTarget ?? state.replyTarget ?? this.firstTalkableTarget()
+      : state.selectedTalkTarget;
+    useSessionStore.setState({
+      talkSelectMode,
+      selectedTalkTarget,
+      statusMessage: talkSelectMode
+        ? selectedTalkTarget
+          ? `Talk & select: ${selectedTalkTarget.label}`
+          : 'Talk & select: tap a card, then hold Talk.'
+        : HOLD_HINT,
+    });
+    this.persistLayout();
+  }
+
+  selectTalkTarget(target: TalkTarget): void {
+    if (!this.canTalkTo(target)) {
+      return;
+    }
+    useSessionStore.setState({ selectedTalkTarget: target });
+    const state = useSessionStore.getState();
+    if (state.talkSelectMode && state.talking) {
+      void this.retargetTalk(target);
+    }
+  }
+
+  private firstTalkableTarget(): TalkTarget | null {
+    return useSessionStore.getState().targets.find((target) => this.canTalkTo(target)) ?? null;
+  }
+
+  private async retargetTalk(target: TalkTarget): Promise<void> {
+    if (!this.media || !this.canTalkTo(target)) {
+      return;
+    }
+    this.talkingTargets = [target];
+    if (useSessionStore.getState().talkLocked) {
+      this.lockedTargets = [target];
+    }
+    this.rememberSpokenTarget(target);
+    this.publishTalkState(useSessionStore.getState().talkLocked);
+    try {
+      await this.media.startTalking(this.talkingTargets, useSessionStore.getState().talkLocked);
+    } catch (error) {
+      this.failTalk(error);
+    }
+  }
+
+  async pressSelectedTalk(): Promise<void> {
+    const target = useSessionStore.getState().selectedTalkTarget;
+    if (!target) {
+      useSessionStore.setState({ error: 'Select a destination on a card first.' });
+      return;
+    }
+    await this.pressTalk(target);
+  }
+
+  async lockSelectedTalk(): Promise<void> {
+    const target = useSessionStore.getState().selectedTalkTarget;
+    if (!target) {
+      return;
+    }
+    await this.lockTalk(target);
+  }
+
+  setConferenceMemberListening(conferenceId: number | string, userId: number, listening: boolean): void {
+    const next = nextConferenceMemberListening(
+      useSessionStore.getState().conferenceListen,
+      conferenceId,
+      userId,
+      listening,
+    );
+    this.applyConferenceListen(next);
+  }
+
+  setConferenceMemberLevel(conferenceId: number | string, userId: number, level: number): void {
+    const next = nextConferenceMemberLevel(
+      useSessionStore.getState().conferenceListen,
+      conferenceId,
+      userId,
+      level,
+    );
+    this.applyConferenceListen(next);
+  }
+
+  private applyConferenceListen(next: ConferenceListenState): void {
+    useSessionStore.setState({ conferenceListen: next });
+    this.media?.setConferenceListen(next);
+    void saveConferenceListen(next);
+  }
+
+  private persistLayout(): void {
     const state = useSessionStore.getState();
     void saveRememberedProfile(
       {
@@ -628,7 +751,8 @@ class SessionController {
         username: state.username,
         rememberPassword: state.rememberPassword,
         allowInsecureLocalTLS: state.allowInsecureLocalTLS,
-        leftHanded,
+        leftHanded: state.leftHanded,
+        talkSelectMode: state.talkSelectMode,
       },
       this.pendingPassword,
     );
@@ -757,6 +881,7 @@ class SessionController {
     if (!this.media) {
       this.media = new MediaEngine(this.signaling);
       this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
+      this.media.setConferenceListen(useSessionStore.getState().conferenceListen);
       useSessionStore.setState({ statusMessage: 'Starting media…' });
       await this.media.start();
       try {
@@ -768,9 +893,11 @@ class SessionController {
       }
     } else {
       this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
+      this.media.setConferenceListen(useSessionStore.getState().conferenceListen);
     }
 
     const producers = await this.signaling.requestActiveProducers();
+    this.replaceLiveProducers(producers);
     await this.media.syncProducers(producers, this.consumerContext());
     this.publishMediaSnapshot();
 
@@ -782,9 +909,10 @@ class SessionController {
       talkLocked: false,
       talkingTargetKey: null,
       talkingTargetKeys: [],
-      statusMessage: HOLD_HINT,
+      statusMessage: useSessionStore.getState().talkSelectMode ? 'Talk & select: tap a card, then hold Talk.' : HOLD_HINT,
     });
     this.refreshReplyTarget();
+    this.refreshSelectedTalkTarget(targets);
     await this.syncAudioSession(AppState.currentState);
     await this.syncForegroundService();
     await this.syncSystemPtt();
@@ -848,16 +976,21 @@ class SessionController {
       onTargetsUpdated: () => {
         void this.refreshTargets();
       },
+      onConferenceMembersUpdated: () => {
+        void this.refreshTargets();
+      },
       onIncomingTalkState: (incoming) => {
         useSessionStore.setState({ incoming });
         this.refreshReplyTarget();
       },
       onProducerStarted: (producer) => {
+        this.rememberLiveProducer(producer);
         void this.media?.consumeProducer(producer, this.consumerContext()).then(() => {
           this.publishMediaSnapshot();
         });
       },
       onProducerClosed: (producer) => {
+        this.forgetLiveProducer(producer.producerId);
         void this.media?.dropProducer(producer.producerId).then(() => {
           this.publishMediaSnapshot();
         });
@@ -938,9 +1071,11 @@ class SessionController {
     }
     this.media = new MediaEngine(this.signaling);
     this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
+    this.media.setConferenceListen(useSessionStore.getState().conferenceListen);
     await this.media.start();
     await this.media.warmTalkProducer();
     const producers = await this.signaling.requestActiveProducers();
+    this.replaceLiveProducers(producers);
     await this.media.syncProducers(producers, this.consumerContext());
     this.publishMediaSnapshot();
     await this.syncAudioSession(AppState.currentState);
@@ -965,6 +1100,42 @@ class SessionController {
     const targets = await this.loadTargets(identity, useSessionStore.getState().productionId);
     useSessionStore.setState({ targets });
     this.refreshReplyTarget();
+    this.refreshSelectedTalkTarget(targets);
+  }
+
+  private refreshSelectedTalkTarget(targets: TalkTarget[]): void {
+    const selected = useSessionStore.getState().selectedTalkTarget;
+    if (!selected) {
+      if (useSessionStore.getState().talkSelectMode) {
+        useSessionStore.setState({
+          selectedTalkTarget: useSessionStore.getState().replyTarget ?? this.firstTalkableTarget(),
+        });
+      }
+      return;
+    }
+    const next = targets.find((target) => talkTargetIdentity(target) === talkTargetIdentity(selected)) ?? null;
+    useSessionStore.setState({ selectedTalkTarget: next });
+  }
+
+  private rememberLiveProducer(producer: ActiveProducer): void {
+    this.liveProducers.set(producer.producerId, producer);
+    this.publishActiveFeeds();
+  }
+
+  private forgetLiveProducer(producerId: string): void {
+    this.liveProducers.delete(producerId);
+    this.publishActiveFeeds();
+  }
+
+  private replaceLiveProducers(producers: ActiveProducer[]): void {
+    this.liveProducers = new Map(producers.map((producer) => [producer.producerId, producer]));
+    this.publishActiveFeeds();
+  }
+
+  private publishActiveFeeds(): void {
+    useSessionStore.setState({
+      activeFeedKeys: activeFeedKeysFromProducers([...this.liveProducers.values()]),
+    });
   }
 
   private consumerContext() {
@@ -1425,6 +1596,7 @@ class SessionController {
     }
     try {
       const producers = await this.signaling.requestActiveProducers();
+      this.replaceLiveProducers(producers);
       await this.media.syncProducers(producers, this.consumerContext());
       this.publishMediaSnapshot();
     } catch {

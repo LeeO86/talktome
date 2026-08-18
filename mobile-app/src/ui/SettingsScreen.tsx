@@ -77,6 +77,18 @@ export function SettingsScreen({ visible, onClose }: Props) {
               Moves talk controls and the landscape Reply column to the left, and slides right to
               lock — same as the web client.
             </Text>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Talk & select</Text>
+              <Switch
+                value={store.talkSelectMode}
+                onValueChange={(value) => session.setTalkSelectMode(value)}
+                trackColor={{ true: '#E23B4A' }}
+              />
+            </View>
+            <Text style={styles.footnote}>
+              Reply becomes a red Talk button. Cards only choose the destination; volume sliders
+              stay. Tap a conference icon to set who you hear.
+            </Text>
           </View>
 
           <View style={styles.section}>

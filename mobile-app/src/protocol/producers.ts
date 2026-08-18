@@ -80,3 +80,13 @@ function routeFromAppData(type: string, appData: Record<string, unknown>): Activ
       return { kind: 'unknown', type: type || 'unknown' };
   }
 }
+
+export function activeFeedKeysFromProducers(producers: ActiveProducer[]): string[] {
+  const keys = new Set<string>();
+  for (const producer of producers) {
+    if (producer.route.kind === 'feed') {
+      keys.add(`feed-${producer.route.id}`);
+    }
+  }
+  return [...keys];
+}

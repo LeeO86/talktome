@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
+import type { TalkTarget } from '../protocol';
 import { session, useSessionStore } from '../session/store';
 import { slideToLockHint } from '../talk/slideToLock';
-import { GearIcon, LockIcon, ReplyArrowIcon } from './icons';
+import { ConferenceMembersModal } from './ConferenceMembersModal';
+import { GearIcon, LockIcon, MicIcon, ReplyArrowIcon } from './icons';
 import { HoldToTalk } from './HoldToTalk';
 import { targetLayerCount, visibleTargets } from './layers';
 import { SettingsScreen } from './SettingsScreen';
@@ -15,7 +17,9 @@ export function OperatorScreen() {
   const { width, height } = useWindowDimensions();
   const [layerIndex, setLayerIndex] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [conferenceTarget, setConferenceTarget] = useState<TalkTarget | null>(null);
   const reply = store.replyTarget;
+  const selected = store.selectedTalkTarget;
   const landscape = width > height;
   const layers = targetLayerCount(store.targets.length, width, height);
   const page = visibleTargets(store.targets, layerIndex, width, height);
@@ -25,8 +29,41 @@ export function OperatorScreen() {
   }, [store.productionId, store.targets.length, landscape]);
 
   const replyLabel = reply ? `Reply to ${reply.label}` : 'Reply';
+  const selectLabel = selected ? `Talk to ${selected.label}` : 'Talk';
+  const mainTalking = store.talkSelectMode
+    ? Boolean(store.talking && selected)
+    : Boolean(store.talking && reply);
 
-  const replyButton = (
+  const replyButton = store.talkSelectMode ? (
+    <HoldToTalk
+      accessibilityLabel="Talk to selected destination"
+      disabled={!selected}
+      locked={Boolean(store.talkLocked && selected)}
+      leftHanded={store.leftHanded}
+      onPress={() => void session.pressSelectedTalk()}
+      onLock={() => void session.lockSelectedTalk()}
+      onRelease={() => void session.releaseTalk()}
+      style={[
+        styles.reply,
+        styles.talkSelect,
+        landscape && styles.replyLandscape,
+        mainTalking && styles.talkSelectActive,
+        !selected && styles.replyDisabled,
+      ]}
+    >
+      {store.talkLocked && selected ? (
+        <LockIcon color={colors.text} />
+      ) : (
+        <MicIcon color={selected ? colors.text : 'rgba(255,255,255,0.38)'} />
+      )}
+      <Text style={[styles.replyText, landscape && styles.replyTextLandscape, !selected && styles.replyMuted]}>
+        {selectLabel}
+      </Text>
+      {selected ? (
+        <Text style={styles.replyHint}>{slideToLockHint(store.leftHanded)}</Text>
+      ) : null}
+    </HoldToTalk>
+  ) : (
     <HoldToTalk
       accessibilityLabel="Reply"
       disabled={!reply}
@@ -38,7 +75,7 @@ export function OperatorScreen() {
       style={[
         styles.reply,
         landscape && styles.replyLandscape,
-        store.talking && reply && styles.replyActive,
+        mainTalking && styles.replyActive,
         !reply && styles.replyDisabled,
       ]}
     >
@@ -76,6 +113,14 @@ export function OperatorScreen() {
           ) : null}
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel="Talk and select mode"
+            onPress={() => session.setTalkSelectMode(!store.talkSelectMode)}
+            style={[styles.layer, store.talkSelectMode && styles.modeOn]}
+          >
+            <Text style={styles.layerText}>{store.talkSelectMode ? 'Select' : 'Reply'}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
             accessibilityLabel="Settings"
             onPress={() => setSettingsOpen(true)}
             style={styles.gear}
@@ -99,13 +144,19 @@ export function OperatorScreen() {
       >
         <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
           {page.map((target) => (
-            <TargetRow key={`${target.type}-${target.id}`} target={target} compact={landscape} />
+            <TargetRow
+              key={`${target.type}-${target.id}`}
+              target={target}
+              compact={landscape}
+              onOpenConferenceMembers={setConferenceTarget}
+            />
           ))}
         </ScrollView>
         {replyButton}
       </View>
 
       <SettingsScreen visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ConferenceMembersModal target={conferenceTarget} onClose={() => setConferenceTarget(null)} />
     </View>
   );
 }
@@ -210,6 +261,17 @@ const styles = StyleSheet.create({
   replyActive: {
     backgroundColor: 'rgba(122,71,199,0.28)',
     borderColor: 'rgba(158,112,230,0.68)',
+  },
+  talkSelect: {
+    backgroundColor: 'rgba(226,59,74,0.88)',
+    borderColor: 'rgba(255,180,180,0.55)',
+  },
+  talkSelectActive: {
+    backgroundColor: '#B81F2E',
+    borderColor: 'rgba(255,180,180,0.8)',
+  },
+  modeOn: {
+    backgroundColor: 'rgba(226,59,74,0.35)',
   },
   replyDisabled: {
     backgroundColor: 'rgba(255,255,255,0.05)',
