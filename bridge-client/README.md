@@ -13,7 +13,7 @@ The current bridge path includes:
 - Server registration and automatic loading of Admin bridge assignments.
 - One managed headless user session per configured bridge endpoint.
 - Native CPAL input/output on the exact configured channel pairs.
-- Optional NDI® Audio receive/send through a separately installed NDI Runtime.
+- Optional NDI® Audio receive/send through separately installed NDI Tools or NDI Runtime.
 - Bundled Open Media Transport (OMT) Audio receive/send.
 - Opus/RTP transport to and from mediasoup through the server's plain RTP API.
 - Companion press, release and lock commands for managed bridge users.
@@ -28,12 +28,14 @@ binary path via `TALKTOME_FFMPEG`.
 
 NDI support is optional and dynamically loaded at runtime. Talktome does not
 bundle the NDI SDK, NDI Runtime or NDI Tools. Install the current
+[NDI Tools](https://ndi.video/tools/) package or the
 [NDI Runtime](https://ndi.video/for-developers/) separately, then use the
 Bridge's `Refresh` action. The Bridge reports the loaded runtime version and
-discovered source count in its window.
+discovered source count in its window. Restart the Bridge after updating NDI so
+that no previously loaded runtime remains active.
 
 If no runtime is found, the Bridge shows an orange NDI status and a `Download
-NDI Runtime` button leading to NDI's official Tools download. While refreshing,
+NDI Tools` button leading to NDI's official Tools download. While refreshing,
 the button changes to `Refreshing…` and the status reads `Discovering NDI
 sources…`; discovery can take a few seconds.
 
@@ -46,7 +48,9 @@ use NDI HX, compressed audio or Advanced SDK functionality.
 
 Runtime lookup honors `TALKTOME_NDI_RUNTIME` first, followed by the standard
 `NDI_RUNTIME_DIR_V6`/`V5`/`V4` variables and common installation paths. The
-value can point either to the runtime library itself or its directory.
+Windows fallbacks include both the standalone NDI Runtime and the Runtime
+included with NDI 6 Tools. An environment variable can point either to the
+runtime library itself or its directory.
 
 The macOS Bridge has library validation disabled in its signing entitlements so
 that an independently signed NDI Runtime can be loaded. Keep this limited to the

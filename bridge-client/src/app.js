@@ -251,7 +251,7 @@ function renderNdiStatus(status) {
     ndiRuntimeDetail.title = error;
     if (ndiRuntimeLink) {
       ndiRuntimeLink.href = timedOut ? "https://ndi.video/" : "https://ndi.video/tools/";
-      ndiRuntimeLink.textContent = timedOut ? "NDI® information" : "Download NDI\nRuntime";
+      ndiRuntimeLink.textContent = timedOut ? "NDI® information" : "Download NDI\nTools";
     }
     return;
   }

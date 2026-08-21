@@ -29,6 +29,14 @@ const NDI_TIMECODE_SYNTHESIZE: i64 = i64::MAX;
 const NDI_CAPTURE_TIMEOUT_MS: u32 = 100;
 const NDI_INITIAL_DISCOVERY_WAIT: Duration = Duration::from_secs(2);
 const NDI_EMPTY_DISCOVERY_GRACE: Duration = Duration::from_secs(10);
+#[cfg(any(windows, test))]
+const WINDOWS_NDI_RUNTIME_DIRECTORIES: &[&str] = &[
+    "NDI\\NDI 6 Runtime\\v6",
+    "NDI\\NDI 6 Tools\\Runtime",
+    "NDI\\NDI 5 Runtime\\v5",
+    "NewTek\\NDI 6 Runtime\\v6",
+    "NewTek\\NDI 5 Runtime\\v5",
+];
 
 static NDI_DISCOVERY_LOCK: Mutex<()> = Mutex::new(());
 static NDI_SOURCE_CACHE: OnceLock<Mutex<CachedSources>> = OnceLock::new();
@@ -301,15 +309,7 @@ fn runtime_candidates() -> Vec<PathBuf> {
 
     #[cfg(windows)]
     if let Some(program_files) = std::env::var_os("ProgramFiles") {
-        let program_files = PathBuf::from(program_files);
-        for relative in [
-            "NDI\\NDI 6 Runtime\\v6",
-            "NDI\\NDI 5 Runtime\\v5",
-            "NewTek\\NDI 6 Runtime\\v6",
-            "NewTek\\NDI 5 Runtime\\v5",
-        ] {
-            push_runtime_directory(&mut candidates, &program_files.join(relative), names);
-        }
+        push_windows_runtime_directories(&mut candidates, &PathBuf::from(program_files), names);
     }
 
     for name in names {
@@ -318,6 +318,17 @@ fn runtime_candidates() -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     candidates.retain(|candidate| seen.insert(candidate.clone()));
     candidates
+}
+
+#[cfg(any(windows, test))]
+fn push_windows_runtime_directories(
+    candidates: &mut Vec<PathBuf>,
+    program_files: &Path,
+    names: &[&str],
+) {
+    for relative in WINDOWS_NDI_RUNTIME_DIRECTORIES {
+        push_runtime_directory(candidates, &program_files.join(relative), names);
+    }
 }
 
 fn push_runtime_path(candidates: &mut Vec<PathBuf>, path: PathBuf, names: &[&str]) {
@@ -972,6 +983,22 @@ pub(crate) mod tests {
         );
         assert!(output_source_name("ndi:send:0").is_err());
         assert!(output_source_name("ndi:send:9").is_err());
+    }
+
+    #[test]
+    fn windows_runtime_fallbacks_include_ndi_tools() {
+        let program_files = Path::new("Program Files");
+        let library_name = "Processing.NDI.Lib.x64.dll";
+        let mut candidates = Vec::new();
+
+        push_windows_runtime_directories(&mut candidates, program_files, &[library_name]);
+
+        assert_eq!(
+            candidates[1],
+            program_files
+                .join("NDI\\NDI 6 Tools\\Runtime")
+                .join(library_name)
+        );
     }
 
     #[test]
