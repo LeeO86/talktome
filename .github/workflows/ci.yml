@@ -1,0 +1,128 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "main"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  server-core:
+    name: Server core
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Reject new production dependency advisories
+        run: node scripts/check-npm-audit-baseline.mjs .github/npm-audit-baseline.json
+
+  bridge-client:
+    name: Bridge client
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: bridge-client/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          libasound2-dev
+          libwebkit2gtk-4.1-dev
+          libappindicator3-dev
+          librsvg2-dev
+          patchelf
+
+      - name: Install JavaScript dependencies
+        working-directory: bridge-client
+        run: npm ci
+
+      - name: Audit production dependencies
+        working-directory: bridge-client
+        run: npm audit --package-lock-only --omit=dev --audit-level=high
+
+      - name: Build UI
+        working-directory: bridge-client
+        run: npm run build:ui
+
+      - name: Check Rust
+        run: cargo check --locked --manifest-path bridge-client/src-tauri/Cargo.toml
+
+      - name: Test Rust
+        run: cargo test --locked --manifest-path bridge-client/src-tauri/Cargo.toml --lib
+
+  server-app:
+    name: Server app
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server-app/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          libwebkit2gtk-4.1-dev
+          libappindicator3-dev
+          librsvg2-dev
+          patchelf
+
+      - name: Install JavaScript dependencies
+        working-directory: server-app
+        run: npm ci
+
+      - name: Audit production dependencies
+        working-directory: server-app
+        run: npm audit --package-lock-only --omit=dev --audit-level=high
+
+      - name: Build UI
+        working-directory: server-app
+        run: npm run build:ui
+
+      - name: Check Rust
+        run: cargo check --locked --manifest-path server-app/src-tauri/Cargo.toml
+
+      - name: Test Rust
+        run: cargo test --locked --manifest-path server-app/src-tauri/Cargo.toml --lib
