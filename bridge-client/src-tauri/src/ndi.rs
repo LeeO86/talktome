@@ -17,6 +17,7 @@ use crate::bridge_media::{BridgeOutputLevel, BridgeOutputMixerSource};
 
 const NDI_INPUT_PREFIX: &str = "ndi:recv:";
 const NDI_OUTPUT_PREFIX: &str = "ndi:send:";
+const NDI_INPUT_MAX_CHANNELS: u16 = 32;
 const NDI_OUTPUT_SLOTS: usize = 8;
 const NDI_SAMPLE_RATE: i32 = 48_000;
 const NDI_SEND_FRAMES: usize = 480;
@@ -411,39 +412,42 @@ fn output_source_name(device_id: &str) -> Result<String, String> {
     Ok(format!("Talktome Bridge {slot}"))
 }
 
-fn virtual_device(id: String, name: String, direction: &str) -> AudioDeviceInfo {
+fn channel_pairs(max_channels: u16) -> Vec<ChannelPair> {
+    let mut pairs = (1..=max_channels)
+        .map(|channel| ChannelPair {
+            label: channel.to_string(),
+            left_channel: channel,
+            right_channel: channel,
+        })
+        .collect::<Vec<_>>();
+    pairs.extend((0..max_channels / 2).map(|pair| {
+        let left = pair * 2 + 1;
+        ChannelPair {
+            label: format!("{left}/{}", left + 1),
+            left_channel: left,
+            right_channel: left + 1,
+        }
+    }));
+    pairs
+}
+
+fn virtual_device(id: String, name: String, direction: &str, max_channels: u16) -> AudioDeviceInfo {
     AudioDeviceInfo {
         id,
         name,
         direction: direction.to_string(),
         is_default: false,
-        max_channels: 2,
+        max_channels,
         supports_48k: true,
         supported_configs: vec![AudioConfigRange {
-            channels: 2,
+            channels: max_channels,
             min_sample_rate: 48_000,
             max_sample_rate: 48_000,
             sample_format: "F32 (NDI)".to_string(),
             min_buffer_size: None,
             max_buffer_size: None,
         }],
-        channel_pairs: vec![
-            ChannelPair {
-                label: "1".to_string(),
-                left_channel: 1,
-                right_channel: 1,
-            },
-            ChannelPair {
-                label: "2".to_string(),
-                left_channel: 2,
-                right_channel: 2,
-            },
-            ChannelPair {
-                label: "1/2".to_string(),
-                left_channel: 1,
-                right_channel: 2,
-            },
-        ],
+        channel_pairs: channel_pairs(max_channels),
     }
 }
 
@@ -460,6 +464,7 @@ pub fn audio_devices(wait: Duration) -> Vec<AudioDeviceInfo> {
                 source.id,
                 format!("NDI network input · {}", source.name),
                 "input",
+                NDI_INPUT_MAX_CHANNELS,
             )
         })
         .collect::<Vec<_>>();
@@ -468,6 +473,7 @@ pub fn audio_devices(wait: Duration) -> Vec<AudioDeviceInfo> {
             format!("{NDI_OUTPUT_PREFIX}{slot}"),
             format!("NDI network output · Talktome Bridge {slot}"),
             "output",
+            2,
         )
     }));
     devices
@@ -983,6 +989,19 @@ pub(crate) mod tests {
         );
         assert!(output_source_name("ndi:send:0").is_err());
         assert!(output_source_name("ndi:send:9").is_err());
+    }
+
+    #[test]
+    fn input_channel_pairs_cover_32_channels() {
+        let pairs = channel_pairs(NDI_INPUT_MAX_CHANNELS);
+
+        assert_eq!(pairs.len(), 48);
+        assert!(pairs.iter().any(|pair| {
+            pair.label == "32" && pair.left_channel == 32 && pair.right_channel == 32
+        }));
+        assert!(pairs.iter().any(|pair| {
+            pair.label == "31/32" && pair.left_channel == 31 && pair.right_channel == 32
+        }));
     }
 
     #[test]

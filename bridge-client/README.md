@@ -39,12 +39,14 @@ NDI Tools` button leading to NDI's official Tools download. While refreshing,
 the button changes to `Refreshing…` and the status reads `Discovering NDI
 sources…`; discovery can take a few seconds.
 
-Discovered NDI sources are exposed as Bridge input devices. Eight stereo send
-slots named `Talktome Bridge 1` through `Talktome Bridge 8` are exposed as
-Bridge output devices. Both use the existing managed Bridge-port configuration,
-so no server-side NDI component is required. The first implementation supports
-uncompressed planar floating-point audio at 48 kHz. It intentionally does not
-use NDI HX, compressed audio or Advanced SDK functionality.
+Discovered NDI sources are exposed as Bridge input devices with channel choices
+up to channel 32. The selected channel is validated against the channel count of
+received audio frames. Eight stereo send slots named `Talktome Bridge 1` through
+`Talktome Bridge 8` are exposed as Bridge output devices. Both use the existing
+managed Bridge-port configuration, so no server-side NDI component is required.
+The first implementation supports uncompressed planar floating-point audio at
+48 kHz. It intentionally does not use NDI HX, compressed audio or Advanced SDK
+functionality.
 
 Runtime lookup honors `TALKTOME_NDI_RUNTIME` first, followed by the standard
 `NDI_RUNTIME_DIR_V6`/`V5`/`V4` variables and common installation paths. The
