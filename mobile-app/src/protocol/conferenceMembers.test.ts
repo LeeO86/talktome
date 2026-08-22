@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   excludeSelfConferenceMembers,
   formatLinearLevelDb,
+  formatLinearLevelDbShort,
   onlineUserIdsFromPeers,
   sortConferenceMembers,
 } from './conferenceMembers';
@@ -56,5 +57,8 @@ describe('conference members', () => {
     expect(formatLinearLevelDb(1)).toBe('0 dB');
     expect(formatLinearLevelDb(0)).toBe('-inf dB');
     expect(formatLinearLevelDb(0.5)).toBe('-6.0 dB');
+    expect(formatLinearLevelDbShort(1)).toBe('0');
+    expect(formatLinearLevelDbShort(0.5)).toBe('-6');
+    expect(formatLinearLevelDbShort(0)).toBe('-∞');
   });
 });

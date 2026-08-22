@@ -14,11 +14,11 @@ public final class TalkToMeForegroundServiceModule: Module {
       false
     }
 
-    AsyncFunction("start") { (_includeConnectedDevice: Bool) in
+    AsyncFunction("start") { (_includeConnectedDevice: Bool, _title: String, _text: String) in
       false
     }
 
-    AsyncFunction("update") { (_includeConnectedDevice: Bool) in
+    AsyncFunction("update") { (_includeConnectedDevice: Bool, _title: String, _text: String) in
       false
     }
 

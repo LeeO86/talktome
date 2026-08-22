@@ -1,0 +1,12 @@
+/** @type {import('@bacons/apple-targets/app.plugin').Config} */
+module.exports = {
+  type: 'widget',
+  name: 'TalkToMeWidget',
+  displayName: 'TalkToMe',
+  bundleIdentifier: '.widget',
+  deploymentTarget: '17.0',
+  frameworks: ['SwiftUI', 'WidgetKit', 'ActivityKit'],
+  entitlements: {
+    'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
+  },
+};

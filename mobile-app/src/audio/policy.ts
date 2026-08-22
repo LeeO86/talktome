@@ -25,6 +25,11 @@ export function shouldOwnAudioSession(input: {
   return input.platform === 'ios' || input.platform === 'android';
 }
 
+/** Activate AVAudioSession before getUserMedia / produce, or the iOS Simulator abort()s in VoiceProcessingIO. */
+export function shouldPrepareAudioForMedia(input: { platform: string; pttEnabled: boolean }): boolean {
+  return input.platform === 'ios' && !input.pttEnabled;
+}
+
 export function shouldStartBackgroundKeepalive(input: {
   platform: string;
   pttEnabled: boolean;

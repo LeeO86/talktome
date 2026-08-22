@@ -7,6 +7,7 @@ import {
   audioSessionStatusLabel,
   iosPttEnabled,
   shouldOwnAudioSession,
+  shouldPrepareAudioForMedia,
   shouldReactivateCaptureForTalk,
   shouldStartBackgroundKeepalive,
 } from './policy';
@@ -19,6 +20,12 @@ describe('audio session policy', () => {
     expect(
       shouldOwnAudioSession({ platform: 'ios', pttEnabled: false, operatorReady: false }),
     ).toBe(false);
+  });
+
+  it('prepares the iOS session before media, unless PushToTalk owns it', () => {
+    expect(shouldPrepareAudioForMedia({ platform: 'ios', pttEnabled: false })).toBe(true);
+    expect(shouldPrepareAudioForMedia({ platform: 'ios', pttEnabled: true })).toBe(false);
+    expect(shouldPrepareAudioForMedia({ platform: 'android', pttEnabled: false })).toBe(false);
   });
 
   it('does not own the session when PushToTalk is compiled in', () => {

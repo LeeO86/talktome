@@ -1,12 +1,28 @@
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { DEFAULT_AUDIO_PREFERENCE, talkTargetIdentity, type TalkTarget } from '../protocol';
+import {
+  DEFAULT_AUDIO_PREFERENCE,
+  formatLinearLevelDb,
+  nudgeVolume,
+  talkTargetIdentity,
+  type TalkTarget,
+} from '../protocol';
 import { session, useSessionStore } from '../session/store';
 import { incomingHighlightsTarget } from '../talk/replyTarget';
 import { HoldToTalk } from './HoldToTalk';
-import { ConferenceIcon, HeadphonesIcon, LockIcon, MicIcon, PersonIcon, SpeakerIcon, StopIcon } from './icons';
+import {
+  ConferenceIcon,
+  HeadphonesIcon,
+  ListenOnlyIcon,
+  LockIcon,
+  PersonIcon,
+  PlayIcon,
+  StopIcon,
+} from './icons';
 import { colors } from './theme';
-import { VolumeSlider } from './VolumeSlider';
+import { VolumeOverlay } from './VolumeOverlay';
+import { VolumeRing } from './VolumeRing';
 
 type Props = {
   target: TalkTarget;
@@ -17,8 +33,7 @@ type Props = {
 export function TargetRow({ target, compact = false, onOpenConferenceMembers }: Props) {
   const key = talkTargetIdentity(target);
   const talking = useSessionStore((state) => state.talkingTargetKeys.includes(key));
-  const locked = useSessionStore((state) => state.talkLocked && state.talkingTargetKeys.includes(key));
-  const speaking = useSessionStore((state) => state.speakingTargetKeys.includes(key));
+  const locked = useSessionStore((state) => state.lockedTargetKeys.includes(key));
   const incoming = useSessionStore((state) =>
     state.incoming.addressedNow.some((entry) => incomingHighlightsTarget(entry, target)),
   );
@@ -39,7 +54,11 @@ export function TargetRow({ target, compact = false, onOpenConferenceMembers }: 
   const userOnline =
     target.type !== 'user' || peers.some((peer) => peer.kind === 'user' && peer.userId === target.id);
   const dimmed = target.type === 'feed' ? !feedOnline : target.type === 'user' && !userOnline;
-  const talkSize = compact ? 56 : 48;
+  const listenOnly = target.type === 'conference' && !target.canTalk;
+  const [volumeOpen, setVolumeOpen] = useState(false);
+
+  const speaking = incoming;
+  const streaming = target.type === 'feed' && feedOnline && !feedStopped;
 
   const meta =
     target.type === 'feed'
@@ -47,71 +66,22 @@ export function TargetRow({ target, compact = false, onOpenConferenceMembers }: 
         ? 'Offline'
         : feedStopped
           ? 'Stopped'
-          : speaking
+          : streaming
             ? 'Streaming'
             : 'Feed'
       : target.type === 'conference'
-        ? target.canTalk
-          ? speaking || incoming
+        ? listenOnly
+          ? 'Listen only'
+          : speaking
             ? 'Speaking'
             : 'Conference'
-          : 'Listen only'
         : userOnline
-          ? speaking || incoming
+          ? speaking
             ? 'Speaking'
             : 'Online'
           : 'Offline';
 
-  const iconColor = dimmed ? 'rgba(255,255,255,0.28)' : speaking || incoming ? colors.speaking : colors.accent;
-
-  const talkControl =
-    target.type === 'feed' ? (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={feedStopped ? 'Start feed' : 'Stop feed'}
-        onPress={() => session.toggleFeedReception(target)}
-        style={[styles.circle, compact && { width: talkSize, height: talkSize, borderRadius: 12 }]}
-      >
-        <StopIcon color={colors.text} />
-      </Pressable>
-    ) : target.canTalk && !talkSelectMode ? (
-      <HoldToTalk
-        accessibilityLabel={locked ? `Unlock ${target.label}` : `Talk to ${target.label}`}
-        disabled={!canTalk}
-        locked={locked}
-        leftHanded={leftHanded}
-        onPress={() => void session.pressTalk(target)}
-        onLock={() => void session.lockTalk(target)}
-        onRelease={() => void session.releaseTalk(target)}
-        style={[
-          styles.talk,
-          compact && styles.talkCompact,
-          { width: talkSize, height: talkSize },
-          (talking || locked) && styles.talkActive,
-          !canTalk && styles.circleDim,
-        ]}
-      >
-        {locked ? (
-          <LockIcon color={colors.text} />
-        ) : (
-          <MicIcon color={!canTalk ? 'rgba(255,255,255,0.28)' : colors.text} />
-        )}
-      </HoldToTalk>
-    ) : (
-      <View style={[styles.circle, compact && { width: talkSize, height: talkSize }, selected && styles.selectedMark]} />
-    );
-
-  const muteControl = (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={preference.muted ? 'Unmute' : 'Mute'}
-      disabled={dimmed}
-      onPress={() => session.toggleTargetMuted(target)}
-      style={[styles.circle, preference.muted && styles.muteActive, dimmed && styles.circleDim]}
-    >
-      <SpeakerIcon muted={preference.muted} color={dimmed ? 'rgba(255,255,255,0.28)' : colors.text} />
-    </Pressable>
-  );
+  const iconColor = dimmed ? 'rgba(255,255,255,0.28)' : speaking || streaming ? colors.speaking : colors.accent;
 
   const avatar =
     target.type === 'conference' ? (
@@ -122,6 +92,11 @@ export function TargetRow({ target, compact = false, onOpenConferenceMembers }: 
         style={[styles.avatar, { backgroundColor: dimmed ? 'rgba(255,255,255,0.04)' : 'rgba(61,214,245,0.12)' }]}
       >
         <ConferenceIcon color={iconColor} />
+        {listenOnly ? (
+          <View style={styles.listenBadge}>
+            <ListenOnlyIcon color={colors.muted} size={10} />
+          </View>
+        ) : null}
       </Pressable>
     ) : (
       <View style={[styles.avatar, { backgroundColor: dimmed ? 'rgba(255,255,255,0.04)' : 'rgba(61,214,245,0.12)' }]}>
@@ -129,62 +104,37 @@ export function TargetRow({ target, compact = false, onOpenConferenceMembers }: 
       </View>
     );
 
-  const body = (
-    <>
-      {avatar}
-      <View style={styles.identity} pointerEvents="none">
+  const identity = (
+    <View style={styles.identity} pointerEvents="none">
+      <View style={styles.nameRow}>
+        {locked ? <LockIcon color={colors.text} size={14} /> : null}
         <Text style={[styles.label, dimmed && styles.dimText]} numberOfLines={1}>
           {target.label}
         </Text>
-        <Text style={styles.meta} numberOfLines={1}>
-          {meta}
-        </Text>
       </View>
-      <VolumeSlider
-        value={preference.volume}
-        disabled={dimmed || preference.muted}
-        onChange={(volume) => session.setTargetVolume(target, volume)}
-      />
-      {leftHanded ? (
-        <>
-          {talkControl}
-          {muteControl}
-        </>
-      ) : (
-        <>
-          {muteControl}
-          {talkControl}
-        </>
-      )}
-    </>
+      <Text style={styles.meta} numberOfLines={1}>
+        {meta}
+      </Text>
+    </View>
   );
 
-  const rowStyle = [
-    styles.row,
-    leftHanded && styles.rowLeft,
-    compact && styles.rowCompact,
-    (talking || locked) && styles.rowTalking,
-    (speaking || incoming) && !talking && styles.rowSpeaking,
-    talkSelectMode && selected && styles.rowSelected,
-    dimmed && styles.rowOffline,
-  ];
+  const talkZoneStyle = [styles.talkZone, talking ? styles.talkZoneActive : null];
 
+  let talkZone;
   if (talkSelectMode && canTalk) {
-    return (
+    talkZone = (
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Select ${target.label}`}
         accessibilityState={{ selected }}
         onPress={() => session.selectTalkTarget(target)}
-        style={rowStyle}
+        style={talkZoneStyle}
       >
-        {body}
+        {identity}
       </Pressable>
     );
-  }
-
-  if (canTalk && !talkSelectMode) {
-    return (
+  } else if (canTalk && !talkSelectMode) {
+    talkZone = (
       <HoldToTalk
         accessibilityLabel={locked ? `Unlock ${target.label}` : `Talk to ${target.label}`}
         disabled={!canTalk}
@@ -193,14 +143,68 @@ export function TargetRow({ target, compact = false, onOpenConferenceMembers }: 
         onPress={() => void session.pressTalk(target)}
         onLock={() => void session.lockTalk(target)}
         onRelease={() => void session.releaseTalk(target)}
-        style={rowStyle}
+        style={talkZoneStyle}
       >
-        {body}
+        {identity}
       </HoldToTalk>
     );
+  } else {
+    talkZone = <View style={talkZoneStyle}>{identity}</View>;
   }
 
-  return <View style={rowStyle}>{body}</View>;
+  const rowStyle = [
+    styles.row,
+    leftHanded && styles.rowLeft,
+    compact && styles.rowCompact,
+    talking && styles.rowTalking,
+    (speaking || streaming) && !talking && styles.rowSpeaking,
+    talkSelectMode && selected && styles.rowSelected,
+    dimmed && styles.rowOffline,
+  ];
+
+  return (
+    <View style={rowStyle}>
+      {avatar}
+      {talkZone}
+      <View style={[styles.meterCluster, leftHanded && styles.meterClusterLeft]}>
+        {target.type === 'feed' && feedOnline ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={feedStopped ? 'Start feed' : 'Stop feed'}
+            onPress={() => session.toggleFeedReception(target)}
+            style={styles.feedButton}
+          >
+            {feedStopped ? <PlayIcon color={colors.text} /> : <StopIcon color={colors.text} />}
+          </Pressable>
+        ) : (
+          <View style={styles.feedSlot} />
+        )}
+        <VolumeRing
+          level={preference.volume}
+          muted={preference.muted}
+          dimmed={dimmed}
+          compact={compact}
+          accessibilityLabel={
+            preference.muted ? `Volume muted, ${target.label}` : `Volume ${formatLinearLevelDb(preference.volume)}`
+          }
+          onPress={() => setVolumeOpen(true)}
+          onDoublePress={() => session.toggleTargetMuted(target)}
+        />
+      </View>
+      <VolumeOverlay
+        visible={volumeOpen}
+        title={target.label}
+        level={preference.volume}
+        muted={preference.muted}
+        onNudge={(direction) => {
+          const current = useSessionStore.getState().audioPreferences[key] ?? DEFAULT_AUDIO_PREFERENCE;
+          session.setTargetVolume(target, nudgeVolume(current.volume, direction));
+        }}
+        onToggleMute={() => session.toggleTargetMuted(target)}
+        onClose={() => setVolumeOpen(false)}
+      />
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -209,8 +213,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-start',
     gap: 8,
-    minHeight: 68,
+    minHeight: 72,
     paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.05)',
     borderWidth: 1,
@@ -220,7 +225,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row-reverse',
   },
   rowCompact: {
-    minHeight: 58,
+    minHeight: 62,
     paddingHorizontal: 8,
   },
   rowTalking: {
@@ -244,15 +249,42 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  listenBadge: {
+    position: 'absolute',
+    right: -4,
+    bottom: -4,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#121826',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  talkZone: {
+    flex: 1,
+    alignSelf: 'stretch',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  talkZoneActive: {
+    opacity: 1,
+  },
   identity: {
-    width: 108,
-    flexGrow: 1,
-    flexShrink: 1,
+    width: '100%',
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   label: {
     color: colors.text,
     fontWeight: '700',
     fontSize: 16,
+    flexShrink: 1,
   },
   dimText: {
     color: 'rgba(255,255,255,0.55)',
@@ -262,33 +294,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
-  circle: {
+  meterCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  meterClusterLeft: {
+    flexDirection: 'row-reverse',
+  },
+  feedSlot: {
+    width: 40,
+    height: 40,
+  },
+  feedButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.08)',
-  },
-  talk: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-  },
-  talkCompact: {
-    borderRadius: 12,
-  },
-  circleDim: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  muteActive: {
-    backgroundColor: colors.mute,
-  },
-  talkActive: {
-    backgroundColor: colors.talking,
-  },
-  selectedMark: {
-    backgroundColor: colors.talk,
   },
 });

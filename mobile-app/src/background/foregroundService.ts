@@ -11,8 +11,8 @@ export type ForegroundServiceSnapshot = {
 type NativeForegroundService = {
   isAvailable?: () => boolean;
   isRunning?: () => boolean;
-  start?: (includeConnectedDevice: boolean) => Promise<boolean>;
-  update?: (includeConnectedDevice: boolean) => Promise<boolean>;
+  start?: (includeConnectedDevice: boolean, title: string, text: string) => Promise<boolean>;
+  update?: (includeConnectedDevice: boolean, title: string, text: string) => Promise<boolean>;
   stop?: () => Promise<boolean>;
   openBatterySettings?: () => Promise<boolean>;
   addListener?: (
@@ -57,20 +57,28 @@ export function describeForegroundService(platform: string, running: boolean): s
   });
 }
 
-export async function startForegroundService(includeConnectedDevice: boolean): Promise<boolean> {
+export async function startForegroundService(
+  includeConnectedDevice: boolean,
+  title = 'Nobody Talking',
+  text = 'Disconnect ends the session.',
+): Promise<boolean> {
   const native = loadNative();
   if (!native?.start) {
     return false;
   }
-  return native.start(includeConnectedDevice);
+  return native.start(includeConnectedDevice, title, text);
 }
 
-export async function updateForegroundService(includeConnectedDevice: boolean): Promise<boolean> {
+export async function updateForegroundService(
+  includeConnectedDevice: boolean,
+  title = 'Nobody Talking',
+  text = 'Disconnect ends the session.',
+): Promise<boolean> {
   const native = loadNative();
   if (!native?.update) {
     return false;
   }
-  return native.update(includeConnectedDevice);
+  return native.update(includeConnectedDevice, title, text);
 }
 
 export async function stopForegroundService(): Promise<boolean> {

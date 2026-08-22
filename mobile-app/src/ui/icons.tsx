@@ -118,6 +118,25 @@ export function StopIcon({ color = colors.text, size = 14 }: IconProps) {
   return <View style={{ width: size, height: size, borderRadius: 3, backgroundColor: color }} {...iconEvents} />;
 }
 
+export function PlayIcon({ color = colors.text, size = 14 }: IconProps) {
+  return (
+    <View
+      style={{
+        width: 0,
+        height: 0,
+        marginLeft: 2,
+        borderTopWidth: size * 0.42,
+        borderBottomWidth: size * 0.42,
+        borderLeftWidth: size * 0.72,
+        borderTopColor: 'transparent',
+        borderBottomColor: 'transparent',
+        borderLeftColor: color,
+      }}
+      {...iconEvents}
+    />
+  );
+}
+
 export function GearIcon({ color = colors.text, size = 18 }: IconProps) {
   return (
     <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
@@ -145,6 +164,16 @@ export function LockIcon({ color = colors.text, size = 16 }: IconProps) {
     <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
       <View style={[styles.lockShackle, { borderColor: color, width: size * 0.55, height: size * 0.4 }]} />
       <View style={[styles.lockBody, { backgroundColor: color, width: size * 0.72, height: size * 0.48 }]} />
+    </View>
+  );
+}
+
+export function ListenOnlyIcon({ color = colors.muted, size = 14 }: IconProps) {
+  return (
+    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
+      <View style={[styles.micCapsule, { backgroundColor: color, width: size * 0.36, height: size * 0.5 }]} />
+      <View style={[styles.micStand, { backgroundColor: color, height: size * 0.18 }]} />
+      <View style={[styles.slash, { width: size * 0.92, backgroundColor: color, height: 1.5 }]} />
     </View>
   );
 }

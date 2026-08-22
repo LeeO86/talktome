@@ -15,5 +15,5 @@ export function fgsStatusLabel(input: { available: boolean; running: boolean; pl
 export function fgsCapabilityReason(running: boolean): string {
   return running
     ? 'Session is in a microphone/media foreground service. OEM battery savers can still kill it.'
-    : 'Android starts a microphone/media foreground service after you join a production. Rebuild the Dev Client if the notification never appears. OEM battery savers can still kill it.';
+    : 'Android starts a microphone/media foreground service after you join a production. OEM battery savers can still kill it.';
 }

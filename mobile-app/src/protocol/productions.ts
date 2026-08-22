@@ -25,3 +25,11 @@ export function resolveProduction(
   }
   return productions.find((item) => item.id === id) ?? DEFAULT_PRODUCTION;
 }
+
+export function visibleProductionName(name: string | null | undefined): string | null {
+  const trimmed = name?.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'default') {
+    return null;
+  }
+  return trimmed;
+}

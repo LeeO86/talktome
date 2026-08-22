@@ -38,8 +38,8 @@ export function ProductionPickerScreen() {
       {statusMessage ? <Text style={styles.status}>{statusMessage}</Text> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <Pressable onPress={() => void session.logout()} style={styles.logout}>
-        <Text style={styles.logoutText}>Log out</Text>
+      <Pressable onPress={() => void session.leaveToProfiles()} style={styles.logout}>
+        <Text style={styles.logoutText}>Profiles</Text>
       </Pressable>
     </View>
   );

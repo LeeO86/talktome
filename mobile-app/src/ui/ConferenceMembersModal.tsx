@@ -1,16 +1,18 @@
-import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
   excludeSelfConferenceMembers,
   formatLinearLevelDb,
+  nudgeVolume,
   onlineUserIdsFromPeers,
   sortConferenceMembers,
   type TalkTarget,
 } from '../protocol';
 import { conferenceMemberExcluded, conferenceMemberLevel } from '../session/conferenceListen';
 import { session, useSessionStore } from '../session/store';
+import { NudgeButton } from './NudgeButton';
 import { colors } from './theme';
-import { VolumeSlider } from './VolumeSlider';
+import { VolumeRing } from './VolumeRing';
 
 type Props = {
   target: TalkTarget | null;
@@ -27,13 +29,16 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
     onlineIds,
   );
 
+  const nudgeMember = (userId: number, direction: 1 | -1) => {
+    if (!target) {
+      return;
+    }
+    const current = conferenceMemberLevel(useSessionStore.getState().conferenceListen, target.id, userId);
+    session.setConferenceMemberLevel(target.id, userId, nudgeVolume(current, direction));
+  };
+
   return (
-    <Modal
-      visible={Boolean(target)}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
+    <Modal visible={Boolean(target)} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={styles.card}>
@@ -51,36 +56,48 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
                 return (
                   <View
                     key={member.userId}
-                    style={[styles.member, !online && styles.memberOffline, !listening && styles.memberMuted]}
+                    style={[
+                      styles.member,
+                      !online && styles.memberOffline,
+                      !listening && styles.memberMuted,
+                    ]}
                   >
-                    <View style={styles.memberTop}>
-                      <Switch
-                        value={listening}
-                        onValueChange={(value) => {
-                          if (target) {
-                            session.setConferenceMemberListening(target.id, member.userId, value);
-                          }
-                        }}
-                        trackColor={{ true: '#22c55e' }}
-                      />
+                    <View style={styles.memberText}>
                       <Text style={[styles.memberName, !online && styles.offlineText]} numberOfLines={1}>
                         {member.name}
                       </Text>
-                      <Text style={styles.onlineState}>{online ? 'Online' : 'Offline'}</Text>
+                      <Text style={styles.onlineState}>
+                        {!listening ? 'Muted' : online ? 'Online' : 'Offline'}
+                      </Text>
                     </View>
-                    <View style={styles.levelRow}>
-                      <VolumeSlider
-                        value={level}
-                        disabled={!listening}
-                        flex
-                        onChange={(value) => {
-                          if (target) {
-                            session.setConferenceMemberLevel(target.id, member.userId, value);
-                          }
-                        }}
-                      />
-                      <Text style={styles.db}>{formatLinearLevelDb(listening ? level : 0)}</Text>
-                    </View>
+                    <NudgeButton
+                      accessibilityLabel={`Quieter ${member.name}`}
+                      onNudge={() => nudgeMember(member.userId, -1)}
+                      style={styles.nudge}
+                      textStyle={styles.nudgeText}
+                    >
+                      {'−'}
+                    </NudgeButton>
+                    <VolumeRing
+                      level={level}
+                      muted={!listening}
+                      dimmed={!online}
+                      compact
+                      accessibilityLabel={`Volume ${formatLinearLevelDb(listening ? level : 0)}`}
+                      onDoublePress={() =>
+                        target
+                          ? session.setConferenceMemberListening(target.id, member.userId, !listening)
+                          : undefined
+                      }
+                    />
+                    <NudgeButton
+                      accessibilityLabel={`Louder ${member.name}`}
+                      onNudge={() => nudgeMember(member.userId, 1)}
+                      style={styles.nudge}
+                      textStyle={styles.nudgeText}
+                    >
+                      {'+'}
+                    </NudgeButton>
                   </View>
                 );
               })
@@ -104,15 +121,15 @@ const styles = StyleSheet.create({
   },
   card: {
     maxHeight: '80%',
-    borderRadius: 14,
-    backgroundColor: '#1f2937',
+    borderRadius: 16,
+    backgroundColor: '#121826',
     borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.28)',
+    borderColor: 'rgba(255,255,255,0.12)',
     overflow: 'hidden',
     zIndex: 1,
   },
   description: {
-    color: 'rgba(226, 232, 240, 0.7)',
+    color: colors.muted,
     fontSize: 14,
     paddingHorizontal: 16,
     paddingTop: 16,
@@ -127,66 +144,69 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   empty: {
-    color: 'rgba(148, 163, 184, 0.8)',
+    color: colors.muted,
     textAlign: 'center',
     paddingVertical: 24,
   },
   member: {
-    minHeight: 68,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 8,
+    minHeight: 56,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   memberOffline: {
     opacity: 0.78,
   },
   memberMuted: {
-    opacity: 0.62,
+    opacity: 0.85,
   },
-  memberTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+  memberText: {
+    flexGrow: 1,
+    flexShrink: 1,
   },
   memberName: {
     color: colors.text,
     fontSize: 16,
     fontWeight: '600',
-    flexGrow: 1,
-    flexShrink: 1,
   },
   offlineText: {
     color: 'rgba(148, 163, 184, 0.92)',
   },
   onlineState: {
-    color: 'rgba(148, 163, 184, 0.7)',
+    color: colors.muted,
     fontSize: 12,
+    marginTop: 2,
   },
-  levelRow: {
-    flexDirection: 'row',
+  nudge: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(61,214,245,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(61,214,245,0.32)',
     alignItems: 'center',
-    gap: 10,
-    marginTop: 8,
-    paddingLeft: 4,
+    justifyContent: 'center',
   },
-  db: {
-    color: 'rgba(226, 232, 240, 0.82)',
-    fontSize: 12,
-    width: 64,
-    textAlign: 'right',
-    fontVariant: ['tabular-nums'],
+  nudgeText: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: '600',
+    marginTop: -1,
   },
   done: {
     margin: 16,
     marginTop: 8,
-    backgroundColor: '#3b82f6',
-    borderRadius: 8,
+    backgroundColor: 'rgba(61,214,245,0.18)',
+    borderRadius: 12,
     minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
   doneText: {
-    color: '#fff',
+    color: colors.text,
     fontWeight: '700',
     fontSize: 16,
   },

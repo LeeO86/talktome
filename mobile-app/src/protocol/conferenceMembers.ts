@@ -54,6 +54,15 @@ export function formatLinearLevelDb(level: number): string {
   return `${rounded.toFixed(1)} dB`;
 }
 
+/** Compact label for the volume ring. */
+export function formatLinearLevelDbShort(level: number): string {
+  const formatted = formatLinearLevelDb(level);
+  if (formatted === '-inf dB') {
+    return '-∞';
+  }
+  return formatted.replace(' dB', '').replace(/\.0$/, '');
+}
+
 export function conferenceListenKey(conferenceId: number | string, userId: number): string {
   return `${conferenceId}:${userId}`;
 }

@@ -51,4 +51,35 @@ describe('resolveReplyTalkTarget', () => {
       ),
     ).toBe(true);
   });
+
+  it('does not highlight the person being talked to', () => {
+    const schniedel: TalkTarget = { type: 'user', id: 4, label: 'Schniedel', canTalk: true };
+    expect(
+      incomingHighlightsTarget(
+        { fromUserId: 9, targetType: 'user', targetId: 4, replyTargetType: 'user', replyTargetId: 4 },
+        schniedel,
+      ),
+    ).toBe(false);
+    expect(
+      incomingHighlightsTarget(
+        { fromUserId: 9, targetType: 'user', targetId: 4, replyTargetType: 'user', replyTargetId: 4 },
+        beni,
+      ),
+    ).toBe(true);
+  });
+
+  it('highlights the conference card, not a member user card', () => {
+    expect(
+      incomingHighlightsTarget(
+        { fromUserId: 9, fromName: 'beni', targetType: 'conference', targetId: 2 },
+        traktor,
+      ),
+    ).toBe(true);
+    expect(
+      incomingHighlightsTarget(
+        { fromUserId: 9, fromName: 'beni', targetType: 'conference', targetId: 2 },
+        beni,
+      ),
+    ).toBe(false);
+  });
 });

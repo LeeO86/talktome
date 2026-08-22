@@ -50,6 +50,7 @@ import {
 import {
   iosPttEnabled,
   shouldOwnAudioSession,
+  shouldPrepareAudioForMedia,
   shouldReactivateCaptureForTalk,
   shouldStartBackgroundKeepalive,
 } from '../audio/policy';
@@ -97,12 +98,24 @@ import {
   updatePttChannel,
   updatePttRemoteParticipant,
 } from '../ptt/native';
-import { loadRememberedProfile, saveRememberedProfile } from './remembered';
+import {
+  loadProfileBundle,
+  passwordForProfile,
+  profileCanAutoConnect,
+  profileIdentity,
+  removeProfile,
+  savePasswordForProfile,
+  saveProfileBundle,
+  upsertProfile,
+  type SavedProfile,
+} from './remembered';
+import { sessionPresence, presenceNotification } from './presence';
+import { publishSessionPresence, subscribeTalkShortcut } from './presenceNative';
 import { AppState, Platform, type AppStateStatus } from 'react-native';
 
 export type SessionUiState = {
   hydrated: boolean;
-  status: 'idle' | 'connecting' | 'choose-production' | 'ready' | 'error';
+  status: 'idle' | 'connecting' | 'choose-production' | 'ready' | 'paused' | 'error';
   statusMessage: string;
   serverAddress: string;
   username: string;
@@ -118,10 +131,15 @@ export type SessionUiState = {
   productions: Production[];
   productionId: number | null;
   productionName: string | null;
+  profiles: SavedProfile[];
+  activeProfileId: string | null;
+  paused: boolean;
+  addingProfile: boolean;
   operatorReady: boolean;
   targets: TalkTarget[];
   talkingTargetKey: string | null;
   talkingTargetKeys: string[];
+  lockedTargetKeys: string[];
   talking: boolean;
   talkLocked: boolean;
   incoming: IncomingTalkState;
@@ -179,10 +197,15 @@ const initialState: SessionUiState = {
   productions: [],
   productionId: null,
   productionName: null,
+  profiles: [],
+  activeProfileId: null,
+  paused: false,
+  addingProfile: false,
   operatorReady: false,
   targets: [],
   talkingTargetKey: null,
   talkingTargetKeys: [],
+  lockedTargetKeys: [],
   talking: false,
   talkLocked: false,
   incoming: { addressedNow: [] },
@@ -245,21 +268,26 @@ class SessionController {
   private readonly blePolicy = new BleButtonPolicy();
 
   async hydrate(): Promise<void> {
-    const [remembered, audioPreferences, blePreferences, conferenceListen] = await Promise.all([
-      loadRememberedProfile(),
+    const [bundle, audioPreferences, blePreferences, conferenceListen] = await Promise.all([
+      loadProfileBundle(),
       loadAudioPreferences(),
       loadBlePreferences(),
       loadConferenceListen(),
       hydrateTlsPins(),
     ]);
+    const last = bundle.profiles.find((item) => item.id === bundle.lastProfileId) ?? bundle.profiles[0] ?? null;
     useSessionStore.setState({
       hydrated: true,
-      serverAddress: remembered?.serverAddress ?? '',
-      username: remembered?.username ?? '',
-      rememberPassword: remembered?.rememberPassword ?? true,
-      allowInsecureLocalTLS: remembered?.allowInsecureLocalTLS ?? false,
-      leftHanded: remembered?.leftHanded ?? false,
-      talkSelectMode: remembered?.talkSelectMode ?? false,
+      profiles: bundle.profiles,
+      activeProfileId: last?.id ?? null,
+      serverAddress: last?.serverAddress ?? '',
+      username: last?.username ?? '',
+      rememberPassword: last?.rememberPassword ?? true,
+      allowInsecureLocalTLS: last?.allowInsecureLocalTLS ?? false,
+      productionId: last?.productionId ?? null,
+      productionName: last?.productionName ?? null,
+      leftHanded: bundle.leftHanded,
+      talkSelectMode: bundle.talkSelectMode,
       audioSessionAvailable: audioSessionAvailable(),
       pttAvailable: pttNativeAvailable(),
       capabilityReason: this.capabilityReason({
@@ -270,11 +298,18 @@ class SessionController {
       conferenceListen,
       ...bleFieldsFromSelection(blePreferences.target, blePreferences.shortPressLocksTalk),
     });
-    this.pendingPassword = remembered?.password;
+    this.pendingPassword = last ? await passwordForProfile(last.id) : undefined;
     this.bindHardware();
     void startBleNative().then((state) => this.publishBleState(state));
-    if (remembered?.serverAddress) {
-      void this.refreshLoginOptions(remembered.serverAddress);
+    if (last?.serverAddress) {
+      void this.refreshLoginOptions(last.serverAddress);
+    }
+    if (bundle.profiles.length === 1 && last && profileCanAutoConnect(last, this.pendingPassword)) {
+      try {
+        await this.connectProfile(last.id);
+      } catch {
+        useSessionStore.setState({ paused: false, addingProfile: false, status: 'idle' });
+      }
     }
   }
 
@@ -319,17 +354,7 @@ class SessionController {
       throw new SessionCookieUnavailableError();
     }
     await this.finishIdentity(identity, input.force === true);
-    await saveRememberedProfile(
-      {
-        serverAddress: input.serverAddress,
-        username: input.username,
-        rememberPassword: input.rememberPassword,
-        allowInsecureLocalTLS: useSessionStore.getState().allowInsecureLocalTLS,
-        leftHanded: useSessionStore.getState().leftHanded,
-        talkSelectMode: useSessionStore.getState().talkSelectMode,
-      },
-      input.password,
-    );
+    await this.persistCurrentProfile(input.password);
   }
 
   async loginGuest(input: { serverAddress: string; displayName?: string; force?: boolean }): Promise<void> {
@@ -338,20 +363,7 @@ class SessionController {
     useSessionStore.setState({ statusMessage: 'Signing in as guest…' });
     const identity = await this.requireApi().loginGuest(input.displayName);
     await this.finishIdentity(identity, input.force === true);
-    const state = useSessionStore.getState();
-    await saveRememberedProfile({
-      serverAddress: input.serverAddress,
-      username: state.username,
-      rememberPassword: state.rememberPassword,
-      allowInsecureLocalTLS: state.allowInsecureLocalTLS,
-      leftHanded: state.leftHanded,
-      talkSelectMode: state.talkSelectMode,
-      guest: {
-        guestId: String(identity.guestId ?? identity.id),
-        guestProfileUserId: identity.guestProfileUserId ?? 0,
-        name: identity.name,
-      },
-    });
+    await this.persistCurrentProfile();
   }
 
   async acceptCertificateAndRetry(kind: 'user' | 'guest' = 'user'): Promise<void> {
@@ -417,6 +429,149 @@ class SessionController {
   }
 
   async logout(statusMessage = 'Signed out.'): Promise<void> {
+    await this.persistCurrentProfile();
+    await this.teardownSession();
+    this.applyDisconnectedState({ paused: false, addingProfile: false, statusMessage });
+  }
+
+  async disconnect(): Promise<void> {
+    await this.persistCurrentProfile();
+    await this.teardownSession();
+    this.applyDisconnectedState({
+      paused: true,
+      addingProfile: false,
+      status: 'paused',
+      statusMessage: 'Disconnected.',
+    });
+  }
+
+  async leaveToProfiles(): Promise<void> {
+    await this.persistCurrentProfile();
+    await this.teardownSession();
+    this.applyDisconnectedState({ paused: false, addingProfile: false, statusMessage: '' });
+  }
+
+  openProfilePicker(): void {
+    useSessionStore.setState({ paused: false, addingProfile: false, status: 'idle', error: null });
+  }
+
+  startAddProfile(): void {
+    useSessionStore.setState({
+      paused: false,
+      addingProfile: true,
+      serverAddress: '',
+      username: '',
+      rememberPassword: true,
+      productionId: null,
+      productionName: null,
+      error: null,
+      conflictName: undefined,
+      status: 'idle',
+      statusMessage: '',
+    });
+    this.pendingPassword = undefined;
+  }
+
+  cancelAddProfile(): void {
+    const last = useSessionStore.getState().profiles.find((item) => item.id === useSessionStore.getState().activeProfileId);
+    useSessionStore.setState({
+      addingProfile: false,
+      serverAddress: last?.serverAddress ?? useSessionStore.getState().profiles[0]?.serverAddress ?? '',
+      username: last?.username ?? useSessionStore.getState().profiles[0]?.username ?? '',
+    });
+  }
+
+  async connectProfile(profileId: string): Promise<void> {
+    const profile = useSessionStore.getState().profiles.find((item) => item.id === profileId);
+    if (!profile) {
+      throw new Error('Profile not found.');
+    }
+    const password = await passwordForProfile(profile.id);
+    this.pendingPassword = password;
+    useSessionStore.setState({
+      activeProfileId: profile.id,
+      paused: false,
+      addingProfile: false,
+      serverAddress: profile.serverAddress,
+      username: profile.username,
+      rememberPassword: profile.rememberPassword,
+      allowInsecureLocalTLS: Boolean(profile.allowInsecureLocalTLS),
+      productionId: profile.productionId ?? null,
+      productionName: profile.productionName ?? null,
+      error: null,
+    });
+    try {
+      if (profile.guest) {
+        await this.loginGuest({
+          serverAddress: profile.serverAddress,
+          displayName: profile.guest.name,
+        });
+        return;
+      }
+      if (!password) {
+        useSessionStore.setState({ addingProfile: true, status: 'idle' });
+        return;
+      }
+      await this.login({
+        serverAddress: profile.serverAddress,
+        username: profile.username,
+        password,
+        rememberPassword: profile.rememberPassword,
+      });
+    } catch (error) {
+      if (error instanceof SessionConflictError) {
+        useSessionStore.setState({
+          addingProfile: true,
+          status: 'idle',
+          conflictName: error.existing?.name,
+          error: null,
+        });
+        return;
+      }
+      if (error instanceof TlsUntrustedError) {
+        useSessionStore.setState({ addingProfile: true, status: 'idle' });
+        return;
+      }
+      useSessionStore.setState({
+        status: 'idle',
+        paused: false,
+        addingProfile: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async reconnectLastProfile(): Promise<void> {
+    const id = useSessionStore.getState().activeProfileId ?? useSessionStore.getState().profiles[0]?.id;
+    if (!id) {
+      this.startAddProfile();
+      return;
+    }
+    await this.connectProfile(id);
+  }
+
+  async removeSavedProfile(profileId: string): Promise<void> {
+    const state = useSessionStore.getState();
+    const next = await removeProfile(profileId, {
+      profiles: state.profiles,
+      lastProfileId: state.activeProfileId,
+      leftHanded: state.leftHanded,
+      talkSelectMode: state.talkSelectMode,
+    });
+    const fallback = next.profiles.find((item) => item.id === next.lastProfileId) ?? next.profiles[0];
+    useSessionStore.setState({
+      profiles: next.profiles,
+      activeProfileId: next.lastProfileId,
+      ...(state.activeProfileId === profileId
+        ? {
+            serverAddress: fallback?.serverAddress ?? '',
+            username: fallback?.username ?? '',
+          }
+        : {}),
+    });
+  }
+
+  private async teardownSession(): Promise<void> {
     const identity = useSessionStore.getState().identity;
     try {
       await this.media?.stopTalking();
@@ -452,6 +607,14 @@ class SessionController {
     await this.leaveSystemPtt();
     await this.teardownAudioSession();
     await stopForegroundService();
+  }
+
+  private applyDisconnectedState(input: {
+    paused: boolean;
+    addingProfile: boolean;
+    status?: SessionUiState['status'];
+    statusMessage: string;
+  }): void {
     const next = useSessionStore.getState();
     useSessionStore.setState({
       ...initialState,
@@ -462,6 +625,12 @@ class SessionController {
       allowInsecureLocalTLS: next.allowInsecureLocalTLS,
       leftHanded: next.leftHanded,
       talkSelectMode: next.talkSelectMode,
+      productionId: next.productionId,
+      productionName: next.productionName,
+      profiles: next.profiles,
+      activeProfileId: next.activeProfileId,
+      paused: input.paused,
+      addingProfile: input.addingProfile,
       conferenceListen: next.conferenceListen,
       loginOptions: next.loginOptions,
       audioPreferences: next.audioPreferences,
@@ -476,8 +645,56 @@ class SessionController {
       fgsAvailable: next.fgsAvailable,
       audioSessionAvailable: next.audioSessionAvailable,
       pttAvailable: next.pttAvailable,
-      statusMessage,
+      status: input.status ?? 'idle',
+      statusMessage: input.statusMessage,
     });
+    this.syncPresence();
+  }
+
+  private async persistCurrentProfile(password = this.pendingPassword): Promise<void> {
+    const state = useSessionStore.getState();
+    if (!state.serverAddress.trim() || !state.username.trim()) {
+      await saveProfileBundle({
+        profiles: state.profiles,
+        lastProfileId: state.activeProfileId,
+        leftHanded: state.leftHanded,
+        talkSelectMode: state.talkSelectMode,
+      });
+      return;
+    }
+    const id = profileIdentity(state.serverAddress, state.username);
+    const existing = state.profiles.find((item) => item.id === id);
+    const guest =
+      state.identity?.kind === 'guest'
+        ? {
+            guestId: String(state.identity.guestId ?? state.identity.id),
+            guestProfileUserId: state.identity.guestProfileUserId ?? 0,
+            name: state.identity.name,
+          }
+        : existing?.guest;
+    const saved: SavedProfile = {
+      id,
+      serverAddress: state.serverAddress,
+      username: state.username,
+      rememberPassword: state.rememberPassword,
+      allowInsecureLocalTLS: state.allowInsecureLocalTLS,
+      productionId: state.operatorReady ? state.productionId : (existing?.productionId ?? state.productionId),
+      productionName: state.operatorReady ? state.productionName : (existing?.productionName ?? state.productionName),
+      guest,
+    };
+    const profiles = upsertProfile(state.profiles, saved);
+    useSessionStore.setState({ profiles, activeProfileId: id, addingProfile: false });
+    await saveProfileBundle({
+      profiles,
+      lastProfileId: id,
+      leftHanded: state.leftHanded,
+      talkSelectMode: state.talkSelectMode,
+    });
+    if (state.rememberPassword && password) {
+      await savePasswordForProfile(id, password);
+    } else if (!state.rememberPassword) {
+      await savePasswordForProfile(id, undefined);
+    }
   }
 
   canTalkTo(target: TalkTarget): boolean {
@@ -523,6 +740,7 @@ class SessionController {
     }
     const stoppedFeedKeys = [...current];
     useSessionStore.setState({ stoppedFeedKeys });
+    this.syncPresence();
     void this.media?.setStoppedFeedKeys(stoppedFeedKeys, this.consumerContext()).then(() => {
       this.publishMediaSnapshot();
     });
@@ -544,7 +762,7 @@ class SessionController {
 
     const key = talkTargetIdentity(target);
     const state = useSessionStore.getState();
-    if (state.talkLocked && state.talkingTargetKeys.includes(key) && this.overrideFrom === null) {
+    if (state.talkLocked && state.lockedTargetKeys.includes(key) && this.overrideFrom === null) {
       await this.unlockTalk();
       return;
     }
@@ -666,6 +884,7 @@ class SessionController {
         : HOLD_HINT,
     });
     this.persistLayout();
+    this.syncPresence();
   }
 
   selectTalkTarget(target: TalkTarget): void {
@@ -677,6 +896,7 @@ class SessionController {
     if (state.talkSelectMode && state.talking) {
       void this.retargetTalk(target);
     }
+    this.syncPresence();
   }
 
   private firstTalkableTarget(): TalkTarget | null {
@@ -717,6 +937,39 @@ class SessionController {
     await this.lockTalk(target);
   }
 
+  async toggleCurrentTalk(): Promise<void> {
+    const state = useSessionStore.getState();
+    if (!state.operatorReady) {
+      return;
+    }
+    if (state.talking || state.talkLocked) {
+      await this.unlockTalk();
+      return;
+    }
+    if (state.talkSelectMode) {
+      await this.lockSelectedTalk();
+      return;
+    }
+    await this.lockReply();
+  }
+
+  handleTalkUrl(url: string): void {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return;
+    }
+    if (parsed.protocol !== 'talktome:') {
+      return;
+    }
+    const path = `${parsed.host}${parsed.pathname}`.replace(/\/+$/, '').replace(/^\/+/, '');
+    if (path !== 'talk') {
+      return;
+    }
+    void this.toggleCurrentTalk();
+  }
+
   setConferenceMemberListening(conferenceId: number | string, userId: number, listening: boolean): void {
     const next = nextConferenceMemberListening(
       useSessionStore.getState().conferenceListen,
@@ -744,18 +997,7 @@ class SessionController {
   }
 
   private persistLayout(): void {
-    const state = useSessionStore.getState();
-    void saveRememberedProfile(
-      {
-        serverAddress: state.serverAddress,
-        username: state.username,
-        rememberPassword: state.rememberPassword,
-        allowInsecureLocalTLS: state.allowInsecureLocalTLS,
-        leftHanded: state.leftHanded,
-        talkSelectMode: state.talkSelectMode,
-      },
-      this.pendingPassword,
-    );
+    void this.persistCurrentProfile();
   }
 
   bluetoothButtonCandidates(): TalkTarget[] {
@@ -820,6 +1062,7 @@ class SessionController {
     useSessionStore.setState({ replyTarget });
     const incomingName = latestIncomingName(state.incoming);
     void updatePttRemoteParticipant(incomingName ?? replyTarget?.label ?? null);
+    this.syncPresence();
   }
 
   private async unlockTalk(): Promise<void> {
@@ -847,19 +1090,23 @@ class SessionController {
 
   private publishTalkState(locked: boolean): void {
     const keys = talkTargetKeys(this.talkingTargets);
+    const lockedKeys = talkTargetKeys(this.lockedTargets);
+    const overriding = this.overrideFrom !== null;
     useSessionStore.setState({
       talking: this.talkingTargets.length > 0,
-      talkLocked: locked && this.talkingTargets.length > 0,
+      talkLocked: locked && this.lockedTargets.length > 0,
       talkingTargetKey: keys[0] ?? null,
       talkingTargetKeys: keys,
+      lockedTargetKeys: locked ? lockedKeys : [],
       error: null,
       statusMessage:
         this.talkingTargets.length > 0
-          ? locked
+          ? locked && !overriding
             ? `Locked to ${this.talkingTargets.map((item) => item.label).join(', ')}.`
             : `Talking to ${this.talkingTargets.map((item) => item.label).join(', ')}…`
           : HOLD_HINT,
     });
+    this.syncPresence();
   }
 
   private async enterOperator(production: Production | null): Promise<void> {
@@ -883,6 +1130,7 @@ class SessionController {
       this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
       this.media.setConferenceListen(useSessionStore.getState().conferenceListen);
       useSessionStore.setState({ statusMessage: 'Starting media…' });
+      await this.prepareAudioForMedia();
       await this.media.start();
       try {
         await this.media.warmTalkProducer();
@@ -909,6 +1157,7 @@ class SessionController {
       talkLocked: false,
       talkingTargetKey: null,
       talkingTargetKeys: [],
+      lockedTargetKeys: [],
       statusMessage: useSessionStore.getState().talkSelectMode ? 'Talk & select: tap a card, then hold Talk.' : HOLD_HINT,
     });
     this.refreshReplyTarget();
@@ -916,6 +1165,8 @@ class SessionController {
     await this.syncAudioSession(AppState.currentState);
     await this.syncForegroundService();
     await this.syncSystemPtt();
+    await this.persistCurrentProfile();
+    this.syncPresence();
   }
 
   private async loadTargets(identity: OperatorIdentity, productionId: number | null): Promise<TalkTarget[]> {
@@ -982,6 +1233,7 @@ class SessionController {
       onIncomingTalkState: (incoming) => {
         useSessionStore.setState({ incoming });
         this.refreshReplyTarget();
+        this.syncPresence();
       },
       onProducerStarted: (producer) => {
         this.rememberLiveProducer(producer);
@@ -1072,6 +1324,7 @@ class SessionController {
     this.media = new MediaEngine(this.signaling);
     this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
     this.media.setConferenceListen(useSessionStore.getState().conferenceListen);
+    await this.prepareAudioForMedia();
     await this.media.start();
     await this.media.warmTalkProducer();
     const producers = await this.signaling.requestActiveProducers();
@@ -1136,6 +1389,7 @@ class SessionController {
     useSessionStore.setState({
       activeFeedKeys: activeFeedKeysFromProducers([...this.liveProducers.values()]),
     });
+    this.syncPresence();
   }
 
   private consumerContext() {
@@ -1231,6 +1485,8 @@ class SessionController {
 
     this.lastSocketId = this.signaling.socketId;
     const productions = Array.isArray(identity.productions) ? identity.productions : [];
+    const rememberedProductionId = useSessionStore.getState().productionId;
+    const rememberedProductionName = useSessionStore.getState().productionName;
     useSessionStore.setState({
       identity,
       productions,
@@ -1241,6 +1497,15 @@ class SessionController {
     });
 
     if (productions.length > 0) {
+      const remembered = productions.find((item) => item.id === rememberedProductionId);
+      if (remembered) {
+        await this.enterOperator(remembered);
+        return;
+      }
+      if (rememberedProductionId == null && rememberedProductionName?.trim().toLowerCase() === 'default') {
+        await this.enterOperator(null);
+        return;
+      }
       useSessionStore.setState({
         status: 'choose-production',
         statusMessage: 'Choose a production',
@@ -1258,7 +1523,7 @@ class SessionController {
     this.hardwareBound = true;
     subscribeForegroundService({
       onStopRequested: () => {
-        void this.logout('Session stopped from the notification.');
+        void this.disconnect();
       },
       onStarted: () => {
         useSessionStore.setState({
@@ -1273,6 +1538,9 @@ class SessionController {
           capabilityReason: this.capabilityReason({ fgsRunning: false }),
         });
       },
+    });
+    subscribeTalkShortcut(() => {
+      void this.toggleCurrentTalk();
     });
     subscribeBleNative({
       onState: (state) => {
@@ -1370,8 +1638,39 @@ class SessionController {
     await this.releaseTalk(target);
   }
 
+  private currentPresence() {
+    const state = useSessionStore.getState();
+    return sessionPresence({
+      operatorReady: state.operatorReady,
+      talkSelectMode: state.talkSelectMode,
+      incoming: state.incoming,
+      talking: state.talking,
+      talkingLabels: this.talkingTargets.map((item) => item.label),
+      talkLocked: state.talkLocked,
+      replyTarget: state.replyTarget,
+      selectedTalkTarget: state.selectedTalkTarget,
+      targets: state.targets,
+      streamingFeedLabels: state.targets
+        .filter((target) => {
+          if (target.type !== 'feed') {
+            return false;
+          }
+          const key = talkTargetIdentity(target);
+          return state.activeFeedKeys.includes(key) && !state.stoppedFeedKeys.includes(key);
+        })
+        .map((target) => target.label),
+    });
+  }
+
+  private syncPresence(): void {
+    const snapshot = this.currentPresence();
+    publishSessionPresence(snapshot);
+    void this.syncForegroundService();
+  }
+
   private async syncForegroundService(): Promise<void> {
     const state = useSessionStore.getState();
+    const notification = presenceNotification(this.currentPresence());
     if (!shouldStartForegroundService(Platform.OS, state.operatorReady)) {
       if (state.fgsRunning) {
         await stopForegroundService();
@@ -1381,10 +1680,10 @@ class SessionController {
     await requestAndroidSessionPermissions();
     const includeConnectedDevice = state.bleKind === 'connected' || state.bleKind === 'connecting';
     if (state.fgsRunning) {
-      await updateForegroundService(includeConnectedDevice);
+      await updateForegroundService(includeConnectedDevice, notification.title, notification.text);
       return;
     }
-    const started = await startForegroundService(includeConnectedDevice);
+    const started = await startForegroundService(includeConnectedDevice, notification.title, notification.text);
     useSessionStore.setState({
       fgsRunning: started,
       fgsAvailable: started || foregroundServiceAvailable(),
@@ -1451,6 +1750,24 @@ class SessionController {
         audioSessionAvailable: available,
         audioSessionActive: active,
         audioKeepalive: false,
+      }),
+    });
+  }
+
+  private async prepareAudioForMedia(): Promise<void> {
+    if (!shouldPrepareAudioForMedia({ platform: Platform.OS, pttEnabled: iosPttEnabled() })) {
+      return;
+    }
+    const active = await activateForIntercom();
+    if (active) {
+      await setWebRTCAudioEnabled(true);
+    }
+    useSessionStore.setState({
+      audioSessionAvailable: audioSessionAvailable(),
+      audioSessionActive: active,
+      capabilityReason: this.capabilityReason({
+        audioSessionAvailable: audioSessionAvailable(),
+        audioSessionActive: active,
       }),
     });
   }

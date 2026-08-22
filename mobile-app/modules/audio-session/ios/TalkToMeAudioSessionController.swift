@@ -16,6 +16,7 @@ final class TalkToMeAudioSessionController {
 
   init(notificationCenter: NotificationCenter = .default) {
     self.notificationCenter = notificationCenter
+    claimManualAudio()
     installObservers()
   }
 
@@ -99,28 +100,67 @@ final class TalkToMeAudioSessionController {
     #endif
   }
 
+  private func claimManualAudio() {
+    applyWebRTCSessionDefaults()
+    setWebRTCAudioEnabled(false)
+  }
+
+  private func applyWebRTCSessionDefaults() {
+    #if canImport(WebRTC)
+    let config = RTCAudioSessionConfiguration.webRTC()
+    config.category = AVAudioSession.Category.playAndRecord.rawValue
+    config.categoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
+    #if targetEnvironment(simulator)
+    config.mode = AVAudioSession.Mode.default.rawValue
+    config.sampleRate = 44_100
+    config.ioBufferDuration = 0.02
+    #else
+    config.mode = AVAudioSession.Mode.voiceChat.rawValue
+    config.sampleRate = 48_000
+    config.ioBufferDuration = 0.01
+    #endif
+    RTCAudioSessionConfiguration.setWebRTC(config)
+    #endif
+  }
+
   private func activate(profile: String) throws {
     let session = AVAudioSession.sharedInstance()
     try configureIntercom(session)
     try session.setActive(true)
     try routeToSpeakerIfNeeded(session)
+    #if targetEnvironment(simulator)
+    Thread.sleep(forTimeInterval: 0.15)
+    #endif
     notifyWebRTCActivated()
     setWebRTCAudioEnabled(true)
     activeProfile = profile
   }
 
   private func configureIntercom(_ session: AVAudioSession) throws {
+    applyWebRTCSessionDefaults()
+    #if targetEnvironment(simulator)
+    // Voice Processing I/O (echo cancellation) deadlocks the iOS Simulator HAL
+    // and abort()s the process. Use a plain duplex session instead.
+    try session.setCategory(
+      .playAndRecord,
+      mode: .default,
+      options: [.defaultToSpeaker]
+    )
+    try session.setPreferredSampleRate(44_100)
+    try session.setPreferredIOBufferDuration(0.02)
+    #else
     try session.setCategory(
       .playAndRecord,
       mode: .voiceChat,
       options: [
-        .allowBluetooth,
+        .allowBluetoothHFP,
         .allowBluetoothA2DP,
         .defaultToSpeaker,
       ]
     )
     try session.setPreferredSampleRate(48_000)
     try session.setPreferredIOBufferDuration(0.01)
+    #endif
   }
 
   private func routeToSpeakerIfNeeded(_ session: AVAudioSession) throws {

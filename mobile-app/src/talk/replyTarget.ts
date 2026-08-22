@@ -1,22 +1,38 @@
-// Derived from talktome public/client.js resolveReplyTargetFromIncomingEntry @ bbb8e09
-// and talktome-apple AppSession.resolveIncomingReplyTarget @ 004d6e76 by Daniel Jocher.
+// Derived from talktome public/client.js resolveReplyTargetFromIncomingEntry
+// and targetKeyFromIncomingAddressedEntry @ current public/client.js by Daniel Jocher.
 
-import type { IncomingTalkEntry, IncomingTalkState, PeerSession, TalkTarget } from '../protocol';
+import {
+  talkTargetIdentity,
+  type IncomingTalkEntry,
+  type IncomingTalkState,
+  type PeerSession,
+  type TalkTarget,
+} from '../protocol';
+
+/** Web speakingPeers key: speaker for 1:1, conference card for conference talk. */
+export function incomingSpeakingIdentity(entry: IncomingTalkEntry): string | null {
+  if (entry.targetType === 'conference') {
+    return `conference-${entry.targetId}`;
+  }
+  if (entry.targetType === 'feed') {
+    return `feed-${entry.targetId}`;
+  }
+  if (entry.targetType === 'guest') {
+    return `guest-${entry.targetId}`;
+  }
+  if (entry.targetType === 'user') {
+    const speakerId = entry.fromUserId ?? entry.targetId;
+    if (speakerId === undefined || speakerId === '') {
+      return null;
+    }
+    return `user-${speakerId}`;
+  }
+  return null;
+}
 
 export function incomingHighlightsTarget(entry: IncomingTalkEntry, target: TalkTarget): boolean {
-  if (entry.targetType === 'conference' && target.type === 'conference') {
-    return Number(entry.targetId) === Number(target.id);
-  }
-  if (target.type === 'user') {
-    return (
-      Number(entry.fromUserId) === Number(target.id) ||
-      (entry.replyTargetType === 'user' && Number(entry.replyTargetId) === Number(target.id))
-    );
-  }
-  if (target.type === 'guest') {
-    return entry.fromGuestId === String(target.id) || String(entry.targetId) === String(target.id);
-  }
-  return entry.targetType === target.type && String(entry.targetId) === String(target.id);
+  const identity = incomingSpeakingIdentity(entry);
+  return identity != null && identity === talkTargetIdentity(target);
 }
 
 export function resolveReplyTalkTarget(input: {

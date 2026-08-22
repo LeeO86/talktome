@@ -74,6 +74,14 @@ export function parseIncomingTalkEntry(payload: unknown): IncomingTalkEntry | nu
   };
 }
 
+export function latestAddressedSpeaker(incoming: IncomingTalkState): string | null {
+  const latest = incoming.addressedNow
+    .slice()
+    .sort((left, right) => (right.at ?? 0) - (left.at ?? 0))[0];
+  const name = latest?.fromName?.trim();
+  return name ? name : null;
+}
+
 export function parseIncomingTalkState(payload: unknown): IncomingTalkState | null {
   const item = unwrapIncomingTalkPayload(payload);
   if (!item) {

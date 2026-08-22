@@ -4,8 +4,12 @@ import {
   DEFAULT_AUDIO_PREFERENCE,
   clampVolume,
   defaultAudioPreference,
+  dbToLinear,
+  linearToDb,
+  nudgeVolume,
   playbackGain,
   normalizeAudioPreference,
+  volumeMeterFill,
 } from './audioPreference';
 
 describe('audioPreference', () => {
@@ -27,5 +31,22 @@ describe('audioPreference', () => {
   it('reuses one default object so Zustand getSnapshot stays stable', () => {
     expect(defaultAudioPreference()).toBe(DEFAULT_AUDIO_PREFERENCE);
     expect(DEFAULT_AUDIO_PREFERENCE).toEqual({ volume: 0.9, muted: false });
+  });
+
+  it('nudges volume on a 1.5 / 3 / 6 dB grid', () => {
+    expect(linearToDb(1)).toBeCloseTo(0, 5);
+    expect(nudgeVolume(1, 1)).toBe(1);
+    expect(linearToDb(nudgeVolume(1, -1))).toBeCloseTo(-1.5, 5);
+    expect(linearToDb(nudgeVolume(dbToLinear(-15), -1))).toBeCloseTo(-18, 5);
+    expect(linearToDb(nudgeVolume(dbToLinear(-45), -1))).toBeCloseTo(-51, 5);
+    expect(linearToDb(nudgeVolume(dbToLinear(-18), 1))).toBeCloseTo(-15, 5);
+    expect(linearToDb(nudgeVolume(0.9, 1))).toBeCloseTo(0, 5);
+    expect(dbToLinear(0)).toBe(1);
+  });
+
+  it('fills the volume meter on a dB scale', () => {
+    expect(volumeMeterFill(1)).toBeCloseTo(1, 5);
+    expect(volumeMeterFill(0)).toBe(0);
+    expect(volumeMeterFill(dbToLinear(-37.5))).toBeCloseTo(0.5, 5);
   });
 });

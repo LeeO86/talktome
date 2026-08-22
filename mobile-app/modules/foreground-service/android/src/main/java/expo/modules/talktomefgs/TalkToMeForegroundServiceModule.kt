@@ -44,15 +44,15 @@ class TalkToMeForegroundServiceModule : Module() {
       Holder.running
     }
 
-    AsyncFunction("start") { includeConnectedDevice: Boolean ->
+    AsyncFunction("start") { includeConnectedDevice: Boolean, title: String, text: String ->
       val context = appContext.reactContext ?: return@AsyncFunction false
-      TalkToMeForegroundService.start(context, includeConnectedDevice)
+      TalkToMeForegroundService.start(context, includeConnectedDevice, title, text)
       true
     }
 
-    AsyncFunction("update") { includeConnectedDevice: Boolean ->
+    AsyncFunction("update") { includeConnectedDevice: Boolean, title: String, text: String ->
       val context = appContext.reactContext ?: return@AsyncFunction false
-      TalkToMeForegroundService.update(context, includeConnectedDevice)
+      TalkToMeForegroundService.update(context, includeConnectedDevice, title, text)
       Holder.running
     }
 

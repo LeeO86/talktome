@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import type { TalkTarget } from '../protocol';
+import { visibleProductionName, talkTargetIdentity, type TalkTarget } from '../protocol';
 import { session, useSessionStore } from '../session/store';
 import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
-import { GearIcon, LockIcon, MicIcon, ReplyArrowIcon } from './icons';
+import { LockIcon, MicIcon, ReplyArrowIcon } from './icons';
 import { HoldToTalk } from './HoldToTalk';
 import { targetLayerCount, visibleTargets } from './layers';
+import { SessionSheet } from './SessionSheet';
 import { SettingsScreen } from './SettingsScreen';
 import { TargetRow } from './TargetRow';
 import { colors } from './theme';
@@ -17,6 +18,7 @@ export function OperatorScreen() {
   const { width, height } = useWindowDimensions();
   const [layerIndex, setLayerIndex] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sessionOpen, setSessionOpen] = useState(false);
   const [conferenceTarget, setConferenceTarget] = useState<TalkTarget | null>(null);
   const reply = store.replyTarget;
   const selected = store.selectedTalkTarget;
@@ -34,11 +36,18 @@ export function OperatorScreen() {
     ? Boolean(store.talking && selected)
     : Boolean(store.talking && reply);
 
+  const productionLabel = visibleProductionName(store.productionName);
+  const replyLocked =
+    Boolean(store.replyTarget) && store.lockedTargetKeys.includes(talkTargetIdentity(store.replyTarget!));
+  const selectedLocked =
+    Boolean(store.selectedTalkTarget) &&
+    store.lockedTargetKeys.includes(talkTargetIdentity(store.selectedTalkTarget!));
+
   const replyButton = store.talkSelectMode ? (
     <HoldToTalk
       accessibilityLabel="Talk to selected destination"
       disabled={!selected}
-      locked={Boolean(store.talkLocked && selected)}
+      locked={selectedLocked}
       leftHanded={store.leftHanded}
       onPress={() => void session.pressSelectedTalk()}
       onLock={() => void session.lockSelectedTalk()}
@@ -51,7 +60,7 @@ export function OperatorScreen() {
         !selected && styles.replyDisabled,
       ]}
     >
-      {store.talkLocked && selected ? (
+      {selectedLocked ? (
         <LockIcon color={colors.text} />
       ) : (
         <MicIcon color={selected ? colors.text : 'rgba(255,255,255,0.38)'} />
@@ -67,7 +76,7 @@ export function OperatorScreen() {
     <HoldToTalk
       accessibilityLabel="Reply"
       disabled={!reply}
-      locked={Boolean(store.talkLocked && reply)}
+      locked={replyLocked}
       leftHanded={store.leftHanded}
       onPress={() => void session.pressReply()}
       onLock={() => void session.lockReply()}
@@ -79,7 +88,7 @@ export function OperatorScreen() {
         !reply && styles.replyDisabled,
       ]}
     >
-      {store.talkLocked && reply ? (
+      {replyLocked ? (
         <LockIcon color={colors.text} />
       ) : (
         <ReplyArrowIcon color={reply ? colors.text : 'rgba(255,255,255,0.38)'} />
@@ -96,9 +105,22 @@ export function OperatorScreen() {
   return (
     <View style={[styles.screen, landscape && styles.screenLandscape]}>
       <View style={styles.header}>
-        <Text style={styles.name} numberOfLines={1}>
-          {store.identity?.name ?? 'talktome'}
-        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Session"
+          accessibilityHint="Server, settings, disconnect, and profiles"
+          onPress={() => setSessionOpen(true)}
+          style={styles.identity}
+        >
+          <Text style={styles.name} numberOfLines={1}>
+            {store.identity?.name ?? 'talktome'}
+          </Text>
+          {productionLabel ? (
+            <Text style={styles.production} numberOfLines={1}>
+              {productionLabel}
+            </Text>
+          ) : null}
+        </Pressable>
         <View style={styles.headerActions}>
           {layers > 1 ? (
             <Pressable
@@ -111,22 +133,6 @@ export function OperatorScreen() {
               </Text>
             </Pressable>
           ) : null}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Talk and select mode"
-            onPress={() => session.setTalkSelectMode(!store.talkSelectMode)}
-            style={[styles.layer, store.talkSelectMode && styles.modeOn]}
-          >
-            <Text style={styles.layerText}>{store.talkSelectMode ? 'Select' : 'Reply'}</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Settings"
-            onPress={() => setSettingsOpen(true)}
-            style={styles.gear}
-          >
-            <GearIcon />
-          </Pressable>
         </View>
       </View>
 
@@ -155,6 +161,14 @@ export function OperatorScreen() {
         {replyButton}
       </View>
 
+      <SessionSheet
+        visible={sessionOpen}
+        onClose={() => setSessionOpen(false)}
+        onOpenSettings={() => {
+          setSessionOpen(false);
+          setSettingsOpen(true);
+        }}
+      />
       <SettingsScreen visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ConferenceMembersModal target={conferenceTarget} onClose={() => setConferenceTarget(null)} />
     </View>
@@ -177,13 +191,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 12,
   },
+  identity: {
+    flexGrow: 1,
+    flexShrink: 1,
+    marginRight: 12,
+  },
   name: {
     color: colors.text,
     fontSize: 34,
     fontWeight: '700',
-    flexGrow: 1,
-    flexShrink: 1,
-    marginRight: 12,
+  },
+  production: {
+    color: colors.muted,
+    fontSize: 15,
+    fontWeight: '600',
+    marginTop: 2,
   },
   headerActions: {
     flexDirection: 'row',
@@ -202,14 +224,6 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: '600',
     fontSize: 13,
-  },
-  gear: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   warn: {
     color: colors.danger,
@@ -269,9 +283,6 @@ const styles = StyleSheet.create({
   talkSelectActive: {
     backgroundColor: '#B81F2E',
     borderColor: 'rgba(255,180,180,0.8)',
-  },
-  modeOn: {
-    backgroundColor: 'rgba(226,59,74,0.35)',
   },
   replyDisabled: {
     backgroundColor: 'rgba(255,255,255,0.05)',

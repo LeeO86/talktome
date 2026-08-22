@@ -23,6 +23,8 @@ class TalkToMeForegroundService : Service() {
       }
       ACTION_UPDATE -> {
         includeConnectedDevice = intent.getBooleanExtra(EXTRA_INCLUDE_CONNECTED_DEVICE, includeConnectedDevice)
+        intent.getStringExtra(EXTRA_TITLE)?.let { contentTitle = it }
+        intent.getStringExtra(EXTRA_TEXT)?.let { contentText = it }
         if (Holder.running) {
           startInForeground()
         }
@@ -30,6 +32,8 @@ class TalkToMeForegroundService : Service() {
       }
       else -> {
         includeConnectedDevice = intent?.getBooleanExtra(EXTRA_INCLUDE_CONNECTED_DEVICE, false) == true
+        intent?.getStringExtra(EXTRA_TITLE)?.let { contentTitle = it }
+        intent?.getStringExtra(EXTRA_TEXT)?.let { contentText = it }
         startInForeground()
         Holder.running = true
         Holder.listener?.onStarted(includeConnectedDevice)
@@ -81,13 +85,18 @@ class TalkToMeForegroundService : Service() {
       return
     }
     val manager = getSystemService(NotificationManager::class.java) ?: return
+    manager.deleteNotificationChannel(LEGACY_CHANNEL_ID)
     val channel = NotificationChannel(
       CHANNEL_ID,
       "TalkToMe session",
-      NotificationManager.IMPORTANCE_LOW,
+      NotificationManager.IMPORTANCE_DEFAULT,
     )
     channel.description = "Keeps the intercom microphone and playback running in the background."
     channel.setShowBadge(false)
+    channel.enableVibration(false)
+    channel.enableLights(false)
+    channel.setSound(null, null)
+    channel.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
     manager.createNotificationChannel(channel)
   }
 
@@ -110,17 +119,23 @@ class TalkToMeForegroundService : Service() {
       Notification.Builder(this, CHANNEL_ID)
     } else {
       @Suppress("DEPRECATION")
-      Notification.Builder(this)
+      Notification.Builder(this).setPriority(Notification.PRIORITY_DEFAULT)
     }
-    return builder
-      .setContentTitle("TalkToMe")
-      .setContentText("Intercom is running. Stop ends the session.")
+    builder
+      .setContentTitle(contentTitle)
+      .setContentText(contentText)
+      .setStyle(Notification.BigTextStyle().bigText(contentText))
       .setSmallIcon(if (applicationInfo.icon != 0) applicationInfo.icon else android.R.drawable.stat_sys_headset)
       .setContentIntent(contentPending)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
-      .addAction(0, "Stop", stopPending)
-      .build()
+      .setVisibility(Notification.VISIBILITY_PUBLIC)
+      .setCategory(Notification.CATEGORY_SERVICE)
+      .addAction(0, "Disconnect", stopPending)
+    if (Build.VERSION.SDK_INT >= 31) {
+      builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+    }
+    return builder.build()
   }
 
   private fun immutableFlag(): Int {
@@ -132,16 +147,29 @@ class TalkToMeForegroundService : Service() {
     const val ACTION_STOP = "expo.modules.talktomefgs.STOP"
     const val ACTION_UPDATE = "expo.modules.talktomefgs.UPDATE"
     const val EXTRA_INCLUDE_CONNECTED_DEVICE = "includeConnectedDevice"
-    const val CHANNEL_ID = "talktome.session"
+    const val EXTRA_TITLE = "title"
+    const val EXTRA_TEXT = "text"
+    const val CHANNEL_ID = "talktome.session.v2"
+    const val LEGACY_CHANNEL_ID = "talktome.session"
     const val NOTIFICATION_ID = 5602
 
     @Volatile
     var includeConnectedDevice: Boolean = false
 
-    fun start(context: Context, includeConnectedDevice: Boolean) {
+    @Volatile
+    var contentTitle: String = "Nobody Talking"
+
+    @Volatile
+    var contentText: String = "Disconnect ends the session."
+
+    fun start(context: Context, includeConnectedDevice: Boolean, title: String, text: String) {
+      contentTitle = title
+      contentText = text
       val intent = Intent(context, TalkToMeForegroundService::class.java)
         .setAction(ACTION_START)
         .putExtra(EXTRA_INCLUDE_CONNECTED_DEVICE, includeConnectedDevice)
+        .putExtra(EXTRA_TITLE, title)
+        .putExtra(EXTRA_TEXT, text)
       if (Build.VERSION.SDK_INT >= 26) {
         context.startForegroundService(intent)
       } else {
@@ -149,13 +177,17 @@ class TalkToMeForegroundService : Service() {
       }
     }
 
-    fun update(context: Context, includeConnectedDevice: Boolean) {
+    fun update(context: Context, includeConnectedDevice: Boolean, title: String, text: String) {
       if (!Holder.running) {
         return
       }
+      contentTitle = title
+      contentText = text
       val intent = Intent(context, TalkToMeForegroundService::class.java)
         .setAction(ACTION_UPDATE)
         .putExtra(EXTRA_INCLUDE_CONNECTED_DEVICE, includeConnectedDevice)
+        .putExtra(EXTRA_TITLE, title)
+        .putExtra(EXTRA_TEXT, text)
       context.startService(intent)
     }
 

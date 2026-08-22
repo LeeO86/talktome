@@ -5,8 +5,8 @@ import { pttStatusLabel } from '../ptt/policy';
 import { describeBleConnection } from '../ble/native';
 import { describeBleTarget, type BleTargetSelection } from '../ble/target';
 import { fgsStatusLabel } from '../background/fgs';
-import { productionChoices } from '../protocol';
 import { session, useSessionStore } from '../session/store';
+import { androidSafeArea } from './androidSafeArea';
 
 type Props = {
   visible: boolean;
@@ -32,7 +32,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={styles.sheet}>
+      <View style={[styles.sheet, androidSafeArea]}>
         <View style={styles.header}>
           <Text style={styles.title}>Settings</Text>
           <Pressable onPress={onClose} accessibilityRole="button">
@@ -41,28 +41,6 @@ export function SettingsScreen({ visible, onClose }: Props) {
         </View>
 
         <ScrollView contentContainerStyle={styles.body}>
-          {store.productions.length > 0 ? (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Production</Text>
-              {productionChoices(store.productions).map((choice) => {
-                const selected = choice.id === store.productionId;
-                return (
-                  <Pressable
-                    key={choice.id ?? 'default'}
-                    style={[styles.row, selected && styles.rowSelected]}
-                    onPress={() => {
-                      void session.selectProduction(choice.id === null ? null : { id: choice.id, name: choice.name });
-                      onClose();
-                    }}
-                  >
-                    <Text style={styles.rowLabel}>{choice.name}</Text>
-                    <Text style={styles.rowValue}>{selected ? 'Selected' : ''}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          ) : null}
-
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Layout</Text>
             <View style={styles.row}>
@@ -74,7 +52,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
               />
             </View>
             <Text style={styles.footnote}>
-              Moves talk controls and the landscape Reply column to the left, and slides right to
+              Moves the volume ring and the landscape Reply column to the left, and slides right to
               lock — same as the web client.
             </Text>
             <View style={styles.row}>
@@ -86,8 +64,8 @@ export function SettingsScreen({ visible, onClose }: Props) {
               />
             </View>
             <Text style={styles.footnote}>
-              Reply becomes a red Talk button. Cards only choose the destination; volume sliders
-              stay. Tap a conference icon to set who you hear.
+              Reply becomes a red Talk button. Cards only choose the destination. Tap the volume
+              ring to set level in dB and mute. Double-tap a ring to mute. Tap a conference icon to set who you hear.
             </Text>
           </View>
 
@@ -119,7 +97,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
             ) : null}
             <Text style={styles.footnote}>
               GATT PTT-Z01-class buttons (service FFE0, characteristic FFE1). Press 0x01/0xAB,
-              release 0x00/0xCD. Rebuild the Dev Client if Connect does nothing.
+              release 0x00/0xCD.
             </Text>
           </View>
 
@@ -150,6 +128,16 @@ export function SettingsScreen({ visible, onClose }: Props) {
               target if you want the button to ignore Reply.
             </Text>
           </View>
+
+          {Platform.OS === 'ios' ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Talk shortcut</Text>
+              <Text style={styles.footnote}>
+                Shortcuts can run Talk, which locks or unlocks talk to Reply — or to the selected
+                card in Talk & select. Assign that shortcut to the Action Button in iOS Settings.
+              </Text>
+            </View>
+          ) : null}
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Session</Text>
@@ -205,7 +193,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
               style={styles.signOut}
               onPress={() => {
                 onClose();
-                void session.logout();
+                void session.leaveToProfiles();
               }}
             >
               <Text style={styles.signOutText}>Sign Out</Text>

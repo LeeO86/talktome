@@ -1,12 +1,15 @@
 import { useEffect } from 'react';
-import { ActivityIndicator, SafeAreaView, StyleSheet } from 'react-native';
+import { ActivityIndicator, Linking, SafeAreaView, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 import { session, useSessionStore } from './src/session/store';
+import { androidSafeArea } from './src/ui/androidSafeArea';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { OperatorScreen } from './src/ui/OperatorScreen';
+import { PausedScreen } from './src/ui/PausedScreen';
 import { ProductionPickerScreen } from './src/ui/ProductionPickerScreen';
+import { ProfilePickerScreen } from './src/ui/ProfilePickerScreen';
 import { colors } from './src/ui/theme';
 
 export default function App() {
@@ -14,9 +17,23 @@ export default function App() {
   const identity = useSessionStore((state) => state.identity);
   const operatorReady = useSessionStore((state) => state.operatorReady);
   const status = useSessionStore((state) => state.status);
+  const paused = useSessionStore((state) => state.paused);
+  const addingProfile = useSessionStore((state) => state.addingProfile);
+  const profiles = useSessionStore((state) => state.profiles);
 
   useEffect(() => {
     void session.hydrate();
+  }, []);
+
+  useEffect(() => {
+    const handleUrl = (url: string | null) => {
+      if (url) {
+        session.handleTalkUrl(url);
+      }
+    };
+    const subscription = Linking.addEventListener('url', (event) => handleUrl(event.url));
+    void Linking.getInitialURL().then(handleUrl);
+    return () => subscription.remove();
   }, []);
 
   useEffect(() => {
@@ -29,20 +46,27 @@ export default function App() {
     return undefined;
   }, [identity]);
 
+  let body;
+  if (!hydrated || (status === 'connecting' && !identity && !operatorReady && !addingProfile)) {
+    body = <ActivityIndicator color={colors.accent} />;
+  } else if (identity && operatorReady) {
+    body = <OperatorScreen />;
+  } else if (identity && status === 'choose-production') {
+    body = <ProductionPickerScreen />;
+  } else if (identity) {
+    body = <ActivityIndicator color={colors.accent} />;
+  } else if (paused) {
+    body = <PausedScreen />;
+  } else if (addingProfile || profiles.length === 0) {
+    body = <LoginScreen />;
+  } else {
+    body = <ProfilePickerScreen />;
+  }
+
   return (
-    <SafeAreaView style={styles.root}>
+    <SafeAreaView style={[styles.root, androidSafeArea]}>
       <StatusBar style="light" />
-      {!hydrated ? (
-        <ActivityIndicator color={colors.accent} />
-      ) : !identity ? (
-        <LoginScreen />
-      ) : operatorReady ? (
-        <OperatorScreen />
-      ) : status === 'choose-production' ? (
-        <ProductionPickerScreen />
-      ) : (
-        <ActivityIndicator color={colors.accent} />
-      )}
+      {body}
     </SafeAreaView>
   );
 }

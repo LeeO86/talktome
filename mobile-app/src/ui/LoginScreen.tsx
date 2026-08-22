@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -21,6 +22,7 @@ export function LoginScreen() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const guest = store.loginOptions?.guestLogin;
+  const canGoBack = store.profiles.length > 0;
 
   useEffect(() => {
     if (store.hydrated) {
@@ -79,8 +81,16 @@ export function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        {canGoBack ? (
+          <Pressable accessibilityRole="button" onPress={() => session.cancelAddProfile()} style={styles.back}>
+            <Text style={styles.backText}>Profiles</Text>
+          </Pressable>
+        ) : null}
         <View style={styles.intro}>
-          <Text style={styles.brand}>talktome</Text>
+          <View style={styles.brandRow}>
+            <Image source={require('../../assets/talktome-mark.png')} style={styles.brandIcon} />
+            <Text style={styles.brand}>talktome</Text>
+          </View>
           <Text style={styles.subtitle}>Connect to the talktome server.</Text>
         </View>
 
@@ -234,9 +244,29 @@ const styles = StyleSheet.create({
   scroll: {
     paddingBottom: 16,
   },
+  back: {
+    alignSelf: 'flex-start',
+    marginBottom: 12,
+    paddingVertical: 6,
+  },
+  backText: {
+    color: colors.accent,
+    fontWeight: '600',
+    fontSize: 16,
+  },
   intro: {
     marginTop: 4,
     marginBottom: 16,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  brandIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
   },
   brand: {
     color: colors.text,

@@ -10,15 +10,25 @@ const config: ExpoConfig = {
   icon: './assets/icon.png',
   userInterfaceStyle: 'dark',
   scheme: 'talktome',
+  splash: {
+    image: './assets/splash-icon.png',
+    resizeMode: 'contain',
+    backgroundColor: '#000000',
+  },
   ios: {
     supportsTablet: true,
     bundleIdentifier: 'io.github.leeo86.talktome-mobile',
+    entitlements: {
+      'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
+    },
     infoPlist: {
       NSMicrophoneUsageDescription:
         'TalkToMe uses the microphone so you can talk to other operators.',
       NSLocalNetworkUsageDescription:
         'TalkToMe connects to your self-hosted intercom on the local network.',
       NSBluetoothAlwaysUsageDescription: 'TalkToMe connects to wireless PTT buttons.',
+      NSSupportsLiveActivities: true,
+      NSSupportsLiveActivitiesFrequentUpdates: true,
       UIBackgroundModes: ['audio', 'bluetooth-central'],
       UISupportedInterfaceOrientations: [
         'UIInterfaceOrientationPortrait',
@@ -37,7 +47,7 @@ const config: ExpoConfig = {
     // Android Java packages cannot contain a hyphen.
     package: 'io.github.leeo86.talktomemobile',
     adaptiveIcon: {
-      backgroundColor: '#0B1220',
+      backgroundColor: '#000000',
       foregroundImage: './assets/android-icon-foreground.png',
       backgroundImage: './assets/android-icon-background.png',
       monochromeImage: './assets/android-icon-monochrome.png',
@@ -60,6 +70,7 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: false,
   },
   plugins: [
+    '@bacons/apple-targets',
     '@preeternal/react-native-cookie-manager',
     [
       '@config-plugins/react-native-webrtc',
@@ -74,6 +85,7 @@ const config: ExpoConfig = {
     './plugins/withTalkToMeBle',
     './plugins/withTalkToMePtt',
     './plugins/withTalkToMeOrientation',
+    './plugins/withTalkToMePresence',
   ],
   extra: {
     enableIosPtt,
