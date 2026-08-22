@@ -39,9 +39,12 @@ NDI Tools` button leading to NDI's official Tools download. While refreshing,
 the button changes to `Refreshing…` and the status reads `Discovering NDI
 sources…`; discovery can take a few seconds.
 
-Discovered NDI sources are exposed as Bridge input devices with channel choices
-up to channel 32. The selected channel is validated against the channel count of
-received audio frames. Eight stereo send slots named `Talktome Bridge 1` through
+Discovered NDI sources are briefly probed for an audio frame and exposed as
+Bridge input devices with only the detected channel choices, up to channel 32.
+If a silent or video-only source does not provide an audio frame during the
+bounded probe, the Bridge falls back to stereo choices until a later refresh
+can detect its channel count. The selected channel is validated again when the
+input starts. Eight stereo send slots named `Talktome Bridge 1` through
 `Talktome Bridge 8` are exposed as Bridge output devices. Both use the existing
 managed Bridge-port configuration, so no server-side NDI component is required.
 The first implementation supports uncompressed planar floating-point audio at

@@ -1,6 +1,6 @@
 use libloading::Library;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::ptr;
@@ -30,6 +30,8 @@ const NDI_TIMECODE_SYNTHESIZE: i64 = i64::MAX;
 const NDI_CAPTURE_TIMEOUT_MS: u32 = 100;
 const NDI_INITIAL_DISCOVERY_WAIT: Duration = Duration::from_secs(2);
 const NDI_EMPTY_DISCOVERY_GRACE: Duration = Duration::from_secs(10);
+const NDI_CHANNEL_PROBE_PER_SOURCE: Duration = Duration::from_millis(350);
+const NDI_CHANNEL_PROBE_TOTAL: Duration = Duration::from_millis(1_200);
 #[cfg(any(windows, test))]
 const WINDOWS_NDI_RUNTIME_DIRECTORIES: &[&str] = &[
     "NDI\\NDI 6 Runtime\\v6",
@@ -41,6 +43,7 @@ const WINDOWS_NDI_RUNTIME_DIRECTORIES: &[&str] = &[
 
 static NDI_DISCOVERY_LOCK: Mutex<()> = Mutex::new(());
 static NDI_SOURCE_CACHE: OnceLock<Mutex<CachedSources>> = OnceLock::new();
+static NDI_CHANNEL_COUNT_CACHE: OnceLock<Mutex<HashMap<String, u16>>> = OnceLock::new();
 
 type NdiInstance = *mut c_void;
 
@@ -451,20 +454,120 @@ fn virtual_device(id: String, name: String, direction: &str, max_channels: u16) 
     }
 }
 
+fn normalized_input_channel_count(channels: i32) -> Option<u16> {
+    u16::try_from(channels)
+        .ok()
+        .filter(|channels| *channels > 0)
+        .map(|channels| channels.min(NDI_INPUT_MAX_CHANNELS))
+}
+
+fn cached_input_channel_count(source_id: &str) -> Option<u16> {
+    NDI_CHANNEL_COUNT_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(source_id).copied())
+}
+
+fn cache_input_channel_count(source_id: &str, channels: u16) {
+    if let Ok(mut cache) = NDI_CHANNEL_COUNT_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        cache.insert(source_id.to_string(), channels);
+    }
+}
+
+fn probe_input_channel_count(
+    api: &NdiApi,
+    source: &DiscoveredSource,
+    wait: Duration,
+) -> Option<u16> {
+    if wait.is_zero() {
+        return None;
+    }
+    let source_name = CString::new(source.name.clone()).ok()?;
+    let receiver_name = CString::new("Talktome Bridge channel probe").ok()?;
+    let settings = NdiRecvCreateV3 {
+        source: NdiSource {
+            ndi_name: source_name.as_ptr(),
+            url_address: ptr::null(),
+        },
+        color_format: NDI_RECV_COLOR_FORMAT_FASTEST,
+        bandwidth: NDI_RECV_BANDWIDTH_AUDIO_ONLY,
+        allow_video_fields: false,
+        receiver_name: receiver_name.as_ptr(),
+    };
+    let receiver = unsafe { (api.recv_create)(&settings) };
+    if receiver.is_null() {
+        return None;
+    }
+    let _guard = NdiReceiverGuard { api, receiver };
+    let deadline = Instant::now() + wait;
+
+    while Instant::now() < deadline {
+        let mut frame = NdiAudioFrameV3 {
+            sample_rate: 0,
+            channels: 0,
+            samples: 0,
+            timecode: 0,
+            fourcc: 0,
+            data: ptr::null_mut(),
+            channel_stride_bytes: 0,
+            metadata: ptr::null(),
+            timestamp: 0,
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let timeout_ms = remaining
+            .min(Duration::from_millis(u64::from(NDI_CAPTURE_TIMEOUT_MS)))
+            .as_millis()
+            .max(1) as u32;
+        let frame_type = unsafe {
+            (api.recv_capture)(
+                receiver,
+                ptr::null_mut(),
+                &mut frame,
+                ptr::null_mut(),
+                timeout_ms,
+            )
+        };
+        if frame_type == NDI_FRAME_TYPE_ERROR {
+            return None;
+        }
+        if frame_type != NDI_FRAME_TYPE_AUDIO {
+            continue;
+        }
+        let channels = normalized_input_channel_count(frame.channels);
+        unsafe { (api.recv_free_audio)(receiver, &frame) };
+        return channels;
+    }
+    None
+}
+
 pub fn audio_devices(wait: Duration) -> Vec<AudioDeviceInfo> {
     let Ok(api) = NdiApi::load() else {
         return Vec::new();
     };
-    let mut devices = api
-        .discover_resilient(wait)
-        .unwrap_or_default()
+    let sources = api.discover_resilient(wait).unwrap_or_default();
+    let channel_probe_started = Instant::now();
+    let mut devices = sources
         .into_iter()
         .map(|source| {
+            let cached_channels = cached_input_channel_count(&source.id);
+            let remaining = NDI_CHANNEL_PROBE_TOTAL.saturating_sub(channel_probe_started.elapsed());
+            let detected_channels = probe_input_channel_count(
+                &api,
+                &source,
+                remaining.min(NDI_CHANNEL_PROBE_PER_SOURCE),
+            );
+            if let Some(channels) = detected_channels {
+                cache_input_channel_count(&source.id, channels);
+            }
             virtual_device(
                 source.id,
                 format!("NDI network input · {}", source.name),
                 "input",
-                NDI_INPUT_MAX_CHANNELS,
+                detected_channels.or(cached_channels).unwrap_or(2),
             )
         })
         .collect::<Vec<_>>();
@@ -1002,6 +1105,15 @@ pub(crate) mod tests {
         assert!(pairs.iter().any(|pair| {
             pair.label == "31/32" && pair.left_channel == 31 && pair.right_channel == 32
         }));
+    }
+
+    #[test]
+    fn detected_input_channel_count_is_validated_and_capped() {
+        assert_eq!(normalized_input_channel_count(0), None);
+        assert_eq!(normalized_input_channel_count(-1), None);
+        assert_eq!(normalized_input_channel_count(2), Some(2));
+        assert_eq!(normalized_input_channel_count(8), Some(8));
+        assert_eq!(normalized_input_channel_count(64), Some(32));
     }
 
     #[test]
