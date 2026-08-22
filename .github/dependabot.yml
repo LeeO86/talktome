@@ -11,9 +11,19 @@ updates:
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
+        applies-to: "version-updates"
         update-types:
           - "minor"
           - "patch"
+      security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "npm"
     directory: "/bridge-client"
@@ -25,9 +35,19 @@ updates:
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
+        applies-to: "version-updates"
         update-types:
           - "minor"
           - "patch"
+      security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "npm"
     directory: "/server-app"
@@ -39,9 +59,19 @@ updates:
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
+        applies-to: "version-updates"
         update-types:
           - "minor"
           - "patch"
+      security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "cargo"
     directory: "/bridge-client/src-tauri"
@@ -53,9 +83,19 @@ updates:
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
+        applies-to: "version-updates"
         update-types:
           - "minor"
           - "patch"
+      security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "cargo"
     directory: "/server-app/src-tauri"
@@ -67,9 +107,19 @@ updates:
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
+        applies-to: "version-updates"
         update-types:
           - "minor"
           - "patch"
+      security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "docker"
     directory: "/"
@@ -79,6 +129,16 @@ updates:
       time: "06:50"
       timezone: "Europe/Berlin"
     open-pull-requests-limit: 3
+    groups:
+      security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -90,6 +150,16 @@ updates:
     open-pull-requests-limit: 3
     groups:
       actions-minor-and-patch:
+        applies-to: "version-updates"
         update-types:
           - "minor"
           - "patch"
+      security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
