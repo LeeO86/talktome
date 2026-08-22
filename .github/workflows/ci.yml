@@ -26,7 +26,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -56,6 +56,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge-client/src-tauri
+
       - name: Install Linux build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install -y --no-install-recommends
@@ -76,6 +81,12 @@ jobs:
       - name: Build UI
         working-directory: bridge-client
         run: npm run build:ui
+
+      - name: Prepare CI sidecar placeholder
+        run: |
+          sidecar="bridge-client/src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu"
+          touch "$sidecar"
+          chmod +x "$sidecar"
 
       - name: Check Rust
         run: cargo check --locked --manifest-path bridge-client/src-tauri/Cargo.toml
@@ -101,6 +112,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-app/src-tauri
+
       - name: Install Linux build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install -y --no-install-recommends
@@ -120,6 +136,14 @@ jobs:
       - name: Build UI
         working-directory: server-app
         run: npm run build:ui
+
+      - name: Prepare CI sidecar placeholders
+        run: |
+          sidecar="server-app/src-tauri/binaries/talktome-server-x86_64-unknown-linux-gnu"
+          touch "$sidecar"
+          chmod +x "$sidecar"
+          touch server-app/src-tauri/binaries/better_sqlite3.node
+          touch server-app/src-tauri/binaries/mediasoup-worker
 
       - name: Check Rust
         run: cargo check --locked --manifest-path server-app/src-tauri/Cargo.toml
