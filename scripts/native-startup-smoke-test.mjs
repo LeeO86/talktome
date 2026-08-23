@@ -217,6 +217,14 @@ async function main() {
   const localAppData = path.join(tempRoot, "local-app-data");
   await mkdir(dataDir, { recursive: true });
   await mkdir(localAppData, { recursive: true });
+  const staleRuntimeDir = path.join(dataDir, "runtime");
+  const staleWorkerName = process.platform === "win32" ? "mediasoup-worker.exe" : "mediasoup-worker";
+  const staleWorkerPath = path.join(staleRuntimeDir, staleWorkerName);
+  await mkdir(staleRuntimeDir, { recursive: true });
+  await writeFile(staleWorkerPath, "outdated mediasoup worker used to verify runtime upgrades\n");
+  if (process.platform !== "win32") {
+    await chmod(staleWorkerPath, 0o755);
+  }
   const launchedExecutable = mode === "server"
     ? await stageServerRuntime(executable, tempRoot)
     : executable;

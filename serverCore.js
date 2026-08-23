@@ -30,6 +30,7 @@ const {
 const {
   shouldCloseBridgeSessionAfterEventStreamClose,
 } = require("./bridgeSessionLiveness");
+const { syncRuntimeExecutable } = require("./runtimeWorker");
 
 const SERVER_APP_VERSION = resolveServerAppVersion();
 const CLIENT_ICE_CONFIG = resolveClientIceConfig(process.env);
@@ -72,11 +73,10 @@ if (process.pkg) {
   }
 
   const runtimeDir = path.join(getDataDir(), "runtime");
-  fs.mkdirSync(runtimeDir, { recursive: true });
   const dest = path.join(runtimeDir, workerName);
-  if (!fs.existsSync(dest)) {
-    fs.copyFileSync(sourceBin, dest);
-    fs.chmodSync(dest, 0o755);
+  const workerSync = syncRuntimeExecutable(sourceBin, dest);
+  if (workerSync.updated) {
+    console.log(`[INIT] Updated mediasoup worker runtime: ${dest}`);
   }
 
   // The packaged worker is copied out of pkg's virtual filesystem before it
@@ -6387,7 +6387,7 @@ function warnIfDockerAnnouncedIpLooksInternal(announcedIp) {
   );
 }
 
-(async () => {
+const mediaReadyPromise = (async () => {
   console.log("[INIT] Starting mediasoup worker");
   try {
     worker = await mediasoup.createWorker({
@@ -7332,6 +7332,9 @@ io.on("connection", (socket) => {
   socket.on("create-send-transport", async (_, callback) => {
     console.log(`[TRANSPORT] Client ${socket.id} requests send transport`);
     try {
+      if (!router) {
+        return callback({ error: "Media router is not ready, try again" });
+      }
       const mediaRoute = resolveTransportAnnouncedAddress();
       if (mediaRoute.error || !mediaRoute.announcedAddress) {
         console.error("[TRANSPORT] No usable announced IP:", mediaRoute.error || "unknown media network error");
@@ -7378,6 +7381,9 @@ io.on("connection", (socket) => {
   socket.on("create-recv-transport", async (_, callback) => {
     console.log(`[TRANSPORT] Client ${socket.id} requests recv transport`);
     try {
+      if (!router) {
+        return callback({ error: "Media router is not ready, try again" });
+      }
       const mediaRoute = resolveTransportAnnouncedAddress();
       if (mediaRoute.error || !mediaRoute.announcedAddress) {
         console.error("[TRANSPORT] No usable announced IP:", mediaRoute.error || "unknown media network error");
@@ -8061,7 +8067,7 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
-server.listen(HTTPS_PORT, () => {
+function logHttpsServerReady() {
   const startupHosts = getStartupHosts();
   const configuredPublicIp = typeof process.env.PUBLIC_IP === "string"
     ? process.env.PUBLIC_IP.trim()
@@ -8131,4 +8137,18 @@ server.listen(HTTPS_PORT, () => {
   if (!readCompanionApiKeyFromEnv()) {
     console.log(`🔐 API key file: ${COMPANION_API_KEY_FILE}`);
   }
+}
+
+function startHttpsServer() {
+  server.listen(HTTPS_PORT, logHttpsServerReady);
+}
+
+mediaReadyPromise.then(startHttpsServer).catch((error) => {
+  const message = error?.stack || error?.message || String(error);
+  console.error(`[INIT] mediasoup initialization failed: ${message}`);
+  try {
+    worker?.close();
+  } catch {}
+  process.exitCode = 1;
+  setImmediate(() => process.exit(1));
 });
