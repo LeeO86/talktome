@@ -920,6 +920,7 @@ let micCleanupTimer = null;
 let micPrimed = false;
 let micPrimingPromise = null;
 let initialMicAccessRequested = false;
+let mediaInitialized = false;
 
 let feedStreaming = false;
 let feedManualStop = false;
@@ -3409,7 +3410,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const productionSessionSelect = document.getElementById('production-session-select');
   const mediaConnectionStatusEl = document.getElementById('media-connection-status');
   const mediaConnectionStatusLabelEl = document.getElementById('media-connection-status-label');
-  let mediaInitialized = false;
   const mediaConnectionState = {
     signaling: socket.connected ? 'connected' : 'connecting',
     send: 'idle',
@@ -9886,8 +9886,12 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
         socket.emit("get-router-rtp-capabilities", (caps) => {
           clearTimeout(timeout);
-          if (!caps) {
+          if (!caps || typeof caps !== 'object') {
             reject(new Error("No RTP capabilities received"));
+          } else if (caps.error) {
+            reject(new Error(`Server could not provide RTP capabilities: ${caps.error}`));
+          } else if (!Array.isArray(caps.codecs)) {
+            reject(new Error("Server returned invalid RTP capabilities"));
           } else {
             resolve(caps);
           }
@@ -9911,7 +9915,15 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
         socket.emit("create-send-transport", null, (params) => {
           clearTimeout(timeout);
-          resolve(params);
+          if (!params || typeof params !== 'object') {
+            reject(new Error("Server returned no send transport parameters"));
+          } else if (params.error) {
+            reject(new Error(`Server could not create send transport: ${params.error}`));
+          } else if (typeof params.id !== 'string') {
+            reject(new Error("Server returned invalid send transport parameters"));
+          } else {
+            resolve(params);
+          }
         });
       });
 
@@ -9976,7 +9988,15 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
         socket.emit("create-recv-transport", null, (params) => {
           clearTimeout(timeout);
-          resolve(params);
+          if (!params || typeof params !== 'object') {
+            reject(new Error("Server returned no receive transport parameters"));
+          } else if (params.error) {
+            reject(new Error(`Server could not create receive transport: ${params.error}`));
+          } else if (typeof params.id !== 'string') {
+            reject(new Error("Server returned invalid receive transport parameters"));
+          } else {
+            resolve(params);
+          }
         });
       });
 
