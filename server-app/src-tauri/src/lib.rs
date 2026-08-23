@@ -443,19 +443,137 @@ fn write_runtime_config(config: &ServerRuntimeConfig) -> Result<PathBuf, String>
     Ok(path)
 }
 
+fn is_link_local_ipv4(address: &str) -> bool {
+    address.trim().starts_with("169.254.")
+}
+
+fn admin_host_from_config(
+    config: &ServerRuntimeConfig,
+    available_interfaces: &[MediaNetworkInterface],
+) -> String {
+    if config.media_network_mode == "manual" {
+        if let Some(address) = config
+            .media_announced_address
+            .as_deref()
+            .map(str::trim)
+            .filter(|address| !address.is_empty())
+        {
+            return address.to_string();
+        }
+    }
+
+    if config.media_network_mode == "interface" {
+        if let Some(interface_name) = config
+            .media_interface_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if let Some(interface) = available_interfaces
+                .iter()
+                .find(|interface| interface.name == interface_name)
+            {
+                return interface.address.clone();
+            }
+        }
+    }
+
+    available_interfaces
+        .iter()
+        .find(|interface| !is_link_local_ipv4(&interface.address))
+        .or_else(|| available_interfaces.first())
+        .map(|interface| interface.address.clone())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
+fn admin_url(
+    config: &ServerRuntimeConfig,
+    available_interfaces: &[MediaNetworkInterface],
+) -> String {
+    let host = admin_host_from_config(config, available_interfaces);
+    format!("https://{}:{}/admin", host, config.https_port)
+}
+
 fn admin_url_from_config() -> String {
     let config = load_runtime_config().unwrap_or_default();
-    let host = if config.mdns_host.trim().is_empty() || config.mdns_host == "off" {
-        "localhost".to_string()
-    } else {
-        config.mdns_host
-    };
-    let port_suffix = if config.https_port == 443 {
-        String::new()
-    } else {
-        format!(":{}", config.https_port)
-    };
-    format!("https://{host}{port_suffix}/admin")
+    admin_url(&config, &get_available_media_network_interfaces())
+}
+
+#[cfg(test)]
+mod admin_url_tests {
+    use super::*;
+
+    fn interface(name: &str, address: &str) -> MediaNetworkInterface {
+        MediaNetworkInterface {
+            name: name.to_string(),
+            address: address.to_string(),
+            label: format!("{name} - {address}"),
+        }
+    }
+
+    #[test]
+    fn manual_address_replaces_mdns_host_and_keeps_port() {
+        let config = ServerRuntimeConfig {
+            https_port: 8444,
+            mdns_host: "intercom.local".to_string(),
+            media_network_mode: "manual".to_string(),
+            media_announced_address: Some("192.168.178.166".to_string()),
+            ..ServerRuntimeConfig::default()
+        };
+
+        assert_eq!(
+            admin_url(&config, &[]),
+            "https://192.168.178.166:8444/admin"
+        );
+    }
+
+    #[test]
+    fn preferred_adapter_uses_its_current_address() {
+        let config = ServerRuntimeConfig {
+            https_port: 443,
+            media_network_mode: "interface".to_string(),
+            media_interface_name: Some("en1".to_string()),
+            ..ServerRuntimeConfig::default()
+        };
+        let interfaces = [
+            interface("en0", "192.168.1.20"),
+            interface("en1", "10.0.0.15"),
+        ];
+
+        assert_eq!(
+            admin_url(&config, &interfaces),
+            "https://10.0.0.15:443/admin"
+        );
+    }
+
+    #[test]
+    fn automatic_mode_prefers_regular_ipv4_over_link_local() {
+        let config = ServerRuntimeConfig {
+            https_port: 8444,
+            media_network_mode: "auto".to_string(),
+            ..ServerRuntimeConfig::default()
+        };
+        let interfaces = [
+            interface("en0", "169.254.10.20"),
+            interface("en1", "192.168.178.166"),
+        ];
+
+        assert_eq!(
+            admin_url(&config, &interfaces),
+            "https://192.168.178.166:8444/admin"
+        );
+    }
+
+    #[test]
+    fn missing_network_falls_back_to_loopback_ip() {
+        let config = ServerRuntimeConfig {
+            https_port: 9443,
+            media_network_mode: "auto".to_string(),
+            ..ServerRuntimeConfig::default()
+        };
+
+        assert_eq!(admin_url(&config, &[]), "https://127.0.0.1:9443/admin");
+    }
 }
 
 #[cfg(target_os = "macos")]
