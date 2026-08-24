@@ -105,6 +105,9 @@ const config: ExpoConfig = {
   ],
   extra: {
     enableIosPtt,
+    eas: {
+      projectId: 'ae071885-3a15-4e42-950f-101152ef28be',
+    },
   },
 };
 

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Pressable, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
+import { iosPttEnabled } from '../audio/policy';
 import { visibleProductionName, talkTargetIdentity, type TalkTarget } from '../protocol';
+import { shouldShowPttJoinBanner } from '../ptt/policy';
 import { session, useSessionStore } from '../session/store';
 import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
@@ -139,6 +141,23 @@ export function OperatorScreen() {
       {store.overBudget ? (
         <Text style={styles.warn}>Too many incoming streams — some feeds paused.</Text>
       ) : null}
+      {shouldShowPttJoinBanner({
+        platform: Platform.OS,
+        pttEnabled: iosPttEnabled(),
+        bootstrapEnabled: store.pttBootstrapEnabled,
+        joined: store.pttJoined,
+      }) ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Join PushToTalk channel"
+          accessibilityHint="Enables Lock Screen and Dynamic Island talk while the app is in the foreground"
+          onPress={() => void session.joinSystemPttChannel()}
+          style={styles.pttBanner}
+        >
+          <Text style={styles.pttBannerTitle}>Join PushToTalk</Text>
+          <Text style={styles.pttBannerHint}>Needed for Lock Screen and Dynamic Island.</Text>
+        </Pressable>
+      ) : null}
       {store.error ? <Text style={styles.error}>{store.error}</Text> : null}
 
       <View
@@ -232,6 +251,25 @@ const styles = StyleSheet.create({
   error: {
     color: colors.danger,
     marginBottom: 8,
+  },
+  pttBanner: {
+    backgroundColor: 'rgba(61,214,245,0.16)',
+    borderColor: 'rgba(61,214,245,0.42)',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 10,
+  },
+  pttBannerTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  pttBannerHint: {
+    color: colors.muted,
+    fontSize: 13,
+    marginTop: 2,
   },
   body: {
     flex: 1,

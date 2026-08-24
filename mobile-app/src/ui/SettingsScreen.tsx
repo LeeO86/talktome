@@ -1,7 +1,7 @@
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
-import { pttStatusLabel } from '../ptt/policy';
+import { pttStatusLabel, shouldShowPttJoinBanner } from '../ptt/policy';
 import { describeBleConnection } from '../ble/native';
 import { describeBleTarget, type BleTargetSelection } from '../ble/target';
 import { fgsStatusLabel } from '../background/fgs';
@@ -175,12 +175,17 @@ export function SettingsScreen({ visible, onClose }: Props) {
                     })}
                   </Text>
                 </View>
-                {store.pttBootstrapEnabled && !store.pttJoined ? (
+                {shouldShowPttJoinBanner({
+                  platform: Platform.OS,
+                  pttEnabled: iosPttEnabled(),
+                  bootstrapEnabled: store.pttBootstrapEnabled,
+                  joined: store.pttJoined,
+                }) ? (
                   <Pressable
                     style={styles.row}
                     onPress={() => {
-                      onClose();
                       void session.joinSystemPttChannel();
+                      onClose();
                     }}
                     accessibilityRole="button"
                   >

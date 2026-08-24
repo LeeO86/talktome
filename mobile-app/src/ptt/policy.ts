@@ -115,6 +115,29 @@ export function shouldUseSystemPtt(input: {
   );
 }
 
+export function canJoinCachedSystemPtt(input: {
+  platform: string;
+  pttEnabled: boolean;
+  channelUUID?: string | null;
+  guest?: boolean;
+}): boolean {
+  return (
+    input.platform === 'ios' &&
+    input.pttEnabled &&
+    !input.guest &&
+    Boolean(input.channelUUID?.trim())
+  );
+}
+
+export function shouldShowPttJoinBanner(input: {
+  platform: string;
+  pttEnabled: boolean;
+  bootstrapEnabled: boolean;
+  joined: boolean;
+}): boolean {
+  return input.platform === 'ios' && input.pttEnabled && input.bootstrapEnabled && !input.joined;
+}
+
 export function pttStatusLabel(input: {
   enabledInBuild: boolean;
   nativeAvailable: boolean;
@@ -160,7 +183,7 @@ export function pttCapabilityReason(input: {
     return 'Joined the system PTT channel. Server bootstrap { enabled: true } is advisory — APNs is not verified until a real push arrives.';
   }
   if (input.bootstrapEnabled) {
-    return 'Server bootstrap claims Apple PTT is configured. That is not a delivered push.';
+    return 'Server bootstrap claims Apple PTT is configured. Tap Join PushToTalk on the session screen while the app is in the foreground. That is not a delivered push.';
   }
   return 'PushToTalk is in this build. The server has not advertised an enabled channel yet. Bootstrap is advisory.';
 }

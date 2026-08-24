@@ -65,6 +65,15 @@ export async function updatePttChannel(
   return (await loadNative()?.updateChannel?.(channelUUID, channelName)) === true;
 }
 
+/** Starts `requestJoinChannel` on this call stack so Apple still counts a user tap. */
+export function beginPttJoin(channelUUID: string, channelName: string): Promise<boolean> {
+  const pending = loadNative()?.updateChannel?.(channelUUID, channelName);
+  if (!pending) {
+    return Promise.resolve(false);
+  }
+  return pending.then((ok) => ok === true);
+}
+
 export function lastPttDiagnostic(): string {
   return loadNative()?.lastDiagnostic?.() ?? '';
 }

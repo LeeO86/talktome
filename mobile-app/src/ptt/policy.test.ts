@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canJoinCachedSystemPtt,
   hexPushToken,
   incomingPushResultForPayload,
   parseApplePttBootstrap,
   parseApplePttPushPayload,
   pttCapabilityReason,
   pttStatusLabel,
+  shouldShowPttJoinBanner,
   shouldUseSystemPtt,
 } from './policy';
 
@@ -80,6 +82,44 @@ describe('Apple PTT policy', () => {
         pttEnabled: true,
         operatorReady: true,
         identityKind: 'guest',
+      }),
+    ).toBe(false);
+  });
+
+  it('allows a cached-channel join from a profile tap before operator ready', () => {
+    expect(
+      canJoinCachedSystemPtt({
+        platform: 'ios',
+        pttEnabled: true,
+        channelUUID: '3abe3537-8595-4284-8352-02f4c1c4cc13',
+      }),
+    ).toBe(true);
+    expect(
+      canJoinCachedSystemPtt({
+        platform: 'ios',
+        pttEnabled: true,
+        channelUUID: '3abe3537-8595-4284-8352-02f4c1c4cc13',
+        guest: true,
+      }),
+    ).toBe(false);
+    expect(canJoinCachedSystemPtt({ platform: 'ios', pttEnabled: true, channelUUID: '' })).toBe(false);
+  });
+
+  it('shows a session Join banner until the system channel is joined', () => {
+    expect(
+      shouldShowPttJoinBanner({
+        platform: 'ios',
+        pttEnabled: true,
+        bootstrapEnabled: true,
+        joined: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowPttJoinBanner({
+        platform: 'ios',
+        pttEnabled: true,
+        bootstrapEnabled: true,
+        joined: true,
       }),
     ).toBe(false);
   });

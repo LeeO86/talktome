@@ -87,11 +87,13 @@ import { slideToLockHint } from '../talk/slideToLock';
 import { addTalkTarget, removeTalkTarget, talkTargetKeys } from '../talk/talkSet';
 import { loadAudioPreferences, saveAudioPreferences } from './audioPrefs';
 import {
+  canJoinCachedSystemPtt,
   isHexPushToken,
   parseApplePttBootstrap,
   shouldUseSystemPtt,
 } from '../ptt/policy';
 import {
+  beginPttJoin,
   lastPttDiagnostic,
   leavePttChannel,
   pttNativeAvailable,
@@ -100,6 +102,7 @@ import {
   updatePttRemoteParticipant,
 } from '../ptt/native';
 import {
+  cachedPttChannel,
   loadProfileBundle,
   passwordForProfile,
   profileCanAutoConnect,
@@ -268,6 +271,7 @@ class SessionController {
   private liveProducers = new Map<string, ActiveProducer>();
   private appStateSubscription: { remove: () => void } | null = null;
   private pttChannelUUID: string | null = null;
+  private pendingPttRegistration: { token: string; channelUUID: string } | null = null;
   private readonly blePolicy = new BleButtonPolicy();
 
   async hydrate(): Promise<void> {
@@ -484,10 +488,13 @@ class SessionController {
     });
   }
 
-  async connectProfile(profileId: string): Promise<void> {
+  async connectProfile(profileId: string, options?: { userGesture?: boolean }): Promise<void> {
     const profile = useSessionStore.getState().profiles.find((item) => item.id === profileId);
     if (!profile) {
       throw new Error('Profile not found.');
+    }
+    if (options?.userGesture) {
+      this.joinCachedSystemPttFromUserGesture(profile);
     }
     const password = await passwordForProfile(profile.id);
     this.pendingPassword = password;
@@ -550,7 +557,7 @@ class SessionController {
       this.startAddProfile();
       return;
     }
-    await this.connectProfile(id);
+    await this.connectProfile(id, { userGesture: true });
   }
 
   async removeSavedProfile(profileId: string): Promise<void> {
@@ -683,6 +690,10 @@ class SessionController {
       allowInsecureLocalTLS: state.allowInsecureLocalTLS,
       productionId: state.operatorReady ? state.productionId : (existing?.productionId ?? state.productionId),
       productionName: state.operatorReady ? state.productionName : (existing?.productionName ?? state.productionName),
+      pttChannelUUID: guest ? undefined : (this.pttChannelUUID ?? existing?.pttChannelUUID),
+      pttChannelName: guest
+        ? undefined
+        : (state.pttChannelName.trim() || existing?.pttChannelName),
       guest,
     };
     const profiles = upsertProfile(state.profiles, saved);
@@ -882,9 +893,6 @@ class SessionController {
     ) {
       return;
     }
-    if (!this.pttChannelUUID) {
-      await this.syncSystemPtt();
-    }
     const channelUUID = this.pttChannelUUID;
     const channelName = useSessionStore.getState().pttChannelName || 'Talktome';
     if (!channelUUID) {
@@ -894,11 +902,43 @@ class SessionController {
       });
       return;
     }
+    await this.beginSystemPttJoin(channelUUID, channelName);
+  }
+
+  private joinCachedSystemPttFromUserGesture(profile: SavedProfile): void {
+    const cached = cachedPttChannel(profile);
+    if (
+      !cached ||
+      !canJoinCachedSystemPtt({
+        platform: Platform.OS,
+        pttEnabled: iosPttEnabled(),
+        channelUUID: cached.channelUUID,
+        guest: Boolean(profile.guest),
+      })
+    ) {
+      return;
+    }
+    this.pttChannelUUID = cached.channelUUID;
     useSessionStore.setState({
+      pttChannelName: cached.channelName,
       pttDiagnostic: 'Joining system PTT channel…',
       statusMessage: 'Joining system PTT channel…',
     });
-    await updatePttChannel(channelUUID, channelName);
+    void this.finishSystemPttJoin(beginPttJoin(cached.channelUUID, cached.channelName));
+  }
+
+  private async beginSystemPttJoin(channelUUID: string, channelName: string): Promise<void> {
+    this.pttChannelUUID = channelUUID;
+    useSessionStore.setState({
+      pttChannelName: channelName,
+      pttDiagnostic: 'Joining system PTT channel…',
+      statusMessage: 'Joining system PTT channel…',
+    });
+    await this.finishSystemPttJoin(beginPttJoin(channelUUID, channelName));
+  }
+
+  private async finishSystemPttJoin(joined: Promise<boolean>): Promise<void> {
+    await joined;
     await new Promise((resolve) => setTimeout(resolve, 400));
     const nativeNote = lastPttDiagnostic().trim();
     if (!useSessionStore.getState().pttJoined && nativeNote) {
@@ -1906,14 +1946,28 @@ class SessionController {
         await this.syncAudioSession();
         return;
       }
+      const previousUUID = this.pttChannelUUID;
       this.pttChannelUUID = bootstrap.channel.channelUUID;
-      await updatePttChannel(bootstrap.channel.channelUUID, bootstrap.channel.channelName);
+      if (
+        previousUUID &&
+        previousUUID !== bootstrap.channel.channelUUID &&
+        useSessionStore.getState().pttJoined
+      ) {
+        try {
+          await leavePttChannel();
+        } catch {
+          // Banner join will request the server channel after this leave.
+        }
+        useSessionStore.setState({ pttJoined: false });
+      }
       useSessionStore.setState({
         pttAvailable: pttNativeAvailable(),
         pttBootstrapEnabled: true,
         pttChannelName: bootstrap.channel.channelName,
         capabilityReason: this.capabilityReason({ pttBootstrapEnabled: true }),
       });
+      await this.persistCurrentProfile();
+      await this.flushPendingPttRegistration();
     } catch (error) {
       useSessionStore.setState({
         pttAvailable: pttNativeAvailable(),
@@ -1948,11 +2002,20 @@ class SessionController {
   }
 
   private async registerPttToken(token: string, channelUUID: string): Promise<void> {
-    if (!this.signaling || !isHexPushToken(token)) {
+    if (!isHexPushToken(token)) {
+      return;
+    }
+    this.pendingPttRegistration = { token, channelUUID };
+    await this.flushPendingPttRegistration();
+  }
+
+  private async flushPendingPttRegistration(): Promise<void> {
+    const pending = this.pendingPttRegistration;
+    if (!pending || !this.signaling) {
       return;
     }
     try {
-      await this.signaling.registerApplePttPushToken(channelUUID, token);
+      await this.signaling.registerApplePttPushToken(pending.channelUUID, pending.token);
       useSessionStore.setState({ statusMessage: 'System PTT push token registered.' });
     } catch (error) {
       useSessionStore.setState({

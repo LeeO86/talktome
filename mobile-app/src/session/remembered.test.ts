@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { profileCanAutoConnect, profileIdentity, upsertProfile, type SavedProfile } from './profileModel';
+import { profileCanAutoConnect, profileIdentity, upsertProfile, cachedPttChannel, type SavedProfile } from './profileModel';
 
 const base = (id: string): SavedProfile => ({
   id,
@@ -35,5 +35,28 @@ describe('profileCanAutoConnect', () => {
     expect(profileCanAutoConnect({ ...base('a'), guest: { guestId: 'g', guestProfileUserId: 1, name: 'Guest' } })).toBe(
       true,
     );
+  });
+});
+
+describe('cachedPttChannel', () => {
+  it('returns a stored operator channel and skips guests', () => {
+    expect(
+      cachedPttChannel({
+        ...base('a'),
+        pttChannelUUID: '  3abe3537-8595-4284-8352-02f4c1c4cc13  ',
+        pttChannelName: ' Talktome ',
+      }),
+    ).toEqual({
+      channelUUID: '3abe3537-8595-4284-8352-02f4c1c4cc13',
+      channelName: 'Talktome',
+    });
+    expect(cachedPttChannel(base('a'))).toBeNull();
+    expect(
+      cachedPttChannel({
+        ...base('a'),
+        pttChannelUUID: '3abe3537-8595-4284-8352-02f4c1c4cc13',
+        guest: { guestId: 'g', guestProfileUserId: 1, name: 'Guest' },
+      }),
+    ).toBeNull();
   });
 });

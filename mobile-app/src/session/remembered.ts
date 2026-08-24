@@ -10,6 +10,7 @@ import {
 } from './profileModel';
 
 export {
+  cachedPttChannel,
   profileCanAutoConnect,
   profileIdentity,
   upsertProfile,
