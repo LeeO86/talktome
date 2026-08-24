@@ -26,9 +26,21 @@ final class TalkToMePttController: NSObject {
   private let defaults = UserDefaults.standard
   private let persistedChannelKey = "io.github.leeo86.talktome-mobile.system-ptt-channel"
   private var appDidBecomeActiveObserver: NSObjectProtocol?
+  private var lastDiagnosticMessage: String?
+
+  private func emitDiagnostic(_ message: String) {
+    lastDiagnosticMessage = message
+    onDiagnostic?(message)
+  }
+
+  func lastDiagnostic() -> String {
+    lastDiagnosticMessage ?? ""
+  }
 
 #if canImport(PushToTalk)
   private var channelManager: PTChannelManager?
+  private var instantiationInFlight = false
+  private var unrecoverableInstantiationError = false
 #endif
 
   override init() {
@@ -58,54 +70,134 @@ final class TalkToMePttController: NSObject {
   }
 
   func updateChannel(channelUUID: String?, channelName: String?) {
-    desiredChannelUUID = channelUUID
-    desiredChannelName = channelName
-    persist()
+    onMain {
+      self.desiredChannelUUID = channelUUID
+      self.desiredChannelName = channelName
+      self.persist()
 #if canImport(PushToTalk)
-    if #available(iOS 16.0, *), channelUUID != nil {
-      instantiateIfNeeded()
-    }
+      if #available(iOS 16.0, *), channelUUID != nil {
+        self.instantiateIfNeeded()
+      }
 #endif
-    reconcile()
+      self.reconcile()
+    }
   }
 
   func updateActiveRemoteParticipant(name: String?) {
-    lastParticipantName = name
+    onMain {
+      self.lastParticipantName = name
 #if canImport(PushToTalk)
-    if #available(iOS 16.0, *) {
-      applyRemoteParticipant()
+      if #available(iOS 16.0, *) {
+        self.applyRemoteParticipant()
+      }
+#endif
+    }
+  }
+
+  func leave() {
+    onMain {
+      self.desiredChannelUUID = nil
+      self.desiredChannelName = nil
+      self.persist()
+#if canImport(PushToTalk)
+      if #available(iOS 16.0, *), let uuid = self.channelManager?.activeChannelUUID {
+        self.channelManager?.leaveChannel(channelUUID: uuid)
+      }
+#endif
+    }
+  }
+
+  func prepareAtLaunch() {
+#if canImport(PushToTalk)
+    onMain {
+      if #available(iOS 16.0, *) {
+        self.instantiateIfNeeded()
+      }
     }
 #endif
   }
 
-  func leave() {
-    desiredChannelUUID = nil
-    desiredChannelName = nil
-    persist()
-#if canImport(PushToTalk)
-    if #available(iOS 16.0, *), let uuid = channelManager?.activeChannelUUID {
-      channelManager?.leaveChannel(channelUUID: uuid)
+  private func onMain(_ work: @escaping () -> Void) {
+    if Thread.isMainThread {
+      work()
+    } else {
+      DispatchQueue.main.async(execute: work)
     }
-#endif
   }
 
 #if canImport(PushToTalk)
   @available(iOS 16.0, *)
   private func instantiateIfNeeded() {
-    guard channelManager == nil else {
+    if unrecoverableInstantiationError {
+      emitDiagnostic(
+        lastDiagnosticMessage
+          ?? "System PTT manager previously failed. Rebuild on a physical iPhone."
+      )
       return
     }
+    if channelManager != nil {
+      return
+    }
+    if instantiationInFlight {
+      emitDiagnostic("System PTT manager is still starting…")
+      return
+    }
+    instantiationInFlight = true
+    emitDiagnostic("System PTT manager starting…")
     PTChannelManager.channelManager(delegate: self, restorationDelegate: self) { [weak self] manager, error in
       guard let self else {
         return
       }
-      if let error {
-        self.onDiagnostic?("System PTT manager failed: \(error.localizedDescription)")
-        return
+      self.onMain {
+        self.instantiationInFlight = false
+        if let error {
+          self.unrecoverableInstantiationError = Self.isUnrecoverableInstantiationError(error)
+          self.emitDiagnostic(Self.describeChannelManagerError(error))
+          return
+        }
+        self.channelManager = manager
+        self.reconcile()
       }
-      self.channelManager = manager
-      self.reconcile()
     }
+  }
+
+  @available(iOS 16.0, *)
+  private static func isUnrecoverableInstantiationError(_ error: Error) -> Bool {
+    let nsError = error as NSError
+    guard nsError.domain == PTInstantiationErrorDomain else {
+      return false
+    }
+    switch nsError.code {
+    case PTInstantiationError.invalidPlatform.rawValue,
+         PTInstantiationError.missingBackgroundMode.rawValue,
+         PTInstantiationError.missingPushServerEnvironment.rawValue,
+         PTInstantiationError.missingEntitlement.rawValue:
+      return true
+    default:
+      return false
+    }
+  }
+
+  @available(iOS 16.0, *)
+  private static func describeChannelManagerError(_ error: Error) -> String {
+    let nsError = error as NSError
+    if nsError.domain == PTInstantiationErrorDomain {
+      switch nsError.code {
+      case PTInstantiationError.invalidPlatform.rawValue:
+        return "System PTT is not available on the Simulator. Install TalkToMe on a physical iPhone."
+      case PTInstantiationError.missingBackgroundMode.rawValue:
+        return "System PTT manager failed: Info.plist is missing UIBackgroundModes push-to-talk. Rebuild with EXPO_PUBLIC_ENABLE_IOS_PTT=1."
+      case PTInstantiationError.missingPushServerEnvironment.rawValue:
+        return "System PTT manager failed: missing Push Notifications (aps-environment). Enable it on the App ID and rebuild."
+      case PTInstantiationError.missingEntitlement.rawValue:
+        return "System PTT manager failed: missing com.apple.developer.push-to-talk. Enable Push to Talk on the App ID and rebuild."
+      case PTInstantiationError.instantiationAlreadyInProgress.rawValue:
+        return "System PTT manager is still starting…"
+      default:
+        break
+      }
+    }
+    return "System PTT manager failed (\(nsError.domain) \(nsError.code)): \(error.localizedDescription)"
   }
 
   private func reconcile() {
@@ -113,6 +205,14 @@ final class TalkToMePttController: NSObject {
       return
     }
     guard let channelManager else {
+      if instantiationInFlight {
+        emitDiagnostic("System PTT manager is still starting…")
+      } else if unrecoverableInstantiationError {
+        emitDiagnostic(
+          lastDiagnosticMessage
+            ?? "System PTT manager previously failed. Rebuild on a physical iPhone."
+        )
+      }
       return
     }
     guard let desiredChannelUUID, let desiredChannelName else {
@@ -121,17 +221,23 @@ final class TalkToMePttController: NSObject {
       }
       return
     }
-    guard UIApplication.shared.applicationState == .active else {
-      return
-    }
     guard let desiredUUID = UUID(uuidString: desiredChannelUUID) else {
-      onDiagnostic?("System PTT channel UUID is invalid.")
+      emitDiagnostic("System PTT channel UUID is invalid.")
       return
     }
     if channelManager.activeChannelUUID == desiredUUID {
+      emitDiagnostic("System PTT already on this channel.")
+      onJoined?()
       applyRemoteParticipant()
       return
     }
+    let state = UIApplication.shared.applicationState
+    if state != .active {
+      emitDiagnostic(
+        "System PTT join needs the app in the foreground (state \(state.rawValue)). Close Settings and tap Join again."
+      )
+    }
+    emitDiagnostic("System PTT requesting join…")
     let descriptor = PTChannelDescriptor(name: desiredChannelName, image: nil)
     channelManager.requestJoinChannel(channelUUID: desiredUUID, descriptor: descriptor)
   }
@@ -210,7 +316,7 @@ final class TalkToMePttController: NSObject {
 @available(iOS 16.0, *)
 extension TalkToMePttController: PTChannelManagerDelegate {
   func channelManager(_ channelManager: PTChannelManager, didJoinChannel channelUUID: UUID, reason: PTChannelJoinReason) {
-    onDiagnostic?("System PTT joined channel (\(reason.rawValue)).")
+    emitDiagnostic("System PTT joined channel (\(reason.rawValue)).")
     // Prototype hard-coded halfDuplex. Operators need RX during TX/lock; D3 is unproven.
     channelManager.setTransmissionMode(.fullDuplex, channelUUID: channelUUID, completionHandler: nil)
     if #available(iOS 17.0, *) {
@@ -222,9 +328,25 @@ extension TalkToMePttController: PTChannelManagerDelegate {
 
   func channelManager(_ channelManager: PTChannelManager, didLeaveChannel channelUUID: UUID, reason: PTChannelLeaveReason) {
     _ = channelUUID
-    onDiagnostic?("System PTT left channel (\(reason.rawValue)).")
+    emitDiagnostic("System PTT left channel (\(reason.rawValue)).")
     onLeft?()
     onServiceUpdate?("channel-left")
+  }
+
+  func channelManager(_ channelManager: PTChannelManager, failedToJoinChannel channelUUID: UUID, error: Error) {
+    _ = channelUUID
+    let nsError = error as NSError
+    emitDiagnostic(
+      "System PTT failed to join (\(nsError.domain) \(nsError.code)): \(error.localizedDescription)"
+    )
+  }
+
+  func channelManager(_ channelManager: PTChannelManager, failedToLeaveChannel channelUUID: UUID, error: Error) {
+    _ = channelUUID
+    let nsError = error as NSError
+    emitDiagnostic(
+      "System PTT failed to leave (\(nsError.domain) \(nsError.code)): \(error.localizedDescription)"
+    )
   }
 
   func channelManager(

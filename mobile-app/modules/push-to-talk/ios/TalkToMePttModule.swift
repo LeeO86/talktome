@@ -57,10 +57,15 @@ public final class TalkToMePttModule: Module {
         if let reason { body["reason"] = reason }
         self?.sendEvent("onIncomingPush", body)
       }
+      self.controller.prepareAtLaunch()
     }
 
     Function("isAvailable") {
       self.controller.isAvailable()
+    }
+
+    Function("lastDiagnostic") {
+      self.controller.lastDiagnostic()
     }
 
     AsyncFunction("updateChannel") { (channelUUID: String?, channelName: String?) in

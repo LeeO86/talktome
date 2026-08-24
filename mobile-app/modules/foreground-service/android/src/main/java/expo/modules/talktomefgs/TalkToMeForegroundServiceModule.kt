@@ -12,12 +12,16 @@ class TalkToMeForegroundServiceModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("TalkToMeForegroundService")
 
-    Events("onStopRequested", "onStarted", "onStopped")
+    Events("onStopRequested", "onTalkRequested", "onStarted", "onStopped")
 
     OnCreate {
       Holder.listener = object : TalkToMeForegroundServiceListener {
         override fun onStopRequested() {
           sendEvent("onStopRequested")
+        }
+
+        override fun onTalkRequested() {
+          sendEvent("onTalkRequested")
         }
 
         override fun onStarted(includeConnectedDevice: Boolean) {
@@ -44,15 +48,15 @@ class TalkToMeForegroundServiceModule : Module() {
       Holder.running
     }
 
-    AsyncFunction("start") { includeConnectedDevice: Boolean, title: String, text: String ->
+    AsyncFunction("start") { includeConnectedDevice: Boolean, title: String, text: String, talking: Boolean ->
       val context = appContext.reactContext ?: return@AsyncFunction false
-      TalkToMeForegroundService.start(context, includeConnectedDevice, title, text)
+      TalkToMeForegroundService.start(context, includeConnectedDevice, title, text, talking)
       true
     }
 
-    AsyncFunction("update") { includeConnectedDevice: Boolean, title: String, text: String ->
+    AsyncFunction("update") { includeConnectedDevice: Boolean, title: String, text: String, talking: Boolean ->
       val context = appContext.reactContext ?: return@AsyncFunction false
-      TalkToMeForegroundService.update(context, includeConnectedDevice, title, text)
+      TalkToMeForegroundService.update(context, includeConnectedDevice, title, text, talking)
       Holder.running
     }
 

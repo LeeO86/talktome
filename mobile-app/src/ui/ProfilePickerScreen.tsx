@@ -2,6 +2,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import { visibleProductionName } from '../protocol';
 import { session, useSessionStore } from '../session/store';
+import { TrashIcon } from './icons';
 import { colors } from './theme';
 
 export function ProfilePickerScreen() {
@@ -13,7 +14,7 @@ export function ProfilePickerScreen() {
   return (
     <View style={styles.screen}>
       <Text style={styles.title}>Profiles</Text>
-      <Text style={styles.subtitle}>Tap a profile to connect. Remove deletes it from this device.</Text>
+      <Text style={styles.subtitle}>Tap a profile to connect. The trash can deletes it from this device.</Text>
 
       <ScrollView contentContainerStyle={styles.list}>
         {profiles.map((profile) => {
@@ -43,9 +44,10 @@ export function ProfilePickerScreen() {
                     },
                   ]);
                 }}
+                hitSlop={8}
                 style={styles.remove}
               >
-                <Text style={styles.removeText}>Remove</Text>
+                <TrashIcon />
               </Pressable>
             </View>
           );
@@ -88,14 +90,16 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.card,
     overflow: 'hidden',
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   cardLast: {
     borderColor: 'rgba(61,214,245,0.45)',
   },
   cardMain: {
+    flex: 1,
     paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 10,
+    paddingVertical: 14,
   },
   name: {
     color: colors.text,
@@ -115,13 +119,9 @@ const styles = StyleSheet.create({
   },
   remove: {
     paddingHorizontal: 16,
-    paddingBottom: 12,
-    alignSelf: 'flex-start',
-  },
-  removeText: {
-    color: colors.danger,
-    fontSize: 15,
-    fontWeight: '600',
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   error: {
     color: colors.danger,

@@ -10,16 +10,18 @@ const config: ExpoConfig = {
   icon: './assets/icon.png',
   userInterfaceStyle: 'dark',
   scheme: 'talktome',
-  splash: {
-    image: './assets/splash-icon.png',
-    resizeMode: 'contain',
-    backgroundColor: '#000000',
-  },
   ios: {
     supportsTablet: true,
     bundleIdentifier: 'io.github.leeo86.talktome-mobile',
+    appleTeamId: '4876GGFAH9',
     entitlements: {
       'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
+      ...(enableIosPtt
+        ? {
+            'com.apple.developer.push-to-talk': true,
+            'aps-environment': 'development',
+          }
+        : {}),
     },
     infoPlist: {
       NSMicrophoneUsageDescription:
@@ -29,7 +31,9 @@ const config: ExpoConfig = {
       NSBluetoothAlwaysUsageDescription: 'TalkToMe connects to wireless PTT buttons.',
       NSSupportsLiveActivities: true,
       NSSupportsLiveActivitiesFrequentUpdates: true,
-      UIBackgroundModes: ['audio', 'bluetooth-central'],
+      UIBackgroundModes: enableIosPtt
+        ? ['audio', 'bluetooth-central', 'push-to-talk']
+        : ['audio', 'bluetooth-central'],
       UISupportedInterfaceOrientations: [
         'UIInterfaceOrientationPortrait',
         'UIInterfaceOrientationLandscapeLeft',
@@ -86,6 +90,18 @@ const config: ExpoConfig = {
     './plugins/withTalkToMePtt',
     './plugins/withTalkToMeOrientation',
     './plugins/withTalkToMePresence',
+    './plugins/withTalkToMeXcodeWarnings',
+    [
+      'expo-splash-screen',
+      {
+        backgroundColor: '#000000',
+        image: './assets/splash-icon.png',
+        resizeMode: 'contain',
+        imageWidth: 200,
+      },
+    ],
+    './plugins/withTalkToMeSplash',
+    './plugins/withTalkToMeAndroidIcons',
   ],
   extra: {
     enableIosPtt,

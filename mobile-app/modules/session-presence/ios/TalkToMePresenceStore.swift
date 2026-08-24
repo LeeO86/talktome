@@ -13,6 +13,7 @@ enum TalkToMePresenceStore {
   static let suiteName = "group.io.github.leeo86.talktome-mobile"
   static let snapshotKey = "talktome.presence.snapshot"
   static let talkNotification = "io.github.leeo86.talktome.talk" as CFString
+  static let disconnectNotification = "io.github.leeo86.talktome.disconnect" as CFString
 
   static func write(_ state: TalkToMePresenceState) {
     guard let defaults = UserDefaults(suiteName: suiteName) else {

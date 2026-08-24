@@ -22,16 +22,34 @@ describe('audio session policy', () => {
     ).toBe(false);
   });
 
-  it('prepares the iOS session before media, unless PushToTalk owns it', () => {
+  it('prepares the iOS session before media, unless PushToTalk has joined', () => {
     expect(shouldPrepareAudioForMedia({ platform: 'ios', pttEnabled: false })).toBe(true);
-    expect(shouldPrepareAudioForMedia({ platform: 'ios', pttEnabled: true })).toBe(false);
+    expect(shouldPrepareAudioForMedia({ platform: 'ios', pttEnabled: true, pttJoined: false })).toBe(
+      true,
+    );
+    expect(shouldPrepareAudioForMedia({ platform: 'ios', pttEnabled: true, pttJoined: true })).toBe(
+      false,
+    );
     expect(shouldPrepareAudioForMedia({ platform: 'android', pttEnabled: false })).toBe(false);
   });
 
-  it('does not own the session when PushToTalk is compiled in', () => {
+  it('keeps the session until the system PTT channel has actually joined', () => {
     expect(iosPttEnabled('1')).toBe(true);
     expect(
-      shouldOwnAudioSession({ platform: 'ios', pttEnabled: true, operatorReady: true }),
+      shouldOwnAudioSession({
+        platform: 'ios',
+        pttEnabled: true,
+        pttJoined: false,
+        operatorReady: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldOwnAudioSession({
+        platform: 'ios',
+        pttEnabled: true,
+        pttJoined: true,
+        operatorReady: true,
+      }),
     ).toBe(false);
   });
 

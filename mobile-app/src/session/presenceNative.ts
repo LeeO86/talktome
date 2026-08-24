@@ -17,7 +17,10 @@ export type PresenceNativeSnapshot = {
 type NativePresence = {
   isAvailable?: () => boolean;
   update?: (snapshot: PresenceNativeSnapshot) => Promise<boolean>;
-  addListener?: (eventName: 'onTalkShortcut', listener: () => void) => { remove: () => void };
+  addListener?: (
+    eventName: 'onTalkShortcut' | 'onDisconnectShortcut',
+    listener: () => void,
+  ) => { remove: () => void };
 };
 
 let cached: NativePresence | null | undefined;
@@ -52,10 +55,21 @@ export function publishSessionPresence(snapshot: PresenceSnapshot): void {
 }
 
 export function subscribeTalkShortcut(onTalk: () => void): () => void {
+  return subscribePresenceEvent('onTalkShortcut', onTalk);
+}
+
+export function subscribeDisconnectShortcut(onDisconnect: () => void): () => void {
+  return subscribePresenceEvent('onDisconnectShortcut', onDisconnect);
+}
+
+function subscribePresenceEvent(
+  eventName: 'onTalkShortcut' | 'onDisconnectShortcut',
+  listener: () => void,
+): () => void {
   const native = loadNative();
   if (!native?.addListener) {
     return () => undefined;
   }
-  const subscription = native.addListener('onTalkShortcut', onTalk);
+  const subscription = native.addListener(eventName, listener);
   return () => subscription.remove();
 }

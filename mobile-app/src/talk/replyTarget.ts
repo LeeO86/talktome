@@ -1,5 +1,6 @@
-// Derived from talktome public/client.js resolveReplyTargetFromIncomingEntry
-// and targetKeyFromIncomingAddressedEntry @ current public/client.js by Daniel Jocher.
+// Derived from talktome public/client.js applyIncomingTalkState / lastTarget
+// and resolveReplyTargetFromIncomingEntry @ current public/client.js by Daniel Jocher.
+// Web never writes lastTarget from talking; only incoming-talk-state (plus a client fallback).
 
 import {
   talkTargetIdentity,
@@ -39,13 +40,21 @@ export function resolveReplyTalkTarget(input: {
   incoming: IncomingTalkState;
   targets: TalkTarget[];
   peers: PeerSession[];
-  lastSpoken?: TalkTarget | null;
   lastReply?: TalkTarget | null;
+  fallback?: TalkTarget | null;
 }): TalkTarget | null {
   const fromIncoming =
     talkTargetFromIncomingEntry(input.incoming.replyTarget, input.targets, input.peers) ??
     talkTargetFromIncomingEntry(latestAddressed(input.incoming), input.targets, input.peers);
-  return fromIncoming ?? input.lastReply ?? input.lastSpoken ?? null;
+  return fromIncoming ?? rematchTalkTarget(input.lastReply, input.targets) ?? input.fallback ?? null;
+}
+
+/** Web `lastTarget` stays sticky; refresh it against the current target list for labels only. */
+export function rematchTalkTarget(target: TalkTarget | null | undefined, targets: TalkTarget[]): TalkTarget | null {
+  if (!target) {
+    return null;
+  }
+  return targets.find((item) => talkTargetIdentity(item) === talkTargetIdentity(target)) ?? target;
 }
 
 function latestAddressed(incoming: IncomingTalkState): IncomingTalkEntry | undefined {

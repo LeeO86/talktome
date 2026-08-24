@@ -187,6 +187,48 @@ export function ReplyArrowIcon({ color = colors.text, size = 18 }: IconProps) {
   );
 }
 
+export function TrashIcon({ color = colors.danger, size = 20 }: IconProps) {
+  const lid = size * 0.12;
+  const can = size * 0.62;
+  return (
+    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
+      <View
+        style={[
+          styles.trashHandle,
+          {
+            borderColor: color,
+            width: size * 0.28,
+            height: size * 0.16,
+            top: size * 0.04,
+          },
+        ]}
+      />
+      <View
+        style={[
+          styles.trashLid,
+          {
+            backgroundColor: color,
+            width: size * 0.78,
+            height: lid,
+            top: size * 0.18,
+          },
+        ]}
+      />
+      <View
+        style={[
+          styles.trashCan,
+          {
+            borderColor: color,
+            width: size * 0.62,
+            height: can,
+            top: size * 0.32,
+          },
+        ]}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   box: {
     alignItems: 'center',
@@ -310,5 +352,23 @@ const styles = StyleSheet.create({
     borderRightWidth: 7,
     borderTopColor: 'transparent',
     borderBottomColor: 'transparent',
+  },
+  trashHandle: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderBottomWidth: 0,
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+  },
+  trashLid: {
+    position: 'absolute',
+    borderRadius: 1,
+  },
+  trashCan: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderTopWidth: 0,
+    borderBottomLeftRadius: 3,
+    borderBottomRightRadius: 3,
   },
 });

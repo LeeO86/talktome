@@ -9,14 +9,14 @@ public final class TalkToMePresenceModule: Module {
   public func definition() -> ModuleDefinition {
     Name("TalkToMePresence")
 
-    Events("onTalkShortcut")
+    Events("onTalkShortcut", "onDisconnectShortcut")
 
     OnCreate {
-      self.observeTalkShortcut()
+      self.observeShortcuts()
     }
 
     OnDestroy {
-      self.removeTalkObserver()
+      self.removeShortcutObservers()
     }
 
     Function("isAvailable") {
@@ -43,37 +43,52 @@ public final class TalkToMePresenceModule: Module {
     }
   }
 
-  private func observeTalkShortcut() {
+  private func observeShortcuts() {
     let observer = UnsafeRawPointer(Unmanaged.passUnretained(self).toOpaque())
     self.observer = observer
+    let center = CFNotificationCenterGetDarwinNotifyCenter()
     CFNotificationCenterAddObserver(
-      CFNotificationCenterGetDarwinNotifyCenter(),
+      center,
       observer,
       { _, observer, _, _, _ in
-        guard let observer else {
-          return
-        }
-        let module = Unmanaged<TalkToMePresenceModule>.fromOpaque(observer).takeUnretainedValue()
-        DispatchQueue.main.async {
-          module.sendEvent("onTalkShortcut", [:])
-        }
+        TalkToMePresenceModule.emit(observer, event: "onTalkShortcut")
       },
       TalkToMePresenceStore.talkNotification,
       nil,
       .deliverImmediately
     )
+    CFNotificationCenterAddObserver(
+      center,
+      observer,
+      { _, observer, _, _, _ in
+        TalkToMePresenceModule.emit(observer, event: "onDisconnectShortcut")
+      },
+      TalkToMePresenceStore.disconnectNotification,
+      nil,
+      .deliverImmediately
+    )
   }
 
-  private func removeTalkObserver() {
+  private func removeShortcutObservers() {
     guard let observer else {
       return
     }
     CFNotificationCenterRemoveObserver(
       CFNotificationCenterGetDarwinNotifyCenter(),
       observer,
-      CFNotificationName(TalkToMePresenceStore.talkNotification),
+      nil,
       nil
     )
     self.observer = nil
+  }
+
+  private static func emit(_ observer: UnsafeRawPointer?, event: String) {
+    guard let observer else {
+      return
+    }
+    let module = Unmanaged<TalkToMePresenceModule>.fromOpaque(observer).takeUnretainedValue()
+    DispatchQueue.main.async {
+      module.sendEvent(event, [:])
+    }
   }
 }

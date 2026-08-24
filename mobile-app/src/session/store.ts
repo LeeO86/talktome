@@ -92,6 +92,7 @@ import {
   shouldUseSystemPtt,
 } from '../ptt/policy';
 import {
+  lastPttDiagnostic,
   leavePttChannel,
   pttNativeAvailable,
   subscribePttNative,
@@ -110,7 +111,7 @@ import {
   type SavedProfile,
 } from './remembered';
 import { sessionPresence, presenceNotification } from './presence';
-import { publishSessionPresence, subscribeTalkShortcut } from './presenceNative';
+import { publishSessionPresence, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
 import { AppState, Platform, type AppStateStatus } from 'react-native';
 
 export type SessionUiState = {
@@ -165,6 +166,7 @@ export type SessionUiState = {
   pttJoined: boolean;
   pttVerified: boolean;
   pttChannelName: string;
+  pttDiagnostic: string;
   bleKind: BleConnectionKind;
   bleName: string;
   bleMessage: string;
@@ -230,6 +232,7 @@ const initialState: SessionUiState = {
   pttJoined: false,
   pttVerified: false,
   pttChannelName: '',
+  pttDiagnostic: '',
   bleKind: 'idle',
   bleName: '',
   bleMessage: '',
@@ -780,7 +783,6 @@ class SessionController {
     }
 
     this.talkingTargets = addTalkTarget(this.talkingTargets, target);
-    this.rememberSpokenTarget(target);
     this.publishTalkState(state.talkLocked);
     try {
       await this.media.startTalking(this.talkingTargets, state.talkLocked);
@@ -795,7 +797,6 @@ class SessionController {
     }
     await this.prepareAudioForTalk();
     this.talkingTargets = addTalkTarget(this.talkingTargets, target);
-    this.rememberSpokenTarget(target);
     this.lockedTargets = this.talkingTargets;
     this.overrideFrom = null;
     this.publishTalkState(true);
@@ -869,6 +870,45 @@ class SessionController {
     this.persistLayout();
   }
 
+  /** Apple requires requestJoinChannel from a user action while the app is foreground. */
+  async joinSystemPttChannel(): Promise<void> {
+    if (
+      !shouldUseSystemPtt({
+        platform: Platform.OS,
+        pttEnabled: iosPttEnabled(),
+        operatorReady: useSessionStore.getState().operatorReady,
+        identityKind: useSessionStore.getState().identity?.kind,
+      })
+    ) {
+      return;
+    }
+    if (!this.pttChannelUUID) {
+      await this.syncSystemPtt();
+    }
+    const channelUUID = this.pttChannelUUID;
+    const channelName = useSessionStore.getState().pttChannelName || 'Talktome';
+    if (!channelUUID) {
+      useSessionStore.setState({
+        pttDiagnostic: 'System PTT join has no channel UUID from the server.',
+        statusMessage: 'System PTT join has no channel UUID from the server.',
+      });
+      return;
+    }
+    useSessionStore.setState({
+      pttDiagnostic: 'Joining system PTT channel…',
+      statusMessage: 'Joining system PTT channel…',
+    });
+    await updatePttChannel(channelUUID, channelName);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const nativeNote = lastPttDiagnostic().trim();
+    if (!useSessionStore.getState().pttJoined && nativeNote) {
+      useSessionStore.setState({
+        pttDiagnostic: nativeNote,
+        statusMessage: nativeNote,
+      });
+    }
+  }
+
   setTalkSelectMode(talkSelectMode: boolean): void {
     const state = useSessionStore.getState();
     const selectedTalkTarget = talkSelectMode
@@ -911,7 +951,6 @@ class SessionController {
     if (useSessionStore.getState().talkLocked) {
       this.lockedTargets = [target];
     }
-    this.rememberSpokenTarget(target);
     this.publishTalkState(useSessionStore.getState().talkLocked);
     try {
       await this.media.startTalking(this.talkingTargets, useSessionStore.getState().talkLocked);
@@ -1047,10 +1086,6 @@ class SessionController {
     });
   }
 
-  private rememberSpokenTarget(target: TalkTarget): void {
-    useSessionStore.setState({ replyTarget: target });
-  }
-
   private refreshReplyTarget(): void {
     const state = useSessionStore.getState();
     const replyTarget = resolveReplyTalkTarget({
@@ -1058,6 +1093,7 @@ class SessionController {
       targets: state.targets,
       peers: state.peers,
       lastReply: state.replyTarget,
+      fallback: this.firstTalkableTarget(),
     });
     useSessionStore.setState({ replyTarget });
     const incomingName = latestIncomingName(state.incoming);
@@ -1525,6 +1561,9 @@ class SessionController {
       onStopRequested: () => {
         void this.disconnect();
       },
+      onTalkRequested: () => {
+        void this.toggleCurrentTalk();
+      },
       onStarted: () => {
         useSessionStore.setState({
           fgsRunning: true,
@@ -1542,6 +1581,9 @@ class SessionController {
     subscribeTalkShortcut(() => {
       void this.toggleCurrentTalk();
     });
+    subscribeDisconnectShortcut(() => {
+      void this.disconnect();
+    });
     subscribeBleNative({
       onState: (state) => {
         this.publishBleState(state);
@@ -1557,7 +1599,7 @@ class SessionController {
     });
     subscribePttNative({
       onDiagnostic: (message) => {
-        useSessionStore.setState({ statusMessage: message });
+        useSessionStore.setState({ statusMessage: message, pttDiagnostic: message });
       },
       onPushToken: (event) => {
         void this.registerPttToken(event.token, event.channelUUID);
@@ -1579,12 +1621,14 @@ class SessionController {
           pttJoined: true,
           capabilityReason: this.capabilityReason({ pttJoined: true }),
         });
+        void this.syncAudioSession();
       },
       onLeft: () => {
         useSessionStore.setState({
           pttJoined: false,
           capabilityReason: this.capabilityReason({ pttJoined: false }),
         });
+        void this.syncAudioSession();
       },
       onIncomingPush: () => {
         useSessionStore.setState({
@@ -1679,11 +1723,17 @@ class SessionController {
     }
     await requestAndroidSessionPermissions();
     const includeConnectedDevice = state.bleKind === 'connected' || state.bleKind === 'connecting';
+    const talking = this.currentPresence().talking || this.currentPresence().talkLocked;
     if (state.fgsRunning) {
-      await updateForegroundService(includeConnectedDevice, notification.title, notification.text);
+      await updateForegroundService(includeConnectedDevice, notification.title, notification.text, talking);
       return;
     }
-    const started = await startForegroundService(includeConnectedDevice, notification.title, notification.text);
+    const started = await startForegroundService(
+      includeConnectedDevice,
+      notification.title,
+      notification.text,
+      talking,
+    );
     useSessionStore.setState({
       fgsRunning: started,
       fgsAvailable: started || foregroundServiceAvailable(),
@@ -1699,6 +1749,7 @@ class SessionController {
       !shouldOwnAudioSession({
         platform: Platform.OS,
         pttEnabled,
+        pttJoined: state.pttJoined,
         operatorReady: state.operatorReady,
       })
     ) {
@@ -1717,6 +1768,7 @@ class SessionController {
       shouldStartBackgroundKeepalive({
         platform: Platform.OS,
         pttEnabled,
+        pttJoined: state.pttJoined,
         operatorReady: state.operatorReady,
         appState,
       })
@@ -1755,7 +1807,13 @@ class SessionController {
   }
 
   private async prepareAudioForMedia(): Promise<void> {
-    if (!shouldPrepareAudioForMedia({ platform: Platform.OS, pttEnabled: iosPttEnabled() })) {
+    if (
+      !shouldPrepareAudioForMedia({
+        platform: Platform.OS,
+        pttEnabled: iosPttEnabled(),
+        pttJoined: useSessionStore.getState().pttJoined,
+      })
+    ) {
       return;
     }
     const active = await activateForIntercom();
@@ -1777,6 +1835,7 @@ class SessionController {
     const ownsSession = shouldOwnAudioSession({
       platform: Platform.OS,
       pttEnabled: iosPttEnabled(),
+      pttJoined: state.pttJoined,
       operatorReady: state.operatorReady,
     });
     if (
@@ -1844,6 +1903,7 @@ class SessionController {
           pttChannelName: '',
           capabilityReason: this.capabilityReason({ pttBootstrapEnabled: false, pttJoined: false }),
         });
+        await this.syncAudioSession();
         return;
       }
       this.pttChannelUUID = bootstrap.channel.channelUUID;
@@ -1884,6 +1944,7 @@ class SessionController {
       pttVerified: false,
       pttChannelName: '',
     });
+    await this.syncAudioSession();
   }
 
   private async registerPttToken(token: string, channelUUID: string): Promise<void> {

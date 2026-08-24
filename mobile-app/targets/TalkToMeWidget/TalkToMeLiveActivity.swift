@@ -1,6 +1,6 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
-import UIKit
 import WidgetKit
 
 struct TalkToMePresenceAttributes: ActivityAttributes {
@@ -48,6 +48,11 @@ struct TalkToMeLiveActivity: Widget {
         DynamicIslandExpandedRegion(.trailing) {
           AudioAnalyzer(talking: context.state.talking, listening: context.state.listening)
         }
+        DynamicIslandExpandedRegion(.bottom) {
+          if #available(iOS 17.0, *) {
+            TalkToMeSessionActions(talking: context.state.talking)
+          }
+        }
       } compactLeading: {
         TalkToMeMark(size: 22)
       } compactTrailing: {
@@ -67,39 +72,49 @@ struct TalkToMeLockScreenView: View {
   let state: TalkToMePresenceAttributes.ContentState
 
   var body: some View {
-    HStack(spacing: 12) {
-      TalkToMeMark(size: 36)
-      VStack(alignment: .leading, spacing: 2) {
-        ForEach(presenceLines(state.title), id: \.self) { line in
-          Text(line)
-            .font(.headline)
-            .foregroundStyle(isOutgoingTalkLine(line) ? talkGreen : .white)
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 12) {
+        TalkToMeMark(size: 36)
+        VStack(alignment: .leading, spacing: 2) {
+          ForEach(presenceLines(state.title), id: \.self) { line in
+            Text(line)
+              .font(.headline)
+              .foregroundStyle(isOutgoingTalkLine(line) ? talkGreen : .white)
+          }
+          Text(state.detail)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
         }
-        Text(state.detail)
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
+        Spacer()
+        AudioAnalyzer(talking: state.talking, listening: state.listening)
       }
-      Spacer()
-      AudioAnalyzer(talking: state.talking, listening: state.listening)
+      if #available(iOS 17.0, *) {
+        TalkToMeSessionActions(talking: state.talking)
+      }
     }
   }
 }
 
 struct TalkToMeMark: View {
   var size: CGFloat = 24
+  var filled = false
 
   var body: some View {
-    if let uiImage = UIImage(named: "TalkToMeMark") {
-      Image(uiImage: uiImage)
+    let radius = size * 0.24
+    ZStack {
+      if filled {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+          .fill(Color.black)
+      }
+      Image("TalkToMeMarkGlyph")
+        .renderingMode(.original)
         .resizable()
+        .interpolation(.high)
         .scaledToFit()
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
-    } else {
-      Image(systemName: "waveform")
-        .font(.system(size: size * 0.7, weight: .bold))
-        .frame(width: size, height: size)
+        .padding(size * 0.04)
     }
+    .frame(width: size, height: size)
+    .accessibilityHidden(true)
   }
 }
 

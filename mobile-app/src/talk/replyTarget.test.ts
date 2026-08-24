@@ -32,13 +32,72 @@ describe('resolveReplyTalkTarget', () => {
     expect(resolveReplyTalkTarget({ incoming, targets: [traktor, beni], peers: [] })?.label).toBe('beni');
   });
 
-  it('keeps the last spoken target when incoming is idle', () => {
+  it('keeps the last incoming reply when incoming is idle', () => {
+    expect(
+      resolveReplyTalkTarget({
+        incoming: { addressedNow: [] },
+        targets: [traktor, beni],
+        peers: [],
+        lastReply: beni,
+        fallback: traktor,
+      }),
+    ).toEqual(beni);
+  });
+
+  it('does not use a spoken destination when a sticky reply already exists', () => {
+    expect(
+      resolveReplyTalkTarget({
+        incoming: { addressedNow: [] },
+        targets: [traktor, beni],
+        peers: [],
+        lastReply: traktor,
+      }),
+    ).toEqual(traktor);
+  });
+
+  it('prefers live incoming over the sticky reply', () => {
+    const incoming: IncomingTalkState = {
+      addressedNow: [],
+      replyTarget: {
+        fromUserId: 9,
+        fromName: 'beni',
+        targetType: 'user',
+        targetId: 4,
+        replyTargetType: 'user',
+        replyTargetId: 9,
+      },
+    };
+    expect(
+      resolveReplyTalkTarget({
+        incoming,
+        targets: [traktor, beni],
+        peers: [],
+        lastReply: traktor,
+        fallback: traktor,
+      }),
+    ).toEqual(beni);
+  });
+
+  it('falls back to the first talkable target when nothing has spoken to us yet', () => {
+    expect(
+      resolveReplyTalkTarget({
+        incoming: { addressedNow: [] },
+        targets: [traktor, beni],
+        peers: [],
+        lastReply: null,
+        fallback: traktor,
+      }),
+    ).toEqual(traktor);
+  });
+
+  it('refreshes the sticky reply against the current target list', () => {
+    const staleTraktor: TalkTarget = { type: 'conference', id: 2, label: 'Old Traktor', canTalk: true };
     expect(
       resolveReplyTalkTarget({
         incoming: { addressedNow: [] },
         targets: [traktor],
         peers: [],
-        lastSpoken: traktor,
+        lastReply: staleTraktor,
       }),
     ).toEqual(traktor);
   });

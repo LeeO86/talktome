@@ -20,6 +20,7 @@
     "expo-dev-client": "~56.0.24",
     "expo-keep-awake": "~56.0.3",
     "expo-secure-store": "~56.0.4",
+    "expo-splash-screen": "~56.0.14",
     "expo-status-bar": "~56.0.4",
     "mediasoup-client": "3.22.0",
     "react": "19.2.3",

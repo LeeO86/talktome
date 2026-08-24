@@ -4,7 +4,7 @@ public final class TalkToMeForegroundServiceModule: Module {
   public func definition() -> ModuleDefinition {
     Name("TalkToMeForegroundService")
 
-    Events("onStopRequested", "onStarted", "onStopped")
+    Events("onStopRequested", "onTalkRequested", "onStarted", "onStopped")
 
     Function("isAvailable") {
       false
@@ -14,11 +14,11 @@ public final class TalkToMeForegroundServiceModule: Module {
       false
     }
 
-    AsyncFunction("start") { (_includeConnectedDevice: Bool, _title: String, _text: String) in
+    AsyncFunction("start") { (_includeConnectedDevice: Bool, _title: String, _text: String, _talking: Bool) in
       false
     }
 
-    AsyncFunction("update") { (_includeConnectedDevice: Bool, _title: String, _text: String) in
+    AsyncFunction("update") { (_includeConnectedDevice: Bool, _title: String, _text: String, _talking: Bool) in
       false
     }
 

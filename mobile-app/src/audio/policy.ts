@@ -15,19 +15,24 @@ export function shouldOwnAudioSession(input: {
   platform: string;
   pttEnabled: boolean;
   operatorReady: boolean;
+  pttJoined?: boolean;
 }): boolean {
   if (!input.operatorReady) {
     return false;
   }
-  if (input.platform === 'ios' && input.pttEnabled) {
+  if (input.platform === 'ios' && input.pttEnabled && input.pttJoined) {
     return false;
   }
   return input.platform === 'ios' || input.platform === 'android';
 }
 
 /** Activate AVAudioSession before getUserMedia / produce, or the iOS Simulator abort()s in VoiceProcessingIO. */
-export function shouldPrepareAudioForMedia(input: { platform: string; pttEnabled: boolean }): boolean {
-  return input.platform === 'ios' && !input.pttEnabled;
+export function shouldPrepareAudioForMedia(input: {
+  platform: string;
+  pttEnabled: boolean;
+  pttJoined?: boolean;
+}): boolean {
+  return input.platform === 'ios' && !(input.pttEnabled && input.pttJoined);
 }
 
 export function shouldStartBackgroundKeepalive(input: {
@@ -35,10 +40,11 @@ export function shouldStartBackgroundKeepalive(input: {
   pttEnabled: boolean;
   operatorReady: boolean;
   appState: string;
+  pttJoined?: boolean;
 }): boolean {
   return (
     input.platform === 'ios' &&
-    !input.pttEnabled &&
+    !(input.pttEnabled && input.pttJoined) &&
     input.operatorReady &&
     input.appState === 'background'
   );
@@ -58,11 +64,12 @@ export function audioSessionStatusLabel(input: {
   active: boolean;
   keepalive: boolean;
   pttEnabled: boolean;
+  pttJoined?: boolean;
 }): string {
   if (input.platform !== 'ios') {
     return 'Android FGS';
   }
-  if (input.pttEnabled) {
+  if (input.pttEnabled && input.pttJoined) {
     return 'PTT owns session';
   }
   if (!input.available) {

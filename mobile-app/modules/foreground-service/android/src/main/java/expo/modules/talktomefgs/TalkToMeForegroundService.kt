@@ -21,8 +21,13 @@ class TalkToMeForegroundService : Service() {
         stopSession()
         return START_NOT_STICKY
       }
+      ACTION_TOGGLE_TALK -> {
+        Holder.listener?.onTalkRequested()
+        return START_STICKY
+      }
       ACTION_UPDATE -> {
         includeConnectedDevice = intent.getBooleanExtra(EXTRA_INCLUDE_CONNECTED_DEVICE, includeConnectedDevice)
+        talking = intent.getBooleanExtra(EXTRA_TALKING, talking)
         intent.getStringExtra(EXTRA_TITLE)?.let { contentTitle = it }
         intent.getStringExtra(EXTRA_TEXT)?.let { contentText = it }
         if (Holder.running) {
@@ -32,6 +37,7 @@ class TalkToMeForegroundService : Service() {
       }
       else -> {
         includeConnectedDevice = intent?.getBooleanExtra(EXTRA_INCLUDE_CONNECTED_DEVICE, false) == true
+        talking = intent?.getBooleanExtra(EXTRA_TALKING, false) == true
         intent?.getStringExtra(EXTRA_TITLE)?.let { contentTitle = it }
         intent?.getStringExtra(EXTRA_TEXT)?.let { contentText = it }
         startInForeground()
@@ -86,6 +92,8 @@ class TalkToMeForegroundService : Service() {
     }
     val manager = getSystemService(NotificationManager::class.java) ?: return
     manager.deleteNotificationChannel(LEGACY_CHANNEL_ID)
+    manager.deleteNotificationChannel(LEGACY_CHANNEL_ID_V2)
+    manager.deleteNotificationChannel(LEGACY_CHANNEL_ID_V3)
     val channel = NotificationChannel(
       CHANNEL_ID,
       "TalkToMe session",
@@ -108,6 +116,13 @@ class TalkToMeForegroundService : Service() {
       launchIntent,
       PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag(),
     )
+    val talkIntent = Intent(this, TalkToMeForegroundService::class.java).setAction(ACTION_TOGGLE_TALK)
+    val talkPending = PendingIntent.getService(
+      this,
+      2,
+      talkIntent,
+      PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag(),
+    )
     val stopIntent = Intent(this, TalkToMeForegroundService::class.java).setAction(ACTION_STOP)
     val stopPending = PendingIntent.getService(
       this,
@@ -125,17 +140,27 @@ class TalkToMeForegroundService : Service() {
       .setContentTitle(contentTitle)
       .setContentText(contentText)
       .setStyle(Notification.BigTextStyle().bigText(contentText))
-      .setSmallIcon(if (applicationInfo.icon != 0) applicationInfo.icon else android.R.drawable.stat_sys_headset)
+      .setSmallIcon(sessionSmallIcon())
+      .setColor(0xFF000000.toInt())
       .setContentIntent(contentPending)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setVisibility(Notification.VISIBILITY_PUBLIC)
       .setCategory(Notification.CATEGORY_SERVICE)
+      .addAction(0, if (talking) "Stop reply" else "Reply lock", talkPending)
       .addAction(0, "Disconnect", stopPending)
     if (Build.VERSION.SDK_INT >= 31) {
       builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
     }
     return builder.build()
+  }
+
+  private fun sessionSmallIcon(): Int {
+    val fromApp = resources.getIdentifier("ic_stat_talktome", "drawable", packageName)
+    if (fromApp != 0) {
+      return fromApp
+    }
+    return R.drawable.ic_stat_talktome
   }
 
   private fun immutableFlag(): Int {
@@ -145,13 +170,20 @@ class TalkToMeForegroundService : Service() {
   companion object {
     const val ACTION_START = "expo.modules.talktomefgs.START"
     const val ACTION_STOP = "expo.modules.talktomefgs.STOP"
+    const val ACTION_TOGGLE_TALK = "expo.modules.talktomefgs.TOGGLE_TALK"
     const val ACTION_UPDATE = "expo.modules.talktomefgs.UPDATE"
     const val EXTRA_INCLUDE_CONNECTED_DEVICE = "includeConnectedDevice"
     const val EXTRA_TITLE = "title"
     const val EXTRA_TEXT = "text"
-    const val CHANNEL_ID = "talktome.session.v2"
+    const val EXTRA_TALKING = "talking"
+    const val CHANNEL_ID = "talktome.session.v4"
     const val LEGACY_CHANNEL_ID = "talktome.session"
+    const val LEGACY_CHANNEL_ID_V2 = "talktome.session.v2"
+    const val LEGACY_CHANNEL_ID_V3 = "talktome.session.v3"
     const val NOTIFICATION_ID = 5602
+
+    @Volatile
+    var talking: Boolean = false
 
     @Volatile
     var includeConnectedDevice: Boolean = false
@@ -162,14 +194,16 @@ class TalkToMeForegroundService : Service() {
     @Volatile
     var contentText: String = "Disconnect ends the session."
 
-    fun start(context: Context, includeConnectedDevice: Boolean, title: String, text: String) {
+    fun start(context: Context, includeConnectedDevice: Boolean, title: String, text: String, talking: Boolean) {
       contentTitle = title
       contentText = text
+      this.talking = talking
       val intent = Intent(context, TalkToMeForegroundService::class.java)
         .setAction(ACTION_START)
         .putExtra(EXTRA_INCLUDE_CONNECTED_DEVICE, includeConnectedDevice)
         .putExtra(EXTRA_TITLE, title)
         .putExtra(EXTRA_TEXT, text)
+        .putExtra(EXTRA_TALKING, talking)
       if (Build.VERSION.SDK_INT >= 26) {
         context.startForegroundService(intent)
       } else {
@@ -177,17 +211,19 @@ class TalkToMeForegroundService : Service() {
       }
     }
 
-    fun update(context: Context, includeConnectedDevice: Boolean, title: String, text: String) {
+    fun update(context: Context, includeConnectedDevice: Boolean, title: String, text: String, talking: Boolean) {
       if (!Holder.running) {
         return
       }
       contentTitle = title
       contentText = text
+      this.talking = talking
       val intent = Intent(context, TalkToMeForegroundService::class.java)
         .setAction(ACTION_UPDATE)
         .putExtra(EXTRA_INCLUDE_CONNECTED_DEVICE, includeConnectedDevice)
         .putExtra(EXTRA_TITLE, title)
         .putExtra(EXTRA_TEXT, text)
+        .putExtra(EXTRA_TALKING, talking)
       context.startService(intent)
     }
 
@@ -207,6 +243,7 @@ object Holder {
 
 interface TalkToMeForegroundServiceListener {
   fun onStopRequested()
+  fun onTalkRequested()
   fun onStarted(includeConnectedDevice: Boolean)
   fun onStopped()
 }

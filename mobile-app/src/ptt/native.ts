@@ -17,6 +17,7 @@ export type NativePttEventMap = {
 
 type NativePtt = {
   isAvailable?: () => boolean;
+  lastDiagnostic?: () => string;
   updateChannel?: (channelUUID: string | null, channelName: string | null) => Promise<boolean>;
   updateActiveRemoteParticipant?: (name: string | null) => Promise<boolean>;
   leave?: () => Promise<boolean>;
@@ -62,6 +63,10 @@ export async function updatePttChannel(
   channelName: string | null,
 ): Promise<boolean> {
   return (await loadNative()?.updateChannel?.(channelUUID, channelName)) === true;
+}
+
+export function lastPttDiagnostic(): string {
+  return loadNative()?.lastDiagnostic?.() ?? '';
 }
 
 export async function updatePttRemoteParticipant(name: string | null): Promise<boolean> {

@@ -131,10 +131,11 @@ export function SettingsScreen({ visible, onClose }: Props) {
 
           {Platform.OS === 'ios' ? (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Talk shortcut</Text>
+              <Text style={styles.sectionTitle}>Session controls</Text>
               <Text style={styles.footnote}>
-                Shortcuts can run Talk, which locks or unlocks talk to Reply — or to the selected
-                card in Talk & select. Assign that shortcut to the Action Button in iOS Settings.
+                Lock Screen, Dynamic Island, and the home widget have Reply lock (toggle locked
+                reply) and Disconnect. On iOS 18, add those same controls to Control Center or the
+                Action Button. Shortcuts still include Reply lock and Disconnect.
               </Text>
             </View>
           ) : null}
@@ -151,6 +152,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
                       active: store.audioSessionActive,
                       keepalive: store.audioKeepalive,
                       pttEnabled: iosPttEnabled(),
+                      pttJoined: store.pttJoined,
                     })
                   : fgsStatusLabel({
                       available: store.fgsAvailable,
@@ -160,24 +162,39 @@ export function SettingsScreen({ visible, onClose }: Props) {
               </Text>
             </View>
             {Platform.OS === 'ios' ? (
-              <View style={styles.row}>
-                <Text style={styles.rowLabel}>PushToTalk</Text>
-                <Text style={styles.rowValue}>
-                  {pttStatusLabel({
-                    enabledInBuild: iosPttEnabled(),
-                    nativeAvailable: store.pttAvailable,
-                    bootstrapEnabled: store.pttBootstrapEnabled,
-                    joined: store.pttJoined,
-                    verified: store.pttVerified,
-                  })}
-                </Text>
-              </View>
+              <>
+                <View style={styles.row}>
+                  <Text style={styles.rowLabel}>PushToTalk</Text>
+                  <Text style={styles.rowValue}>
+                    {pttStatusLabel({
+                      enabledInBuild: iosPttEnabled(),
+                      nativeAvailable: store.pttAvailable,
+                      bootstrapEnabled: store.pttBootstrapEnabled,
+                      joined: store.pttJoined,
+                      verified: store.pttVerified,
+                    })}
+                  </Text>
+                </View>
+                {store.pttBootstrapEnabled && !store.pttJoined ? (
+                  <Pressable
+                    style={styles.row}
+                    onPress={() => {
+                      onClose();
+                      void session.joinSystemPttChannel();
+                    }}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.actionLabel}>Join PushToTalk channel</Text>
+                  </Pressable>
+                ) : null}
+              </>
             ) : null}
             <View style={styles.row}>
               <Text style={styles.rowLabel}>Talk lock</Text>
               <Text style={styles.rowValue}>Slide to lock</Text>
             </View>
             <Text style={styles.footnote}>{store.capabilityReason}</Text>
+            {store.pttDiagnostic ? <Text style={styles.footnote}>{store.pttDiagnostic}</Text> : null}
             {Platform.OS === 'android' ? (
               <>
                 <Pressable style={styles.row} onPress={() => void session.openBatteryEducation()}>

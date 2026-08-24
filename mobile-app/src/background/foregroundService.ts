@@ -11,12 +11,12 @@ export type ForegroundServiceSnapshot = {
 type NativeForegroundService = {
   isAvailable?: () => boolean;
   isRunning?: () => boolean;
-  start?: (includeConnectedDevice: boolean, title: string, text: string) => Promise<boolean>;
-  update?: (includeConnectedDevice: boolean, title: string, text: string) => Promise<boolean>;
+  start?: (includeConnectedDevice: boolean, title: string, text: string, talking: boolean) => Promise<boolean>;
+  update?: (includeConnectedDevice: boolean, title: string, text: string, talking: boolean) => Promise<boolean>;
   stop?: () => Promise<boolean>;
   openBatterySettings?: () => Promise<boolean>;
   addListener?: (
-    eventName: 'onStopRequested' | 'onStarted' | 'onStopped',
+    eventName: 'onStopRequested' | 'onTalkRequested' | 'onStarted' | 'onStopped',
     listener: (event?: { includeConnectedDevice?: boolean }) => void,
   ) => { remove: () => void };
 };
@@ -61,24 +61,26 @@ export async function startForegroundService(
   includeConnectedDevice: boolean,
   title = 'Nobody Talking',
   text = 'Disconnect ends the session.',
+  talking = false,
 ): Promise<boolean> {
   const native = loadNative();
   if (!native?.start) {
     return false;
   }
-  return native.start(includeConnectedDevice, title, text);
+  return native.start(includeConnectedDevice, title, text, talking);
 }
 
 export async function updateForegroundService(
   includeConnectedDevice: boolean,
   title = 'Nobody Talking',
   text = 'Disconnect ends the session.',
+  talking = false,
 ): Promise<boolean> {
   const native = loadNative();
   if (!native?.update) {
     return false;
   }
-  return native.update(includeConnectedDevice, title, text);
+  return native.update(includeConnectedDevice, title, text, talking);
 }
 
 export async function stopForegroundService(): Promise<boolean> {
@@ -99,6 +101,7 @@ export async function openBatterySettings(): Promise<boolean> {
 
 export function subscribeForegroundService(handlers: {
   onStopRequested?: () => void;
+  onTalkRequested?: () => void;
   onStarted?: () => void;
   onStopped?: () => void;
 }): () => void {
@@ -108,6 +111,7 @@ export function subscribeForegroundService(handlers: {
   }
   const subscriptions = [
     handlers.onStopRequested ? native.addListener('onStopRequested', handlers.onStopRequested) : null,
+    handlers.onTalkRequested ? native.addListener('onTalkRequested', handlers.onTalkRequested) : null,
     handlers.onStarted ? native.addListener('onStarted', handlers.onStarted) : null,
     handlers.onStopped ? native.addListener('onStopped', handlers.onStopped) : null,
   ];

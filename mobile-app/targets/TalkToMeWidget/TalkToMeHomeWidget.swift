@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 import WidgetKit
 
 struct TalkToMeHomeEntry: TimelineEntry {
@@ -7,11 +6,12 @@ struct TalkToMeHomeEntry: TimelineEntry {
   let connected: Bool
   let title: String
   let detail: String
+  let talking: Bool
 }
 
 struct TalkToMeHomeProvider: TimelineProvider {
   func placeholder(in context: Context) -> TalkToMeHomeEntry {
-    TalkToMeHomeEntry(date: Date(), connected: true, title: "Nobody Talking", detail: "Reply: none")
+    TalkToMeHomeEntry(date: Date(), connected: true, title: "Nobody Talking", detail: "Reply: none", talking: false)
   }
 
   func getSnapshot(in context: Context, completion: @escaping (TalkToMeHomeEntry) -> Void) {
@@ -30,10 +30,11 @@ struct TalkToMeHomeProvider: TimelineProvider {
         date: Date(),
         connected: state.connected,
         title: state.title,
-        detail: state.detail
+        detail: state.detail,
+        talking: state.talking ?? false
       )
     }
-    return TalkToMeHomeEntry(date: Date(), connected: false, title: "talktome", detail: "Not connected")
+    return TalkToMeHomeEntry(date: Date(), connected: false, title: "talktome", detail: "Not connected", talking: false)
   }
 }
 
@@ -42,6 +43,7 @@ struct TalkToMeHomeState: Codable {
   var title: String
   var detail: String
   var audioActive: Bool
+  var talking: Bool?
 }
 
 struct TalkToMeHomeWidget: Widget {
@@ -49,9 +51,7 @@ struct TalkToMeHomeWidget: Widget {
     StaticConfiguration(kind: "TalkToMeHomeWidget", provider: TalkToMeHomeProvider()) { entry in
       if #available(iOS 17.0, *) {
         TalkToMeHomeView(entry: entry)
-          .containerBackground(for: .widget) {
-            Color(red: 0.07, green: 0.09, blue: 0.15)
-          }
+          .containerBackground(.background, for: .widget)
       } else {
         TalkToMeHomeView(entry: entry)
       }
@@ -64,23 +64,17 @@ struct TalkToMeHomeWidget: Widget {
 
 struct TalkToMeHomeView: View {
   let entry: TalkToMeHomeEntry
+  @Environment(\.widgetFamily) private var family
 
   var body: some View {
     contents
       .padding()
-      .background(Color(red: 0.07, green: 0.09, blue: 0.15))
   }
 
   private var contents: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
-        if let uiImage = UIImage(named: "TalkToMeMark") {
-          Image(uiImage: uiImage)
-            .resizable()
-            .scaledToFit()
-            .frame(width: 28, height: 28)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
+        TalkToMeMark(size: 28, filled: true)
         Text("talktome")
           .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
@@ -88,13 +82,16 @@ struct TalkToMeHomeView: View {
       }
       Text(entry.title)
         .font(.title3.weight(.bold))
-        .foregroundStyle(.white)
+        .foregroundStyle(.primary)
         .minimumScaleFactor(0.7)
         .lineLimit(2)
       Text(entry.detail)
         .font(.subheadline)
         .foregroundStyle(.secondary)
         .lineLimit(2)
+      if entry.connected, #available(iOS 17.0, *) {
+        TalkToMeSessionActions(talking: entry.talking, compact: family == .systemSmall)
+      }
     }
   }
 }

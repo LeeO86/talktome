@@ -5,7 +5,7 @@ module.exports = {
   displayName: 'TalkToMe',
   bundleIdentifier: '.widget',
   deploymentTarget: '17.0',
-  frameworks: ['SwiftUI', 'WidgetKit', 'ActivityKit'],
+  frameworks: ['SwiftUI', 'WidgetKit', 'ActivityKit', 'AppIntents'],
   entitlements: {
     'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
   },
