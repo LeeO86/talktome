@@ -2,14 +2,11 @@
 const fs = require("fs");
 const path = require("path");
 const Database = require("better-sqlite3");
-const { getDataFile } = require("./dataPaths");
+const { getDataDir, getDataFile } = require("./dataPaths");
+const { syncRuntimeFile } = require("./runtimeWorker");
 
 function resolveNativeBinding() {
-  if (!process.pkg) return null;
   const execDir = path.dirname(process.execPath);
-  const targetPath = path.join(execDir, "better_sqlite3.node");
-  if (fs.existsSync(targetPath)) return targetPath;
-
   const bundledPath = path.join(
     __dirname,
     "node_modules",
@@ -18,21 +15,29 @@ function resolveNativeBinding() {
     "Release",
     "better_sqlite3.node"
   );
-  if (fs.existsSync(bundledPath)) {
-    fs.copyFileSync(bundledPath, targetPath);
-    return targetPath;
+  const candidates = [
+    bundledPath,
+    path.join(execDir, "binaries", "better_sqlite3.node"),
+    path.join(execDir, "better_sqlite3.node"),
+  ];
+  const sourcePath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!sourcePath) {
+    throw new Error(
+      `better_sqlite3.node is missing. Checked: ${candidates.join(", ")}`
+    );
   }
 
-  throw new Error(
-    "better_sqlite3.node is missing. Place it next to the executable."
-  );
+  const targetPath = path.join(getDataDir(), "runtime", "better_sqlite3.node");
+  const result = syncRuntimeFile(sourcePath, targetPath);
+  if (result.updated) {
+    console.log(`[INIT] Updated better-sqlite3 runtime: ${targetPath}`);
+  }
+  return targetPath;
 }
 
 const nativeBinding = resolveNativeBinding();
 const dbPath = getDataFile("app.db");
-const db = nativeBinding
-  ? new Database(dbPath, { nativeBinding })
-  : new Database(dbPath);
+const db = new Database(dbPath, { nativeBinding });
 
 // Initialize tables (run once)
 db.exec(`
