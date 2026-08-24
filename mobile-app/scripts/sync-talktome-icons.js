@@ -155,7 +155,10 @@ scalePng(glyphPath, path.join(glyphSet, 'TalkToMeMarkGlyph.png'), 48);
 scalePng(glyphPath, path.join(glyphSet, 'ivan.p@example.net'), 96);
 scalePng(glyphPath, path.join(glyphSet, 'tom.h@example.org'), 144);
 copy(markPath, path.join(root, 'targets', 'TalkToMeWidget', 'Assets.xcassets', 'TalkToMeMark.imageset', 'TalkToMeMark.png'));
+// iOS App Store icons cannot have alpha. A transparent icon.png is compiled
+// into an empty AppIcon and TestFlight/production shows no icon.
 copy(markPath, path.join(root, 'assets', 'icon.png'));
+flattenOntoBlack(path.join(root, 'assets', 'icon.png'));
 writeContainedGlyph(glyphPath, path.join(root, 'assets', 'android-icon-foreground.png'), 1024);
 writeContainedGlyph(glyphPath, path.join(root, 'assets', 'android-icon-monochrome.png'), 1024);
 

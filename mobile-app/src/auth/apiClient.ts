@@ -7,6 +7,7 @@ import {
   type HealthResponse,
   type LoginOptions,
   type LoginRequest,
+  type LoginTokenRequest,
   type OperatorIdentity,
   type TalkTarget,
   type TalkTargetResponse,
@@ -53,20 +54,31 @@ export class ApiClient {
       throw await this.serverError(response);
     }
 
-    const payload = await readJson<OperatorIdentity>(response);
-    if (!payload || typeof payload.id !== 'number' || typeof payload.name !== 'string') {
-      throw new ApiClientError('The response could not be decoded.');
+    return decodeUserIdentity(await readJson<OperatorIdentity>(response));
+  }
+
+  async loginToken(token: string): Promise<OperatorIdentity> {
+    const body: LoginTokenRequest = { token: token.trim() };
+    const response = await this.http.request('/login/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (response.status === 401) {
+      throw new InvalidCredentialsError('This login link is invalid or expired.');
     }
-    if (payload.kind === 'feed') {
-      throw new FeedLoginNotSupportedError();
+    if (response.status === 404) {
+      throw new ApiClientError(
+        'This server does not support login links. Sign in with username and password.',
+        404,
+      );
     }
-    if (payload.kind !== 'user') {
-      throw new ApiClientError('Unsupported login kind.');
+    if (!response.ok) {
+      throw await this.serverError(response);
     }
-    return {
-      ...payload,
-      productions: normalizeProductions(payload.productions),
-    };
+
+    return decodeUserIdentity(await readJson<OperatorIdentity>(response));
   }
 
   async loginGuest(name?: string): Promise<OperatorIdentity> {
@@ -153,6 +165,22 @@ export class ApiClient {
       : `Server error ${response.status}.`;
     return new ApiClientError(message, response.status);
   }
+}
+
+function decodeUserIdentity(payload: OperatorIdentity | null): OperatorIdentity {
+  if (!payload || typeof payload.id !== 'number' || typeof payload.name !== 'string') {
+    throw new ApiClientError('The response could not be decoded.');
+  }
+  if (payload.kind === 'feed') {
+    throw new FeedLoginNotSupportedError();
+  }
+  if (payload.kind !== 'user') {
+    throw new ApiClientError('Unsupported login kind.');
+  }
+  return {
+    ...payload,
+    productions: normalizeProductions(payload.productions),
+  };
 }
 
 function normalizeProductions(value: unknown): Production[] {

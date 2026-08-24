@@ -77,6 +77,36 @@ describe('ApiClient', () => {
     await expect(client.login('program', 'secret')).rejects.toBeInstanceOf(FeedLoginNotSupportedError);
   });
 
+  it('posts a login token to /login/token', async () => {
+    const { client, getCookies } = clientWith(
+      mockFetch(async (url, init) => {
+        expect(url).toBe('https://intercom.local/login/token');
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual({ token: 'abcDEF1234567890' });
+        return jsonResponse(
+          200,
+          { id: 5, name: 'alice', kind: 'user', productions: [] },
+          { 'set-cookie': 'talktome_session=cookie-2; HttpOnly; Secure' },
+        );
+      }),
+    );
+
+    await expect(client.loginToken('abcDEF1234567890')).resolves.toEqual({
+      id: 5,
+      name: 'alice',
+      kind: 'user',
+      productions: [],
+    });
+    expect(getCookies().talktome_session).toBe('cookie-2');
+  });
+
+  it('maps an invalid login token to invalid credentials', async () => {
+    const { client } = clientWith(
+      mockFetch(async () => jsonResponse(401, { error: 'Invalid or expired login link' })),
+    );
+    await expect(client.loginToken('nope')).rejects.toBeInstanceOf(InvalidCredentialsError);
+  });
+
   it('decodes the targets grid', async () => {
     const { client } = clientWith(
       mockFetch(async (url) => {

@@ -25,7 +25,7 @@ export class FeedLoginNotSupportedError extends ApiClientError {
 export class SessionCookieUnavailableError extends Error {
   constructor() {
     super(
-      'Signed in, but the session cookie could not be attached to signaling. Rebuild the iOS simulator app so native cookie support is included.',
+      'Signed in, but TalkToMe 1.2.1+ did not store a talktome_session cookie for signaling. Older servers (1.1.x) do not use that cookie.',
     );
     this.name = 'SessionCookieUnavailableError';
   }

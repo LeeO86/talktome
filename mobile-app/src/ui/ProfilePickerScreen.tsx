@@ -2,7 +2,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import { visibleProductionName } from '../protocol';
 import { session, useSessionStore } from '../session/store';
-import { TrashIcon } from './icons';
+import { QrIcon, TrashIcon } from './icons';
 import { colors } from './theme';
 
 export function ProfilePickerScreen() {
@@ -56,6 +56,16 @@ export function ProfilePickerScreen() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => session.startAddProfile({ openScanner: true })}
+        style={styles.add}
+      >
+        <View style={styles.addRow}>
+          <QrIcon color={colors.text} />
+          <Text style={styles.addText}>Scan QR code</Text>
+        </View>
+      </Pressable>
       <Pressable accessibilityRole="button" onPress={() => session.startAddProfile()} style={styles.add}>
         <Text style={styles.addText}>Add profile</Text>
       </Pressable>
@@ -140,6 +150,11 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: '700',
     fontSize: 16,
+  },
+  addRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   busy: {
     opacity: 0.6,

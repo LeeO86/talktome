@@ -13,22 +13,40 @@ import {
 } from 'react-native';
 
 import { SessionConflictError, TlsUntrustedError } from '../auth/errors';
+import { parseConnectPayload } from '../servers/parseConnectPayload';
 import { formatFingerprint } from '../servers/fingerprint';
 import { session, useSessionStore } from '../session/store';
+import { QrIcon } from './icons';
+import { QrScannerModal } from './QrScannerModal';
 import { colors } from './theme';
+
+type LoginMethod = 'account' | 'link';
 
 export function LoginScreen() {
   const store = useSessionStore();
+  const [method, setMethod] = useState<LoginMethod>('account');
   const [password, setPassword] = useState('');
+  const [loginLink, setLoginLink] = useState('');
+  const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
   const guest = store.loginOptions?.guestLogin;
   const canGoBack = store.profiles.length > 0;
+
+  const openLoginScanner = useSessionStore((state) => state.openLoginScanner);
+  const setField = useSessionStore((state) => state.setField);
 
   useEffect(() => {
     if (store.hydrated) {
       setPassword((current) => current || session.rememberedPassword());
     }
   }, [store.hydrated]);
+
+  useEffect(() => {
+    if (openLoginScanner) {
+      setScanning(true);
+      setField('openLoginScanner', false);
+    }
+  }, [openLoginScanner, setField]);
 
   useEffect(() => {
     if (store.serverAddress.trim()) {
@@ -64,16 +82,99 @@ export function LoginScreen() {
     }
   };
 
+  const signInWithLink = (raw: string, force = false) => {
+    const parsed = parseConnectPayload(raw);
+    const serverAddress = parsed.serverAddress || store.serverAddress;
+    if (!parsed.token) {
+      useSessionStore.setState({
+        error: 'Paste a TalkToMe login link that includes #login=.',
+        statusMessage: '',
+      });
+      return Promise.resolve();
+    }
+    if (!serverAddress.trim()) {
+      useSessionStore.setState({
+        error: 'This login link is missing a server address.',
+        statusMessage: '',
+      });
+      return Promise.resolve();
+    }
+    setMethod('link');
+    setLoginLink(raw.trim());
+    if (parsed.serverAddress) {
+      store.setField('serverAddress', parsed.serverAddress);
+    }
+    return session.loginWithToken({
+      serverAddress,
+      token: parsed.token,
+      rememberPassword: true,
+      force,
+    });
+  };
+
   const submit = (force = false) =>
-    run(() =>
-      session.login({
+    run(() => {
+      if (method === 'link') {
+        return signInWithLink(loginLink, force);
+      }
+      return session.login({
         serverAddress: store.serverAddress,
         username: store.username,
         password,
         rememberPassword: store.rememberPassword,
         force,
-      }),
-    );
+      });
+    });
+
+  const applyLoginLink = (value: string) => {
+    setLoginLink(value);
+    const parsed = parseConnectPayload(value);
+    if (parsed.token) {
+      if (parsed.serverAddress) {
+        store.setField('serverAddress', parsed.serverAddress);
+      }
+      return;
+    }
+    if (parsed.serverAddress && !parsed.token) {
+      store.setField('serverAddress', parsed.serverAddress);
+      setMethod('account');
+      setLoginLink('');
+    }
+  };
+
+  const applyServerInput = (value: string) => {
+    const parsed = parseConnectPayload(value);
+    if (parsed.token) {
+      setMethod('link');
+      setLoginLink(value.trim());
+      if (parsed.serverAddress) {
+        store.setField('serverAddress', parsed.serverAddress);
+      }
+      return;
+    }
+    store.setField('serverAddress', value);
+  };
+
+  const applyScanned = (raw: string) => {
+    setScanning(false);
+    const parsed = parseConnectPayload(raw);
+    if (!parsed.serverAddress && !parsed.token) {
+      useSessionStore.setState({ error: 'This QR code is not a TalkToMe server or login link.' });
+      return;
+    }
+    if (parsed.token) {
+      void run(() => signInWithLink(raw));
+      return;
+    }
+    setMethod('account');
+    store.setField('serverAddress', parsed.serverAddress ?? '');
+    useSessionStore.setState({ error: null, statusMessage: 'Server filled from QR code. Enter your account.' });
+  };
+
+  const openScanner = () => {
+    useSessionStore.setState({ error: null, statusMessage: '' });
+    setScanning(true);
+  };
 
   return (
     <KeyboardAvoidingView
@@ -91,55 +192,93 @@ export function LoginScreen() {
             <Image source={require('../../assets/talktome-mark.png')} style={styles.brandIcon} />
             <Text style={styles.brand}>talktome</Text>
           </View>
-          <Text style={styles.subtitle}>Connect to the talktome server.</Text>
+          <Text style={styles.subtitle}>Connect with an operator account or a login link.</Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.label}>Server</Text>
-          <TextInput
-            accessibilityLabel="Server"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            placeholder="https://intercom.local"
-            placeholderTextColor="#8A8F99"
-            style={styles.input}
-            value={store.serverAddress}
-            onChangeText={(value) => store.setField('serverAddress', value)}
-          />
-
-          <Text style={styles.label}>Username</Text>
-          <TextInput
-            accessibilityLabel="Username"
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="Username"
-            placeholderTextColor="#8A8F99"
-            style={styles.input}
-            value={store.username}
-            onChangeText={(value) => store.setField('username', value)}
-          />
-
-          <Text style={styles.label}>Password</Text>
-          <TextInput
-            accessibilityLabel="Password"
-            secureTextEntry
-            placeholder="Password"
-            placeholderTextColor="#8A8F99"
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            onSubmitEditing={() => void submit()}
-          />
-
-          <View style={styles.toggleRow}>
-            <Text style={styles.toggleLabel}>Remember password</Text>
-            <Switch
-              value={store.rememberPassword}
-              onValueChange={(value) => store.setField('rememberPassword', value)}
-              trackColor={{ true: colors.accent }}
-            />
+          <View style={styles.segment} accessibilityRole="tablist">
+            <Pressable
+              accessibilityRole="tab"
+              accessibilityState={{ selected: method === 'account' }}
+              style={[styles.segmentItem, method === 'account' && styles.segmentItemOn]}
+              onPress={() => setMethod('account')}
+            >
+              <Text style={[styles.segmentText, method === 'account' && styles.segmentTextOn]}>Account</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="tab"
+              accessibilityState={{ selected: method === 'link' }}
+              style={[styles.segmentItem, method === 'link' && styles.segmentItemOn]}
+              onPress={() => setMethod('link')}
+            >
+              <Text style={[styles.segmentText, method === 'link' && styles.segmentTextOn]}>Login link</Text>
+            </Pressable>
           </View>
+
+          {method === 'account' ? (
+            <>
+              <Text style={styles.label}>Server</Text>
+              <ScanField
+                accessibilityLabel="Server"
+                keyboardType="url"
+                placeholder="https://intercom.local"
+                value={store.serverAddress}
+                onChangeText={applyServerInput}
+                onScan={openScanner}
+                scanLabel="Scan server QR"
+              />
+
+              <Text style={styles.label}>Username</Text>
+              <TextInput
+                accessibilityLabel="Username"
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="Username"
+                placeholderTextColor="#8A8F99"
+                style={styles.input}
+                value={store.username}
+                onChangeText={(value) => store.setField('username', value)}
+              />
+
+              <Text style={styles.label}>Password</Text>
+              <TextInput
+                accessibilityLabel="Password"
+                secureTextEntry
+                placeholder="Password"
+                placeholderTextColor="#8A8F99"
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                onSubmitEditing={() => void submit()}
+              />
+
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Remember password</Text>
+                <Switch
+                  value={store.rememberPassword}
+                  onValueChange={(value) => store.setField('rememberPassword', value)}
+                  trackColor={{ true: colors.accent }}
+                />
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={styles.label}>Login link</Text>
+              <ScanField
+                accessibilityLabel="Login link"
+                keyboardType="url"
+                placeholder="https://host/#login=…"
+                value={loginLink}
+                onChangeText={applyLoginLink}
+                onScan={openScanner}
+                scanLabel="Scan login QR"
+                onSubmitEditing={() => void submit()}
+              />
+              <Text style={styles.hint}>
+                Use a personal login link from TalkToMe. It already includes the server.
+              </Text>
+            </>
+          )}
 
           <View style={styles.toggleRow}>
             <Text style={styles.toggleLabel}>Allow self-signed local TLS</Text>
@@ -201,7 +340,7 @@ export function LoginScreen() {
       </ScrollView>
 
       <View style={styles.actions}>
-        {guest?.enabled ? (
+        {method === 'account' && guest?.enabled ? (
           <Pressable
             accessibilityRole="button"
             style={[styles.guest, busy && styles.buttonDisabled]}
@@ -229,7 +368,54 @@ export function LoginScreen() {
           <Text style={styles.signInText}>{busy ? 'Signing in…' : 'Sign In'}</Text>
         </Pressable>
       </View>
+      <QrScannerModal visible={scanning} onClose={() => setScanning(false)} onScanned={applyScanned} />
     </KeyboardAvoidingView>
+  );
+}
+
+function ScanField({
+  accessibilityLabel,
+  keyboardType,
+  placeholder,
+  value,
+  onChangeText,
+  onScan,
+  scanLabel,
+  onSubmitEditing,
+}: {
+  accessibilityLabel: string;
+  keyboardType: 'url';
+  placeholder: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  onScan: () => void;
+  scanLabel: string;
+  onSubmitEditing?: () => void;
+}) {
+  return (
+    <View style={styles.inputWrap}>
+      <TextInput
+        accessibilityLabel={accessibilityLabel}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType={keyboardType}
+        placeholder={placeholder}
+        placeholderTextColor="#8A8F99"
+        style={styles.inputInWrap}
+        value={value}
+        onChangeText={onChangeText}
+        onSubmitEditing={onSubmitEditing}
+      />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={scanLabel}
+        hitSlop={8}
+        onPress={onScan}
+        style={styles.inputScan}
+      >
+        <QrIcon color="#111318" size={18} />
+      </Pressable>
+    </View>
   );
 }
 
@@ -285,10 +471,34 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 20,
   },
+  segment: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    borderRadius: 12,
+    padding: 3,
+    marginBottom: 6,
+  },
+  segmentItem: {
+    flex: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  segmentItemOn: {
+    backgroundColor: 'rgba(61,214,245,0.22)',
+  },
+  segmentText: {
+    color: colors.muted,
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  segmentTextOn: {
+    color: colors.text,
+  },
   label: {
     color: colors.muted,
     marginBottom: 6,
-    marginTop: 10,
+    marginTop: 14,
     fontWeight: '600',
   },
   input: {
@@ -298,6 +508,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 11,
     fontSize: 16,
+  },
+  inputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+  },
+  inputInWrap: {
+    flex: 1,
+    color: '#111318',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    fontSize: 16,
+  },
+  inputScan: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   toggleRow: {
     flexDirection: 'row',

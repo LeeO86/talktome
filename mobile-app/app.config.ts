@@ -12,6 +12,7 @@ const config: ExpoConfig = {
   scheme: 'talktome',
   ios: {
     supportsTablet: true,
+    icon: './assets/icon.png',
     bundleIdentifier: 'io.github.leeo86.talktome-mobile',
     appleTeamId: '4876GGFAH9',
     entitlements: {
@@ -29,6 +30,7 @@ const config: ExpoConfig = {
       NSLocalNetworkUsageDescription:
         'TalkToMe connects to your self-hosted intercom on the local network.',
       NSBluetoothAlwaysUsageDescription: 'TalkToMe connects to wireless PTT buttons.',
+      NSCameraUsageDescription: 'TalkToMe uses the camera to scan server and login QR codes.',
       NSSupportsLiveActivities: true,
       NSSupportsLiveActivitiesFrequentUpdates: true,
       UIBackgroundModes: enableIosPtt
@@ -70,6 +72,7 @@ const config: ExpoConfig = {
       'BLUETOOTH_SCAN',
       'BLUETOOTH_CONNECT',
       'ACCESS_FINE_LOCATION',
+      'CAMERA',
     ],
     predictiveBackGestureEnabled: false,
   },
@@ -80,12 +83,20 @@ const config: ExpoConfig = {
       '@config-plugins/react-native-webrtc',
       {
         cameraPermission:
-          'TalkToMe does not use the camera in Phase 0. This permission is required by the WebRTC plugin.',
+          'TalkToMe uses the camera to scan server and login QR codes.',
         microphonePermission:
           'TalkToMe uses the microphone so you can talk to other operators.',
       },
     ],
     './plugins/withTalkToMeFgs',
+    [
+      'expo-camera',
+      {
+        cameraPermission: 'TalkToMe uses the camera to scan server and login QR codes.',
+        recordAudioAndroid: false,
+        barcodeScannerEnabled: true,
+      },
+    ],
     './plugins/withTalkToMeBle',
     './plugins/withTalkToMePtt',
     './plugins/withTalkToMeOrientation',

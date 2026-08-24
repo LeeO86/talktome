@@ -1,9 +1,16 @@
 import { SESSION_COOKIE_NAME, type CookieMap } from './cookieJar';
 
-export type NativeCookieRecord = { value?: string };
+export type NativeCookieRecord = { name?: string; value?: string };
 export type NativeCookieSource = {
   get: (url: string) => Promise<Record<string, NativeCookieRecord>>;
+  getAll?: () => Promise<Record<string, NativeCookieRecord>>;
+  getAsArray?: (url: string) => Promise<readonly NativeCookieRecord[]>;
 };
+
+export function cookieLookupUrls(baseUrl: string): string[] {
+  const origin = baseUrl.replace(/\/$/, '');
+  return [`${origin}/login`, `${origin}/`, origin];
+}
 
 export function cookiesFromNativeRecords(
   cookies: Record<string, NativeCookieRecord> | null | undefined,
@@ -25,11 +32,29 @@ export async function readNativeCookies(
   if (!manager) {
     return {};
   }
+  const jar: CookieMap = {};
   try {
-    return cookiesFromNativeRecords(await manager.get(url));
+    for (const candidate of cookieLookupUrls(url)) {
+      Object.assign(jar, cookiesFromNativeRecords(await manager.get(candidate)));
+      if (manager.getAsArray) {
+        for (const cookie of await manager.getAsArray(candidate)) {
+          const name = cookie.name ?? '';
+          if (name && cookie.value) {
+            jar[name] = cookie.value;
+          }
+        }
+      }
+      if (hasSessionCookie(jar)) {
+        return jar;
+      }
+    }
+    if (manager.getAll) {
+      Object.assign(jar, cookiesFromNativeRecords(await manager.getAll()));
+    }
   } catch {
-    return {};
+    return jar;
   }
+  return jar;
 }
 
 async function loadNativeCookieSource(): Promise<NativeCookieSource | null> {

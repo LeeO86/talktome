@@ -5,6 +5,7 @@ import type { CookieMap } from '../auth/cookieJar';
 import { SessionConflictError, SessionCookieUnavailableError, TlsUntrustedError } from '../auth/errors';
 import { TalkToMeHttp } from '../auth/http';
 import { hasSessionCookie, readNativeCookies } from '../auth/nativeCookies';
+import { requiresBrowserSessionCookie } from '../auth/serverCapabilities';
 import { MediaEngine } from '../media/engine';
 import {
   activeFeedKeysFromProducers,
@@ -139,6 +140,7 @@ export type SessionUiState = {
   activeProfileId: string | null;
   paused: boolean;
   addingProfile: boolean;
+  openLoginScanner: boolean;
   operatorReady: boolean;
   targets: TalkTarget[];
   talkingTargetKey: string | null;
@@ -206,6 +208,7 @@ const initialState: SessionUiState = {
   activeProfileId: null,
   paused: false,
   addingProfile: false,
+  openLoginScanner: false,
   operatorReady: false,
   targets: [],
   talkingTargetKey: null,
@@ -257,12 +260,14 @@ export const useSessionStore = create<SessionStore>((set) => ({
 
 class SessionController {
   private cookies: CookieMap = {};
+  private serverAppVersion: string | undefined;
   private http: TalkToMeHttp | null = null;
   private api: ApiClient | null = null;
   private signaling: SignalingClient | null = null;
   private media: MediaEngine | null = null;
   private lastSocketId?: string;
   private pendingPassword?: string;
+  private pendingLoginToken = false;
   private talkingTargets: TalkTarget[] = [];
   private lockedTargets: TalkTarget[] = [];
   private overrideFrom: TalkTarget[] | null = null;
@@ -306,6 +311,7 @@ class SessionController {
       ...bleFieldsFromSelection(blePreferences.target, blePreferences.shortPressLocksTalk),
     });
     this.pendingPassword = last ? await passwordForProfile(last.id) : undefined;
+    this.pendingLoginToken = Boolean(last?.loginToken);
     this.bindHardware();
     void startBleNative().then((state) => this.publishBleState(state));
     if (last?.serverAddress) {
@@ -321,6 +327,9 @@ class SessionController {
   }
 
   rememberedPassword(): string {
+    if (this.pendingLoginToken) {
+      return '';
+    }
     return this.pendingPassword ?? '';
   }
 
@@ -350,21 +359,36 @@ class SessionController {
     force?: boolean;
   }): Promise<void> {
     this.pendingPassword = input.password;
+    this.pendingLoginToken = false;
     this.beginConnect(input.serverAddress, input.username, input.rememberPassword);
     await this.probeAndHealth();
     useSessionStore.setState({ statusMessage: 'Signing in…' });
     const identity = await this.requireApi().login(input.username, input.password);
-    const parsed = parseServerAddress(input.serverAddress);
-    const nativeCookies = await readNativeCookies(parsed.baseUrl);
-    this.cookies = { ...nativeCookies, ...this.cookies };
-    if (!hasSessionCookie(this.cookies)) {
-      throw new SessionCookieUnavailableError();
-    }
+    await this.attachSessionCookie(input.serverAddress);
     await this.finishIdentity(identity, input.force === true);
     await this.persistCurrentProfile(input.password);
   }
 
+  async loginWithToken(input: {
+    serverAddress: string;
+    token: string;
+    rememberPassword?: boolean;
+    force?: boolean;
+  }): Promise<void> {
+    this.pendingPassword = input.token;
+    this.pendingLoginToken = true;
+    this.beginConnect(input.serverAddress, useSessionStore.getState().username, input.rememberPassword ?? true);
+    await this.probeAndHealth();
+    useSessionStore.setState({ statusMessage: 'Signing in with login link…' });
+    const identity = await this.requireApi().loginToken(input.token);
+    useSessionStore.setState({ username: identity.name });
+    await this.attachSessionCookie(input.serverAddress);
+    await this.finishIdentity(identity, input.force === true);
+    await this.persistCurrentProfile(input.token);
+  }
+
   async loginGuest(input: { serverAddress: string; displayName?: string; force?: boolean }): Promise<void> {
+    this.pendingLoginToken = false;
     this.beginConnect(input.serverAddress, input.displayName ?? useSessionStore.getState().username, false);
     await this.probeAndHealth();
     useSessionStore.setState({ statusMessage: 'Signing in as guest…' });
@@ -383,6 +407,14 @@ class SessionController {
     const state = useSessionStore.getState();
     if (kind === 'guest') {
       await this.loginGuest({ serverAddress: state.serverAddress, displayName: state.username });
+      return;
+    }
+    if (this.pendingLoginToken) {
+      await this.loginWithToken({
+        serverAddress: state.serverAddress,
+        token: this.pendingPassword ?? '',
+        rememberPassword: state.rememberPassword,
+      });
       return;
     }
     await this.login({
@@ -426,6 +458,15 @@ class SessionController {
       });
       return;
     }
+    if (this.pendingLoginToken) {
+      await this.loginWithToken({
+        serverAddress: state.serverAddress,
+        token: this.pendingPassword ?? '',
+        rememberPassword: state.rememberPassword,
+        force: true,
+      });
+      return;
+    }
     await this.login({
       serverAddress: state.serverAddress,
       username: state.username,
@@ -462,10 +503,11 @@ class SessionController {
     useSessionStore.setState({ paused: false, addingProfile: false, status: 'idle', error: null });
   }
 
-  startAddProfile(): void {
+  startAddProfile(options?: { openScanner?: boolean }): void {
     useSessionStore.setState({
       paused: false,
       addingProfile: true,
+      openLoginScanner: Boolean(options?.openScanner),
       serverAddress: '',
       username: '',
       rememberPassword: true,
@@ -477,6 +519,7 @@ class SessionController {
       statusMessage: '',
     });
     this.pendingPassword = undefined;
+    this.pendingLoginToken = false;
   }
 
   cancelAddProfile(): void {
@@ -498,6 +541,7 @@ class SessionController {
     }
     const password = await passwordForProfile(profile.id);
     this.pendingPassword = password;
+    this.pendingLoginToken = Boolean(profile.loginToken);
     useSessionStore.setState({
       activeProfileId: profile.id,
       paused: false,
@@ -520,6 +564,14 @@ class SessionController {
       }
       if (!password) {
         useSessionStore.setState({ addingProfile: true, status: 'idle' });
+        return;
+      }
+      if (profile.loginToken) {
+        await this.loginWithToken({
+          serverAddress: profile.serverAddress,
+          token: password,
+          rememberPassword: profile.rememberPassword,
+        });
         return;
       }
       await this.login({
@@ -695,6 +747,7 @@ class SessionController {
         ? undefined
         : (state.pttChannelName.trim() || existing?.pttChannelName),
       guest,
+      loginToken: guest ? undefined : this.pendingLoginToken || undefined,
     };
     const profiles = upsertProfile(state.profiles, saved);
     useSessionStore.setState({ profiles, activeProfileId: id, addingProfile: false });
@@ -1376,6 +1429,15 @@ class SessionController {
 
   private async reauthenticateUser(): Promise<void> {
     const state = useSessionStore.getState();
+    if (this.pendingLoginToken) {
+      await this.loginWithToken({
+        serverAddress: state.serverAddress,
+        token: this.pendingPassword ?? '',
+        rememberPassword: state.rememberPassword,
+        force: true,
+      });
+      return;
+    }
     await this.login({
       serverAddress: state.serverAddress,
       username: state.username,
@@ -1487,9 +1549,19 @@ class SessionController {
     this.prepareHttp(serverAddress);
   }
 
+  private async attachSessionCookie(serverAddress: string): Promise<void> {
+    const parsed = parseServerAddress(serverAddress);
+    const nativeCookies = await readNativeCookies(parsed.baseUrl);
+    this.cookies = { ...this.cookies, ...nativeCookies };
+    if (requiresBrowserSessionCookie(this.serverAppVersion) && !hasSessionCookie(this.cookies)) {
+      throw new SessionCookieUnavailableError();
+    }
+  }
+
   private prepareHttp(serverAddress: string): void {
     const parsed = parseServerAddress(serverAddress);
     this.cookies = {};
+    this.serverAppVersion = undefined;
     this.http = new TalkToMeHttp({
       baseUrl: parsed.baseUrl,
       getCookies: () => this.cookies,
@@ -1505,7 +1577,8 @@ class SessionController {
     const parsed = parseServerAddress(state.serverAddress);
     const hostname = new URL(parsed.baseUrl).hostname;
     try {
-      await this.requireApi().health();
+      const health = await this.requireApi().health();
+      this.serverAppVersion = health.appVersion;
     } catch (error) {
       if (looksLikeTlsFailure(error)) {
         if (state.allowInsecureLocalTLS) {
@@ -1556,7 +1629,11 @@ class SessionController {
       throw new SessionConflictError(register.existing);
     }
     if (!isRegisterOk(register)) {
-      throw new Error('error' in register ? register.error : 'register-user failed');
+      const message = 'error' in register ? register.error : 'register-user failed';
+      if (typeof message === 'string' && /authenticated identity does not match/i.test(message)) {
+        throw new SessionCookieUnavailableError();
+      }
+      throw new Error(message);
     }
 
     this.lastSocketId = this.signaling.socketId;

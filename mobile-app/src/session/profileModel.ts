@@ -9,6 +9,7 @@ export type SavedProfile = {
   serverAddress: string;
   username: string;
   rememberPassword: boolean;
+  loginToken?: boolean;
   allowInsecureLocalTLS?: boolean;
   productionId?: number | null;
   productionName?: string | null;

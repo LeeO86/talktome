@@ -21,6 +21,10 @@ export type LoginRequest = {
   password: string;
 };
 
+export type LoginTokenRequest = {
+  token: string;
+};
+
 export type LoginOptions = {
   guestLogin: { enabled: boolean; label: string };
   sso: { enabled: boolean };

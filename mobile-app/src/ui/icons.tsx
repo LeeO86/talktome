@@ -187,6 +187,19 @@ export function ReplyArrowIcon({ color = colors.text, size = 18 }: IconProps) {
   );
 }
 
+export function QrIcon({ color = colors.text, size = 20 }: IconProps) {
+  const inset = size * 0.16;
+  const finder = size * 0.28;
+  return (
+    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
+      <View style={[styles.qrFrame, { width: size, height: size, borderColor: color }]} />
+      <View style={[styles.qrFinder, { top: inset, left: inset, width: finder, height: finder, borderColor: color }]} />
+      <View style={[styles.qrFinder, { top: inset, right: inset, width: finder, height: finder, borderColor: color }]} />
+      <View style={[styles.qrFinder, { bottom: inset, left: inset, width: finder, height: finder, borderColor: color }]} />
+    </View>
+  );
+}
+
 export function TrashIcon({ color = colors.danger, size = 20 }: IconProps) {
   const lid = size * 0.12;
   const can = size * 0.62;
@@ -370,5 +383,15 @@ const styles = StyleSheet.create({
     borderTopWidth: 0,
     borderBottomLeftRadius: 3,
     borderBottomRightRadius: 3,
+  },
+  qrFrame: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderRadius: 4,
+  },
+  qrFinder: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderRadius: 1,
   },
 });
