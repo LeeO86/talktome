@@ -6,6 +6,7 @@ import {
   cookiesFromNativeRecords,
   hasSessionCookie,
   readNativeCookies,
+  type NativeCookieRecord,
 } from './nativeCookies';
 
 describe('nativeCookies', () => {
@@ -40,7 +41,7 @@ describe('nativeCookies', () => {
 
   it('finds a session cookie that is only stored for the login path', async () => {
     const jar = await readNativeCookies('https://talktome.srfprod.ch', {
-      get: async (url) =>
+      get: async (url): Promise<Record<string, NativeCookieRecord>> =>
         url.endsWith('/login')
           ? { [SESSION_COOKIE_NAME]: { value: 'from-login-path' } }
           : {},

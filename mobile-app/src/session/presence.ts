@@ -41,7 +41,7 @@ export function formatPresenceList(labels: string[]): string {
     return '';
   }
   if (labels.length === 1) {
-    return labels[0];
+    return labels[0] ?? '';
   }
   if (labels.length === 2) {
     return `${labels[0]}, ${labels[1]}`;

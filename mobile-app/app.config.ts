@@ -53,6 +53,7 @@ const config: ExpoConfig = {
   android: {
     // Android Java packages cannot contain a hyphen.
     package: 'io.github.leeo86.talktomemobile',
+    versionCode: 2,
     adaptiveIcon: {
       backgroundColor: '#000000',
       foregroundImage: './assets/android-icon-foreground.png',

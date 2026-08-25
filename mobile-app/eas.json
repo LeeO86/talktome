@@ -22,5 +22,12 @@
         "EXPO_PUBLIC_ENABLE_IOS_PTT": "1"
       }
     }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6804514280"
+      }
+    }
   }
 }

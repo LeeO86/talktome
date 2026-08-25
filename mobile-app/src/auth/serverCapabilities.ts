@@ -19,8 +19,10 @@ export function compareAppVersion(left: string, right: string): number | null {
     return null;
   }
   for (let i = 0; i < 3; i += 1) {
-    if (a[i] !== b[i]) {
-      return a[i] - b[i];
+    const left = a[i] ?? 0;
+    const right = b[i] ?? 0;
+    if (left !== right) {
+      return left - right;
     }
   }
   return 0;

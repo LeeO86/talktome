@@ -82,7 +82,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   embedded: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 20,
     elevation: 20,
   },
