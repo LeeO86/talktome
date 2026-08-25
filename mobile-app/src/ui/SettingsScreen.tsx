@@ -6,6 +6,7 @@ import { describeBleConnection } from '../ble/native';
 import { describeBleTarget, type BleTargetSelection } from '../ble/target';
 import { fgsStatusLabel } from '../background/fgs';
 import { session, useSessionStore } from '../session/store';
+import { describeWatchRemoteStatus, watchRemoteShortStatus, watchRemoteStatus } from '../watch/native';
 import { androidSafeArea } from './androidSafeArea';
 
 type Props = {
@@ -128,6 +129,21 @@ export function SettingsScreen({ visible, onClose }: Props) {
               target if you want the button to ignore Reply.
             </Text>
           </View>
+
+          {Platform.OS === 'ios' ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Apple Watch</Text>
+              <View style={styles.row}>
+                <Text style={styles.rowLabel}>Remote</Text>
+                <Text style={styles.rowValue}>{watchRemoteShortStatus(watchRemoteStatus())}</Text>
+              </View>
+              <Text style={styles.footnote}>
+                {describeWatchRemoteStatus(watchRemoteStatus())} The watch lists Reply, then the
+                same online talk targets as the phone. Hold a row to talk; release to stop. Audio
+                stays on the iPhone.
+              </Text>
+            </View>
+          ) : null}
 
           {Platform.OS === 'ios' ? (
             <View style={styles.section}>

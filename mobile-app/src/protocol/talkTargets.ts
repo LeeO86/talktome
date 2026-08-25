@@ -1,7 +1,7 @@
 // Derived from talktome public/client.js normalizePttTarget @ bbb8e09
 // and talktome-apple OutgoingTalkRequest @ 004d6e76 by Daniel Jocher.
 
-import type { SignalingTalkTarget, TalkTarget } from './types';
+import type { PeerSession, SignalingTalkTarget, TalkTarget } from './types';
 
 export function normalizeTalkTargets(targets: TalkTarget[]): SignalingTalkTarget[] {
   const normalized: SignalingTalkTarget[] = [];
@@ -28,4 +28,21 @@ export function normalizeTalkTargets(targets: TalkTarget[]): SignalingTalkTarget
 
 export function firstTalkableTarget(targets: TalkTarget[]): TalkTarget | null {
   return targets.find((target) => target.canTalk && target.type !== 'feed') ?? null;
+}
+
+export function canTalkToTarget(target: TalkTarget, peers: PeerSession[]): boolean {
+  if (!target.canTalk || target.type === 'feed') {
+    return false;
+  }
+  if (target.type === 'user') {
+    return peers.some((peer) => peer.kind === 'user' && peer.userId === target.id);
+  }
+  if (target.type === 'guest') {
+    return peers.some(
+      (peer) =>
+        peer.kind === 'guest' &&
+        (peer.socketId === String(target.id) || String(peer.userId) === String(target.id)),
+    );
+  }
+  return true;
 }

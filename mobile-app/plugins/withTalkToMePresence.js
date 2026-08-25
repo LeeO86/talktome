@@ -1,6 +1,7 @@
-const { withEntitlementsPlist, withInfoPlist } = require('expo/config-plugins');
+const { withEntitlementsPlist, withInfoPlist, withXcodeProject } = require('expo/config-plugins');
 
 const APP_GROUP = 'group.io.github.leeo86.talktome-mobile';
+const LIVE_ACTIVITY_ATTRIBUTES = 'TalkToMePresenceAttributes';
 
 function withTalkToMePresence(config) {
   config = withEntitlementsPlist(config, (mod) => {
@@ -16,7 +17,29 @@ function withTalkToMePresence(config) {
     return mod;
   });
 
-  return config;
+  return withWatchLiveActivityLaunch(config);
+}
+
+function withWatchLiveActivityLaunch(config) {
+  return withXcodeProject(config, (mod) => {
+    const configs = mod.modResults.pbxXCBuildConfigurationSection();
+    for (const entry of Object.values(configs)) {
+      const settings = entry?.buildSettings;
+      if (!settings || !isWatchAppBuildSettings(settings)) {
+        continue;
+      }
+      settings.INFOPLIST_KEY_WKSupportsLiveActivityLaunchAttributeTypes = LIVE_ACTIVITY_ATTRIBUTES;
+    }
+    return mod;
+  });
+}
+
+function isWatchAppBuildSettings(settings) {
+  return unquote(settings.SDKROOT) === 'watchos' && Boolean(settings.INFOPLIST_KEY_WKCompanionAppBundleIdentifier);
+}
+
+function unquote(value) {
+  return String(value ?? '').replace(/^"+|"+$/g, '');
 }
 
 module.exports = withTalkToMePresence;

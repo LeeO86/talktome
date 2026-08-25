@@ -9,6 +9,7 @@ import { requiresBrowserSessionCookie } from '../auth/serverCapabilities';
 import { MediaEngine } from '../media/engine';
 import {
   activeFeedKeysFromProducers,
+  canTalkToTarget,
   defaultAudioPreference,
   normalizeAudioPreference,
   talkTargetIdentity,
@@ -114,6 +115,8 @@ import {
   upsertProfile,
   type SavedProfile,
 } from './remembered';
+import { buildWatchRemoteSnapshot } from '../watch/snapshot';
+import { publishWatchRemote, subscribeWatchRemote, ackWatchTalk, type WatchRemoteCommand } from '../watch/native';
 import { sessionPresence, presenceNotification } from './presence';
 import { publishSessionPresence, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
 import { AppState, Platform, type AppStateStatus } from 'react-native';
@@ -765,18 +768,7 @@ class SessionController {
   }
 
   canTalkTo(target: TalkTarget): boolean {
-    if (!target.canTalk || target.type === 'feed') {
-      return false;
-    }
-    if (target.type === 'user') {
-      return useSessionStore.getState().peers.some((peer) => peer.kind === 'user' && peer.userId === target.id);
-    }
-    if (target.type === 'guest') {
-      return useSessionStore.getState().peers.some(
-        (peer) => peer.kind === 'guest' && (peer.socketId === String(target.id) || String(peer.userId) === String(target.id)),
-      );
-    }
-    return true;
+    return canTalkToTarget(target, useSessionStore.getState().peers);
   }
 
   audioPreference(target: TalkTarget): TargetAudioPreference {
@@ -1345,6 +1337,7 @@ class SessionController {
       },
       onUserList: (peers) => {
         useSessionStore.setState({ peers });
+        this.syncPresence();
       },
       onSessionKicked: (info) => {
         const message =
@@ -1710,6 +1703,14 @@ class SessionController {
         void this.handleBleButton(pressed);
       },
     });
+    subscribeWatchRemote({
+      onTalkStart: (command) => {
+        void this.handleWatchTalk(command, true);
+      },
+      onTalkStop: (command) => {
+        void this.handleWatchTalk(command, false);
+      },
+    });
     this.appStateSubscription?.remove();
     this.appStateSubscription = AppState.addEventListener('change', (next) => {
       void this.syncAudioSession(next);
@@ -1799,6 +1800,39 @@ class SessionController {
     await this.releaseTalk(target);
   }
 
+  private async handleWatchTalk(command: WatchRemoteCommand, pressed: boolean): Promise<void> {
+    if (!pressed) {
+      const target = this.resolveWatchTarget(command);
+      if (target) {
+        await this.releaseTalk(target);
+      }
+      return;
+    }
+    const target = this.resolveWatchTarget(command);
+    if (!useSessionStore.getState().operatorReady || !target) {
+      ackWatchTalk({ key: command.key, talking: false });
+      return;
+    }
+    await this.pressTalk(target);
+    const talking = this.talkingTargets.some((item) => talkTargetIdentity(item) === talkTargetIdentity(target));
+    ackWatchTalk({ key: command.key, talking });
+  }
+
+  private resolveWatchTarget(command: WatchRemoteCommand): TalkTarget | null {
+    const targets = useSessionStore.getState().targets;
+    if (command.key) {
+      const match = targets.find((target) => talkTargetIdentity(target) === command.key);
+      if (match) {
+        return match;
+      }
+    }
+    return (
+      targets.find(
+        (target) => target.type === command.targetType && String(target.id) === String(command.targetId),
+      ) ?? null
+    );
+  }
+
   private currentPresence() {
     const state = useSessionStore.getState();
     return sessionPresence({
@@ -1826,7 +1860,23 @@ class SessionController {
   private syncPresence(): void {
     const snapshot = this.currentPresence();
     publishSessionPresence(snapshot);
+    publishWatchRemote(this.watchRemoteSnapshot());
     void this.syncForegroundService();
+  }
+
+  private watchRemoteSnapshot() {
+    const state = useSessionStore.getState();
+    return buildWatchRemoteSnapshot({
+      operatorReady: state.operatorReady,
+      username: state.username,
+      productionName: state.productionName,
+      targets: state.targets,
+      peers: state.peers,
+      replyTarget: state.replyTarget,
+      talking: state.talking,
+      talkingTargets: this.talkingTargets,
+      incoming: state.incoming,
+    });
   }
 
   private async syncForegroundService(): Promise<void> {
