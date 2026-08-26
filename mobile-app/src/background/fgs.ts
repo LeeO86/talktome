@@ -14,6 +14,19 @@ export function shouldClaimMicrophoneFgsType(recordAudioGranted: boolean): boole
   return recordAudioGranted;
 }
 
+export type ForegroundServiceMode = 'idle' | 'start' | 'update' | 'stop';
+
+export function foregroundServiceMode(input: {
+  platform: string;
+  operatorReady: boolean;
+  nativeRunning: boolean;
+}): ForegroundServiceMode {
+  if (!shouldStartForegroundService(input.platform, input.operatorReady)) {
+    return input.nativeRunning ? 'stop' : 'idle';
+  }
+  return input.nativeRunning ? 'update' : 'start';
+}
+
 export function fgsStatusLabel(input: { available: boolean; running: boolean; platform: string }): string {
   if (input.platform !== 'android') {
     return 'iOS audio background';

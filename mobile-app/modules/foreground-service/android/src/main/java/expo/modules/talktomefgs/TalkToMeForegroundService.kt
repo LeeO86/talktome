@@ -53,6 +53,14 @@ class TalkToMeForegroundService : Service() {
           Holder.listener?.onStarted(includeConnectedDevice)
         } catch (error: Exception) {
           Log.e(TAG, "Unable to enter foreground", error)
+          Holder.running = false
+          try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+          } catch (_: Exception) {
+            // Never reached startForeground.
+          }
+          stopSelf()
+          Holder.listener?.onStopped()
         }
         return START_STICKY
       }

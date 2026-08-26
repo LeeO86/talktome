@@ -41,4 +41,15 @@ describe('applyConsumerBudget', () => {
     expect(decision.resume[0]?.producerId).toBe('talk');
     expect(decision.pause.map((item) => item.producerId)).toContain('feed');
   });
+
+  it('keeps a locked talk target when the current talk key is empty', () => {
+    const locked = producer('locked', { kind: 'directUser', targetPeerId: 'y' }, 9);
+    const extras = Array.from({ length: 8 }, (_, index) =>
+      producer(`c${index}`, { kind: 'conference', id: 20 + index }),
+    );
+    const decision = applyConsumerBudget([locked, ...extras], {
+      lockedTargetKey: 'user-9',
+    });
+    expect(decision.resume[0]?.producerId).toBe('locked');
+  });
 });

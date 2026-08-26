@@ -59,6 +59,7 @@ import {
 import { advertisedCapability } from '../background/capability';
 import {
   foregroundServiceAvailable,
+  foregroundServiceSnapshot,
   openBatterySettings,
   startForegroundService,
   stopForegroundService,
@@ -66,7 +67,7 @@ import {
   updateForegroundService,
 } from '../background/foregroundService';
 import { requestAndroidBlePermissions, requestAndroidSessionPermissions } from '../background/permissions';
-import { shouldRetryForegroundService, shouldStartForegroundService } from '../background/fgs';
+import { foregroundServiceMode, shouldRetryForegroundService } from '../background/fgs';
 import { BleButtonPolicy } from '../ble/button';
 import {
   disconnectBle,
@@ -280,6 +281,7 @@ class SessionController {
   private appStateSubscription: { remove: () => void } | null = null;
   private pttChannelUUID: string | null = null;
   private pendingPttRegistration: { token: string; channelUUID: string } | null = null;
+  private fgsSync: Promise<void> = Promise.resolve();
   private readonly blePolicy = new BleButtonPolicy();
 
   async hydrate(): Promise<void> {
@@ -1156,6 +1158,11 @@ class SessionController {
 
   async connectBluetoothButton(): Promise<void> {
     await requestAndroidBlePermissions();
+    const started = await startBleNative();
+    if (started.kind === 'connecting' || started.kind === 'connected' || started.kind === 'scanning') {
+      this.publishBleState(started);
+      return;
+    }
     const state = await scanAndConnectBle();
     this.publishBleState(state);
   }
@@ -1467,6 +1474,7 @@ class SessionController {
     await this.media.syncProducers(producers, this.consumerContext());
     this.publishMediaSnapshot();
     await this.syncAudioSession(AppState.currentState);
+    await this.syncForegroundService();
     await this.syncSystemPtt();
     if (resumeTargets.length > 0) {
       await this.prepareAudioForTalk();
@@ -1529,7 +1537,10 @@ class SessionController {
 
   private consumerContext() {
     const state = useSessionStore.getState();
-    return { talkTargetKey: state.talkingTargetKey };
+    return {
+      talkTargetKey: state.talkingTargetKey,
+      lockedTargetKey: state.lockedTargetKeys[0] ?? null,
+    };
   }
 
   private beginConnect(serverAddress: string, username: string, rememberPassword: boolean): void {
@@ -1730,6 +1741,10 @@ class SessionController {
         void this.registerPttToken(event.token, event.channelUUID);
       },
       onBeginTransmitting: () => {
+        if (useSessionStore.getState().talkSelectMode) {
+          void this.pressSelectedTalk();
+          return;
+        }
         void this.pressReply();
       },
       onEndTransmitting: () => {
@@ -1887,31 +1902,61 @@ class SessionController {
   }
 
   private async syncForegroundService(): Promise<void> {
+    const run = this.fgsSync.then(() => this.syncForegroundServiceBody());
+    this.fgsSync = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async syncForegroundServiceBody(): Promise<void> {
     const state = useSessionStore.getState();
+    const nativeRunning = foregroundServiceSnapshot().running;
+    const mode = foregroundServiceMode({
+      platform: Platform.OS,
+      operatorReady: state.operatorReady,
+      nativeRunning,
+    });
     const notification = presenceNotification(this.currentPresence());
-    if (!shouldStartForegroundService(Platform.OS, state.operatorReady)) {
+    if (mode === 'idle') {
       if (state.fgsRunning) {
-        await stopForegroundService();
+        useSessionStore.setState({
+          fgsRunning: false,
+          capabilityReason: this.capabilityReason({ fgsRunning: false }),
+        });
       }
+      return;
+    }
+    if (mode === 'stop') {
+      await stopForegroundService();
       return;
     }
     await requestAndroidSessionPermissions();
     const includeConnectedDevice = state.bleKind === 'connected' || state.bleKind === 'connecting';
     const talking = this.currentPresence().talking || this.currentPresence().talkLocked;
-    if (state.fgsRunning) {
+    if (mode === 'update') {
       await updateForegroundService(includeConnectedDevice, notification.title, notification.text, talking);
+      if (!state.fgsRunning) {
+        useSessionStore.setState({
+          fgsRunning: true,
+          fgsAvailable: true,
+          capabilityReason: this.capabilityReason({ fgsRunning: true }),
+        });
+      }
       return;
     }
-    const started = await startForegroundService(
+    const asked = await startForegroundService(
       includeConnectedDevice,
       notification.title,
       notification.text,
       talking,
     );
+    const running = foregroundServiceSnapshot().running;
     useSessionStore.setState({
-      fgsRunning: started,
-      fgsAvailable: started || foregroundServiceAvailable(),
-      capabilityReason: this.capabilityReason({ fgsRunning: started }),
+      fgsRunning: running,
+      fgsAvailable: asked || running || foregroundServiceAvailable(),
+      capabilityReason: this.capabilityReason({ fgsRunning: running }),
     });
   }
 

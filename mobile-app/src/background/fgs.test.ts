@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   fgsCapabilityReason,
   fgsStatusLabel,
+  foregroundServiceMode,
   shouldClaimMicrophoneFgsType,
   shouldRetryForegroundService,
   shouldStartForegroundService,
@@ -19,6 +20,22 @@ describe('foreground service policy', () => {
     expect(shouldRetryForegroundService('android', true, 'active')).toBe(true);
     expect(shouldRetryForegroundService('android', true, 'background')).toBe(false);
     expect(shouldRetryForegroundService('android', false, 'active')).toBe(false);
+  });
+
+  it('starts from native isRunning, not a JS guess', () => {
+    expect(foregroundServiceMode({ platform: 'android', operatorReady: true, nativeRunning: false })).toBe(
+      'start',
+    );
+    expect(foregroundServiceMode({ platform: 'android', operatorReady: true, nativeRunning: true })).toBe(
+      'update',
+    );
+    expect(foregroundServiceMode({ platform: 'android', operatorReady: false, nativeRunning: true })).toBe(
+      'stop',
+    );
+    expect(foregroundServiceMode({ platform: 'android', operatorReady: false, nativeRunning: false })).toBe(
+      'idle',
+    );
+    expect(foregroundServiceMode({ platform: 'ios', operatorReady: true, nativeRunning: false })).toBe('idle');
   });
 
   it('does not claim the microphone FGS type without RECORD_AUDIO', () => {

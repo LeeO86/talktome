@@ -84,7 +84,11 @@ export async function updateForegroundService(
   if (!native?.update) {
     return false;
   }
-  return native.update(includeConnectedDevice, title, text, talking);
+  try {
+    return await native.update(includeConnectedDevice, title, text, talking);
+  } catch {
+    return false;
+  }
 }
 
 export async function stopForegroundService(): Promise<boolean> {
