@@ -16,7 +16,7 @@ struct TalkToMeSessionActions: View {
           compact: compact
         )
       }
-      .tint(talking ? Color(red: 0.46, green: 0.95, blue: 0.72) : .white)
+      .tint(talking ? Color(red: 0.46, green: 0.95, blue: 0.72) : .primary)
 
       Button(intent: TalkToMeDisconnectIntent()) {
         actionLabel("Disconnect", systemImage: "phone.down.fill", compact: compact)
