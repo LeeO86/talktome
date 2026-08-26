@@ -13,6 +13,7 @@ import { session, useSessionStore } from '../session/store';
 import { NudgeButton } from './NudgeButton';
 import { colors } from './theme';
 import { VolumeRing } from './VolumeRing';
+import { VolumeSlider } from './VolumeSlider';
 
 type Props = {
   target: TalkTarget | null;
@@ -23,6 +24,7 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
   const peers = useSessionStore((state) => state.peers);
   const identityId = useSessionStore((state) => state.identity?.id);
   const listen = useSessionStore((state) => state.conferenceListen);
+  const volumeFader = useSessionStore((state) => state.operatorAudio.volumeFader);
   const onlineIds = onlineUserIdsFromPeers(peers);
   const members = sortConferenceMembers(
     excludeSelfConferenceMembers(target?.members, identityId),
@@ -62,7 +64,7 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
                       !listening && styles.memberMuted,
                     ]}
                   >
-                    <View style={styles.memberText}>
+                    <View style={[styles.memberText, volumeFader && styles.memberTextFader]}>
                       <Text style={[styles.memberName, !online && styles.offlineText]} numberOfLines={1}>
                         {member.name}
                       </Text>
@@ -70,14 +72,28 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
                         {!listening ? 'Muted' : online ? 'Online' : 'Offline'}
                       </Text>
                     </View>
-                    <NudgeButton
-                      accessibilityLabel={`Quieter ${member.name}`}
-                      onNudge={() => nudgeMember(member.userId, -1)}
-                      style={styles.nudge}
-                      textStyle={styles.nudgeText}
-                    >
-                      {'−'}
-                    </NudgeButton>
+                    {volumeFader ? (
+                      <View style={styles.memberFader}>
+                        <VolumeSlider
+                          value={level}
+                          disabled={!listening}
+                          flex
+                          logarithmic
+                          onChange={(next) =>
+                            target ? session.setConferenceMemberLevel(target.id, member.userId, next) : undefined
+                          }
+                        />
+                      </View>
+                    ) : (
+                      <NudgeButton
+                        accessibilityLabel={`Quieter ${member.name}`}
+                        onNudge={() => nudgeMember(member.userId, -1)}
+                        style={styles.nudge}
+                        textStyle={styles.nudgeText}
+                      >
+                        {'−'}
+                      </NudgeButton>
+                    )}
                     <VolumeRing
                       level={level}
                       muted={!listening}
@@ -90,14 +106,16 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
                           : undefined
                       }
                     />
-                    <NudgeButton
-                      accessibilityLabel={`Louder ${member.name}`}
-                      onNudge={() => nudgeMember(member.userId, 1)}
-                      style={styles.nudge}
-                      textStyle={styles.nudgeText}
-                    >
-                      {'+'}
-                    </NudgeButton>
+                    {volumeFader ? null : (
+                      <NudgeButton
+                        accessibilityLabel={`Louder ${member.name}`}
+                        onNudge={() => nudgeMember(member.userId, 1)}
+                        style={styles.nudge}
+                        textStyle={styles.nudgeText}
+                      >
+                        {'+'}
+                      </NudgeButton>
+                    )}
                   </View>
                 );
               })
@@ -166,6 +184,19 @@ const styles = StyleSheet.create({
   memberText: {
     flexGrow: 1,
     flexShrink: 1,
+    minWidth: 72,
+  },
+  memberTextFader: {
+    flexGrow: 0,
+    flexBasis: 92,
+    maxWidth: 108,
+    minWidth: 64,
+  },
+  memberFader: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 132,
+    marginRight: 14,
   },
   memberName: {
     color: colors.text,

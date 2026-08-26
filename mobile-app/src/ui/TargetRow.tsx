@@ -44,6 +44,7 @@ export function TargetRow({ target, compact = false, onOpenConferenceMembers }: 
   const leftHanded = useSessionStore((state) => state.leftHanded);
   const feedStopped = useSessionStore((state) => state.stoppedFeedKeys.includes(key));
   const feedOnline = useSessionStore((state) => state.activeFeedKeys.includes(key));
+  const volumeFader = useSessionStore((state) => state.operatorAudio.volumeFader);
   const talkSelectMode = useSessionStore((state) => state.talkSelectMode);
   const selected = useSessionStore(
     (state) =>
@@ -196,10 +197,12 @@ export function TargetRow({ target, compact = false, onOpenConferenceMembers }: 
         title={target.label}
         level={preference.volume}
         muted={preference.muted}
+        fader={volumeFader}
         onNudge={(direction) => {
           const current = useSessionStore.getState().audioPreferences[key] ?? DEFAULT_AUDIO_PREFERENCE;
           session.setTargetVolume(target, nudgeVolume(current.volume, direction));
         }}
+        onChange={(volume) => session.setTargetVolume(target, volume)}
         onToggleMute={() => session.toggleTargetMuted(target)}
         onClose={() => setVolumeOpen(false)}
       />

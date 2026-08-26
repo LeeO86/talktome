@@ -91,6 +91,19 @@ import { slideToLockHint } from '../talk/slideToLock';
 import { addTalkTarget, removeTalkTarget, talkTargetKeys } from '../talk/talkSet';
 import { loadAudioPreferences, saveAudioPreferences } from './audioPrefs';
 import {
+  DEFAULT_OPERATOR_AUDIO,
+  loadOperatorAudio,
+  saveOperatorAudio,
+  type OperatorAudioSettings,
+} from './operatorAudio';
+import {
+  emptyAudioRouteSnapshot,
+  readAudioRouteSnapshot,
+  selectAudioRoute,
+  subscribeAudioRoutes,
+  type AudioRoute,
+} from '../audio/routes';
+import {
   canJoinCachedSystemPtt,
   isHexPushToken,
   parseApplePttBootstrap,
@@ -161,6 +174,15 @@ export type SessionUiState = {
   activeFeedKeys: string[];
   stoppedFeedKeys: string[];
   conferenceListen: ConferenceListenState;
+  operatorAudio: OperatorAudioSettings;
+  audioRoutes: AudioRoute[];
+  audioInputLabel: string;
+  audioOutputLabel: string;
+  audioVoiceProcessing: boolean;
+  captureMicLabel: string;
+  captureEchoCancellation: boolean | null;
+  captureNoiseSuppression: boolean | null;
+  captureAutoGainControl: boolean | null;
   conflictName?: string;
   error: string | null;
   capabilityReason: string;
@@ -229,6 +251,15 @@ const initialState: SessionUiState = {
   activeFeedKeys: [],
   stoppedFeedKeys: [],
   conferenceListen: EMPTY_CONFERENCE_LISTEN,
+  operatorAudio: DEFAULT_OPERATOR_AUDIO,
+  audioRoutes: emptyAudioRouteSnapshot().routes,
+  audioInputLabel: 'Unknown',
+  audioOutputLabel: 'Unknown',
+  audioVoiceProcessing: false,
+  captureMicLabel: 'Microphone',
+  captureEchoCancellation: null,
+  captureNoiseSuppression: null,
+  captureAutoGainControl: null,
   error: null,
   capabilityReason: FOREGROUND_REASON,
   overBudget: false,
@@ -288,11 +319,12 @@ class SessionController {
   private readonly blePolicy = new BleButtonPolicy();
 
   async hydrate(): Promise<void> {
-    const [bundle, audioPreferences, blePreferences, conferenceListen] = await Promise.all([
+    const [bundle, audioPreferences, blePreferences, conferenceListen, operatorAudio] = await Promise.all([
       loadProfileBundle(),
       loadAudioPreferences(),
       loadBlePreferences(),
       loadConferenceListen(),
+      loadOperatorAudio(),
       hydrateTlsPins(),
     ]);
     const last = bundle.profiles.find((item) => item.id === bundle.lastProfileId) ?? bundle.profiles[0] ?? null;
@@ -316,6 +348,8 @@ class SessionController {
       }),
       audioPreferences,
       conferenceListen,
+      operatorAudio,
+      ...this.audioDeviceFields(),
       ...bleFieldsFromSelection(blePreferences.target, blePreferences.shortPressLocksTalk),
     });
     this.pendingPassword = last ? await passwordForProfile(last.id) : undefined;
@@ -1150,6 +1184,71 @@ class SessionController {
     void this.persistCurrentProfile();
   }
 
+  setOperatorAudio(patch: Partial<OperatorAudioSettings>): void {
+    const operatorAudio = { ...useSessionStore.getState().operatorAudio, ...patch };
+    useSessionStore.setState({ operatorAudio });
+    this.media?.setOperatorAudio(operatorAudio);
+    this.syncFeedDucking();
+    void saveOperatorAudio(operatorAudio);
+    if (
+      patch.echoCancellation != null ||
+      patch.noiseSuppression != null ||
+      patch.autoGainControl != null
+    ) {
+      void this.media?.applyCaptureSettings(operatorAudio).then(() => this.publishCaptureDebug());
+    }
+  }
+
+  async selectAudioDevice(id: string): Promise<void> {
+    this.setOperatorAudio({ audioRouteId: id });
+    this.publishAudioDevices(await selectAudioRoute(id));
+  }
+
+  refreshAudioDevices(): void {
+    this.publishAudioDevices();
+    this.publishCaptureDebug();
+  }
+
+  private syncFeedDucking(): void {
+    const state = useSessionStore.getState();
+    this.media?.setDuckingActive({
+      talking: state.talking,
+      incomingAddressed: state.incoming.addressedNow.length > 0,
+    });
+  }
+
+  private audioDeviceFields(snapshot = readAudioRouteSnapshot()) {
+    return {
+      audioRoutes: snapshot.routes,
+      audioInputLabel: snapshot.inputLabel,
+      audioOutputLabel: snapshot.outputLabel,
+      audioVoiceProcessing: snapshot.voiceProcessing,
+    };
+  }
+
+  private publishAudioDevices(snapshot = readAudioRouteSnapshot()): void {
+    useSessionStore.setState(this.audioDeviceFields(snapshot));
+  }
+
+  private async selectSavedAudioRoute(): Promise<void> {
+    const id = useSessionStore.getState().operatorAudio.audioRouteId;
+    if (!id) {
+      this.publishAudioDevices();
+      return;
+    }
+    this.publishAudioDevices(await selectAudioRoute(id));
+  }
+
+  private publishCaptureDebug(): void {
+    const capture = this.media?.captureDebug();
+    useSessionStore.setState({
+      captureMicLabel: capture?.label ?? 'Microphone',
+      captureEchoCancellation: capture?.echoCancellation ?? null,
+      captureNoiseSuppression: capture?.noiseSuppression ?? null,
+      captureAutoGainControl: capture?.autoGainControl ?? null,
+    });
+  }
+
   bluetoothButtonCandidates(): TalkTarget[] {
     return bleTalkCandidates(useSessionStore.getState().targets);
   }
@@ -1259,6 +1358,7 @@ class SessionController {
           : HOLD_HINT,
     });
     this.syncPresence();
+    this.syncFeedDucking();
   }
 
   private async enterOperator(production: Production | null): Promise<void> {
@@ -1281,8 +1381,11 @@ class SessionController {
       this.media = new MediaEngine(this.signaling);
       this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
       this.media.setConferenceListen(useSessionStore.getState().conferenceListen);
+      this.media.setOperatorAudio(useSessionStore.getState().operatorAudio);
+      this.syncFeedDucking();
       useSessionStore.setState({ statusMessage: 'Starting media…' });
       await this.prepareAudioForMedia();
+      await this.selectSavedAudioRoute();
       await this.media.start();
       try {
         await this.media.warmTalkProducer();
@@ -1291,9 +1394,12 @@ class SessionController {
           statusMessage: `Microphone not ready: ${error instanceof Error ? error.message : String(error)}`,
         });
       }
+      this.publishCaptureDebug();
     } else {
       this.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
       this.media.setConferenceListen(useSessionStore.getState().conferenceListen);
+      this.media.setOperatorAudio(useSessionStore.getState().operatorAudio);
+      this.syncFeedDucking();
     }
 
     const producers = await this.signaling.requestActiveProducers();
@@ -1387,6 +1493,7 @@ class SessionController {
         useSessionStore.setState({ incoming });
         this.refreshReplyTarget();
         this.syncPresence();
+        this.syncFeedDucking();
       },
       onProducerStarted: (producer) => {
         this.rememberLiveProducer(producer);
@@ -1737,6 +1844,10 @@ class SessionController {
       onButton: (pressed) => {
         void this.handleBleButton(pressed);
       },
+    });
+    this.publishAudioDevices();
+    subscribeAudioRoutes((snapshot) => {
+      this.publishAudioDevices(snapshot);
     });
     subscribeWatchRemote({
       onTalkStart: (command) => {

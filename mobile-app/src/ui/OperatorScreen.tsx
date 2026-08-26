@@ -7,6 +7,7 @@ import { shouldShowPttJoinBanner } from '../ptt/policy';
 import { session, useSessionStore } from '../session/store';
 import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
+import { AudioRouteButton } from './AudioRouteButton';
 import { LockIcon, MicIcon, ReplyArrowIcon } from './icons';
 import { HoldToTalk } from './HoldToTalk';
 import { targetLayerCount, visibleTargets } from './layers';
@@ -124,6 +125,7 @@ export function OperatorScreen() {
           ) : null}
         </Pressable>
         <View style={styles.headerActions}>
+          <AudioRouteButton />
           {layers > 1 ? (
             <Pressable
               accessibilityRole="button"

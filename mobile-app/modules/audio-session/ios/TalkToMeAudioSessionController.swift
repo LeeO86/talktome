@@ -13,6 +13,8 @@ final class TalkToMeAudioSessionController {
   private var activeProfile = "idle"
   private var wantsBackgroundReceiveKeepalive = false
   private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+  private var preferredRouteId = "speaker"
+  var onRouteChange: (() -> Void)?
 
   init(notificationCenter: NotificationCenter = .default) {
     self.notificationCenter = notificationCenter
@@ -42,7 +44,7 @@ final class TalkToMeAudioSessionController {
     setWebRTCAudioEnabled(false)
     try configureIntercom(AVAudioSession.sharedInstance())
     try AVAudioSession.sharedInstance().setActive(true)
-    try routeToSpeakerIfNeeded(AVAudioSession.sharedInstance())
+    try applyPreferredRoute(AVAudioSession.sharedInstance())
     notifyWebRTCActivated()
     activeProfile = "intercom"
     Thread.sleep(forTimeInterval: 0.02)
@@ -54,7 +56,7 @@ final class TalkToMeAudioSessionController {
     do {
       try configureIntercom(AVAudioSession.sharedInstance())
       try AVAudioSession.sharedInstance().setActive(true)
-      try routeToSpeakerIfNeeded(AVAudioSession.sharedInstance())
+      try applyPreferredRoute(AVAudioSession.sharedInstance())
       notifyWebRTCActivated()
       setWebRTCAudioEnabled(true)
       wantsBackgroundReceiveKeepalive = true
@@ -76,7 +78,7 @@ final class TalkToMeAudioSessionController {
   func prepareForSystemManagedIntercom() throws {
     let session = AVAudioSession.sharedInstance()
     try configureIntercom(session)
-    try routeToSpeakerIfNeeded(session)
+    try applyPreferredRoute(session)
     setWebRTCAudioEnabled(true)
     activeProfile = "intercom"
   }
@@ -88,6 +90,31 @@ final class TalkToMeAudioSessionController {
     try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     notifyWebRTCDeactivated()
     activeProfile = "idle"
+  }
+
+  func setPreferredRouteId(_ id: String) {
+    preferredRouteId = id.isEmpty ? "speaker" : id
+  }
+
+  func selectRoute(_ id: String) throws {
+    setPreferredRouteId(id)
+    let session = AVAudioSession.sharedInstance()
+    try applyPreferredRoute(session)
+    onRouteChange?()
+  }
+
+  func routeSnapshot() -> [String: Any] {
+    let session = AVAudioSession.sharedInstance()
+    let input = session.currentRoute.inputs.first
+    let output = session.currentRoute.outputs.first
+    let currentId = resolvedRouteId(session)
+    return [
+      "routes": listedRoutes(session, currentId: currentId),
+      "currentId": currentId,
+      "inputLabel": input?.portName ?? "Unknown",
+      "outputLabel": output?.portName ?? "Unknown",
+      "voiceProcessing": session.mode == .voiceChat,
+    ]
   }
 
   func setWebRTCAudioEnabled(_ enabled: Bool) {
@@ -127,7 +154,7 @@ final class TalkToMeAudioSessionController {
     let session = AVAudioSession.sharedInstance()
     try configureIntercom(session)
     try session.setActive(true)
-    try routeToSpeakerIfNeeded(session)
+    try applyPreferredRoute(session)
     #if targetEnvironment(simulator)
     Thread.sleep(forTimeInterval: 0.15)
     #endif
@@ -163,23 +190,84 @@ final class TalkToMeAudioSessionController {
     #endif
   }
 
-  private func routeToSpeakerIfNeeded(_ session: AVAudioSession) throws {
-    let outputs = session.currentRoute.outputs.map(\.portType)
-    let hasExternalOutput = outputs.contains { portType in
-      switch portType {
-      case .headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .airPlay, .carAudio, .HDMI, .lineOut, .usbAudio:
-        return true
-      default:
-        return false
-      }
+  private func applyPreferredRoute(_ session: AVAudioSession) throws {
+    if preferredRouteId == "receiver" {
+      try session.overrideOutputAudioPort(.none)
+      return
     }
-    if hasExternalOutput {
-      if outputs.contains(.builtInSpeaker) {
+    if preferredRouteId.hasPrefix("port:") {
+      let uid = String(preferredRouteId.dropFirst(5))
+      if let port = session.availableInputs?.first(where: { $0.uid == uid }) {
+        try session.setPreferredInput(port)
         try session.overrideOutputAudioPort(.none)
+        return
       }
-    } else if !outputs.contains(.builtInSpeaker) {
-      try session.overrideOutputAudioPort(.speaker)
+      preferredRouteId = "speaker"
     }
+    try session.overrideOutputAudioPort(.speaker)
+  }
+
+  private func listedRoutes(_ session: AVAudioSession, currentId: String) -> [[String: Any]] {
+    var routes: [[String: Any]] = [
+      routeEntry(id: "speaker", label: "Speaker", kind: "speaker", selected: currentId == "speaker"),
+      routeEntry(id: "receiver", label: "iPhone", kind: "receiver", selected: currentId == "receiver"),
+    ]
+    for input in session.availableInputs ?? [] {
+      guard let kind = routeKind(for: input.portType), kind != "other" else {
+        continue
+      }
+      if input.portType == .builtInMic {
+        continue
+      }
+      let id = "port:\(input.uid)"
+      routes.append(routeEntry(id: id, label: input.portName, kind: kind, selected: currentId == id))
+    }
+    return routes
+  }
+
+  private func resolvedRouteId(_ session: AVAudioSession) -> String {
+    let outputs = session.currentRoute.outputs
+    if outputs.contains(where: { $0.portType == .builtInSpeaker }) {
+      return "speaker"
+    }
+    if let bluetooth = outputs.first(where: {
+      $0.portType == .bluetoothHFP || $0.portType == .bluetoothA2DP || $0.portType == .bluetoothLE
+    }) {
+      if let input = session.availableInputs?.first(where: { $0.portName == bluetooth.portName }) {
+        return "port:\(input.uid)"
+      }
+    }
+    if let wired = session.currentRoute.inputs.first(where: {
+      $0.portType == .headsetMic || $0.portType == .usbAudio
+    }) {
+      return "port:\(wired.uid)"
+    }
+    if preferredRouteId.hasPrefix("port:"),
+       session.availableInputs?.contains(where: { "port:\($0.uid)" == preferredRouteId }) == true {
+      return preferredRouteId
+    }
+    return preferredRouteId == "receiver" ? "receiver" : "speaker"
+  }
+
+  private func routeKind(for portType: AVAudioSession.Port) -> String? {
+    switch portType {
+    case .builtInSpeaker:
+      return "speaker"
+    case .builtInReceiver, .builtInMic:
+      return "receiver"
+    case .bluetoothHFP, .bluetoothA2DP, .bluetoothLE:
+      return "bluetooth"
+    case .headphones, .headsetMic:
+      return "wired"
+    case .usbAudio:
+      return "usb"
+    default:
+      return "other"
+    }
+  }
+
+  private func routeEntry(id: String, label: String, kind: String, selected: Bool) -> [String: Any] {
+    ["id": id, "label": label, "kind": kind, "selected": selected]
   }
 
   private func notifyWebRTCActivated() {
@@ -216,11 +304,19 @@ final class TalkToMeAudioSessionController {
     switch notification.name {
     case AVAudioSession.routeChangeNotification:
       if let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-         let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason),
-         reason == .override {
-        return
+         let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) {
+        switch reason {
+        case .override, .routeConfigurationChange, .newDeviceAvailable, .oldDeviceUnavailable:
+          // Follow AVRoutePickerView / headset plug events instead of forcing speaker back.
+          preferredRouteId = resolvedRouteId(session)
+          onRouteChange?()
+          return
+        default:
+          break
+        }
       }
-      try? routeToSpeakerIfNeeded(session)
+      try? applyPreferredRoute(session)
+      onRouteChange?()
     case AVAudioSession.mediaServicesWereResetNotification, AVAudioSession.interruptionNotification:
       if notification.name == AVAudioSession.interruptionNotification {
         guard
@@ -236,9 +332,10 @@ final class TalkToMeAudioSessionController {
       }
       try? configureIntercom(session)
       try? session.setActive(true)
-      try? routeToSpeakerIfNeeded(session)
+      try? applyPreferredRoute(session)
       notifyWebRTCActivated()
       setWebRTCAudioEnabled(true)
+      onRouteChange?()
     default:
       break
     }

@@ -105,6 +105,28 @@ export function SpeakerIcon({ color = colors.text, muted = false, size = 20 }: I
   );
 }
 
+export function PhoneIcon({ color = colors.text, size = 18 }: IconProps) {
+  const width = size * 0.46;
+  const height = size * 0.82;
+  return (
+    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
+      <View
+        style={[
+          styles.phoneBody,
+          {
+            width,
+            height,
+            borderColor: color,
+            borderRadius: width * 0.28,
+          },
+        ]}
+      />
+      <View style={[styles.phoneEar, { backgroundColor: color, width: width * 0.34 }]} />
+      <View style={[styles.phoneMouth, { backgroundColor: color, width: width * 0.22 }]} />
+    </View>
+  );
+}
+
 export function MicIcon({ color = colors.text, size = 18 }: IconProps) {
   return (
     <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
@@ -301,6 +323,21 @@ const styles = StyleSheet.create({
     borderLeftColor: 'transparent',
     borderBottomColor: 'transparent',
     transform: [{ rotate: '45deg' }],
+  },
+  phoneBody: {
+    borderWidth: 2,
+  },
+  phoneEar: {
+    position: 'absolute',
+    top: '22%',
+    height: 3,
+    borderRadius: 1,
+  },
+  phoneMouth: {
+    position: 'absolute',
+    bottom: '22%',
+    height: 3,
+    borderRadius: 1,
   },
   slashCut: {
     position: 'absolute',

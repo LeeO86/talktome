@@ -15,12 +15,18 @@ import {
   type ConferenceListenState,
 } from '../session/conferenceListen';
 import {
+  DEFAULT_OPERATOR_AUDIO,
+  feedDuckingFactor,
+  shouldDuckFeeds,
+  type OperatorAudioSettings,
+} from '../session/operatorAudio';
+import {
   applyConsumerBudget,
   MAX_RESUMED_CONSUMERS,
   producerTargetKey,
   type ConsumerPriorityContext,
 } from './consumerBudget';
-import { STANDARD_OPUS, TALK_GUM_CONSTRAINTS } from './opus';
+import { STANDARD_OPUS, talkGumConstraints } from './opus';
 
 type RemoteConsumer = {
   producer: ActiveProducer;
@@ -40,6 +46,9 @@ export class MediaEngine {
   private audioPreferences: Record<string, TargetAudioPreference> = {};
   private stoppedFeedKeys = new Set<string>();
   private conferenceListen: ConferenceListenState = EMPTY_CONFERENCE_LISTEN;
+  private operatorAudio: OperatorAudioSettings = DEFAULT_OPERATOR_AUDIO;
+  private talking = false;
+  private incomingAddressed = false;
   overBudget = false;
 
   constructor(private readonly signaling: SignalingClient) {}
@@ -98,7 +107,9 @@ export class MediaEngine {
       throw new Error('Send transport is not ready.');
     }
 
-    const stream = (await mediaDevices.getUserMedia(TALK_GUM_CONSTRAINTS as never)) as MediaStream;
+    const stream = (await mediaDevices.getUserMedia(
+      talkGumConstraints(this.operatorAudio) as never,
+    )) as MediaStream;
     this.localStream = stream;
     const track = stream.getAudioTracks()[0];
     if (!track) {
@@ -252,6 +263,56 @@ export class MediaEngine {
     this.applyAllTrackGain();
   }
 
+  setOperatorAudio(settings: OperatorAudioSettings): void {
+    this.operatorAudio = settings;
+    this.applyAllTrackGain();
+  }
+
+  setDuckingActive(input: { talking: boolean; incomingAddressed: boolean }): void {
+    this.talking = input.talking;
+    this.incomingAddressed = input.incomingAddressed;
+    this.applyAllTrackGain();
+  }
+
+  async applyCaptureSettings(settings: OperatorAudioSettings): Promise<void> {
+    this.operatorAudio = settings;
+    if (!this.sendTransport || !this.talkProducer || this.talkProducer.closed) {
+      return;
+    }
+    const stream = (await mediaDevices.getUserMedia(
+      talkGumConstraints(settings) as never,
+    )) as MediaStream;
+    const track = stream.getAudioTracks()[0];
+    if (!track) {
+      stream.getTracks().forEach((item) => item.stop());
+      return;
+    }
+    await this.talkProducer.replaceTrack({ track: track as never });
+    this.localStream?.getTracks().forEach((item) => item.stop());
+    this.localStream = stream;
+  }
+
+  captureDebug(): {
+    label: string;
+    echoCancellation?: boolean;
+    noiseSuppression?: boolean;
+    autoGainControl?: boolean;
+  } {
+    const track = this.localStream?.getAudioTracks()[0] as
+      | { label?: string; getSettings?: () => Record<string, unknown> }
+      | undefined;
+    const settings = track?.getSettings?.() ?? {};
+    return {
+      label: typeof track?.label === 'string' && track.label ? track.label : 'Microphone',
+      echoCancellation:
+        typeof settings.echoCancellation === 'boolean' ? settings.echoCancellation : undefined,
+      noiseSuppression:
+        typeof settings.noiseSuppression === 'boolean' ? settings.noiseSuppression : undefined,
+      autoGainControl:
+        typeof settings.autoGainControl === 'boolean' ? settings.autoGainControl : undefined,
+    };
+  }
+
   async setStoppedFeedKeys(keys: string[], ctx: ConsumerPriorityContext = {}): Promise<void> {
     this.stoppedFeedKeys = new Set(keys);
     await this.applyBudget(ctx);
@@ -301,7 +362,24 @@ export class MediaEngine {
       producer.route.kind === 'conference'
         ? conferenceMemberGain(this.conferenceListen, producer.route.id, producer.speakerUserId)
         : 1;
-    track?._setVolume?.(playbackGain(preference) * memberGain);
+    track?._setVolume?.(playbackGain(preference) * memberGain * this.feedDuckingGain(producer));
+  }
+
+  private feedDuckingGain(producer: ActiveProducer): number {
+    if (producer.route.kind !== 'feed') {
+      return 1;
+    }
+    if (
+      !shouldDuckFeeds({
+        dimSelf: this.operatorAudio.feedDimSelf,
+        dimIncoming: this.operatorAudio.feedDimIncoming,
+        talking: this.talking,
+        incomingAddressed: this.incomingAddressed,
+      })
+    ) {
+      return 1;
+    }
+    return feedDuckingFactor(this.operatorAudio.feedDimDb);
   }
 
   private async applyBudget(ctx: ConsumerPriorityContext): Promise<void> {

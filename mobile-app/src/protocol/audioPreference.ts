@@ -89,6 +89,15 @@ export function volumeMeterFill(level: number): number {
   return Math.min(1, Math.max(0, (db - MIN_VOLUME_DB) / (MAX_VOLUME_DB - MIN_VOLUME_DB)));
 }
 
+/** Inverse of volumeMeterFill — slider position 0..1 to linear amplitude. */
+export function volumeFromMeterFill(fill: number): number {
+  const t = Math.min(1, Math.max(0, fill));
+  if (t <= 0) {
+    return dbToLinear(MIN_VOLUME_DB);
+  }
+  return dbToLinear(MIN_VOLUME_DB + t * (MAX_VOLUME_DB - MIN_VOLUME_DB));
+}
+
 export function normalizeAudioPreference(
   value?: Partial<TargetAudioPreference> | null,
 ): TargetAudioPreference {

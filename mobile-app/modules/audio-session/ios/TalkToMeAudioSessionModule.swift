@@ -6,9 +6,24 @@ public final class TalkToMeAudioSessionModule: Module {
   public func definition() -> ModuleDefinition {
     Name("TalkToMeAudioSession")
 
+    Events("onAudioRouteChange")
+
+    OnCreate {
+      self.controller.onRouteChange = { [weak self] in
+        guard let self else { return }
+        self.sendEvent("onAudioRouteChange", self.controller.routeSnapshot())
+      }
+    }
+
     Function("isAvailable") {
       true
     }
+
+    Function("hasSystemRoutePicker") {
+      true
+    }
+
+    View(TalkToMeAudioRoutePickerView.self) {}
 
     Function("profile") {
       self.controller.profile()
@@ -52,6 +67,19 @@ public final class TalkToMeAudioSessionModule: Module {
     AsyncFunction("setWebRTCAudioEnabled") { (enabled: Bool) in
       self.controller.setWebRTCAudioEnabled(enabled)
       return true
+    }
+
+    Function("audioRoutes") {
+      self.controller.routeSnapshot()["routes"]
+    }
+
+    Function("currentAudioRoute") {
+      self.controller.routeSnapshot()
+    }
+
+    AsyncFunction("selectAudioRoute") { (id: String) in
+      try self.controller.selectRoute(id)
+      return self.controller.routeSnapshot()
     }
   }
 }

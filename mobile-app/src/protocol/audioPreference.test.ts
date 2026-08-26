@@ -10,6 +10,7 @@ import {
   playbackGain,
   normalizeAudioPreference,
   volumeMeterFill,
+  volumeFromMeterFill,
 } from './audioPreference';
 
 describe('audioPreference', () => {
@@ -48,5 +49,12 @@ describe('audioPreference', () => {
     expect(volumeMeterFill(1)).toBeCloseTo(1, 5);
     expect(volumeMeterFill(0)).toBe(0);
     expect(volumeMeterFill(dbToLinear(-37.5))).toBeCloseTo(0.5, 5);
+  });
+
+  it('converts slider position back from the dB meter scale', () => {
+    expect(linearToDb(volumeFromMeterFill(1))).toBeCloseTo(0, 5);
+    expect(linearToDb(volumeFromMeterFill(0))).toBeCloseTo(-75, 5);
+    expect(linearToDb(volumeFromMeterFill(0.5))).toBeCloseTo(-37.5, 5);
+    expect(volumeMeterFill(volumeFromMeterFill(0.25))).toBeCloseTo(0.25, 5);
   });
 });

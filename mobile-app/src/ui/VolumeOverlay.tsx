@@ -4,6 +4,7 @@ import { formatLinearLevelDb } from '../protocol';
 import { NudgeButton } from './NudgeButton';
 import { colors } from './theme';
 import { VolumeRing } from './VolumeRing';
+import { VolumeSlider } from './VolumeSlider';
 
 type Props = {
   visible: boolean;
@@ -11,7 +12,9 @@ type Props = {
   level: number;
   muted: boolean;
   embedded?: boolean;
+  fader?: boolean;
   onNudge: (direction: 1 | -1) => void;
+  onChange?: (level: number) => void;
   onToggleMute: () => void;
   onClose: () => void;
 };
@@ -22,7 +25,9 @@ export function VolumeOverlay({
   level,
   muted,
   embedded = false,
+  fader = false,
   onNudge,
+  onChange,
   onToggleMute,
   onClose,
 }: Props) {
@@ -40,14 +45,20 @@ export function VolumeOverlay({
         </Text>
         <VolumeRing level={level} muted={muted} accessibilityLabel={readout} />
         <Text style={[styles.db, muted && styles.mutedText]}>{readout}</Text>
-        <View style={styles.steppers}>
-          <NudgeButton accessibilityLabel="Quieter" onNudge={() => onNudge(-1)} style={styles.step} textStyle={styles.stepText}>
-            {'−'}
-          </NudgeButton>
-          <NudgeButton accessibilityLabel="Louder" onNudge={() => onNudge(1)} style={styles.step} textStyle={styles.stepText}>
-            {'+'}
-          </NudgeButton>
-        </View>
+        {fader && onChange ? (
+          <View style={styles.fader}>
+            <VolumeSlider value={level} disabled={muted} onChange={onChange} flex logarithmic />
+          </View>
+        ) : (
+          <View style={styles.steppers}>
+            <NudgeButton accessibilityLabel="Quieter" onNudge={() => onNudge(-1)} style={styles.step} textStyle={styles.stepText}>
+              {'−'}
+            </NudgeButton>
+            <NudgeButton accessibilityLabel="Louder" onNudge={() => onNudge(1)} style={styles.step} textStyle={styles.stepText}>
+              {'+'}
+            </NudgeButton>
+          </View>
+        )}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={muted ? 'Unmute' : 'Mute'}
@@ -118,6 +129,11 @@ const styles = StyleSheet.create({
   steppers: {
     flexDirection: 'row',
     gap: 16,
+  },
+  fader: {
+    alignSelf: 'stretch',
+    paddingHorizontal: 4,
+    paddingVertical: 8,
   },
   step: {
     width: 64,

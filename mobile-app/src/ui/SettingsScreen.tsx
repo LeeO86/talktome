@@ -1,13 +1,17 @@
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useEffect } from 'react';
 
 import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
+import { describeAudioRouteKind } from '../audio/routes';
 import { pttStatusLabel, shouldShowPttJoinBanner } from '../ptt/policy';
 import { describeBleConnection } from '../ble/native';
 import { describeBleTarget, type BleTargetSelection } from '../ble/target';
 import { fgsStatusLabel } from '../background/fgs';
+import { FEED_DIM_DB_OPTIONS, dimDbFromSliderPosition, sliderPositionFromDimDb } from '../session/operatorAudio';
 import { session, useSessionStore } from '../session/store';
 import { describeWatchRemoteStatus, watchRemoteShortStatus, watchRemoteStatus } from '../watch/native';
 import { androidSafeArea } from './androidSafeArea';
+import { VolumeSlider } from './VolumeSlider';
 
 type Props = {
   visible: boolean;
@@ -16,6 +20,7 @@ type Props = {
 
 export function SettingsScreen({ visible, onClose }: Props) {
   const store = useSessionStore();
+  const audio = store.operatorAudio;
   const selection = session.bluetoothButtonSelection();
   const candidates = session.bluetoothButtonCandidates();
   const bleState = {
@@ -30,6 +35,12 @@ export function SettingsScreen({ visible, onClose }: Props) {
     store.bleKind === 'unavailable';
   const showDisconnect =
     store.bleKind === 'scanning' || store.bleKind === 'connecting' || store.bleKind === 'connected';
+
+  useEffect(() => {
+    if (visible) {
+      session.refreshAudioDevices();
+    }
+  }, [visible]);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -67,6 +78,124 @@ export function SettingsScreen({ visible, onClose }: Props) {
             <Text style={styles.footnote}>
               Reply becomes a red Talk button. Cards only choose the destination. Tap the volume
               ring to set level in dB and mute. Double-tap a ring to mute. Tap a conference icon to set who you hear.
+            </Text>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Horizontal volume fader</Text>
+              <Switch
+                value={audio.volumeFader}
+                onValueChange={(value) => session.setOperatorAudio({ volumeFader: value })}
+                trackColor={{ true: '#3DD6F5' }}
+              />
+            </View>
+            <Text style={styles.footnote}>
+              Replaces the plus/minus buttons in the volume overlay and conference member list with
+              a slider.
+            </Text>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Incoming audio</Text>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Dim feeds when addressed</Text>
+              <Switch
+                value={audio.feedDimIncoming}
+                onValueChange={(value) => session.setOperatorAudio({ feedDimIncoming: value })}
+                trackColor={{ true: '#3DD6F5' }}
+              />
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Dim feeds while speaking</Text>
+              <Switch
+                value={audio.feedDimSelf}
+                onValueChange={(value) => session.setOperatorAudio({ feedDimSelf: value })}
+                trackColor={{ true: '#3DD6F5' }}
+              />
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Dim amount</Text>
+              <Text style={styles.rowValue}>{audio.feedDimDb} dB</Text>
+            </View>
+            <View style={styles.sliderRow}>
+              <Text style={styles.sliderHint}>{FEED_DIM_DB_OPTIONS[0]}</Text>
+              <VolumeSlider
+                light
+                flex
+                accessibilityLabel="Dim amount"
+                value={sliderPositionFromDimDb(audio.feedDimDb)}
+                quantize={(position) => sliderPositionFromDimDb(dimDbFromSliderPosition(position))}
+                onChange={(position) => session.setOperatorAudio({ feedDimDb: dimDbFromSliderPosition(position) })}
+              />
+              <Text style={styles.sliderHint}>{FEED_DIM_DB_OPTIONS[FEED_DIM_DB_OPTIONS.length - 1]}</Text>
+            </View>
+            <Text style={styles.footnote}>
+              Same defaults as the web client: dim when someone calls you, not while you talk, by
+              14 dB.
+            </Text>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Microphone and speaker</Text>
+            {store.audioRoutes.map((route) => (
+              <Pressable
+                key={route.id}
+                style={[styles.row, route.selected && styles.rowSelected]}
+                onPress={() => void session.selectAudioDevice(route.id)}
+              >
+                <Text style={styles.rowLabel}>{route.label}</Text>
+                <Text style={styles.rowValue}>
+                  {route.selected ? 'Selected' : describeAudioRouteKind(route.kind)}
+                </Text>
+              </Pressable>
+            ))}
+            <Text style={styles.footnote}>
+              In-call style combos: phone earpiece, speaker, or a connected headset. Audio stays in
+              communication mode so echo cancellation can run.
+            </Text>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Audio debug</Text>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Used mic</Text>
+              <Text style={styles.rowValue}>{store.audioInputLabel || store.captureMicLabel}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Used speaker</Text>
+              <Text style={styles.rowValue}>{store.audioOutputLabel}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Echo cancellation</Text>
+              <Switch
+                value={audio.echoCancellation}
+                onValueChange={(value) => session.setOperatorAudio({ echoCancellation: value })}
+                trackColor={{ true: '#3DD6F5' }}
+              />
+            </View>
+            <Text style={styles.footnote}>
+              {processingLine('Echo cancellation', audio.echoCancellation, store.captureEchoCancellation, store.audioVoiceProcessing)}
+            </Text>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Noise suppression</Text>
+              <Switch
+                value={audio.noiseSuppression}
+                onValueChange={(value) => session.setOperatorAudio({ noiseSuppression: value })}
+                trackColor={{ true: '#3DD6F5' }}
+              />
+            </View>
+            <Text style={styles.footnote}>
+              {processingLine('Noise suppression', audio.noiseSuppression, store.captureNoiseSuppression, store.audioVoiceProcessing)}
+            </Text>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Auto gain</Text>
+              <Switch
+                value={audio.autoGainControl}
+                onValueChange={(value) => session.setOperatorAudio({ autoGainControl: value })}
+                trackColor={{ true: '#3DD6F5' }}
+              />
+            </View>
+            <Text style={styles.footnote}>
+              {processingLine('Auto gain', audio.autoGainControl, store.captureAutoGainControl, store.audioVoiceProcessing)}
+              {store.audioVoiceProcessing ? ' Voice-processing session is on.' : ' Voice-processing session is off.'}
             </Text>
           </View>
 
@@ -243,6 +372,27 @@ export function SettingsScreen({ visible, onClose }: Props) {
   );
 }
 
+function processingLine(
+  label: string,
+  requested: boolean,
+  applied: boolean | null,
+  voiceProcessing: boolean,
+): string {
+  if (applied === true) {
+    return `${label} is on.`;
+  }
+  if (applied === false) {
+    return requested ? `${label} was requested but the track reports off.` : `${label} is off.`;
+  }
+  if (requested && voiceProcessing) {
+    return `${label} is requested and the call session is using voice processing.`;
+  }
+  if (requested) {
+    return `${label} is requested.`;
+  }
+  return `${label} is off.`;
+}
+
 function TargetChoice({
   selection,
   current,
@@ -321,6 +471,8 @@ const styles = StyleSheet.create({
   rowLabel: {
     color: '#111',
     fontSize: 16,
+    flex: 1,
+    paddingRight: 12,
   },
   rowValue: {
     color: '#6D6D72',
@@ -328,6 +480,19 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     textAlign: 'right',
     marginLeft: 12,
+  },
+  sliderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  sliderHint: {
+    color: '#6D6D72',
+    fontSize: 13,
+    fontVariant: ['tabular-nums'],
+    width: 32,
   },
   actionLabel: {
     color: '#007AFF',

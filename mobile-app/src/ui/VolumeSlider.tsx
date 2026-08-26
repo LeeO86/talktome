@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { volumeFromMeterFill, volumeMeterFill } from '../protocol';
 import { colors } from './theme';
 import { volumeFromTouch } from './volumeFromTouch';
 
@@ -9,21 +10,36 @@ type Props = {
   disabled?: boolean;
   onChange: (value: number) => void;
   flex?: boolean;
+  light?: boolean;
+  accessibilityLabel?: string;
+  quantize?: (value: number) => number;
+  logarithmic?: boolean;
 };
 
-export function VolumeSlider({ value, disabled, onChange, flex = false }: Props) {
+export function VolumeSlider({
+  value,
+  disabled,
+  onChange,
+  flex = false,
+  light = false,
+  accessibilityLabel = 'Volume',
+  quantize,
+  logarithmic = false,
+}: Props) {
   const originX = useRef(0);
   const width = useRef(1);
   const [draft, setDraft] = useState<number | null>(null);
-  const shown = draft ?? value;
+  const shown = draft ?? (logarithmic ? volumeMeterFill(value) : value);
 
   const applyPageX = (pageX: number) => {
     if (disabled) {
       return;
     }
-    const next = volumeFromTouch(pageX, originX.current, width.current);
+    const next = quantize
+      ? quantize(volumeFromTouch(pageX, originX.current, width.current))
+      : volumeFromTouch(pageX, originX.current, width.current);
     setDraft(next);
-    onChange(next);
+    onChange(logarithmic ? volumeFromMeterFill(next) : next);
   };
 
   const endDrag = () => {
@@ -34,7 +50,7 @@ export function VolumeSlider({ value, disabled, onChange, flex = false }: Props)
     <View
       collapsable={false}
       accessibilityRole="adjustable"
-      accessibilityLabel="Volume"
+      accessibilityLabel={accessibilityLabel}
       style={[styles.track, flex && styles.flex, disabled && styles.disabled]}
       onLayout={(event) => {
         width.current = event.nativeEvent.layout.width || 1;
@@ -51,9 +67,9 @@ export function VolumeSlider({ value, disabled, onChange, flex = false }: Props)
       onResponderRelease={endDrag}
       onResponderTerminate={endDrag}
     >
-      <View pointerEvents="none" style={styles.rail} />
+      <View pointerEvents="none" style={[styles.rail, light && styles.railLight]} />
       <View pointerEvents="none" style={[styles.fill, { width: `${shown * 100}%` }]} />
-      <View pointerEvents="none" style={[styles.thumb, { left: `${shown * 100}%` }]} />
+      <View pointerEvents="none" style={[styles.thumb, light && styles.thumbLight, { left: `${shown * 100}%` }]} />
     </View>
   );
 }
@@ -93,5 +109,13 @@ const styles = StyleSheet.create({
     marginLeft: -8,
     borderRadius: 8,
     backgroundColor: colors.text,
+  },
+  railLight: {
+    backgroundColor: 'rgba(60, 60, 67, 0.18)',
+  },
+  thumbLight: {
+    backgroundColor: '#111',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.08)',
   },
 });
