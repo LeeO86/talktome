@@ -35,6 +35,15 @@ export function shouldPrepareAudioForMedia(input: {
   return input.platform === 'ios' && !(input.pttEnabled && input.pttJoined);
 }
 
+/** System PTT owns AVAudioSession; configure WebRTC around it instead of activateForIntercom. */
+export function shouldPrepareSystemManagedAudioForMedia(input: {
+  platform: string;
+  pttEnabled: boolean;
+  pttJoined?: boolean;
+}): boolean {
+  return input.platform === 'ios' && Boolean(input.pttEnabled && input.pttJoined);
+}
+
 export function shouldStartBackgroundKeepalive(input: {
   platform: string;
   pttEnabled: boolean;

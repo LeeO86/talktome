@@ -1,6 +1,11 @@
 import { requireNativeModule } from 'expo-modules-core';
 
-import { presenceWidgetLines, type PresenceSnapshot } from './presence';
+import {
+  PRESENCE_DISCONNECT_LABEL,
+  presenceTalkButtonLabel,
+  presenceWidgetLines,
+  type PresenceSnapshot,
+} from './presence';
 
 export type PresenceNativeSnapshot = {
   connected: boolean;
@@ -12,6 +17,8 @@ export type PresenceNativeSnapshot = {
   speaker: string;
   actionKind: string;
   actionTarget: string;
+  talkLabel: string;
+  disconnectLabel: string;
 };
 
 type NativePresence = {
@@ -45,11 +52,13 @@ export function publishSessionPresence(snapshot: PresenceSnapshot): void {
     title: lines.title,
     detail: lines.detail,
     audioActive: lines.audioActive,
-    talking: lines.talking,
+    talking: lines.talking || snapshot.talking || snapshot.talkLocked,
     listening: lines.listening,
     speaker: snapshot.speaker ?? '',
     actionKind: snapshot.actionKind,
     actionTarget: snapshot.actionTarget ?? '',
+    talkLabel: presenceTalkButtonLabel(snapshot),
+    disconnectLabel: PRESENCE_DISCONNECT_LABEL,
   };
   void loadNative()?.update?.(payload);
 }

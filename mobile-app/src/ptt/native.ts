@@ -12,6 +12,7 @@ export type NativePttEventMap = {
   onServiceUpdate: { reason?: string };
   onJoined: Record<string, never>;
   onLeft: Record<string, never>;
+  onJoinFailed: { message: string };
   onIncomingPush: { type: string; participantName?: string; reason?: string };
 };
 
@@ -96,6 +97,7 @@ export function subscribePttNative(handlers: {
   onServiceUpdate?: (reason?: string) => void;
   onJoined?: () => void;
   onLeft?: () => void;
+  onJoinFailed?: (message: string) => void;
   onIncomingPush?: (event: NativePttEventMap['onIncomingPush']) => void;
 }): () => void {
   const native = loadNative();
@@ -135,6 +137,9 @@ export function subscribePttNative(handlers: {
       : null,
     handlers.onJoined ? native.addListener('onJoined', () => handlers.onJoined?.()) : null,
     handlers.onLeft ? native.addListener('onLeft', () => handlers.onLeft?.()) : null,
+    handlers.onJoinFailed
+      ? native.addListener('onJoinFailed', (event) => handlers.onJoinFailed?.(event.message ?? ''))
+      : null,
     handlers.onIncomingPush
       ? native.addListener('onIncomingPush', (event) =>
           handlers.onIncomingPush?.({

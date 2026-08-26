@@ -53,6 +53,7 @@ import {
   iosPttEnabled,
   shouldOwnAudioSession,
   shouldPrepareAudioForMedia,
+  shouldPrepareSystemManagedAudioForMedia,
   shouldReactivateCaptureForTalk,
   shouldStartBackgroundKeepalive,
 } from '../audio/policy';
@@ -95,6 +96,7 @@ import {
   parseApplePttBootstrap,
   shouldUseSystemPtt,
 } from '../ptt/policy';
+import { SystemPttJoinGate, shouldWaitForPendingSystemPttJoin } from '../ptt/joinGate';
 import {
   beginPttJoin,
   lastPttDiagnostic,
@@ -281,6 +283,7 @@ class SessionController {
   private appStateSubscription: { remove: () => void } | null = null;
   private pttChannelUUID: string | null = null;
   private pendingPttRegistration: { token: string; channelUUID: string } | null = null;
+  private readonly pttJoin = new SystemPttJoinGate();
   private fgsSync: Promise<void> = Promise.resolve();
   private readonly blePolicy = new BleButtonPolicy();
 
@@ -675,6 +678,7 @@ class SessionController {
     this.overrideFrom = null;
     this.liveProducers = new Map();
     this.blePolicy.reset();
+    this.pttJoin.settle();
     await this.leaveSystemPtt();
     await this.teardownAudioSession();
     await stopForegroundService();
@@ -975,7 +979,14 @@ class SessionController {
       pttDiagnostic: 'Joining system PTT channel…',
       statusMessage: 'Joining system PTT channel…',
     });
-    void this.finishSystemPttJoin(beginPttJoin(cached.channelUUID, cached.channelName));
+    this.pttJoin.begin();
+    const joining = beginPttJoin(cached.channelUUID, cached.channelName);
+    void joining.then((ok) => {
+      if (!ok) {
+        this.pttJoin.settle();
+      }
+    });
+    void this.finishSystemPttJoin(joining);
   }
 
   private async beginSystemPttJoin(channelUUID: string, channelName: string): Promise<void> {
@@ -985,7 +996,16 @@ class SessionController {
       pttDiagnostic: 'Joining system PTT channel…',
       statusMessage: 'Joining system PTT channel…',
     });
-    await this.finishSystemPttJoin(beginPttJoin(channelUUID, channelName));
+    if (!this.media) {
+      this.pttJoin.begin();
+    }
+    const joining = beginPttJoin(channelUUID, channelName);
+    void joining.then((ok) => {
+      if (!ok) {
+        this.pttJoin.settle();
+      }
+    });
+    await this.finishSystemPttJoin(joining);
   }
 
   private async finishSystemPttJoin(joined: Promise<boolean>): Promise<void> {
@@ -1757,6 +1777,7 @@ class SessionController {
         void this.refreshProducersFromPtt();
       },
       onJoined: () => {
+        this.pttJoin.settle();
         useSessionStore.setState({
           pttJoined: true,
           capabilityReason: this.capabilityReason({ pttJoined: true }),
@@ -1764,11 +1785,21 @@ class SessionController {
         void this.syncAudioSession();
       },
       onLeft: () => {
+        this.pttJoin.settle();
         useSessionStore.setState({
           pttJoined: false,
           capabilityReason: this.capabilityReason({ pttJoined: false }),
         });
         void this.syncAudioSession();
+      },
+      onJoinFailed: (message) => {
+        this.pttJoin.settle();
+        if (message.trim()) {
+          useSessionStore.setState({
+            pttDiagnostic: message,
+            statusMessage: message,
+          });
+        }
       },
       onIncomingPush: () => {
         useSessionStore.setState({
@@ -2026,11 +2057,33 @@ class SessionController {
   }
 
   private async prepareAudioForMedia(): Promise<void> {
+    await this.waitForPendingSystemPttJoin();
+    const pttEnabled = iosPttEnabled();
+    const pttJoined = useSessionStore.getState().pttJoined;
+    if (
+      shouldPrepareSystemManagedAudioForMedia({
+        platform: Platform.OS,
+        pttEnabled,
+        pttJoined,
+      })
+    ) {
+      await prepareForSystemManagedIntercom();
+      await setWebRTCAudioEnabled(true);
+      useSessionStore.setState({
+        audioSessionAvailable: audioSessionAvailable(),
+        audioSessionActive: false,
+        capabilityReason: this.capabilityReason({
+          audioSessionAvailable: audioSessionAvailable(),
+          audioSessionActive: false,
+        }),
+      });
+      return;
+    }
     if (
       !shouldPrepareAudioForMedia({
         platform: Platform.OS,
-        pttEnabled: iosPttEnabled(),
-        pttJoined: useSessionStore.getState().pttJoined,
+        pttEnabled,
+        pttJoined,
       })
     ) {
       return;
@@ -2047,6 +2100,21 @@ class SessionController {
         audioSessionActive: active,
       }),
     });
+  }
+
+  private async waitForPendingSystemPttJoin(): Promise<void> {
+    if (
+      !shouldWaitForPendingSystemPttJoin({
+        platform: Platform.OS,
+        pttEnabled: iosPttEnabled(),
+        joinInFlight: this.pttJoin.pending,
+        pttJoined: useSessionStore.getState().pttJoined,
+      })
+    ) {
+      return;
+    }
+    useSessionStore.setState({ statusMessage: 'Waiting for system PTT join…' });
+    await this.pttJoin.wait();
   }
 
   private async prepareAudioForTalk(): Promise<void> {

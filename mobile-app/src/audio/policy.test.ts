@@ -8,6 +8,7 @@ import {
   iosPttEnabled,
   shouldOwnAudioSession,
   shouldPrepareAudioForMedia,
+  shouldPrepareSystemManagedAudioForMedia,
   shouldReactivateCaptureForTalk,
   shouldStartBackgroundKeepalive,
 } from './policy';
@@ -31,6 +32,20 @@ describe('audio session policy', () => {
       false,
     );
     expect(shouldPrepareAudioForMedia({ platform: 'android', pttEnabled: false })).toBe(false);
+    expect(
+      shouldPrepareSystemManagedAudioForMedia({
+        platform: 'ios',
+        pttEnabled: true,
+        pttJoined: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPrepareSystemManagedAudioForMedia({
+        platform: 'ios',
+        pttEnabled: true,
+        pttJoined: false,
+      }),
+    ).toBe(false);
   });
 
   it('keeps the session until the system PTT channel has actually joined', () => {

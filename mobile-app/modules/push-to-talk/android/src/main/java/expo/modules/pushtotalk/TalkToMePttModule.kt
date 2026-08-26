@@ -17,6 +17,7 @@ class TalkToMePttModule : Module() {
       "onServiceUpdate",
       "onJoined",
       "onLeft",
+      "onJoinFailed",
       "onIncomingPush",
     )
 

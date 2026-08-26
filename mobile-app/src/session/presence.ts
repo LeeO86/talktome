@@ -141,6 +141,13 @@ export function presenceActionLine(snapshot: PresenceSnapshot): string {
   return snapshot.actionTarget ? `${kind}: ${snapshot.actionTarget}` : `${kind}: none`;
 }
 
+/** Same copy as the Android FGS notification and iOS Live Activity buttons. */
+export function presenceTalkButtonLabel(snapshot: PresenceSnapshot): string {
+  return snapshot.talking || snapshot.talkLocked ? 'Stop reply' : 'Reply lock';
+}
+
+export const PRESENCE_DISCONNECT_LABEL = 'Disconnect';
+
 function uniqueLabels(labels: string[]): string[] {
   const seen = new Set<string>();
   const next: string[] = [];

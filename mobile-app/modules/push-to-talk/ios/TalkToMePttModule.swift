@@ -16,6 +16,7 @@ public final class TalkToMePttModule: Module {
       "onServiceUpdate",
       "onJoined",
       "onLeft",
+      "onJoinFailed",
       "onIncomingPush"
     )
 
@@ -50,6 +51,9 @@ public final class TalkToMePttModule: Module {
       }
       self.controller.onLeft = { [weak self] in
         self?.sendEvent("onLeft", [:])
+      }
+      self.controller.onJoinFailed = { [weak self] message in
+        self?.sendEvent("onJoinFailed", ["message": message])
       }
       self.controller.onIncomingPush = { [weak self] type, name, reason in
         var body: [String: Any] = ["type": type]

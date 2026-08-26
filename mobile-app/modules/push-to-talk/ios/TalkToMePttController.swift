@@ -18,6 +18,7 @@ final class TalkToMePttController: NSObject {
   var onServiceUpdate: ((String?) -> Void)?
   var onJoined: (() -> Void)?
   var onLeft: (() -> Void)?
+  var onJoinFailed: ((String) -> Void)?
   var onIncomingPush: ((String, String?, String?) -> Void)?
 
   private var desiredChannelUUID: String?
@@ -129,10 +130,11 @@ final class TalkToMePttController: NSObject {
   @available(iOS 16.0, *)
   private func instantiateIfNeeded() {
     if unrecoverableInstantiationError {
-      emitDiagnostic(
+      let message =
         lastDiagnosticMessage
           ?? "System PTT manager previously failed. Rebuild on a physical iPhone."
-      )
+      emitDiagnostic(message)
+      onJoinFailed?(message)
       return
     }
     if channelManager != nil {
@@ -152,7 +154,9 @@ final class TalkToMePttController: NSObject {
         self.instantiationInFlight = false
         if let error {
           self.unrecoverableInstantiationError = Self.isUnrecoverableInstantiationError(error)
-          self.emitDiagnostic(Self.describeChannelManagerError(error))
+          let message = Self.describeChannelManagerError(error)
+          self.emitDiagnostic(message)
+          self.onJoinFailed?(message)
           return
         }
         self.channelManager = manager
@@ -208,10 +212,11 @@ final class TalkToMePttController: NSObject {
       if instantiationInFlight {
         emitDiagnostic("System PTT manager is still starting…")
       } else if unrecoverableInstantiationError {
-        emitDiagnostic(
+        let message =
           lastDiagnosticMessage
             ?? "System PTT manager previously failed. Rebuild on a physical iPhone."
-        )
+        emitDiagnostic(message)
+        onJoinFailed?(message)
       }
       return
     }
@@ -223,6 +228,7 @@ final class TalkToMePttController: NSObject {
     }
     guard let desiredUUID = UUID(uuidString: desiredChannelUUID) else {
       emitDiagnostic("System PTT channel UUID is invalid.")
+      onJoinFailed?("System PTT channel UUID is invalid.")
       return
     }
     if channelManager.activeChannelUUID == desiredUUID {
@@ -336,9 +342,10 @@ extension TalkToMePttController: PTChannelManagerDelegate {
   func channelManager(_ channelManager: PTChannelManager, failedToJoinChannel channelUUID: UUID, error: Error) {
     _ = channelUUID
     let nsError = error as NSError
-    emitDiagnostic(
+    let message =
       "System PTT failed to join (\(nsError.domain) \(nsError.code)): \(error.localizedDescription)"
-    )
+    emitDiagnostic(message)
+    onJoinFailed?(message)
   }
 
   func channelManager(_ channelManager: PTChannelManager, failedToLeaveChannel channelUUID: UUID, error: Error) {

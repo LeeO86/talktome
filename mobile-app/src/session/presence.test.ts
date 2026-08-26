@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { presenceActionLine, presenceNotification, presenceWidgetLines, sessionPresence } from './presence';
+import { presenceActionLine, presenceNotification, presenceTalkButtonLabel, PRESENCE_DISCONNECT_LABEL, presenceWidgetLines, sessionPresence } from './presence';
 
 const incoming = (name?: string, targetType: 'user' | 'conference' = 'user', targetId: number = 9) => ({
   addressedNow: name
@@ -69,6 +69,35 @@ describe('presence copy', () => {
       listening: true,
     });
     expect(presenceActionLine(snapshot)).toBe('Reply: Pat');
+  });
+
+  it('uses Reply lock copy on widget / FGS talk buttons', () => {
+    const idle = sessionPresence({
+      operatorReady: true,
+      talkSelectMode: false,
+      incoming: incoming(),
+      talking: false,
+      talkingLabels: [],
+      talkLocked: false,
+      replyTarget: pat,
+      selectedTalkTarget: null,
+      targets: [pat],
+    });
+    expect(presenceTalkButtonLabel(idle)).toBe('Reply lock');
+    expect(PRESENCE_DISCONNECT_LABEL).toBe('Disconnect');
+
+    const locked = sessionPresence({
+      operatorReady: true,
+      talkSelectMode: true,
+      incoming: incoming(),
+      talking: true,
+      talkingLabels: ['Stage'],
+      talkLocked: true,
+      replyTarget: null,
+      selectedTalkTarget: stage,
+      targets: [stage],
+    });
+    expect(presenceTalkButtonLabel(locked)).toBe('Stop reply');
   });
 
   it('names the conference, not the speaker, when talk is into a conference', () => {
