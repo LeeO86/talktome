@@ -12,7 +12,9 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -47,7 +49,7 @@ class TalkToMeBlePttController(private val context: Context) {
     }
   }
 
-  fun currentState(): Map<String, Any?> = snapshot(stateKind, connectedDevice?.name, null)
+  fun currentState(): Map<String, Any?> = snapshot(stateKind, safeName(connectedDevice), null)
 
   fun start() {
     val bluetoothAdapter = bluetoothAdapter()
@@ -57,6 +59,10 @@ class TalkToMeBlePttController(private val context: Context) {
     }
     if (!bluetoothAdapter.isEnabled) {
       emit(kind = "unavailable", message = "Bluetooth is turned off on this phone.")
+      return
+    }
+    if (!hasScanPermission() && !hasConnectPermission()) {
+      emit(kind = "idle")
       return
     }
     adapter = bluetoothAdapter
@@ -71,6 +77,10 @@ class TalkToMeBlePttController(private val context: Context) {
     }
     if (!bluetoothAdapter.isEnabled) {
       emit(kind = "unavailable", message = "Bluetooth is turned off on this phone.")
+      return
+    }
+    if (!hasScanPermission()) {
+      emit(kind = "unavailable", message = "Bluetooth permission is required to scan for a PTT button.")
       return
     }
     adapter = bluetoothAdapter
@@ -134,9 +144,15 @@ class TalkToMeBlePttController(private val context: Context) {
       .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
       .build()
     scanning = true
-    // Unfiltered scan: match FFE0 or the PTT-Z01 name in the callback. Cheap
-    // CC2541 buttons often omit the service UUID from the advertisement.
-    scanner.startScan(emptyList(), settings, scanCallback)
+    try {
+      // Unfiltered scan: match FFE0 or the PTT-Z01 name in the callback. Cheap
+      // CC2541 buttons often omit the service UUID from the advertisement.
+      scanner.startScan(emptyList(), settings, scanCallback)
+    } catch (error: SecurityException) {
+      scanning = false
+      emit(kind = "unavailable", message = "Bluetooth permission is required to scan for a PTT button.")
+      return
+    }
     handler.removeCallbacks(scanTimeout)
     handler.postDelayed(scanTimeout, 8_000)
   }
@@ -155,16 +171,25 @@ class TalkToMeBlePttController(private val context: Context) {
   }
 
   private fun connect(device: BluetoothDevice, reason: String) {
+    if (!hasConnectPermission()) {
+      emit(kind = "unavailable", message = "Bluetooth permission is required to connect a PTT button.")
+      return
+    }
     stopScan()
     shouldReconnectAutomatically = true
     connectedDevice = device
     emit(kind = "connecting", name = displayName(device))
     emitDiagnostic("Bluetooth button connecting ($reason) to ${displayName(device)}.")
     gatt?.close()
-    gatt = if (Build.VERSION.SDK_INT >= 23) {
-      device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-    } else {
-      device.connectGatt(context, false, gattCallback)
+    gatt = try {
+      if (Build.VERSION.SDK_INT >= 23) {
+        device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+      } else {
+        device.connectGatt(context, false, gattCallback)
+      }
+    } catch (error: SecurityException) {
+      emit(kind = "unavailable", message = "Bluetooth permission is required to connect a PTT button.")
+      null
     }
   }
 
@@ -184,7 +209,7 @@ class TalkToMeBlePttController(private val context: Context) {
   }
 
   private fun matchesExpected(device: BluetoothDevice, serviceUuids: List<ParcelUuid>?): Boolean {
-    val name = device.name?.trim()?.uppercase()
+    val name = safeName(device)?.uppercase()
     if (name != null && EXPECTED_NAMES.contains(name)) {
       return true
     }
@@ -192,8 +217,37 @@ class TalkToMeBlePttController(private val context: Context) {
   }
 
   private fun displayName(device: BluetoothDevice): String {
-    val name = device.name?.trim()
+    val name = safeName(device)
     return if (name.isNullOrEmpty()) "PTT-Z01" else name
+  }
+
+  private fun safeName(device: BluetoothDevice?): String? {
+    if (device == null) {
+      return null
+    }
+    return try {
+      device.name?.trim()?.takeIf { it.isNotEmpty() }
+    } catch (_: SecurityException) {
+      null
+    }
+  }
+
+  private fun hasConnectPermission(): Boolean {
+    if (Build.VERSION.SDK_INT < 31) {
+      return true
+    }
+    return context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
+      PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun hasScanPermission(): Boolean {
+    return if (Build.VERSION.SDK_INT >= 31) {
+      context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) ==
+        PackageManager.PERMISSION_GRANTED
+    } else {
+      context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    }
   }
 
   private fun emit(kind: String, name: String? = null, message: String? = null) {
@@ -236,7 +290,11 @@ class TalkToMeBlePttController(private val context: Context) {
           connectedDevice = gatt.device
           lastPressedValue = null
           emitDiagnostic("Bluetooth button connected to ${displayName(gatt.device)}.")
-          gatt.discoverServices()
+          try {
+            gatt.discoverServices()
+          } catch (_: SecurityException) {
+            emit(kind = "unavailable", message = "Bluetooth permission is required to connect a PTT button.")
+          }
           return@post
         }
         if (newState == BluetoothProfile.STATE_DISCONNECTED) {

@@ -56,7 +56,11 @@ export async function startBleNative(): Promise<BleConnectionState> {
   if (!native?.start) {
     return bleNativeState();
   }
-  return native.start();
+  try {
+    return await native.start();
+  } catch {
+    return { kind: 'idle' };
+  }
 }
 
 export async function scanAndConnectBle(): Promise<BleConnectionState> {
@@ -64,7 +68,11 @@ export async function scanAndConnectBle(): Promise<BleConnectionState> {
   if (!native?.scanAndConnect) {
     return bleNativeState();
   }
-  return native.scanAndConnect();
+  try {
+    return await native.scanAndConnect();
+  } catch {
+    return { kind: 'unavailable', message: 'Bluetooth permission is required to scan for a PTT button.' };
+  }
 }
 
 export async function disconnectBle(): Promise<BleConnectionState> {

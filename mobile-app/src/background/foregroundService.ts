@@ -67,7 +67,11 @@ export async function startForegroundService(
   if (!native?.start) {
     return false;
   }
-  return native.start(includeConnectedDevice, title, text, talking);
+  try {
+    return await native.start(includeConnectedDevice, title, text, talking);
+  } catch {
+    return false;
+  }
 }
 
 export async function updateForegroundService(

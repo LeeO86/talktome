@@ -16,25 +16,40 @@ class TalkToMeBlePttModule : Module() {
     }
 
     Function("getState") {
-      controller()?.currentState() ?: mapOf("kind" to "idle")
+      try {
+        controller()?.currentState() ?: mapOf("kind" to "idle")
+      } catch (_: SecurityException) {
+        mapOf("kind" to "idle")
+      }
     }
 
     AsyncFunction("start") {
-      val current = controller() ?: return@AsyncFunction mapOf(
-        "kind" to "unavailable",
-        "message" to "Bluetooth is currently unavailable.",
-      )
-      current.start()
-      current.currentState()
+      try {
+        val current = controller() ?: return@AsyncFunction mapOf(
+          "kind" to "unavailable",
+          "message" to "Bluetooth is currently unavailable.",
+        )
+        current.start()
+        current.currentState()
+      } catch (_: SecurityException) {
+        mapOf("kind" to "idle")
+      }
     }
 
     AsyncFunction("scanAndConnect") {
-      val current = controller() ?: return@AsyncFunction mapOf(
-        "kind" to "unavailable",
-        "message" to "Bluetooth is currently unavailable.",
-      )
-      current.scanAndConnect()
-      current.currentState()
+      try {
+        val current = controller() ?: return@AsyncFunction mapOf(
+          "kind" to "unavailable",
+          "message" to "Bluetooth is currently unavailable.",
+        )
+        current.scanAndConnect()
+        current.currentState()
+      } catch (_: SecurityException) {
+        mapOf(
+          "kind" to "unavailable",
+          "message" to "Bluetooth permission is required to scan for a PTT button.",
+        )
+      }
     }
 
     AsyncFunction("disconnect") {

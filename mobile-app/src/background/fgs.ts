@@ -2,6 +2,18 @@ export function shouldStartForegroundService(platform: string, operatorReady: bo
   return platform === 'android' && operatorReady;
 }
 
+export function shouldRetryForegroundService(
+  platform: string,
+  operatorReady: boolean,
+  appState: string,
+): boolean {
+  return shouldStartForegroundService(platform, operatorReady) && appState === 'active';
+}
+
+export function shouldClaimMicrophoneFgsType(recordAudioGranted: boolean): boolean {
+  return recordAudioGranted;
+}
+
 export function fgsStatusLabel(input: { available: boolean; running: boolean; platform: string }): string {
   if (input.platform !== 'android') {
     return 'iOS audio background';

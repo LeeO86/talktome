@@ -51,7 +51,6 @@ class TalkToMeForegroundServiceModule : Module() {
     AsyncFunction("start") { includeConnectedDevice: Boolean, title: String, text: String, talking: Boolean ->
       val context = appContext.reactContext ?: return@AsyncFunction false
       TalkToMeForegroundService.start(context, includeConnectedDevice, title, text, talking)
-      true
     }
 
     AsyncFunction("update") { includeConnectedDevice: Boolean, title: String, text: String, talking: Boolean ->

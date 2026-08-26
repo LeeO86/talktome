@@ -1,5 +1,6 @@
 package expo.modules.talktomefgs
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,9 +8,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 
 class TalkToMeForegroundService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
@@ -31,7 +34,11 @@ class TalkToMeForegroundService : Service() {
         intent.getStringExtra(EXTRA_TITLE)?.let { contentTitle = it }
         intent.getStringExtra(EXTRA_TEXT)?.let { contentText = it }
         if (Holder.running) {
-          startInForeground()
+          try {
+            startInForeground()
+          } catch (error: Exception) {
+            Log.e(TAG, "Unable to update foreground notification", error)
+          }
         }
         return START_STICKY
       }
@@ -40,9 +47,13 @@ class TalkToMeForegroundService : Service() {
         talking = intent?.getBooleanExtra(EXTRA_TALKING, false) == true
         intent?.getStringExtra(EXTRA_TITLE)?.let { contentTitle = it }
         intent?.getStringExtra(EXTRA_TEXT)?.let { contentText = it }
-        startInForeground()
-        Holder.running = true
-        Holder.listener?.onStarted(includeConnectedDevice)
+        try {
+          startInForeground()
+          Holder.running = true
+          Holder.listener?.onStarted(includeConnectedDevice)
+        } catch (error: Exception) {
+          Log.e(TAG, "Unable to enter foreground", error)
+        }
         return START_STICKY
       }
     }
@@ -57,11 +68,20 @@ class TalkToMeForegroundService : Service() {
   private fun startInForeground() {
     ensureChannel()
     val notification = buildNotification()
-    val types = serviceTypes()
-    if (Build.VERSION.SDK_INT >= 29) {
-      startForeground(NOTIFICATION_ID, notification, types)
-    } else {
+    if (Build.VERSION.SDK_INT < 29) {
       startForeground(NOTIFICATION_ID, notification)
+      return
+    }
+    val wanted = serviceTypes()
+    try {
+      startForeground(NOTIFICATION_ID, notification, wanted)
+    } catch (error: Exception) {
+      Log.e(TAG, "startForeground($wanted) rejected; retrying with mediaPlayback only", error)
+      val playback = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+      if (wanted == playback) {
+        throw error
+      }
+      startForeground(NOTIFICATION_ID, notification, playback)
     }
   }
 
@@ -74,16 +94,26 @@ class TalkToMeForegroundService : Service() {
 
   private fun serviceTypes(): Int {
     var types = 0
-    if (Build.VERSION.SDK_INT >= 30) {
-      types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-    }
     if (Build.VERSION.SDK_INT >= 29) {
       types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
     }
-    if (includeConnectedDevice && Build.VERSION.SDK_INT >= 31) {
+    // Android 14+ throws SecurityException if we claim microphone/connectedDevice
+    // without the matching runtime permission.
+    if (Build.VERSION.SDK_INT >= 30 && hasPermission(Manifest.permission.RECORD_AUDIO)) {
+      types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+    }
+    if (
+      includeConnectedDevice &&
+      Build.VERSION.SDK_INT >= 31 &&
+      hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    ) {
       types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
     }
     return types
+  }
+
+  private fun hasPermission(permission: String): Boolean {
+    return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
   }
 
   private fun ensureChannel() {
@@ -110,12 +140,6 @@ class TalkToMeForegroundService : Service() {
 
   private fun buildNotification(): Notification {
     val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-    val contentPending = PendingIntent.getActivity(
-      this,
-      0,
-      launchIntent,
-      PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag(),
-    )
     val talkIntent = Intent(this, TalkToMeForegroundService::class.java).setAction(ACTION_TOGGLE_TALK)
     val talkPending = PendingIntent.getService(
       this,
@@ -142,13 +166,22 @@ class TalkToMeForegroundService : Service() {
       .setStyle(Notification.BigTextStyle().bigText(contentText))
       .setSmallIcon(sessionSmallIcon())
       .setColor(0xFF000000.toInt())
-      .setContentIntent(contentPending)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setVisibility(Notification.VISIBILITY_PUBLIC)
       .setCategory(Notification.CATEGORY_SERVICE)
       .addAction(0, if (talking) "Stop reply" else "Reply lock", talkPending)
       .addAction(0, "Disconnect", stopPending)
+    if (launchIntent != null) {
+      builder.setContentIntent(
+        PendingIntent.getActivity(
+          this,
+          0,
+          launchIntent,
+          PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag(),
+        ),
+      )
+    }
     if (Build.VERSION.SDK_INT >= 31) {
       builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
     }
@@ -181,6 +214,7 @@ class TalkToMeForegroundService : Service() {
     const val LEGACY_CHANNEL_ID_V2 = "talktome.session.v2"
     const val LEGACY_CHANNEL_ID_V3 = "talktome.session.v3"
     const val NOTIFICATION_ID = 5602
+    private const val TAG = "TalkToMeFgs"
 
     @Volatile
     var talking: Boolean = false
@@ -194,7 +228,7 @@ class TalkToMeForegroundService : Service() {
     @Volatile
     var contentText: String = "Disconnect ends the session."
 
-    fun start(context: Context, includeConnectedDevice: Boolean, title: String, text: String, talking: Boolean) {
+    fun start(context: Context, includeConnectedDevice: Boolean, title: String, text: String, talking: Boolean): Boolean {
       contentTitle = title
       contentText = text
       this.talking = talking
@@ -204,10 +238,16 @@ class TalkToMeForegroundService : Service() {
         .putExtra(EXTRA_TITLE, title)
         .putExtra(EXTRA_TEXT, text)
         .putExtra(EXTRA_TALKING, talking)
-      if (Build.VERSION.SDK_INT >= 26) {
-        context.startForegroundService(intent)
-      } else {
-        context.startService(intent)
+      return try {
+        if (Build.VERSION.SDK_INT >= 26) {
+          context.startForegroundService(intent)
+        } else {
+          context.startService(intent)
+        }
+        true
+      } catch (error: Exception) {
+        Log.e(TAG, "Unable to start session service", error)
+        false
       }
     }
 
@@ -224,7 +264,11 @@ class TalkToMeForegroundService : Service() {
         .putExtra(EXTRA_TITLE, title)
         .putExtra(EXTRA_TEXT, text)
         .putExtra(EXTRA_TALKING, talking)
-      context.startService(intent)
+      try {
+        context.startService(intent)
+      } catch (error: Exception) {
+        Log.e(TAG, "Unable to update session service", error)
+      }
     }
 
     fun stop(context: Context) {

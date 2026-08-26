@@ -66,7 +66,7 @@ import {
   updateForegroundService,
 } from '../background/foregroundService';
 import { requestAndroidBlePermissions, requestAndroidSessionPermissions } from '../background/permissions';
-import { shouldStartForegroundService } from '../background/fgs';
+import { shouldRetryForegroundService, shouldStartForegroundService } from '../background/fgs';
 import { BleButtonPolicy } from '../ble/button';
 import {
   disconnectBle,
@@ -316,7 +316,11 @@ class SessionController {
     this.pendingPassword = last ? await passwordForProfile(last.id) : undefined;
     this.pendingLoginToken = Boolean(last?.loginToken);
     this.bindHardware();
-    void startBleNative().then((state) => this.publishBleState(state));
+    void startBleNative()
+      .then((state) => this.publishBleState(state))
+      .catch(() => {
+        this.publishBleState({ kind: 'idle' });
+      });
     if (last?.serverAddress) {
       void this.refreshLoginOptions(last.serverAddress);
     }
@@ -1714,6 +1718,9 @@ class SessionController {
     this.appStateSubscription?.remove();
     this.appStateSubscription = AppState.addEventListener('change', (next) => {
       void this.syncAudioSession(next);
+      if (shouldRetryForegroundService(Platform.OS, useSessionStore.getState().operatorReady, next)) {
+        void this.syncForegroundService();
+      }
     });
     subscribePttNative({
       onDiagnostic: (message) => {
