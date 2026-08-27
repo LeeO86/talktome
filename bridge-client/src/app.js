@@ -38,7 +38,8 @@ const STORAGE_KEYS = {
 const MANAGED_EVENT_FALLBACK_POLL_MS = 250;
 // This timer only reads the lightweight device snapshot. Full format discovery
 // runs at startup, on manual refresh, or after the snapshot actually changes.
-const MANAGED_INVENTORY_WATCH_MS = 30_000;
+const MANAGED_INVENTORY_WATCH_MS = 5_000;
+const MANAGED_INVENTORY_RETRY_MS = 30_000;
 const MANAGED_RETRY_MS = 2_000;
 const MANAGED_LEVEL_TRIGGER_POLL_MS = 50;
 const MANAGED_LEVEL_TRIGGER_ATTACK_MS = 45;
@@ -75,7 +76,7 @@ let managedLevelTriggerTimer = null;
 let managedRetryRunning = false;
 let managedLevelTriggerRunning = false;
 let managedInventoryWatchRunning = false;
-let managedInventoryWatchDisabled = false;
+let managedInventoryWatchRetryAt = 0;
 let managedRangeInteractionActive = false;
 let lastAnnouncedInventorySignature = "";
 let lastAudioDeviceSnapshotSignature = "";
@@ -1366,7 +1367,13 @@ function finishManagedRangeInteraction() {
 }
 
 function renderManagedBridgePorts() {
-  if (managedRangeInteractionActive) return;
+  const activeElement = document.activeElement;
+  const managedControlFocused = (
+    activeElement instanceof HTMLElement
+    && bridgePorts?.contains(activeElement)
+    && activeElement.matches("select, input, textarea")
+  );
+  if (managedRangeInteractionActive || managedControlFocused) return;
   const configuredPorts = managedBridgeConfig?.ports ?? [];
   if (!managedBridgeConfig) {
     const html = '<div class="empty-state">Connect to the server to load bridge endpoints.</div>';
@@ -2654,7 +2661,7 @@ async function refreshManagedInventoryOnly() {
     AUDIO_INVENTORY_TIMEOUT_MS,
     "Audio device scan"
   );
-  managedInventoryWatchDisabled = false;
+  managedInventoryWatchRetryAt = 0;
   renderInventory(inventory);
   const [ndiResult, omtResult] = await Promise.allSettled([
     withTimeout(invoke("get_ndi_status"), AUDIO_STATUS_TIMEOUT_MS, "NDI status check"),
@@ -2767,7 +2774,12 @@ async function syncManagedBridge() {
 }
 
 async function watchManagedInventory() {
-  if (managedInventoryWatchRunning || managedInventoryWatchDisabled || managedSyncRunning || !invoke) return;
+  if (
+    managedInventoryWatchRunning
+    || managedSyncRunning
+    || !invoke
+    || Date.now() < managedInventoryWatchRetryAt
+  ) return;
   if (isBridgeSettingsControlFocused()) return;
   if (!serverUrlInput.value.trim() || !getBridgeCredential()) return;
 
@@ -2779,6 +2791,7 @@ async function watchManagedInventory() {
       "Audio device snapshot"
     );
     const nextSnapshotSignature = audioDeviceSnapshotSignature(snapshot);
+    managedInventoryWatchRetryAt = 0;
     if (!lastAudioDeviceSnapshotSignature) {
       lastAudioDeviceSnapshotSignature = nextSnapshotSignature;
     } else if (nextSnapshotSignature && nextSnapshotSignature !== lastAudioDeviceSnapshotSignature) {
@@ -2795,7 +2808,7 @@ async function watchManagedInventory() {
   } catch (error) {
     console.warn("managed inventory watch failed", error);
     if (/audio device snapshot did not respond/i.test(String(error?.message || error))) {
-      managedInventoryWatchDisabled = true;
+      managedInventoryWatchRetryAt = Date.now() + MANAGED_INVENTORY_RETRY_MS;
     }
   } finally {
     managedInventoryWatchRunning = false;
@@ -3367,7 +3380,16 @@ function renderAllPortControls() {
     return;
   }
 
-  portRows.forEach((row) => populatePortControls(row));
+  portRows.forEach((row) => {
+    const activeElement = document.activeElement;
+    const rowControlFocused = (
+      activeElement instanceof HTMLElement
+      && row.element?.contains(activeElement)
+      && activeElement.matches("select, input, textarea")
+    );
+    if (rowControlFocused) return;
+    populatePortControls(row);
+  });
 }
 
 function updatePortControlState(row) {
@@ -3564,7 +3586,7 @@ async function refreshDevices() {
       ? inventoryResult[0].value
       : { host: "Unavailable", devices: [], warnings: [String(inventoryResult[0].reason)] };
     if (inventoryResult[0].status === "fulfilled") {
-      managedInventoryWatchDisabled = false;
+      managedInventoryWatchRetryAt = 0;
     }
     renderInventory(inventory);
 
