@@ -31,6 +31,11 @@ const {
   shouldCloseBridgeSessionAfterEventStreamClose,
 } = require("./bridgeSessionLiveness");
 const { syncRuntimeExecutable } = require("./runtimeWorker");
+const {
+  normalizeConfiguredDefaultClientSettings,
+  resolveDefaultClientSettings,
+  serializeDefaultClientSettingsScript,
+} = require("./defaultClientSettings");
 
 const SERVER_APP_VERSION = resolveServerAppVersion();
 const CLIENT_ICE_CONFIG = resolveClientIceConfig(process.env);
@@ -530,6 +535,14 @@ app.get("/", (req, res) => {
   } catch (err) {
     res.status(500).send("Failed to load index.html");
   }
+});
+
+app.get("/default-client-settings.js", (req, res) => {
+  const config = loadRuntimeConfig() || {};
+  res.setHeader("Cache-Control", "no-store");
+  res.type("application/javascript").send(
+    serializeDefaultClientSettingsScript(config.defaultClientSettings)
+  );
 });
 
 function findSocketIoClientPath() {
@@ -3651,6 +3664,15 @@ app.get("/admin/settings/guest-login", requireAdmin, (req, res) => {
   }
 });
 
+app.get("/admin/settings/default-client", requireAdmin, (req, res) => {
+  const config = loadRuntimeConfig() || {};
+  res.json({
+    settings: resolveDefaultClientSettings(config.defaultClientSettings),
+    configured: Object.prototype.hasOwnProperty.call(config, "defaultClientSettings"),
+    configPath: getConfigPath(),
+  });
+});
+
 app.put("/admin/settings/mdns", requireAdmin, (req, res) => {
   const nextHost = normalizeMdnsSetting(req.body?.mdnsHost);
   if (!nextHost) {
@@ -3796,6 +3818,25 @@ app.put("/admin/settings/guest-login", requireAdmin, (req, res) => {
   }
 });
 
+app.put("/admin/settings/default-client", requireAdmin, (req, res) => {
+  try {
+    const settings = normalizeConfiguredDefaultClientSettings(req.body, { strict: true });
+    const currentConfig = loadRuntimeConfig() || {};
+    const updatedConfig = {
+      ...currentConfig,
+      defaultClientSettings: settings,
+    };
+    const configPath = saveRuntimeConfig(updatedConfig);
+    return res.json({
+      settings: resolveDefaultClientSettings(settings),
+      configured: true,
+      configPath,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message || "Invalid default client settings" });
+  }
+});
+
 app.get("/admin/config/export", requireAdmin, (req, res) => {
   try {
     const bundle = {
@@ -3891,6 +3932,19 @@ app.post("/admin/config/import", requireAdmin, (req, res) => {
           enabled: bundle.serverConfig.guestLogin.enabled === true,
           profileUserId: Number.isFinite(importedGuestProfileId) ? importedGuestProfileId : null,
         };
+      }
+
+      if (Object.prototype.hasOwnProperty.call(bundle.serverConfig, "defaultClientSettings")) {
+        try {
+          nextConfig.defaultClientSettings = normalizeConfiguredDefaultClientSettings(
+            bundle.serverConfig.defaultClientSettings,
+            { strict: true }
+          );
+        } catch (error) {
+          return res.status(400).json({
+            error: `Config file contains invalid default client settings: ${error.message}`,
+          });
+        }
       }
     }
 

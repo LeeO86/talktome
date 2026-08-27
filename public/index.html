@@ -403,7 +403,7 @@
 
       .settings-subheader {
         display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-columns: auto minmax(0, 1fr) auto;
         align-items: center;
         gap: 0.75rem;
         padding-bottom: 0.2rem;
@@ -447,13 +447,6 @@
 
       .shortcut-settings[hidden] {
         display: none !important;
-      }
-
-      .shortcut-settings__header {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 0.75rem;
       }
 
       .shortcut-settings__title {
@@ -1812,6 +1805,76 @@
         margin-left: 1.8rem;
       }
 
+      .processing-options label.settings-switch,
+      .voice-trigger-controls label.settings-switch {
+        position: relative;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        justify-content: initial;
+        gap: 0.25rem 0.65rem;
+        width: 100%;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .settings-switch input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .settings-switch__track {
+        position: relative;
+        width: 2.8rem;
+        height: 1.5rem;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+
+      .settings-switch__track::after {
+        content: '';
+        position: absolute;
+        top: 0.17rem;
+        left: 0.17rem;
+        width: 1.05rem;
+        height: 1.05rem;
+        border-radius: 50%;
+        background: #cbd5e1;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.5);
+        transition: transform 0.15s ease, background 0.15s ease;
+      }
+
+      .settings-switch input:checked + .settings-switch__track {
+        border-color: rgba(59, 130, 246, 0.75);
+        background: rgba(37, 99, 235, 0.75);
+      }
+
+      .settings-switch input:checked + .settings-switch__track::after {
+        background: #fff;
+        transform: translateX(1.3rem);
+      }
+
+      .settings-switch input:focus,
+      .settings-switch input:focus-visible {
+        outline: none;
+      }
+
+      .settings-switch input:focus-visible + .settings-switch__track {
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+      }
+
+      .processing-options label.settings-switch .processing-desc {
+        grid-column: 2;
+        margin-left: 0;
+      }
+
       @media (min-width: 980px) {
         .processing-options label.processing-setting-label {
           flex-direction: row;
@@ -1822,6 +1885,10 @@
         .processing-options label.processing-setting-label .processing-desc {
           display: inline;
           margin-left: 0;
+        }
+
+        .processing-options label.settings-switch.processing-setting-label {
+          display: flex;
         }
       }
 
@@ -2154,36 +2221,42 @@
                 </select>
               </div>
               <div class="processing-options feed-optional feed-dim-option">
-                <label>
-                  <span class="processing-inline">
-                    <input type="checkbox" id="toggle-self-dim" />
-                    Dim feeds while speaking
-                  </span>
+                <label class="settings-switch">
+                  <input type="checkbox" id="toggle-self-dim" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Dim feeds while speaking</span>
                 </label>
               </div>
               <div class="processing-options feed-optional feed-dim-option">
-                <label>
-                  <span class="processing-inline">
-                    <input type="checkbox" id="toggle-incoming-dim" />
-                    Dim when addressed
-                  </span>
+                <label class="settings-switch">
+                  <input type="checkbox" id="toggle-incoming-dim" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Dim when addressed</span>
                 </label>
               </div>
               <div class="processing-options feed-optional">
-                <label class="processing-setting-label">
-                  <span class="processing-inline">
-                    <input type="checkbox" id="toggle-processing" />
-                    Audio auto processing
-                  </span>
+                <label class="processing-setting-label settings-switch">
+                  <input type="checkbox" id="toggle-processing" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Audio auto processing</span>
                   <span class="processing-desc">(auto gain, noise cancellation, echo suppression - adds ~50 ms latency)</span>
                 </label>
               </div>
               <div class="processing-options feed-optional">
-                <label>
-                  <span class="processing-inline">
-                    <input type="checkbox" id="toggle-left-hand-mode" />
-                    Left-hand mode
-                  </span>
+                <label class="settings-switch">
+                  <input type="checkbox" id="toggle-left-hand-mode" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Left-hand mode</span>
+                </label>
+              </div>
+              <div class="processing-options feed-optional">
+                <label
+                  class="settings-switch"
+                  title="Keep locked targets active while temporarily talking to or locking additional targets."
+                >
+                  <input type="checkbox" id="toggle-lock-multiple-targets" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Lock multiple targets</span>
                 </label>
               </div>
               <div class="user-level-controls feed-optional" id="user-level-controls">
@@ -2217,11 +2290,10 @@
                 </div>
               </div>
               <div class="voice-trigger-controls feed-optional" id="voice-trigger-controls">
-                <label>
-                  <span class="processing-inline">
-                    <input type="checkbox" id="toggle-voice-trigger" />
-                    Level trigger
-                  </span>
+                <label class="settings-switch">
+                  <input type="checkbox" id="toggle-voice-trigger" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Level trigger</span>
                 </label>
                 <label for="voice-trigger-target">Target</label>
                 <select id="voice-trigger-target">
@@ -2258,13 +2330,11 @@
               <div class="settings-subheader">
                 <button type="button" class="settings-back-button" id="shortcut-settings-back">Back</button>
                 <span class="settings-subheader__title">Keyboard shortcuts</span>
+                <button type="button" class="shortcut-settings__button shortcut-settings__button--secondary" id="shortcut-reset-btn">
+                  Reset all
+                </button>
               </div>
               <div class="shortcut-settings feed-optional" id="shortcut-settings" hidden>
-                <div class="shortcut-settings__header">
-                  <button type="button" class="shortcut-settings__button shortcut-settings__button--secondary" id="shortcut-reset-btn">
-                    Reset all
-                  </button>
-                </div>
                 <p class="shortcut-settings__desc">
                   Targets default to 1-9 in target order. Reply defaults to Space. Click Set key and press a key to store a custom shortcut.
                 </p>
@@ -2468,6 +2538,7 @@
   <script src="/mediasoup-client.js"></script>
   <script src="/receivePlaybackPolicy.js"></script>
   <script src="/targetIdentity.js"></script>
+  <script src="/default-client-settings.js"></script>
   <script src="client.js"></script>
   <script>
     (function () {

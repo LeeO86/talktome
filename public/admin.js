@@ -104,6 +104,14 @@ const mediaNetworkQrDownloadButton = document.getElementById('media-network-qr-d
 const guestLoginEnabledInput = document.getElementById('guest-login-enabled');
 const guestLoginStatus = document.getElementById('guest-login-status');
 const guestLoginProfile = document.getElementById('guest-login-profile');
+const defaultClientSettingsForm = document.getElementById('default-client-settings-form');
+const defaultClientAudioProfile = document.getElementById('default-client-audio-profile');
+const defaultClientDimAmount = document.getElementById('default-client-dim-amount');
+const defaultClientDimSelf = document.getElementById('default-client-dim-self');
+const defaultClientDimIncoming = document.getElementById('default-client-dim-incoming');
+const defaultClientAudioProcessing = document.getElementById('default-client-audio-processing');
+const defaultClientLeftHand = document.getElementById('default-client-left-hand');
+const defaultClientLockMultiple = document.getElementById('default-client-lock-multiple');
 const adminImageLightbox = document.getElementById('admin-image-lightbox');
 const adminImageLightboxClose = document.getElementById('admin-image-lightbox-close');
 const adminImageLightboxImage = document.getElementById('admin-image-lightbox-image');
@@ -1848,6 +1856,7 @@ async function loadData() {
     return;
   }
   await loadGuestLoginSettings();
+  await loadDefaultClientSettings();
   const { users, conferences, feeds, bridges } = await fetchAdminCollections();
   await loadMdnsSettings();
   await loadMediaNetworkSettings();
@@ -2343,8 +2352,10 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
       ? `
         <div class="nested-block">
           <form class="bridge-config-form" id="bridge-config-${user.id}" data-bridge-config-user-id="${user.id}" onsubmit="saveBridgeEndpoint(event, ${user.id})">
-            <label class="toggle-row" for="bridge-enabled-${user.id}">
-              <input type="checkbox" id="bridge-enabled-${user.id}" ${isBridgeEndpoint ? 'checked' : ''}>
+            <label class="admin-switch bridge-input-switch" for="bridge-enabled-${user.id}">
+              <input type="checkbox" id="bridge-enabled-${user.id}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
+              <span class="admin-switch__track" aria-hidden="true"></span>
+              <span class="admin-switch__state" aria-hidden="true"></span>
               <span>Use this user as bridge endpoint</span>
             </label>
             <div class="bridge-config-options" id="bridge-options-${user.id}" ${isBridgeEndpoint ? '' : 'hidden'}>
@@ -2483,8 +2494,10 @@ async function renderFeedList(feeds) {
       <div class="nested" id="feed-nested-${feed.id}" onclick="event.stopPropagation()">
         <div class="nested-block">
           <form class="bridge-config-form" id="bridge-config-${formKey}" data-bridge-config-key="${formKey}" onsubmit="saveFeedBridgeEndpoint(event, ${feed.id})">
-            <label class="toggle-row" for="bridge-enabled-${formKey}">
-              <input type="checkbox" id="bridge-enabled-${formKey}" ${isBridgeEndpoint ? 'checked' : ''}>
+            <label class="admin-switch bridge-input-switch" for="bridge-enabled-${formKey}">
+              <input type="checkbox" id="bridge-enabled-${formKey}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
+              <span class="admin-switch__track" aria-hidden="true"></span>
+              <span class="admin-switch__state" aria-hidden="true"></span>
               <span>Use this feed as bridge input</span>
             </label>
             <div class="bridge-config-options" id="bridge-options-${formKey}" ${isBridgeEndpoint ? '' : 'hidden'}>
@@ -2740,6 +2753,19 @@ async function loadGuestLoginSettings() {
     const profileName = payload?.profileName || 'Guest';
     guestLoginProfile.textContent = profileName;
   }
+  return payload;
+}
+
+async function loadDefaultClientSettings() {
+  const payload = await fetchJSON('/admin/settings/default-client');
+  const settings = payload?.settings || {};
+  if (defaultClientAudioProfile) defaultClientAudioProfile.value = settings.audioProfile || 'ultra-low';
+  if (defaultClientDimAmount) defaultClientDimAmount.value = String(settings.dimAmountDb ?? -14);
+  if (defaultClientDimSelf) defaultClientDimSelf.checked = settings.dimFeedsWhileSpeaking === true;
+  if (defaultClientDimIncoming) defaultClientDimIncoming.checked = settings.dimWhenAddressed === true;
+  if (defaultClientAudioProcessing) defaultClientAudioProcessing.checked = settings.audioAutoProcessing === true;
+  if (defaultClientLeftHand) defaultClientLeftHand.checked = settings.leftHandMode === true;
+  if (defaultClientLockMultiple) defaultClientLockMultiple.checked = settings.lockMultipleTargets === true;
   return payload;
 }
 
@@ -3716,6 +3742,40 @@ if (guestLoginEnabledInput) {
       showMessage(`❌ ${err.message || 'Failed to save Guest login'}`, 'error', 'config');
     } finally {
       guestLoginEnabledInput.disabled = false;
+    }
+  });
+}
+
+if (defaultClientSettingsForm) {
+  defaultClientSettingsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const submitButton = defaultClientSettingsForm.querySelector('button[type="submit"]');
+    const settings = {
+      audioProfile: defaultClientAudioProfile?.value || 'ultra-low',
+      dimAmountDb: Number(defaultClientDimAmount?.value ?? -14),
+      dimFeedsWhileSpeaking: Boolean(defaultClientDimSelf?.checked),
+      dimWhenAddressed: Boolean(defaultClientDimIncoming?.checked),
+      audioAutoProcessing: Boolean(defaultClientAudioProcessing?.checked),
+      leftHandMode: Boolean(defaultClientLeftHand?.checked),
+      lockMultipleTargets: Boolean(defaultClientLockMultiple?.checked),
+    };
+
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const res = await authedFetch('/admin/settings/default-client', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'Failed to save default client settings');
+      await loadDefaultClientSettings();
+      showMessage('✅ Default client settings saved', 'success', 'config');
+    } catch (error) {
+      console.error('Failed to save default client settings:', error);
+      showMessage(`❌ ${error.message || 'Failed to save default client settings'}`, 'error', 'config');
+    } finally {
+      if (submitButton) submitButton.disabled = false;
     }
   });
 }
