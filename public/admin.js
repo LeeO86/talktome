@@ -3338,7 +3338,8 @@ window.copyUserLoginUrl = async function (userId, userName, button) {
       throw new Error(payload.error || 'Failed to create login URL');
     }
 
-    const loginUrl = `${window.location.origin}/#login=${encodeURIComponent(payload.token)}`;
+    const loginUrl = payload.loginUrl
+      || `${window.location.origin}/#login=${encodeURIComponent(payload.token)}`;
     await copyTextToClipboard(loginUrl);
     if (button) button.textContent = 'Copied';
     showMessage(`✅ Login URL copied for ${userName}`, 'success', 'user');

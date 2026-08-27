@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { selectAdminQrUrl } = require("./qrConnectUrl");
+const { buildLoginUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 
 test("prefers the selected adapter over a localhost admin URL", () => {
   assert.equal(selectAdminQrUrl({
@@ -42,4 +42,16 @@ test("falls back to localhost when no adapter address is available", () => {
   assert.equal(selectAdminQrUrl({
     requestUrl: "https://localhost:8444",
   }), "https://localhost:8444");
+});
+
+test("builds a shareable login URL from the selected adapter URL", () => {
+  assert.equal(
+    buildLoginUrl("https://192.168.178.166:8444", "token/value"),
+    "https://192.168.178.166:8444/#login=token%2Fvalue"
+  );
+});
+
+test("does not build a login URL without a usable base URL or token", () => {
+  assert.equal(buildLoginUrl("", "token"), "");
+  assert.equal(buildLoginUrl("https://192.168.178.166:8444", ""), "");
 });
