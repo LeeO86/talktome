@@ -14,7 +14,7 @@ const { createBrowserSessionStore } = require("./browserSessions");
 const { loadProxySsoConfig, resolveProxySsoIdentity } = require("./proxySso");
 const { getDataDir } = require("./dataPaths");
 const { ApplePttPushService } = require("./applePttPushService");
-const { normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
+const { buildLoginUrl, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
 const {
   listMediaNetworkInterfaces,
@@ -3533,15 +3533,10 @@ function resolvePreferredAdminQrIpAddress(activeAddress) {
 }
 
 async function buildAdminMediaNetworkQrPayload(activeAddress, req = null) {
-  const qrIpAddress = resolvePreferredAdminQrIpAddress(activeAddress);
+  const qrUrl = resolveAdminConnectUrl(activeAddress, req);
   const configuredPublicConnectUrl = resolveConfiguredAdminPublicConnectUrl();
   const requestConnectUrl = resolveAdminRequestConnectUrl(req);
-  const adapterConnectUrl = buildHttpsConnectUrl(qrIpAddress);
-  const qrUrl = selectAdminQrUrl({
-    configuredUrl: configuredPublicConnectUrl,
-    requestUrl: requestConnectUrl,
-    adapterUrl: adapterConnectUrl,
-  });
+  const qrIpAddress = resolvePreferredAdminQrIpAddress(activeAddress);
   const publicConnectUrl = configuredPublicConnectUrl || requestConnectUrl;
   const activeMdnsHost = mdnsHostname || "off";
   const mdnsUrl = mdnsHostname ? buildHttpsConnectUrl(mdnsHostname) : "";
@@ -3572,6 +3567,18 @@ async function buildAdminMediaNetworkQrPayload(activeAddress, req = null) {
     mdnsUrl: mdnsUrl || null,
     qrCodeDataUrl,
   };
+}
+
+function resolveAdminConnectUrl(activeAddress, req = null) {
+  const qrIpAddress = resolvePreferredAdminQrIpAddress(activeAddress);
+  const configuredPublicConnectUrl = resolveConfiguredAdminPublicConnectUrl();
+  const requestConnectUrl = resolveAdminRequestConnectUrl(req);
+  const adapterConnectUrl = buildHttpsConnectUrl(qrIpAddress);
+  return selectAdminQrUrl({
+    configuredUrl: configuredPublicConnectUrl,
+    requestUrl: requestConnectUrl,
+    adapterUrl: adapterConnectUrl,
+  });
 }
 
 app.get("/admin/settings/media-network", requireAdmin, async (req, res) => {
@@ -4003,8 +4010,11 @@ app.put("/admin/users/:id/admin", requireAdmin, (req, res) => {
 app.post("/admin/users/:id/login-link", requireAdmin, (req, res) => {
   try {
     const token = createUserLoginToken(req.params.id);
+    const active = resolveTransportAnnouncedAddress();
+    const connectUrl = resolveAdminConnectUrl(active.announcedAddress, req);
+    const loginUrl = buildLoginUrl(connectUrl, token);
     res.setHeader("Cache-Control", "no-store");
-    return res.json({ token });
+    return res.json({ token, loginUrl: loginUrl || null });
   } catch (err) {
     const status = err.message === "User not found" ? 404 : 400;
     return res.status(status).json({ error: err.message || "Failed to create login link" });
