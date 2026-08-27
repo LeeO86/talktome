@@ -991,6 +991,7 @@ let voiceTriggerRafId = null;
 let voiceTriggerActive = false;
 let voiceTriggerAboveSince = 0;
 let voiceTriggerBelowSince = 0;
+let voiceTriggerAdminInhibited = false;
 let settingsMonitorActive = false;
 let settingsMonitorPromise = null;
 let settingsMenuOpen = false;
@@ -7801,6 +7802,17 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       const startThreshold = clampVoiceTriggerThresholdDb(voiceTriggerThresholdDb);
       const stopThreshold = Math.max(VOICE_TRIGGER_MIN_DB, startThreshold - VOICE_TRIGGER_HYSTERESIS_DB);
 
+      if (voiceTriggerAdminInhibited) {
+        voiceTriggerAboveSince = 0;
+        voiceTriggerBelowSince = 0;
+        if (!Number.isFinite(peakDb) || peakDb < stopThreshold) {
+          voiceTriggerAdminInhibited = false;
+        }
+        setVoiceTriggerState('armed');
+        voiceTriggerRafId = requestAnimationFrame(tick);
+        return;
+      }
+
       if (!voiceTriggerActive) {
         if (Number.isFinite(peakDb) && peakDb >= startThreshold) {
           if (!voiceTriggerAboveSince) {
@@ -7848,6 +7860,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   function setVoiceTriggerEnabled(enabled, { persist = true } = {}) {
     voiceTriggerEnabled = !!enabled && isOperatorSession() && session.kind !== 'feed';
+    voiceTriggerAdminInhibited = false;
     if (voiceTriggerToggle) {
       voiceTriggerToggle.checked = voiceTriggerEnabled;
     }
@@ -11203,6 +11216,22 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       }
     }
   }
+
+  socket.on('force-stop-transmission', () => {
+    clearSuspendedLockState();
+    if (voiceTriggerEnabled) {
+      voiceTriggerAdminInhibited = true;
+      voiceTriggerActive = false;
+      voiceTriggerAboveSince = 0;
+      voiceTriggerBelowSince = 0;
+      setVoiceTriggerState('armed');
+    }
+    handleStopTalking({
+      preventDefault() {},
+      currentTarget: null,
+      suppressLockRestore: true,
+    });
+  });
 
   // Safety stop so PTT can't get stuck on iOS/background transitions.
   function stopTalkingSafely({ respectLock = false, pointerId = null } = {}) {

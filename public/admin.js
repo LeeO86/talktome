@@ -1221,6 +1221,24 @@ function formatStatusPacketLoss(networkStats) {
   return `${packetLossPercent.toFixed(packetLossPercent >= 10 ? 0 : 1)}%`;
 }
 
+function syncStopTransmissionButtons(users = latestAdminStatus?.users || []) {
+  const statusByUserId = new Map(
+    (Array.isArray(users) ? users : []).map((user) => [Number(user.id), user])
+  );
+
+  document.querySelectorAll('[data-stop-transmission-user-id]').forEach((button) => {
+    if (button.dataset.requestPending === 'true') return;
+    const user = statusByUserId.get(Number(button.dataset.stopTransmissionUserId));
+    const canStop = Boolean(user?.online && user?.talking);
+    button.disabled = !canStop;
+    button.title = canStop
+      ? 'Immediately stop this user\'s active transmission'
+      : user?.online
+        ? 'User is not transmitting'
+        : 'User is offline';
+  });
+}
+
 function renderAdminStatus(payload = {}) {
   const canRestartServer = Boolean(adminState.isSuperAdmin && payload.restartSupported);
   containerRestartPanel?.classList.toggle('is-hidden', !canRestartServer);
@@ -1239,6 +1257,7 @@ function renderAdminStatus(payload = {}) {
   feeds.sort(sortByOnlineAndName);
   bridges.sort(sortByOnlineAndName);
   companions.sort(sortByOnlineAndName);
+  syncStopTransmissionButtons(users);
 
   setStatusText('status-summary-users', `${summary.usersOnline || 0} / ${summary.usersTotal || 0}`);
   setStatusText('status-summary-bridges', `${summary.bridgesOnline || 0} / ${summary.bridgesTotal || 0}`);
@@ -2340,6 +2359,9 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
     const deleteAttrs = isGuestProfile
       ? 'disabled title="Guest profile cannot be deleted"'
       : isAdmin ? 'disabled title="Admin accounts cannot be deleted"' : '';
+    const stopTransmissionButton = !isSuperadmin && !isGuestProfile
+      ? `<button type="button" class="small warning" data-stop-transmission-user-id="${user.id}" onclick="stopUserTransmission(${user.id}, this)" disabled>Stop transmission</button>`
+      : '';
     const li = document.createElement('li');
     li.className = 'list-item entity-detail-item';
     li.dataset.entityId = String(user.id);
@@ -2423,6 +2445,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
           <button type="button" class="small" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>
           <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
+          ${stopTransmissionButton}
           ${adminToggle}
           <button type="button" class="small danger" onclick="deleteUser(${user.id})" ${deleteAttrs}>Delete</button>
         </div>
@@ -2462,6 +2485,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
   }));
   initializeBridgeEndpointForms();
   await syncEntityMasterDetail('users', visibleUsers);
+  syncStopTransmissionButtons();
 }
 
 async function renderFeedList(feeds) {
@@ -3183,6 +3207,39 @@ window.editUser = async function (userId, currentName) {
   } catch (err) {
     showMessage('❌ Failed to update user', 'error', 'user');
     console.error(err);
+  }
+};
+
+window.stopUserTransmission = async function (userId, button) {
+  const userName = latestAdminStatus?.users?.find((user) => Number(user.id) === Number(userId))?.name || 'User';
+  if (button) {
+    button.dataset.requestPending = 'true';
+    button.disabled = true;
+  }
+
+  try {
+    const res = await authedFetch(`/admin/users/${userId}/stop-transmission`, { method: 'POST' });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || 'Failed to stop transmission');
+    }
+
+    const statusUser = latestAdminStatus?.users?.find((user) => Number(user.id) === Number(userId));
+    if (statusUser) statusUser.talking = false;
+
+    showMessage(
+      payload.stopped
+        ? `✅ Transmission stopped for ${userName}`
+        : `ℹ️ ${userName} was no longer transmitting`,
+      payload.stopped ? 'success' : 'warning',
+      'user'
+    );
+  } catch (err) {
+    console.error('Error stopping user transmission:', err);
+    showMessage(`❌ ${err.message}`, 'error', 'user');
+  } finally {
+    if (button) delete button.dataset.requestPending;
+    syncStopTransmissionButtons();
   }
 };
 

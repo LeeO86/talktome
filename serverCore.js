@@ -36,6 +36,7 @@ const {
   resolveDefaultClientSettings,
   serializeDefaultClientSettingsScript,
 } = require("./defaultClientSettings");
+const { stopPeerTransmission } = require("./transmissionControl");
 
 const SERVER_APP_VERSION = resolveServerAppVersion();
 const CLIENT_ICE_CONFIG = resolveClientIceConfig(process.env);
@@ -3420,6 +3421,81 @@ function buildAdminStatusSnapshot() {
 
 app.get("/admin/status", requireAdmin, (req, res) => {
   res.json(buildAdminStatusSnapshot());
+});
+
+async function forceStopUserTransmission(userId) {
+  const found = findUserPeerByUserId(userId);
+  if (!found?.peer) return null;
+
+  const { socketId, peer } = found;
+  const talkProducers = getPeerTalkProducers(peer, { includePaused: true });
+  const appleRecipientUserIds = [...new Set(talkProducers.flatMap((producer) => (
+    Array.isArray(producer?.__applePttRecipientUserIds) ? producer.__applePttRecipientUserIds : []
+  )))];
+  const result = await stopPeerTransmission(peer, talkProducers);
+
+  for (const producer of talkProducers) {
+    producer.__applePttRecipientUserIds = [];
+    if (String(producer?.appData?.type || "").trim().toLowerCase() === "talk") {
+      syncProducerRecipients({ producer, speakerSocketId: socketId });
+    }
+  }
+
+  try {
+    peer.socket?.emit("force-stop-transmission", {
+      reason: "admin-stop-transmission",
+      at: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn(`[ADMIN] Failed to notify user ${userId} about stopped transmission:`, error?.message || error);
+  }
+
+  syncPeerCompanionState(peer, { reason: "admin-stop-transmission" });
+  broadcastRuntimeUserStates("admin-stop-transmission");
+  void sendApplePttServiceUpdate({
+    recipientUserIds: appleRecipientUserIds,
+    reason: "admin-stop-transmission",
+  }).catch((error) => {
+    console.warn("[APPLE-PTT] Failed to send forced-stop update:", error?.message || error);
+  });
+
+  return result;
+}
+
+app.post("/admin/users/:id/stop-transmission", requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ error: "Invalid user id" });
+  }
+
+  const user = getUserById(userId);
+  if (!user || user.is_superadmin || user.is_guest_profile) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  try {
+    const result = await forceStopUserTransmission(userId);
+    if (!result) {
+      return res.status(409).json({ error: "User is not online" });
+    }
+    if (result.errors.length > 0) {
+      console.error(`[ADMIN] Failed to stop all transmission producers for user ${userId}`, result.errors);
+      return res.status(500).json({ error: "Failed to stop all active transmission producers" });
+    }
+    console.log(
+      `[ADMIN] Stopped transmission for user ${userId} (${user.name}); `
+      + `paused=${result.pausedProducerCount}, closed=${result.closedProducerCount}`
+    );
+    return res.json({
+      ok: true,
+      stopped: result.hadActiveTransmission,
+      pausedProducerCount: result.pausedProducerCount,
+      closedProducerCount: result.closedProducerCount,
+    });
+  } catch (error) {
+    console.error(`[ADMIN] Failed to stop transmission for user ${userId}:`, error);
+    return res.status(500).json({ error: "Failed to stop transmission" });
+  }
 });
 
 app.post("/admin/restart", requireAdmin, requireSuperAdmin, (req, res) => {
