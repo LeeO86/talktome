@@ -32,6 +32,9 @@ const config: ExpoConfig = {
         'TalkToMe connects to your self-hosted intercom on the local network.',
       NSBluetoothAlwaysUsageDescription: 'TalkToMe connects to wireless PTT buttons.',
       NSCameraUsageDescription: 'TalkToMe uses the camera to scan server and login QR codes.',
+      NSAppTransportSecurity: {
+        NSAllowsLocalNetworking: true,
+      },
       NSSupportsLiveActivities: true,
       NSSupportsLiveActivitiesFrequentUpdates: true,
       UIBackgroundModes: enableIosPtt

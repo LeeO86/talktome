@@ -2,6 +2,14 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+void TalkToMeInstallExpoFetchTrust(void);
+#ifdef __cplusplus
+}
+#endif
+
 @interface TalkToMePinStore : NSObject
 
 + (instancetype)shared;

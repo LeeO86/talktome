@@ -3,7 +3,6 @@ package expo.modules.certtrust
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.net.URL
-import java.security.MessageDigest
 import java.security.cert.X509Certificate
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
@@ -40,7 +39,7 @@ private fun probeCertificate(url: String): Map<String, String> {
   context.init(null, arrayOf(capturing), null)
   connection.sslSocketFactory = context.socketFactory
   connection.hostnameVerifier = HostnameVerifier { _, _ -> true }
-  connection.requestMethod = "HEAD"
+  connection.requestMethod = "GET"
   connection.connectTimeout = 8000
   connection.readTimeout = 8000
   try {
@@ -71,9 +70,4 @@ private class CapturingTrustManager : X509TrustManager {
   }
 
   override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-}
-
-internal fun sha256Hex(bytes: ByteArray): String {
-  val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
-  return digest.joinToString("") { byte -> "%02x".format(byte) }
 }

@@ -224,7 +224,4 @@ export function latestIncomingName(incoming: IncomingTalkState): string | null {
   return name ? name : null;
 }
 
-export function looksLikeTlsFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /ssl|tls|cert|trust|self.signed|handshake/i.test(message);
-}
+export { looksLikeTlsFailure } from '../servers/tlsFailure';
