@@ -65,6 +65,25 @@ export function applyConsumerBudget(
   };
 }
 
+export function producerDeliverySignature(producer: ActiveProducer): string {
+  const appData = producer.appData ?? {};
+  const type = typeof appData.type === 'string' && appData.type ? appData.type : producer.route.kind;
+  const id = appData.id ?? producerTargetKey(producer);
+  const targetPeer = typeof appData.targetPeer === 'string' ? appData.targetPeer : '';
+  return `${type}:${String(id)}:${targetPeer}`;
+}
+
+export function shouldReplaceRemoteConsumer(
+  existing: { producer: ActiveProducer; closed?: boolean },
+  next: ActiveProducer,
+): boolean {
+  if (existing.closed) {
+    return true;
+  }
+  return producerDeliverySignature(existing.producer) !== producerDeliverySignature(next);
+}
+
 export function producerTargetKey(producer: ActiveProducer): string {
   return producerKey(producer);
 }
+

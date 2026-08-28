@@ -629,13 +629,22 @@ export class SessionController {
       },
       onProducerStarted: (producer) => {
         this.mediaCoordinator.rememberLiveProducer(producer);
-        void this.media?.consumeProducer(producer, this.mediaCoordinator.consumerContext()).then(() => {
-          this.mediaCoordinator.publishMediaSnapshot();
-        });
+        void this.media?.consumeProducer(producer, this.mediaCoordinator.consumerContext())
+          .then(() => {
+            this.mediaCoordinator.publishMediaSnapshot();
+          })
+          .catch(() => {
+            this.mediaCoordinator.publishMediaSnapshot();
+          });
       },
       onProducerClosed: (producer) => {
         this.mediaCoordinator.forgetLiveProducer(producer.producerId);
         void this.media?.dropProducer(producer.producerId).then(() => {
+          this.mediaCoordinator.publishMediaSnapshot();
+        });
+      },
+      onConsumerClosed: (consumerId) => {
+        void this.media?.dropConsumer(consumerId).then(() => {
           this.mediaCoordinator.publishMediaSnapshot();
         });
       },

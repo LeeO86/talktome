@@ -68,6 +68,7 @@ export type SessionUiState = {
   capabilityReason: string;
   overBudget: boolean;
   activeRemoteCount: number;
+  mediaDebug: string;
   signalingLabel: string;
   fgsRunning: boolean;
   fgsAvailable: boolean;
@@ -144,6 +145,7 @@ export const initialState: SessionUiState = {
   capabilityReason: FOREGROUND_REASON,
   overBudget: false,
   activeRemoteCount: 0,
+  mediaDebug: '',
   signalingLabel: 'disconnected',
   fgsRunning: false,
   fgsAvailable: false,

@@ -34,6 +34,7 @@ export type SignalingHandlers = {
   onIncomingTalkState?: (state: IncomingTalkState) => void;
   onProducerStarted?: (producer: ActiveProducer) => void;
   onProducerClosed?: (producer: ActiveProducer) => void;
+  onConsumerClosed?: (consumerId: string) => void;
 };
 
 export type SignalingConnectionState =
@@ -327,6 +328,12 @@ export class SignalingClient {
       const producer = parseActiveProducer(payload);
       if (producer) {
         this.handlers.onProducerClosed?.(producer);
+      }
+    });
+    socket.on(SocketEvent.consumerClosed, (payload) => {
+      const record = payload && typeof payload === 'object' ? (payload as { consumerId?: unknown }) : {};
+      if (typeof record.consumerId === 'string' && record.consumerId) {
+        this.handlers.onConsumerClosed?.(record.consumerId);
       }
     });
     socket.on(SocketEvent.sessionKicked, (payload) => {

@@ -275,6 +275,7 @@ export class MediaCoordinator {
       overBudget: this.c.media?.overBudget ?? false,
       activeRemoteCount: this.c.media?.activeRemoteCount ?? 0,
       speakingTargetKeys: this.c.media?.speakingTargetKeys ?? [],
+      mediaDebug: this.c.media?.mediaDebugLine() ?? '',
     });
   }
 

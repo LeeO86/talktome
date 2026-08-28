@@ -345,6 +345,13 @@ export function SettingsScreen({ visible, onClose }: Props) {
             </View>
             <Text style={styles.footnote}>{store.capabilityReason}</Text>
             {store.pttDiagnostic ? <Text style={styles.footnote}>{store.pttDiagnostic}</Text> : null}
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Incoming audio</Text>
+              <Text style={styles.rowValue}>
+                {store.activeRemoteCount} live / {store.overBudget ? 'over budget' : 'ok'}
+              </Text>
+            </View>
+            {store.mediaDebug ? <Text style={styles.footnote}>{store.mediaDebug}</Text> : null}
             {Platform.OS === 'android' ? (
               <>
                 <Pressable style={styles.row} onPress={() => void session.openBatteryEducation()}>

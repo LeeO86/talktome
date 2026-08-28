@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ActiveProducer } from '../protocol/types';
-import { applyConsumerBudget, MAX_RESUMED_CONSUMERS } from './consumerBudget';
+import { applyConsumerBudget, MAX_RESUMED_CONSUMERS, shouldReplaceRemoteConsumer } from './consumerBudget';
 
 function producer(
   id: string,
@@ -51,5 +51,17 @@ describe('applyConsumerBudget', () => {
       lockedTargetKey: 'user-9',
     });
     expect(decision.resume[0]?.producerId).toBe('locked');
+  });
+});
+
+describe('shouldReplaceRemoteConsumer', () => {
+  it('replaces a talk consumer when the same producer is re-announced to a new conference', () => {
+    const first = producer('talk-1', { kind: 'conference', id: 1 });
+    first.appData = { type: 'conference', id: 1 };
+    const second = producer('talk-1', { kind: 'conference', id: 2 });
+    second.appData = { type: 'conference', id: 2 };
+    expect(shouldReplaceRemoteConsumer({ producer: first }, second)).toBe(true);
+    expect(shouldReplaceRemoteConsumer({ producer: second }, second)).toBe(false);
+    expect(shouldReplaceRemoteConsumer({ producer: first, closed: true }, first)).toBe(true);
   });
 });

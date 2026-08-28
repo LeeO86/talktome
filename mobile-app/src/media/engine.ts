@@ -24,6 +24,7 @@ import {
   applyConsumerBudget,
   MAX_RESUMED_CONSUMERS,
   producerTargetKey,
+  shouldReplaceRemoteConsumer,
   type ConsumerPriorityContext,
 } from './consumerBudget';
 import { STANDARD_OPUS, talkGumConstraints } from './opus';
@@ -50,6 +51,8 @@ export class MediaEngine {
   private talking = false;
   private incomingAddressed = false;
   overBudget = false;
+  lastMediaEvent = '';
+  private work: Promise<void> = Promise.resolve();
 
   constructor(private readonly signaling: SignalingClient) {}
 
@@ -183,60 +186,30 @@ export class MediaEngine {
   }
 
   async consumeProducer(producer: ActiveProducer, ctx: ConsumerPriorityContext = {}): Promise<void> {
-    if (!this.device || !this.recvTransport) {
-      throw new Error('Receive transport is not ready.');
-    }
-    if (this.remotes.has(producer.producerId)) {
-      return;
-    }
-    if (producer.peerId === this.signaling.socketId) {
-      return;
-    }
-
-    const params = await this.signaling.consume(producer.producerId, this.device.rtpCapabilities);
-    const consumer = await this.recvTransport.consume({
-      id: params.id,
-      producerId: params.producerId,
-      kind: params.kind as 'audio' | 'video',
-      rtpParameters: params.rtpParameters as never,
-    });
-
-    const stream = new MediaStream();
-    stream.addTrack(consumer.track as never);
-    this.remotes.set(producer.producerId, { producer, consumer, stream, resumed: false });
-    this.applyTrackGain(producer);
-    await this.applyBudget(ctx);
+    await this.serialize(() => this.consumeProducerLocked(producer, ctx));
   }
 
   async dropProducer(producerId: string): Promise<void> {
-    const remote = this.remotes.get(producerId);
-    if (!remote) {
-      return;
-    }
-    this.remotes.delete(producerId);
-    try {
-      remote.consumer.close();
-    } catch {
-      // already closed
-    }
-    try {
-      await this.signaling.closeConsumer(remote.consumer.id);
-    } catch {
-      // socket may already have closed it
-    }
+    await this.serialize(() => this.dropProducerLocked(producerId));
+  }
+
+  async dropConsumer(consumerId: string): Promise<void> {
+    await this.serialize(() => this.dropConsumerLocked(consumerId));
   }
 
   async syncProducers(producers: ActiveProducer[], ctx: ConsumerPriorityContext = {}): Promise<void> {
-    const wanted = new Set(producers.map((item) => item.producerId));
-    for (const producerId of [...this.remotes.keys()]) {
-      if (!wanted.has(producerId)) {
-        await this.dropProducer(producerId);
+    await this.serialize(async () => {
+      const wanted = new Set(producers.map((item) => item.producerId));
+      for (const producerId of [...this.remotes.keys()]) {
+        if (!wanted.has(producerId)) {
+          await this.dropProducerLocked(producerId);
+        }
       }
-    }
-    for (const producer of producers) {
-      await this.consumeProducer(producer, ctx);
-    }
-    await this.applyBudget(ctx);
+      for (const producer of producers) {
+        await this.consumeProducerLocked(producer, ctx);
+      }
+      await this.applyBudget(ctx);
+    });
   }
 
   get activeRemoteCount(): number {
@@ -251,6 +224,16 @@ export class MediaEngine {
       }
     }
     return [...keys];
+  }
+
+  mediaDebugLine(): string {
+    const routes = [...this.remotes.values()]
+      .map((item) => `${producerTargetKey(item.producer)}${item.resumed ? '' : ' (paused)'}`)
+      .join(', ');
+    const tracked = this.remotes.size;
+    const resumed = this.activeRemoteCount;
+    const last = this.lastMediaEvent ? ` Last: ${this.lastMediaEvent}` : '';
+    return `${resumed} live / ${tracked} tracked${routes ? ` — ${routes}` : ''}.${last}`;
   }
 
   setAudioPreferences(preferences: Record<string, TargetAudioPreference>): void {
@@ -314,14 +297,18 @@ export class MediaEngine {
   }
 
   async setStoppedFeedKeys(keys: string[], ctx: ConsumerPriorityContext = {}): Promise<void> {
-    this.stoppedFeedKeys = new Set(keys);
-    await this.applyBudget(ctx);
+    await this.serialize(async () => {
+      this.stoppedFeedKeys = new Set(keys);
+      await this.applyBudget(ctx);
+    });
   }
 
   async stop(): Promise<void> {
-    for (const producerId of [...this.remotes.keys()]) {
-      await this.dropProducer(producerId);
-    }
+    await this.serialize(async () => {
+      for (const producerId of [...this.remotes.keys()]) {
+        await this.dropProducerLocked(producerId);
+      }
+    });
     if (this.talkProducer) {
       try {
         this.talkProducer.close();
@@ -346,6 +333,7 @@ export class MediaEngine {
     this.recvTransport = null;
     this.device = null;
     this.overBudget = false;
+    this.lastMediaEvent = '';
   }
 
   private applyAllTrackGain(): void {
@@ -380,6 +368,97 @@ export class MediaEngine {
       return 1;
     }
     return feedDuckingFactor(this.operatorAudio.feedDimDb);
+  }
+
+  private serialize(work: () => Promise<void>): Promise<void> {
+    const run = this.work.then(work, work);
+    this.work = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async consumeProducerLocked(
+    producer: ActiveProducer,
+    ctx: ConsumerPriorityContext,
+  ): Promise<void> {
+    if (!this.device || !this.recvTransport) {
+      throw new Error('Receive transport is not ready.');
+    }
+    if (producer.peerId === this.signaling.socketId) {
+      return;
+    }
+
+    const existing = this.remotes.get(producer.producerId);
+    if (existing) {
+      if (
+        !shouldReplaceRemoteConsumer(
+          { producer: existing.producer, closed: existing.consumer.closed },
+          producer,
+        )
+      ) {
+        existing.producer = producer;
+        return;
+      }
+      this.lastMediaEvent = `replace ${producerTargetKey(existing.producer)} → ${producerTargetKey(producer)}`;
+      await this.dropProducerLocked(producer.producerId);
+    }
+
+    try {
+      const params = await this.signaling.consume(producer.producerId, this.device.rtpCapabilities);
+      const consumer = await this.recvTransport.consume({
+        id: params.id,
+        producerId: params.producerId,
+        kind: params.kind as 'audio' | 'video',
+        rtpParameters: params.rtpParameters as never,
+      });
+
+      const stream = new MediaStream();
+      stream.addTrack(consumer.track as never);
+      this.remotes.set(producer.producerId, { producer, consumer, stream, resumed: false });
+      this.lastMediaEvent = `consume ${producerTargetKey(producer)} ${consumer.id.slice(0, 8)}`;
+      this.applyTrackGain(producer);
+      await this.applyBudget(ctx);
+    } catch (error) {
+      this.lastMediaEvent = `consume failed ${producerTargetKey(producer)}: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      throw error;
+    }
+  }
+
+  private async dropProducerLocked(producerId: string): Promise<void> {
+    const remote = this.remotes.get(producerId);
+    if (!remote) {
+      return;
+    }
+    this.remotes.delete(producerId);
+    try {
+      remote.consumer.close();
+    } catch {
+      // already closed
+    }
+    try {
+      await this.signaling.closeConsumer(remote.consumer.id);
+    } catch {
+      // socket may already have closed it
+    }
+  }
+
+  private async dropConsumerLocked(consumerId: string): Promise<void> {
+    for (const [producerId, remote] of this.remotes) {
+      if (remote.consumer.id === consumerId) {
+        this.lastMediaEvent = `server closed ${producerTargetKey(remote.producer)}`;
+        this.remotes.delete(producerId);
+        try {
+          remote.consumer.close();
+        } catch {
+          // already closed
+        }
+        return;
+      }
+    }
   }
 
   private async applyBudget(ctx: ConsumerPriorityContext): Promise<void> {
