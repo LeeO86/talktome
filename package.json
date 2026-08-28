@@ -15,7 +15,7 @@
     "radio:stream": "node gateway/radioGateway.js stream",
     "radio:stream-rx": "node gateway/radioGateway.js stream-rx",
     "gateway:sync": "scripts/sync-gateway-to-pi.sh",
-    "prebuild:pkg": "node scripts/verify-build-node.js && node scripts/resolve-build-version.js --version-json build-version.json && npm rebuild better-sqlite3",
+    "prebuild:pkg": "node scripts/verify-build-node.js && node scripts/resolve-build-version.js --version-json build-version.json && node scripts/stage-better-sqlite3-binding.js",
     "build:win64": "npm run prebuild:pkg && npx --no-install pkg package.json --targets node24-win-x64 --output talktome_win64 && node scripts/copy-runtime-deps.js win64",
     "build:mac_arm64": "npm run prebuild:pkg && npx --no-install pkg package.json --targets node24-macos-arm64 --output talktome_arm64 && node scripts/copy-runtime-deps.js mac_arm64"
   },
@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "13.0.3",
     "express": "^4.18.2",
     "mediasoup": "^3.26.0",
     "mediasoup-client": "^3.22.0",
@@ -54,7 +54,7 @@
     ]
   },
   "allowScripts": {
-    "better-sqlite3@11.10.0": true,
+    "better-sqlite3@13.0.3": true,
     "esbuild@0.28.2": true,
     "mediasoup@3.26.0": true
   }
