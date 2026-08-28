@@ -3,9 +3,16 @@ import ExpoModulesCore
 import Foundation
 import Security
 
+@_silgen_name("TalkToMeInstallExpoFetchTrust")
+private func TalkToMeInstallExpoFetchTrust()
+
 public final class TalkToMeCertTrustModule: Module {
   public func definition() -> ModuleDefinition {
     Name("TalkToMeCertTrust")
+
+    OnCreate {
+      TalkToMeInstallExpoFetchTrust()
+    }
 
     Function("isAvailable") {
       true
@@ -27,18 +34,20 @@ private func probeCertificate(url: String) async throws -> [String: String] {
   }
 
   let delegate = ProbeDelegate()
-  let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
-  defer { session.invalidateAndCancel() }
+  let session = URLSession(configuration: .ephemeral)
+  defer { session.finishTasksAndInvalidate() }
 
   var request = URLRequest(url: target)
-  request.httpMethod = "HEAD"
+  request.httpMethod = "GET"
   request.timeoutInterval = 8
 
   do {
-    _ = try await session.data(for: request)
+    // Pass a task delegate so the server-trust challenge is not swallowed by
+    // URLSession's async default handling (session-level delegate is skipped).
+    _ = try await session.data(for: request, delegate: delegate)
   } catch {
     if delegate.sha256 == nil {
-      throw error
+      throw Exception(name: "ProbeFailed", description: error.localizedDescription)
     }
   }
 
@@ -53,14 +62,30 @@ private func probeCertificate(url: String) async throws -> [String: String] {
   return result
 }
 
-private final class ProbeDelegate: NSObject, URLSessionDelegate {
+private final class ProbeDelegate: NSObject, URLSessionTaskDelegate {
   var hostname: String?
   var sha256: String?
   var issuer: String?
 
   func urlSession(
     _ session: URLSession,
+    task: URLSessionTask,
     didReceive challenge: URLAuthenticationChallenge,
+    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+  ) {
+    accept(challenge, completionHandler: completionHandler)
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    didReceive challenge: URLAuthenticationChallenge,
+    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+  ) {
+    accept(challenge, completionHandler: completionHandler)
+  }
+
+  private func accept(
+    _ challenge: URLAuthenticationChallenge,
     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
   ) {
     hostname = challenge.protectionSpace.host

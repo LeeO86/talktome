@@ -69,11 +69,17 @@ export function LoginScreen() {
           conflictName: error.existing?.name ?? store.username,
           error: null,
         });
-      } else if (error instanceof TlsUntrustedError && store.pendingCertificate) {
-        useSessionStore.setState({ status: 'idle' });
+      } else if (error instanceof TlsUntrustedError) {
+        const pending = useSessionStore.getState().pendingCertificate;
+        useSessionStore.setState({
+          status: 'idle',
+          statusMessage: pending ? 'This certificate is not in the system trust store.' : '',
+          error: pending ? null : error.message,
+        });
       } else {
         useSessionStore.setState({
           status: 'idle',
+          statusMessage: '',
           error: error instanceof Error ? error.message : String(error),
         });
       }

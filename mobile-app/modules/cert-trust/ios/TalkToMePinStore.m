@@ -8,6 +8,11 @@
   NSLock *_lock;
 }
 
++ (void)load
+{
+  TalkToMeInstallExpoFetchTrust();
+}
+
 + (instancetype)shared
 {
   static TalkToMePinStore *store;

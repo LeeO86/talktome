@@ -1,6 +1,6 @@
-// Phase 0.5 Q7: per-host SHA-256 pin. RN fetch/Socket.IO use the system stack;
-// the local Expo module installs the pin into that stack. JS never sets a
-// global rejectUnauthorized=false.
+// Phase 0.5 Q7: per-host SHA-256 pin. Expo SDK 56 fetch uses ExpoFetchModule
+// (not RCTHTTPRequestHandler). The native module pins that stack plus RN XHR.
+// JS never sets a global rejectUnauthorized=false.
 
 import { formatFingerprint, isSha256Fingerprint } from './fingerprint';
 import { loadTlsPins, pinForHost, saveTlsPins, upsertTlsPin, type TlsPin } from './tlsPins';
@@ -25,14 +25,14 @@ export function rememberedTlsPins(): TlsPin[] {
 
 export async function hydrateTlsPins(): Promise<TlsPin[]> {
   cachedPins = await loadTlsPins();
-  applyPinsToNative(cachedPins);
+  await applyPinsToNative(cachedPins);
   return cachedPins;
 }
 
 export async function rememberTlsPin(pin: TlsPin): Promise<TlsPin[]> {
   cachedPins = upsertTlsPin(cachedPins, pin);
   await saveTlsPins(cachedPins);
-  applyPinsToNative(cachedPins);
+  await applyPinsToNative(cachedPins);
   return cachedPins;
 }
 
@@ -45,15 +45,19 @@ export async function probeServerCertificate(url: string): Promise<CertificatePr
   if (!native?.probe) {
     return null;
   }
-  const probe = await native.probe(url);
-  if (!probe?.hostname || !isSha256Fingerprint(probe.sha256)) {
+  try {
+    const probe = await native.probe(url);
+    if (!probe?.hostname || !isSha256Fingerprint(probe.sha256)) {
+      return null;
+    }
+    return {
+      hostname: probe.hostname,
+      sha256: probe.sha256,
+      issuer: probe.issuer,
+    };
+  } catch {
     return null;
   }
-  return {
-    hostname: probe.hostname,
-    sha256: probe.sha256,
-    issuer: probe.issuer,
-  };
 }
 
 export function describeCertificate(probe: CertificateProbe): string {
@@ -61,10 +65,9 @@ export function describeCertificate(probe: CertificateProbe): string {
   return `${probe.hostname}\nSHA-256: ${formatFingerprint(probe.sha256)}${issuer}`;
 }
 
-function applyPinsToNative(pins: TlsPin[]): void {
-  void loadNativeCertTrust().then((native) => {
-    native?.setPins?.(pins);
-  });
+async function applyPinsToNative(pins: TlsPin[]): Promise<void> {
+  const native = await loadNativeCertTrust();
+  native?.setPins?.(pins);
 }
 
 async function loadNativeCertTrust(): Promise<NativeCertTrust | null> {
