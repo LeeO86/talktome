@@ -1,5 +1,6 @@
 import AVFAudio
 import Foundation
+import MediaPlayer
 import UIKit
 
 #if canImport(WebRTC)
@@ -14,6 +15,7 @@ final class TalkToMeAudioSessionController {
   private var wantsBackgroundReceiveKeepalive = false
   private var backgroundTask = UIBackgroundTaskIdentifier.invalid
   private var preferredRouteId = "speaker"
+  private var remoteCommandsReady = false
   var onRouteChange: (() -> Void)?
 
   init(notificationCenter: NotificationCenter = .default) {
@@ -49,6 +51,7 @@ final class TalkToMeAudioSessionController {
     activeProfile = "intercom"
     Thread.sleep(forTimeInterval: 0.02)
     setWebRTCAudioEnabled(true)
+    updateNowPlaying(title: "TalkToMe", detail: "Intercom", active: true)
   }
 
   func startBackgroundKeepalive() throws {
@@ -61,6 +64,7 @@ final class TalkToMeAudioSessionController {
       setWebRTCAudioEnabled(true)
       wantsBackgroundReceiveKeepalive = true
       activeProfile = "keepalive"
+      updateNowPlaying(title: "TalkToMe", detail: "Intercom", active: true)
     } catch {
       endBackgroundTask()
       throw error
@@ -81,6 +85,7 @@ final class TalkToMeAudioSessionController {
     try applyPreferredRoute(session)
     setWebRTCAudioEnabled(true)
     activeProfile = "intercom"
+    updateNowPlaying(title: "TalkToMe", detail: "Intercom", active: true)
   }
 
   func deactivate() {
@@ -90,6 +95,7 @@ final class TalkToMeAudioSessionController {
     try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     notifyWebRTCDeactivated()
     activeProfile = "idle"
+    updateNowPlaying(title: "TalkToMe", detail: "", active: false)
   }
 
   func setPreferredRouteId(_ id: String) {
@@ -161,6 +167,9 @@ final class TalkToMeAudioSessionController {
     notifyWebRTCActivated()
     setWebRTCAudioEnabled(true)
     activeProfile = profile
+    if profile != "idle" {
+      updateNowPlaying(title: "TalkToMe", detail: "Intercom", active: true)
+    }
   }
 
   private func configureIntercom(_ session: AVAudioSession) throws {
@@ -270,6 +279,56 @@ final class TalkToMeAudioSessionController {
     ["id": id, "label": label, "kind": kind, "selected": selected]
   }
 
+  func updateNowPlaying(title: String, detail: String, active: Bool) {
+    if !active {
+      MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+      return
+    }
+    if activeProfile == "idle" {
+      return
+    }
+    ensureRemoteCommands()
+    var info: [String: Any] = [
+      MPMediaItemPropertyTitle: title.isEmpty ? "TalkToMe" : title,
+      MPMediaItemPropertyArtist: "TalkToMe",
+      MPMediaItemPropertyAlbumTitle: detail,
+      MPNowPlayingInfoPropertyIsLiveStream: true,
+      MPNowPlayingInfoPropertyPlaybackRate: 1.0,
+    ]
+    if let image = appIconImage() {
+      let size = image.size
+      info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
+    }
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+  }
+
+  private func ensureRemoteCommands() {
+    guard !remoteCommandsReady else {
+      return
+    }
+    remoteCommandsReady = true
+    let center = MPRemoteCommandCenter.shared()
+    center.playCommand.isEnabled = true
+    center.playCommand.addTarget { _ in .success }
+    center.pauseCommand.isEnabled = false
+    center.stopCommand.isEnabled = false
+    center.nextTrackCommand.isEnabled = false
+    center.previousTrackCommand.isEnabled = false
+  }
+
+  private func appIconImage() -> UIImage? {
+    if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+       let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+       let files = primary["CFBundleIconFiles"] as? [String] {
+      for name in files.reversed() {
+        if let image = UIImage(named: name) {
+          return image
+        }
+      }
+    }
+    return UIImage(named: "AppIcon")
+  }
+
   private func notifyWebRTCActivated() {
     #if canImport(WebRTC)
     RTCAudioSession.sharedInstance().audioSessionDidActivate(AVAudioSession.sharedInstance())
@@ -305,15 +364,28 @@ final class TalkToMeAudioSessionController {
     case AVAudioSession.routeChangeNotification:
       if let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
          let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) {
+        let resolved = resolvedRouteId(session)
+        let preferredStillAvailable =
+          !preferredRouteId.hasPrefix("port:") ||
+          session.availableInputs?.contains(where: { "port:\($0.uid)" == preferredRouteId }) == true
         switch reason {
-        case .override, .routeConfigurationChange, .newDeviceAvailable, .oldDeviceUnavailable:
-          // Follow AVRoutePickerView / headset plug events instead of forcing speaker back.
-          preferredRouteId = resolvedRouteId(session)
-          onRouteChange?()
-          return
+        case .newDeviceAvailable:
+          // Plug in EarPods / BT: follow the new device.
+          preferredRouteId = resolved
+        case .oldDeviceUnavailable:
+          if !preferredStillAvailable {
+            preferredRouteId = "speaker"
+          }
+        case .override:
+          // Control Center / AVRoutePickerView is an explicit user choice.
+          preferredRouteId = resolved
         default:
+          // Do not adopt a transient headphones-only route after the user picked Speaker.
           break
         }
+        try? applyPreferredRoute(session)
+        onRouteChange?()
+        return
       }
       try? applyPreferredRoute(session)
       onRouteChange?()

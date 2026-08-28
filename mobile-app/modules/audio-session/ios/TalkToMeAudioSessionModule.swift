@@ -69,6 +69,11 @@ public final class TalkToMeAudioSessionModule: Module {
       return true
     }
 
+    AsyncFunction("updateNowPlaying") { (title: String, detail: String, active: Bool) in
+      self.controller.updateNowPlaying(title: title, detail: detail, active: active)
+      return true
+    }
+
     Function("audioRoutes") {
       self.controller.routeSnapshot()["routes"]
     }

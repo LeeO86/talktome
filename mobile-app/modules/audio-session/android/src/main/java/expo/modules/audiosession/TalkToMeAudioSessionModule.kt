@@ -73,6 +73,10 @@ class TalkToMeAudioSessionModule : Module() {
       true
     }
 
+    AsyncFunction("updateNowPlaying") { _title: String, _detail: String, _active: Boolean ->
+      true
+    }
+
     Function("audioRoutes") {
       routeSnapshot()["routes"]
     }

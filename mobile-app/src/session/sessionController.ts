@@ -14,6 +14,8 @@ import type {
 } from '../protocol';
 import { audioSessionAvailable } from '../audio/session';
 import { isLikelyLocalHost, parseServerAddress } from '../servers/parseServerAddress';
+import { looksLikeTlsFailure } from '../servers/tlsFailure';
+import { pinMatches } from '../servers/tlsPins';
 import {
   hydrateTlsPins,
   probeServerCertificate,
@@ -49,7 +51,6 @@ import { TalkCoordinator } from './talkCoordinator';
 import {
   bleFieldsFromSelection,
   initialState,
-  looksLikeTlsFailure,
   useSessionStore,
   type SessionUiState,
 } from './state';
@@ -764,31 +765,40 @@ export class SessionController {
       const health = await this.requireApi().health();
       this.serverAppVersion = health.appVersion;
     } catch (error) {
-      if (looksLikeTlsFailure(error)) {
-        if (state.allowInsecureLocalTLS) {
-          const probe = await probeServerCertificate(parsed.baseUrl);
-          if (probe) {
-            const known = storedPinForHost(probe.hostname);
-            if (known && known.sha256 === probe.sha256.replace(/[^0-9a-fA-F]/g, '').toLowerCase()) {
-              useSessionStore.setState({
-                statusMessage: 'Health check failed; pinned certificate is already trusted. Trying login.',
-              });
-              return;
-            }
-            useSessionStore.setState({
-              status: 'idle',
-              pendingCertificate: probe,
-              error: null,
-              statusMessage: 'This certificate is not in the system trust store.',
-            });
-            throw new TlsUntrustedError(hostname, isLikelyLocalHost(hostname));
-          }
+      if (!looksLikeTlsFailure(error)) {
+        useSessionStore.setState({
+          statusMessage: 'Health check failed; trying login anyway.',
+        });
+        return;
+      }
+
+      let probe = null;
+      if (state.allowInsecureLocalTLS) {
+        try {
+          probe = await probeServerCertificate(parsed.baseUrl);
+        } catch {
+          probe = null;
         }
+      }
+
+      if (probe) {
+        const known = storedPinForHost(probe.hostname);
+        if (pinMatches(known, probe.sha256)) {
+          useSessionStore.setState({
+            statusMessage: 'Health check failed; pinned certificate is already trusted. Trying login.',
+          });
+          return;
+        }
+        useSessionStore.setState({
+          status: 'idle',
+          pendingCertificate: probe,
+          error: null,
+          statusMessage: 'This certificate is not in the system trust store.',
+        });
         throw new TlsUntrustedError(hostname, isLikelyLocalHost(hostname));
       }
-      useSessionStore.setState({
-        statusMessage: 'Health check failed; trying login anyway.',
-      });
+
+      throw new TlsUntrustedError(hostname, isLikelyLocalHost(hostname));
     }
   }
 
