@@ -19,8 +19,12 @@ class TalkToMeSessionWidget : AppWidgetProvider() {
   }
 
   override fun onReceive(context: Context, intent: Intent) {
-    super.onReceive(context, intent)
     val action = intent.action ?: return
+    if (action == ACTION_SESSION_ENDED) {
+      writeDisconnected(context)
+      return
+    }
+    super.onReceive(context, intent)
     if (action != ACTION_TALK && action != ACTION_DISCONNECT) {
       return
     }
@@ -50,6 +54,7 @@ class TalkToMeSessionWidget : AppWidgetProvider() {
     private const val PREFS = "talktome.presence"
     const val ACTION_TALK = "expo.modules.sessionpresence.TALK"
     const val ACTION_DISCONNECT = "expo.modules.sessionpresence.DISCONNECT"
+    const val ACTION_SESSION_ENDED = "expo.modules.sessionpresence.SESSION_ENDED"
     private const val EXTRA_TOKEN = "token"
 
     fun write(
@@ -72,6 +77,18 @@ class TalkToMeSessionWidget : AppWidgetProvider() {
       val ids = manager.getAppWidgetIds(ComponentName(context, TalkToMeSessionWidget::class.java))
       for (id in ids) {
         update(context, manager, id)
+      }
+    }
+
+    fun writeDisconnected(context: Context) {
+      write(context, false, "talktome", "Not connected", false, "Reply lock")
+    }
+
+    fun clearIfConnected(context: Context) {
+      val connected = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getBoolean("connected", false)
+      if (connected) {
+        writeDisconnected(context)
       }
     }
 

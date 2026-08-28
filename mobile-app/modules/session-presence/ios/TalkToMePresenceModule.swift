@@ -1,22 +1,29 @@
 import AppIntents
 import ExpoModulesCore
 import Foundation
+import UIKit
 import WidgetKit
 
 public final class TalkToMePresenceModule: Module {
   private var observer: UnsafeRawPointer?
+  private var terminateObserver: NSObjectProtocol?
 
   public func definition() -> ModuleDefinition {
     Name("TalkToMePresence")
 
-    Events("onTalkShortcut", "onDisconnectShortcut")
+    Events("onTalkShortcut", "onDisconnectShortcut", "onAppTerminating")
 
     OnCreate {
       self.observeShortcuts()
+      self.observeWillTerminate()
+      // Swipe-kill of a suspended app never runs JS disconnect. Drop leftover
+      // Live Activities / widget state from the previous process before JS hydrates.
+      TalkToMeSessionShutdown.clearLockScreenSurfaces()
     }
 
     OnDestroy {
       self.removeShortcutObservers()
+      self.removeTerminateObserver()
     }
 
     Function("isAvailable") {
@@ -80,6 +87,24 @@ public final class TalkToMePresenceModule: Module {
       nil
     )
     self.observer = nil
+  }
+
+  private func observeWillTerminate() {
+    terminateObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.willTerminateNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      TalkToMeSessionShutdown.runForImminentTermination()
+      self?.sendEvent("onAppTerminating", [:])
+    }
+  }
+
+  private func removeTerminateObserver() {
+    if let terminateObserver {
+      NotificationCenter.default.removeObserver(terminateObserver)
+      self.terminateObserver = nil
+    }
   }
 
   private static func emit(_ observer: UnsafeRawPointer?, event: String) {

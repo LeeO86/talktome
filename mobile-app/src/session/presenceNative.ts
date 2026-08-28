@@ -26,7 +26,7 @@ type NativePresence = {
   isAvailable?: () => boolean;
   update?: (snapshot: PresenceNativeSnapshot) => Promise<boolean>;
   addListener?: (
-    eventName: 'onTalkShortcut' | 'onDisconnectShortcut',
+    eventName: 'onTalkShortcut' | 'onDisconnectShortcut' | 'onAppTerminating',
     listener: () => void,
   ) => { remove: () => void };
 };
@@ -77,8 +77,12 @@ export function subscribeDisconnectShortcut(onDisconnect: () => void): () => voi
   return subscribePresenceEvent('onDisconnectShortcut', onDisconnect);
 }
 
+export function subscribeAppTerminating(onTerminating: () => void): () => void {
+  return subscribePresenceEvent('onAppTerminating', onTerminating);
+}
+
 function subscribePresenceEvent(
-  eventName: 'onTalkShortcut' | 'onDisconnectShortcut',
+  eventName: 'onTalkShortcut' | 'onDisconnectShortcut' | 'onAppTerminating',
   listener: () => void,
 ): () => void {
   const native = loadNative();

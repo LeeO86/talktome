@@ -1,0 +1,40 @@
+/**
+ * Lock-screen / widget / FGS leftovers after the operator closes the app.
+ *
+ * Live Activities and Apple PTT system UI outlive the process. JS
+ * `disconnect()` does not run when the user swipe-kills a suspended app, so
+ * native code has to drop those surfaces. AppState `background` is a live
+ * session (lock screen card is supposed to stay) and must not disconnect.
+ */
+export type PresenceShutdownTrigger =
+  | 'app-state-background'
+  | 'app-state-inactive'
+  | 'native-will-terminate'
+  | 'android-task-removed'
+  | 'native-launch-orphan';
+
+export function shouldDisconnectSession(trigger: PresenceShutdownTrigger): boolean {
+  switch (trigger) {
+    case 'app-state-background':
+    case 'app-state-inactive':
+      return false;
+    case 'native-will-terminate':
+    case 'android-task-removed':
+    case 'native-launch-orphan':
+      return true;
+  }
+}
+
+export function shouldDisconnectForAppStateChange(next: string): boolean {
+  if (next === 'background') {
+    return shouldDisconnectSession('app-state-background');
+  }
+  if (next === 'inactive') {
+    return shouldDisconnectSession('app-state-inactive');
+  }
+  return false;
+}
+
+export function shouldClearOrphanedPresence(nativeSnapshotConnected: boolean): boolean {
+  return nativeSnapshotConnected;
+}

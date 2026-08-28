@@ -55,7 +55,8 @@ import {
 } from '../ptt/native';
 import { cachedPttChannel, type SavedProfile } from './remembered';
 import { sessionPresence, presenceNotification } from './presence';
-import { publishSessionPresence, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
+import { publishSessionPresence, subscribeAppTerminating, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
+import { shouldDisconnectForAppStateChange } from './presenceShutdown';
 import { buildWatchRemoteSnapshot } from '../watch/snapshot';
 import { publishWatchRemote, subscribeWatchRemote, ackWatchTalk, type WatchRemoteCommand } from '../watch/native';
 import { bleFieldsFromSelection, bleSelectionFromState, useSessionStore } from './state';
@@ -237,6 +238,11 @@ export class BackgroundCoordinator {
     subscribeDisconnectShortcut(() => {
       void this.c.disconnect();
     });
+    subscribeAppTerminating(() => {
+      if (useSessionStore.getState().operatorReady) {
+        void this.c.disconnect();
+      }
+    });
     subscribeBleNative({
       onState: (state) => {
         this.publishBleState(state);
@@ -260,6 +266,9 @@ export class BackgroundCoordinator {
     });
     this.appStateSubscription?.remove();
     this.appStateSubscription = AppState.addEventListener('change', (next) => {
+      if (shouldDisconnectForAppStateChange(next)) {
+        void this.c.disconnect();
+      }
       void this.syncAudioSession(next);
       if (shouldRetryForegroundService(Platform.OS, useSessionStore.getState().operatorReady, next)) {
         void this.syncForegroundService();

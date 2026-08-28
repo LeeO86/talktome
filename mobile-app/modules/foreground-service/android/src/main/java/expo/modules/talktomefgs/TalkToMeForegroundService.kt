@@ -73,6 +73,18 @@ class TalkToMeForegroundService : Service() {
     super.onDestroy()
   }
 
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    Holder.listener?.onStopRequested()
+    // Must match TalkToMeSessionWidget.ACTION_SESSION_ENDED.
+    sendBroadcast(
+      Intent()
+        .setClassName(packageName, "expo.modules.sessionpresence.TalkToMeSessionWidget")
+        .setAction("expo.modules.sessionpresence.SESSION_ENDED"),
+    )
+    stopSession()
+    super.onTaskRemoved(rootIntent)
+  }
+
   private fun startInForeground() {
     ensureChannel()
     val notification = buildNotification()

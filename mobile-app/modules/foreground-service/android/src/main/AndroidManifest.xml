@@ -11,6 +11,6 @@
       android:name="expo.modules.talktomefgs.TalkToMeForegroundService"
       android:exported="false"
       android:foregroundServiceType="microphone|mediaPlayback|connectedDevice"
-      android:stopWithTask="false" />
+      android:stopWithTask="true" />
   </application>
 </manifest>

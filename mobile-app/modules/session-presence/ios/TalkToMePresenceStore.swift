@@ -14,6 +14,21 @@ enum TalkToMePresenceStore {
   static let snapshotKey = "talktome.presence.snapshot"
   static let talkNotification = "io.github.leeo86.talktome.talk" as CFString
   static let disconnectNotification = "io.github.leeo86.talktome.disconnect" as CFString
+  /// Posted when the process is about to die. PushToTalk listens and leaves the channel.
+  static let sessionWillTerminateNotification = "io.github.leeo86.talktome.session-will-terminate" as CFString
+
+  static func writeDisconnected() {
+    write(
+      TalkToMePresenceState(
+        connected: false,
+        title: "talktome",
+        detail: "Not connected",
+        audioActive: false,
+        talking: false,
+        listening: false
+      )
+    )
+  }
 
   static func write(_ state: TalkToMePresenceState) {
     guard let defaults = UserDefaults(suiteName: suiteName) else {
@@ -21,6 +36,7 @@ enum TalkToMePresenceStore {
     }
     if let data = try? JSONEncoder().encode(state) {
       defaults.set(data, forKey: snapshotKey)
+      defaults.synchronize()
     }
   }
 

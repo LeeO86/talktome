@@ -33,13 +33,25 @@ final class TalkToMeLiveActivityController {
       listening: state.listening
     )
     if !state.connected {
-      Task { @MainActor in
-        await endAll()
-      }
+      Self.endAllDetached()
       return
     }
     Task { @MainActor in
       await requestOrUpdate(content)
+    }
+  }
+
+  static func endAllDetached() {
+    Task { @MainActor in
+      await endAll()
+    }
+  }
+
+  @MainActor
+  static func endAll() async {
+    let existing = Array(Activity<TalkToMePresenceAttributes>.activities)
+    for activity in existing {
+      await activity.end(nil, dismissalPolicy: .immediate)
     }
   }
 
@@ -62,13 +74,6 @@ final class TalkToMeLiveActivityController {
       )
     } catch {
       log.error("Live Activity request failed: \(error.localizedDescription, privacy: .public)")
-    }
-  }
-
-  @MainActor
-  private func endAll() async {
-    for activity in Activity<TalkToMePresenceAttributes>.activities {
-      await activity.end(nil, dismissalPolicy: .immediate)
     }
   }
 }

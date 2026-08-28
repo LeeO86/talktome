@@ -2,6 +2,7 @@ import ExpoModulesCore
 
 public final class TalkToMePttModule: Module {
   private let controller = TalkToMePttController()
+  private var terminateObserver: UnsafeRawPointer?
 
   public func definition() -> ModuleDefinition {
     Name("TalkToMePtt")
@@ -21,6 +22,7 @@ public final class TalkToMePttModule: Module {
     )
 
     OnCreate {
+      self.observeSessionWillTerminate()
       self.controller.onDiagnostic = { [weak self] message in
         self?.sendEvent("onDiagnostic", ["message": message])
       }
@@ -64,6 +66,10 @@ public final class TalkToMePttModule: Module {
       self.controller.prepareAtLaunch()
     }
 
+    OnDestroy {
+      self.removeSessionWillTerminateObserver()
+    }
+
     Function("isAvailable") {
       self.controller.isAvailable()
     }
@@ -87,4 +93,44 @@ public final class TalkToMePttModule: Module {
       return true
     }
   }
+
+  private func observeSessionWillTerminate() {
+    let observer = UnsafeRawPointer(Unmanaged.passUnretained(self).toOpaque())
+    terminateObserver = observer
+    CFNotificationCenterAddObserver(
+      CFNotificationCenterGetDarwinNotifyCenter(),
+      observer,
+      { _, observer, _, _, _ in
+        TalkToMePttModule.leaveFromObserver(observer)
+      },
+      TalkToMePttModule.sessionWillTerminateNotification,
+      nil,
+      .deliverImmediately
+    )
+  }
+
+  private func removeSessionWillTerminateObserver() {
+    guard let terminateObserver else {
+      return
+    }
+    CFNotificationCenterRemoveObserver(
+      CFNotificationCenterGetDarwinNotifyCenter(),
+      terminateObserver,
+      nil,
+      nil
+    )
+    self.terminateObserver = nil
+  }
+
+  private static func leaveFromObserver(_ observer: UnsafeRawPointer?) {
+    guard let observer else {
+      return
+    }
+    let module = Unmanaged<TalkToMePttModule>.fromOpaque(observer).takeUnretainedValue()
+    module.controller.leave()
+  }
+
+  /// Must match `TalkToMePresenceStore.sessionWillTerminateNotification`.
+  private static let sessionWillTerminateNotification =
+    "io.github.leeo86.talktome.session-will-terminate" as CFString
 }

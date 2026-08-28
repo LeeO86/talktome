@@ -10,6 +10,9 @@ class TalkToMePresenceModule : Module() {
     Events("onTalkShortcut", "onDisconnectShortcut")
 
     OnCreate {
+      appContext.reactContext?.applicationContext?.let { context ->
+        TalkToMeSessionWidget.clearIfConnected(context)
+      }
       Holder.listener = object : TalkToMePresenceListener {
         override fun onTalkRequested() {
           sendEvent("onTalkShortcut")

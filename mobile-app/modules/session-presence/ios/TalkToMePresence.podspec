@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   s.source         = { git: '' }
   s.static_framework = true
   s.weak_frameworks = 'ActivityKit', 'WidgetKit', 'AppIntents'
-  s.frameworks     = 'SwiftUI'
+  s.frameworks     = 'SwiftUI', 'MediaPlayer', 'UIKit'
 
   s.dependency 'ExpoModulesCore'
 

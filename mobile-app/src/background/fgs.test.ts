@@ -7,6 +7,7 @@ import {
   shouldClaimMicrophoneFgsType,
   shouldRetryForegroundService,
   shouldStartForegroundService,
+  shouldStopForegroundServiceWhenTaskRemoved,
 } from './fgs';
 
 describe('foreground service policy', () => {
@@ -55,5 +56,9 @@ describe('foreground service policy', () => {
 
   it('does not promise OEM immunity', () => {
     expect(fgsCapabilityReason(true)).toMatch(/OEM battery savers/);
+  });
+
+  it('stops the session FGS when the recents task is removed', () => {
+    expect(shouldStopForegroundServiceWhenTaskRemoved()).toBe(true);
   });
 });
