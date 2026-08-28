@@ -8,7 +8,7 @@ Pod::Spec.new do |s|
   s.platforms      = { :ios => '15.1' }
   s.source         = { git: '' }
   s.static_framework = true
-  s.frameworks     = 'AVFoundation', 'AVFAudio', 'AVKit', 'UIKit'
+  s.frameworks     = 'AVFoundation', 'AVFAudio', 'AVKit', 'UIKit', 'MediaPlayer'
 
   s.dependency 'ExpoModulesCore'
   s.dependency 'JitsiWebRTC', '~> 124.0.0'

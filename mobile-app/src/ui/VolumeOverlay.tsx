@@ -133,7 +133,7 @@ const styles = StyleSheet.create({
   fader: {
     alignSelf: 'stretch',
     paddingHorizontal: 4,
-    paddingVertical: 8,
+    paddingVertical: 12,
   },
   step: {
     width: 64,

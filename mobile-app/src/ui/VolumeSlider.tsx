@@ -3,7 +3,9 @@ import { StyleSheet, View } from 'react-native';
 
 import { volumeFromMeterFill, volumeMeterFill } from '../protocol';
 import { colors } from './theme';
-import { volumeFromTouch } from './volumeFromTouch';
+import { volumeFromTouch, volumeThumbLeft } from './volumeFromTouch';
+
+export const VOLUME_THUMB_SIZE = 24;
 
 type Props = {
   value: number;
@@ -28,16 +30,19 @@ export function VolumeSlider({
 }: Props) {
   const originX = useRef(0);
   const width = useRef(1);
+  const [trackWidth, setTrackWidth] = useState(0);
   const [draft, setDraft] = useState<number | null>(null);
   const shown = draft ?? (logarithmic ? volumeMeterFill(value) : value);
+  const pad = VOLUME_THUMB_SIZE / 2;
+  const thumbLeft = volumeThumbLeft(shown, trackWidth || width.current, VOLUME_THUMB_SIZE);
 
   const applyPageX = (pageX: number) => {
     if (disabled) {
       return;
     }
     const next = quantize
-      ? quantize(volumeFromTouch(pageX, originX.current, width.current))
-      : volumeFromTouch(pageX, originX.current, width.current);
+      ? quantize(volumeFromTouch(pageX, originX.current, width.current, pad))
+      : volumeFromTouch(pageX, originX.current, width.current, pad);
     setDraft(next);
     onChange(logarithmic ? volumeFromMeterFill(next) : next);
   };
@@ -53,7 +58,9 @@ export function VolumeSlider({
       accessibilityLabel={accessibilityLabel}
       style={[styles.track, flex && styles.flex, disabled && styles.disabled]}
       onLayout={(event) => {
-        width.current = event.nativeEvent.layout.width || 1;
+        const nextWidth = event.nativeEvent.layout.width || 1;
+        width.current = nextWidth;
+        setTrackWidth(nextWidth);
       }}
       onStartShouldSetResponder={() => !disabled}
       onMoveShouldSetResponder={() => !disabled}
@@ -68,18 +75,22 @@ export function VolumeSlider({
       onResponderTerminate={endDrag}
     >
       <View pointerEvents="none" style={[styles.rail, light && styles.railLight]} />
-      <View pointerEvents="none" style={[styles.fill, { width: `${shown * 100}%` }]} />
-      <View pointerEvents="none" style={[styles.thumb, light && styles.thumbLight, { left: `${shown * 100}%` }]} />
+      <View pointerEvents="none" style={[styles.fill, { width: thumbLeft }]} />
+      <View
+        pointerEvents="none"
+        style={[styles.thumb, light && styles.thumbLight, { left: thumbLeft }]}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   track: {
-    height: 28,
+    height: 40,
     justifyContent: 'center',
     width: 88,
     flexGrow: 0,
+    overflow: 'visible',
   },
   flex: {
     width: undefined,
@@ -91,23 +102,24 @@ const styles = StyleSheet.create({
   },
   rail: {
     position: 'absolute',
-    left: 0,
-    right: 0,
+    left: VOLUME_THUMB_SIZE / 2,
+    right: VOLUME_THUMB_SIZE / 2,
     height: 4,
     borderRadius: 2,
     backgroundColor: 'rgba(255,255,255,0.16)',
   },
   fill: {
+    position: 'absolute',
+    left: VOLUME_THUMB_SIZE / 2,
     height: 4,
     borderRadius: 2,
     backgroundColor: colors.accent,
   },
   thumb: {
     position: 'absolute',
-    width: 16,
-    height: 16,
-    marginLeft: -8,
-    borderRadius: 8,
+    width: VOLUME_THUMB_SIZE,
+    height: VOLUME_THUMB_SIZE,
+    borderRadius: VOLUME_THUMB_SIZE / 2,
     backgroundColor: colors.text,
   },
   railLight: {

@@ -29,7 +29,12 @@ struct TalkToMeLiveActivity: Widget {
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          TalkToMeMark(size: 36)
+          VStack(alignment: .leading, spacing: 4) {
+            TalkToMeMark(size: 32, filled: true)
+            Text("TalkToMe")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.secondary)
+          }
         }
         DynamicIslandExpandedRegion(.center) {
           VStack(alignment: .leading, spacing: 2) {
@@ -74,7 +79,12 @@ struct TalkToMeLockScreenView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 12) {
-        TalkToMeMark(size: 36)
+        VStack(alignment: .leading, spacing: 4) {
+          TalkToMeMark(size: 36, filled: true)
+          Text("TalkToMe")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+        }
         VStack(alignment: .leading, spacing: 2) {
           ForEach(presenceLines(state.title), id: \.self) { line in
             Text(line)

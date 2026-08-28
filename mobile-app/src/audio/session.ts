@@ -13,6 +13,7 @@ type NativeAudioSession = {
   prepareForSystemManagedIntercom?: () => Promise<boolean>;
   deactivate?: () => Promise<boolean>;
   setWebRTCAudioEnabled?: (enabled: boolean) => Promise<boolean>;
+  updateNowPlaying?: (title: string, detail: string, active: boolean) => Promise<boolean>;
 };
 
 let cached: NativeAudioSession | null | undefined;
@@ -68,4 +69,12 @@ export async function deactivateAudioSession(): Promise<boolean> {
 
 export async function setWebRTCAudioEnabled(enabled: boolean): Promise<boolean> {
   return (await loadNative()?.setWebRTCAudioEnabled?.(enabled)) === true;
+}
+
+export async function updateNowPlaying(input: {
+  title: string;
+  detail: string;
+  active: boolean;
+}): Promise<boolean> {
+  return (await loadNative()?.updateNowPlaying?.(input.title, input.detail, input.active)) === true;
 }

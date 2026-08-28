@@ -1,5 +1,6 @@
 import { requireNativeModule } from 'expo-modules-core';
 
+import { updateNowPlaying } from '../audio/session';
 import {
   PRESENCE_DISCONNECT_LABEL,
   presenceTalkButtonLabel,
@@ -61,6 +62,11 @@ export function publishSessionPresence(snapshot: PresenceSnapshot): void {
     disconnectLabel: PRESENCE_DISCONNECT_LABEL,
   };
   void loadNative()?.update?.(payload);
+  void updateNowPlaying({
+    title: payload.title || 'TalkToMe',
+    detail: payload.detail,
+    active: snapshot.connected,
+  });
 }
 
 export function subscribeTalkShortcut(onTalk: () => void): () => void {
