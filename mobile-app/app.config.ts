@@ -26,6 +26,7 @@ const config: ExpoConfig = {
         : {}),
     },
     infoPlist: {
+      ITSAppUsesNonExemptEncryption: false,
       NSMicrophoneUsageDescription:
         'TalkToMe uses the microphone so you can talk to other operators.',
       NSLocalNetworkUsageDescription:
