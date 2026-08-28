@@ -18,8 +18,8 @@ function producer(
 }
 
 describe('applyConsumerBudget', () => {
-  it('resumes at most eight consumers', () => {
-    const producers = Array.from({ length: 12 }, (_, index) =>
+  it('resumes at most the configured consumer budget', () => {
+    const producers = Array.from({ length: MAX_RESUMED_CONSUMERS + 4 }, (_, index) =>
       producer(`p${index}`, { kind: 'conference', id: index }),
     );
     const decision = applyConsumerBudget(producers);
@@ -32,7 +32,7 @@ describe('applyConsumerBudget', () => {
     const talk = producer('talk', { kind: 'directUser', targetPeerId: 'x' }, 7);
     const conference = producer('conf', { kind: 'conference', id: 1 });
     const feed = producer('feed', { kind: 'feed', id: 3 });
-    const extras = Array.from({ length: 8 }, (_, index) =>
+    const extras = Array.from({ length: MAX_RESUMED_CONSUMERS }, (_, index) =>
       producer(`c${index}`, { kind: 'conference', id: 10 + index }),
     );
     const decision = applyConsumerBudget([feed, conference, ...extras, talk], {

@@ -1,6 +1,6 @@
 import type { ActiveProducer } from '../protocol/types';
 
-export const MAX_RESUMED_CONSUMERS = 8;
+export const MAX_RESUMED_CONSUMERS = 32;
 
 export type ConsumerPriorityContext = {
   talkTargetKey?: string | null;
