@@ -21,7 +21,9 @@ function upsertService(androidManifest) {
       'android:name': SERVICE_NAME,
       'android:exported': 'false',
       'android:foregroundServiceType': SERVICE_TYPES,
-      'android:stopWithTask': 'false',
+      // Must match modules/foreground-service/.../AndroidManifest.xml. Recents
+      // swipe should end the session; a mismatch fails the APK manifest merge.
+      'android:stopWithTask': 'true',
     },
   };
   if (existing) {

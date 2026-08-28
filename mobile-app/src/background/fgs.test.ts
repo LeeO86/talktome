@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -60,5 +62,17 @@ describe('foreground service policy', () => {
 
   it('stops the session FGS when the recents task is removed', () => {
     expect(shouldStopForegroundServiceWhenTaskRemoved()).toBe(true);
+  });
+
+  it('keeps the Expo plugin stopWithTask in sync with the native FGS manifest', () => {
+    const plugin = readFileSync(resolve(__dirname, '../../plugins/withTalkToMeFgs.js'), 'utf8');
+    const manifest = readFileSync(
+      resolve(__dirname, '../../modules/foreground-service/android/src/main/AndroidManifest.xml'),
+      'utf8',
+    );
+    const pluginValue = plugin.match(/'android:stopWithTask': '([^']+)'/)?.[1];
+    const manifestValue = manifest.match(/android:stopWithTask="([^"]+)"/)?.[1];
+    expect(pluginValue).toBe('true');
+    expect(manifestValue).toBe('true');
   });
 });
