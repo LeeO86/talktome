@@ -61,7 +61,6 @@ const statusFeedsBody = document.getElementById('status-feeds-body');
 const statusBridgesBody = document.getElementById('status-bridges-body');
 const statusCompanionsBody = document.getElementById('status-companions-body');
 const targetMatrixContainer = document.getElementById('target-matrix-container');
-const conferenceMembershipMatrixContainer = document.getElementById('conference-membership-matrix-container');
 const userPicker = document.getElementById('user-picker');
 const userSearch = document.getElementById('user-search');
 const userSearchClear = document.getElementById('user-search-clear');
@@ -89,6 +88,10 @@ const productionMembersList = document.getElementById('production-members');
 const productionTargetMatrixContainer = document.getElementById('production-target-matrix-container');
 const productionOrderUser = document.getElementById('production-order-user');
 const productionOrderList = document.getElementById('production-order-list');
+const productionLayout = document.getElementById('production-layout');
+const productionSidebar = document.getElementById('production-sidebar');
+const productionDefaultDetail = document.getElementById('production-default-detail');
+const multipleProductionsInput = document.getElementById('multiple-productions-enabled');
 const configExportBtn = document.getElementById('config-export-btn');
 const configImportBtn = document.getElementById('config-import-btn');
 const configImportFile = document.getElementById('config-import-file');
@@ -159,13 +162,6 @@ const collapsibleAdminSections = {
     cardEl: document.getElementById('matrix-section-toggle')?.closest('.card'),
     headerEl: document.getElementById('matrix-section-toggle')?.closest('.card-header'),
   },
-  productions: {
-    label: 'Productions',
-    bodyEl: document.getElementById('productions-section-body'),
-    buttonEl: document.getElementById('productions-section-toggle'),
-    cardEl: document.getElementById('productions-section-toggle')?.closest('.card'),
-    headerEl: document.getElementById('productions-section-toggle')?.closest('.card-header'),
-  },
   conferences: {
     label: 'Conferences',
     bodyEl: document.getElementById('conferences-section-body'),
@@ -189,7 +185,6 @@ let currentBridgeRegistry = [];
 let currentAdminCatalog = { users: [], conferences: [], feeds: [] };
 const targetAssignmentsByUser = new Map();
 const targetEditorRefreshTimers = new Map();
-const conferenceMembershipsByConference = new Map();
 const conferenceMembershipEditorRefreshes = new Map();
 let statusLoadPromise = null;
 let statusEventSource = null;
@@ -210,6 +205,8 @@ const entityMasterDetailState = {
   feeds: { selectedId: null, query: '' },
 };
 let productionSearchQuery = '';
+let multipleProductionsEnabled = false;
+let multipleProductionsSupported = true;
 
 function focusAdminLoginNameField() {
   if (!adminNameInput) return;
@@ -865,7 +862,11 @@ async function authedFetch(url, options) {
 
 async function fetchJSON(url) {
   const res = await authedFetch(url);
-  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(`Request failed: ${res.status}`);
+    error.status = res.status;
+    throw error;
+  }
   return res.json();
 }
 
@@ -880,7 +881,7 @@ function applyAdminState(payload) {
     adminNameLabel.textContent = adminState.name || 'Admin';
   }
   adminNavLinks.forEach((link) => {
-    link.hidden = !adminState.isGlobalAdmin && link.dataset.adminNav !== 'productions';
+    link.hidden = !adminState.isGlobalAdmin && link.dataset.adminNav !== 'matrix';
   });
   if (productionCreateForm) productionCreateForm.hidden = !adminState.isGlobalAdmin;
 }
@@ -1632,26 +1633,25 @@ async function productionRequest(url, options = undefined) {
   const response = await authedFetch(url, options);
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || `Request failed: ${response.status}`);
+    const error = new Error(payload.error || `Request failed: ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return response;
 }
 
 function renderProductionSummaries() {
   if (!productionList) return;
-  if (!productionSummaries.length) {
-    productionList.innerHTML = '<li class="entity-picker-empty">No productions configured.</li>';
-    return;
-  }
   const query = normalizeAdminSearch(productionSearchQuery);
-  const matches = productionSummaries.filter((production) => normalizeAdminSearch(production.name).includes(query));
+  const availableLayouts = productionSummaries;
+  const matches = availableLayouts.filter((production) => normalizeAdminSearch(production.name).includes(query));
   if (!matches.length) {
-    productionList.innerHTML = '<li class="entity-picker-empty">No matching productions.</li>';
+    productionList.innerHTML = '<li class="entity-picker-empty">No matching matrix layouts.</li>';
     return;
   }
   productionList.innerHTML = matches.map((production) => `
     <li>
-      <button type="button" data-production-select="${production.id}" aria-current="${Number(production.id) === Number(selectedProductionId)}">
+      <button type="button" data-production-select="${production.id}" aria-current="${String(production.id) === String(selectedProductionId)}">
         ${escapeHtml(production.name)}
       </button>
     </li>
@@ -1663,9 +1663,12 @@ bindEntitySearch(productionSearch, productionSearchClear, (query) => {
   renderProductionSummaries();
 });
 
-function setProductionDetailVisible(visible) {
-  productionEmpty?.classList.toggle('is-hidden', visible);
-  productionDetail?.classList.toggle('is-hidden', !visible);
+function setProductionDetailVisible(view = 'empty') {
+  const showDefault = view === 'default';
+  const showProduction = view === 'production';
+  productionDefaultDetail?.classList.toggle('is-hidden', !showDefault);
+  productionDetail?.classList.toggle('is-hidden', !showProduction);
+  productionEmpty?.classList.toggle('is-hidden', showDefault || showProduction);
 }
 
 function productionTargetKey(targetType, targetId) {
@@ -1675,29 +1678,42 @@ function productionTargetKey(targetType, targetId) {
 function renderProductionMembers(payload) {
   if (!productionMembersList) return;
   const memberMap = new Map(payload.members.map((member) => [String(member.id), member]));
-  productionMembersList.innerHTML = payload.catalog.users.map((user) => {
-    const member = memberMap.get(String(user.id));
-    const adminControl = member && payload.permissions.globalAdmin
-      ? user.is_guest_profile
-        ? '<button type="button" class="small production-admin-role-toggle" disabled title="Guest profile cannot be made production admin">Make admin</button>'
-        : `<button type="button" class="small production-admin-role-toggle ${member.isProductionAdmin ? 'warning' : ''}"
-            data-production-admin="${user.id}" data-should-make-admin="${member.isProductionAdmin ? 'false' : 'true'}">
-            ${member.isProductionAdmin ? 'Remove admin' : 'Make admin'}
-          </button>`
-      : member?.isProductionAdmin
-        ? '<span class="badge admin">Production admin</span>'
-        : '';
-    return `
-      <li class="production-check-row${member ? '' : ' is-inactive'}" data-production-member-row="${user.id}" tabindex="0">
-        <button type="button" class="production-member-toggle${member ? ' is-member' : ''}"
-          data-production-member="${user.id}" data-is-member="${member ? 'true' : 'false'}"
-          aria-label="${member ? 'Remove' : 'Add'} ${escapeHtml(user.name)} ${member ? 'from' : 'to'} this production"
-          title="${member ? 'Remove member' : 'Add member'}">${member ? '−' : '+'}</button>
-        <span>${escapeHtml(user.name)}${user.is_guest_profile ? ' <span class="badge guest-profile">Guest</span>' : ''}</span>
-        ${adminControl}
-      </li>
-    `;
-  }).join('') || '<li class="section-note">No users available.</li>';
+  const renderRows = (type, label, catalog, activeItems) => {
+    const activeIds = new Set(activeItems.map((item) => String(item.id)));
+    const rows = catalog.map((item) => {
+      const isMember = type === 'user' ? memberMap.has(String(item.id)) : activeIds.has(String(item.id));
+      const member = type === 'user' ? memberMap.get(String(item.id)) : null;
+      const adminControl = type === 'user' && member && payload.permissions.globalAdmin
+        ? item.is_guest_profile
+          ? '<button type="button" class="small production-admin-role-toggle" disabled title="Guest profile cannot be made production admin">Make admin</button>'
+          : `<button type="button" class="small production-admin-role-toggle ${member.isProductionAdmin ? 'warning' : ''}"
+              data-production-admin="${item.id}" data-should-make-admin="${member.isProductionAdmin ? 'false' : 'true'}">
+              ${member.isProductionAdmin ? 'Remove admin' : 'Make admin'}
+            </button>`
+        : member?.isProductionAdmin
+          ? '<span class="badge admin">Production admin</span>'
+          : '';
+      return `
+        <li class="production-check-row${isMember ? '' : ' is-inactive'}"
+          data-production-entity-row="${type}:${item.id}" tabindex="0">
+          <button type="button" class="production-member-toggle${isMember ? ' is-member' : ''}"
+            data-production-entity-type="${type}" data-production-entity-id="${item.id}"
+            data-is-member="${isMember ? 'true' : 'false'}"
+            aria-label="${isMember ? 'Remove' : 'Add'} ${escapeHtml(item.name)} ${isMember ? 'from' : 'to'} this production"
+            title="${isMember ? 'Remove from production' : 'Add to production'}">${isMember ? '−' : '+'}</button>
+          <span>${escapeHtml(item.name)}${item.is_guest_profile ? ' <span class="badge guest-profile">Guest</span>' : ''}</span>
+          ${adminControl}
+        </li>
+      `;
+    }).join('') || '<li class="section-note">None available.</li>';
+    return `<li class="production-entity-heading">${escapeHtml(label)}</li>${rows}`;
+  };
+
+  productionMembersList.innerHTML = [
+    renderRows('user', 'Users', payload.catalog.users, payload.members),
+    renderRows('conference', 'Conferences', payload.catalog.conferences, payload.conferences),
+    renderRows('feed', 'Feeds', payload.catalog.feeds, payload.feeds),
+  ].join('');
 }
 
 function renderProductionTargetMatrix(payload) {
@@ -1738,7 +1754,7 @@ function renderProductionTargetMatrix(payload) {
         <td class="target-matrix__coupling target-matrix__target-column target-matrix__column--${escapeHtml(column.targetType)}" data-matrix-column="${columnIndex}">
           <button type="button" class="target-matrix-toggle production-target-toggle"
             data-user-id="${user.id}" data-target-type="${escapeHtml(column.targetType)}" data-target-id="${column.id}"
-            aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"
+            aria-label="${escapeHtml(label)}" title="${escapeHtml(column.targetType === 'conference' ? `${label} (also controls conference membership)` : label)}"
             aria-pressed="${assignments.has(productionTargetKey(column.targetType, column.id))}"></button>
         </td>
       `;
@@ -1831,7 +1847,7 @@ async function saveProductionTargetOrder(userId, list) {
 
 function renderProductionDetail(payload, preferredOrderUserId = null) {
   selectedProductionPayload = payload;
-  setProductionDetailVisible(true);
+  setProductionDetailVisible('production');
   if (productionDetailName) productionDetailName.textContent = payload.production.name;
   if (productionGlobalActions) productionGlobalActions.hidden = !payload.permissions.globalAdmin;
   renderProductionMembers(payload);
@@ -1847,14 +1863,40 @@ async function loadProductionDetail(productionId, { preferredOrderUserId = null 
     renderProductionDetail(payload, preferredOrderUserId);
   } catch (error) {
     selectedProductionPayload = null;
-    setProductionDetailVisible(false);
+    setProductionDetailVisible('empty');
     showMessage(error.message || 'Failed to load production', 'error', 'productions');
   }
 }
 
 async function loadProductions({ selectId = selectedProductionId } = {}) {
+  let mode;
+  try {
+    mode = await fetchJSON('/admin/settings/multiple-productions');
+    multipleProductionsSupported = true;
+  } catch (error) {
+    if (error?.status !== 404) throw error;
+    multipleProductionsSupported = false;
+    mode = { enabled: false, configurable: false };
+    console.warn('Multiple Productions requires a server restart to load the matching backend.');
+  }
+  multipleProductionsEnabled = mode?.enabled === true;
+  if (multipleProductionsInput) {
+    multipleProductionsInput.checked = multipleProductionsEnabled;
+    multipleProductionsInput.disabled = !multipleProductionsSupported || mode?.configurable !== true;
+    const switchLabel = multipleProductionsInput.closest('label');
+    if (switchLabel) {
+      switchLabel.title = multipleProductionsSupported
+        ? 'Enable separate user, conference, feed and membership layouts for multiple productions.'
+        : 'Restart the Talktome server to enable Multiple Productions.';
+    }
+  }
+  if (productionSidebar) productionSidebar.hidden = !multipleProductionsEnabled;
+  productionLayout?.classList.toggle('production-layout--single', !multipleProductionsEnabled);
   productionSummaries = await fetchJSON('/admin/productions');
-  if (!productionSummaries.some((item) => Number(item.id) === Number(selectId))) {
+  if (productionEmpty) productionEmpty.textContent = 'Select a matrix layout to configure it.';
+  if (!multipleProductionsEnabled) selectId = mode?.primaryProductionId ?? productionSummaries[0]?.id ?? null;
+  const validSelection = productionSummaries.some((item) => Number(item.id) === Number(selectId));
+  if (!validSelection) {
     selectId = productionSummaries[0]?.id || null;
   }
   selectedProductionId = selectId ? Number(selectId) : null;
@@ -1863,29 +1905,45 @@ async function loadProductions({ selectId = selectedProductionId } = {}) {
     await loadProductionDetail(selectedProductionId);
   } else {
     selectedProductionPayload = null;
-    setProductionDetailVisible(false);
+    setProductionDetailVisible('empty');
   }
 }
 
 async function loadData() {
-  await loadProductions();
   if (!adminState.isGlobalAdmin) {
+    await loadProductions();
     stopStatusStream();
-    activateAdminView('productions', { updateHash: true, replaceHash: true });
+    activateAdminView('matrix', { updateHash: true, replaceHash: true });
     return;
   }
-  await loadGuestLoginSettings();
-  await loadDefaultClientSettings();
+
+  const productionLoad = loadProductions().catch((error) => {
+    console.error('Failed to load matrix layouts:', error);
+    showMessage('Failed to load Production layouts. Default data is still available.', 'warning', 'matrix');
+  });
+  const guestSettingsLoad = loadGuestLoginSettings().catch((error) => {
+    console.error('Failed to load Guest login settings:', error);
+  });
   const { users, conferences, feeds, bridges } = await fetchAdminCollections();
-  await loadMdnsSettings();
-  await loadMediaNetworkSettings();
-  await loadRtcPortSettings();
-  await loadApiKeyField();
-  await renderUserList(users, conferences, feeds, bridges);
-  await renderFeedList(feeds);
-  await renderConferenceList(conferences, users);
+  await guestSettingsLoad;
+
+  // Render the matrix immediately. Per-user requests update its switches as
+  // they arrive, including conference memberships.
   renderTargetMatrix(users, conferences, feeds);
-  renderConferenceMembershipMatrix(users, conferences);
+  await Promise.all([
+    renderUserList(users, conferences, feeds, bridges),
+    renderFeedList(feeds),
+    renderConferenceList(conferences, users),
+  ]);
+
+  await Promise.allSettled([
+    productionLoad,
+    loadDefaultClientSettings(),
+    loadMdnsSettings(),
+    loadMediaNetworkSettings(),
+    loadRtcPortSettings(),
+    loadApiKeyField(),
+  ]);
   startStatusStream();
   activateAdminView(getAdminViewFromHash() || activeAdminView || 'status', { updateHash: false });
 }
@@ -1961,31 +2019,19 @@ function scheduleUserTargetEditorRefresh(userId) {
 }
 
 function cacheConferenceMemberships(conferenceId, users) {
-  const key = String(conferenceId);
+  const conferenceKey = String(conferenceId);
   const memberships = new Set(
     (Array.isArray(users) ? users : []).map((user) => String(user.id))
   );
-  conferenceMembershipsByConference.set(key, memberships);
-
-  if (!conferenceMembershipMatrixContainer) return;
-  conferenceMembershipMatrixContainer
-    .querySelectorAll(`.conference-membership-toggle[data-conference-id="${key}"]`)
-    .forEach((toggle) => {
-      if (toggle.disabled) return;
-      toggle.setAttribute('aria-pressed', String(memberships.has(String(toggle.dataset.userId))));
-    });
-}
-
-function setCachedConferenceMembership(conferenceId, userId, enabled) {
-  const conferenceKey = String(conferenceId);
-  const userKey = String(userId);
-  const memberships = conferenceMembershipsByConference.get(conferenceKey) || new Set();
-  if (enabled) {
-    memberships.add(userKey);
-  } else {
-    memberships.delete(userKey);
-  }
-  conferenceMembershipsByConference.set(conferenceKey, memberships);
+  currentAdminCatalog.users.forEach((user) => {
+    if (user.is_superadmin) return;
+    const userKey = String(user.id);
+    const enabled = memberships.has(userKey);
+    setCachedTargetAssignment(user.id, 'conference', conferenceId, enabled);
+    targetMatrixContainer
+      ?.querySelector(`.target-matrix-toggle[data-user-id="${userKey}"][data-target-type="conference"][data-target-id="${conferenceKey}"]`)
+      ?.setAttribute('aria-pressed', String(enabled));
+  });
 }
 
 function scheduleConferenceMembershipEditorRefresh(conferenceId, userId) {
@@ -2072,7 +2118,7 @@ function renderTargetMatrix(users, conferences, feeds) {
             data-target-id="${column.id}"
             aria-label="${escapeHtml(label)}"
             aria-pressed="${checked ? 'true' : 'false'}"
-            title="${escapeHtml(label)}"
+            title="${escapeHtml(column.targetType === 'conference' ? `${label} (also controls conference membership)` : label)}"
           ></button>
         </td>
       `;
@@ -2102,75 +2148,6 @@ function renderTargetMatrix(users, conferences, feeds) {
             <span class="target-matrix__corner-label target-matrix__corner-label--targets">Targets</span>
           </th>
           ${groupHeaders}
-        </tr>
-        <tr>${columnHeaders}</tr>
-      </thead>
-      <tbody>${bodyRows}</tbody>
-    </table>
-  `;
-}
-
-function renderConferenceMembershipMatrix(users, conferences) {
-  if (!conferenceMembershipMatrixContainer) return;
-  const columnUsers = (Array.isArray(users) ? users : []).filter((user) => (
-    !user.is_superadmin && !user.is_guest_profile
-  ));
-  const rows = Array.isArray(conferences) ? conferences : [];
-
-  if (columnUsers.length === 0 || rows.length === 0) {
-    conferenceMembershipMatrixContainer.innerHTML = '<p class="target-matrix-empty">Add users and conferences to configure memberships.</p>';
-    return;
-  }
-
-  const columnHeaders = columnUsers.map((user, columnIndex) => `
-    <th class="target-matrix__target-column target-matrix__column--user" data-matrix-column="${columnIndex}" scope="col" title="${escapeHtml(user.name)}">
-      <span class="target-matrix__column-label">${escapeHtml(user.name)}</span>
-    </th>
-  `).join('');
-  const bodyRows = rows.map((conference) => {
-    const memberships = conferenceMembershipsByConference.get(String(conference.id)) || new Set();
-    const cells = columnUsers.map((user, columnIndex) => {
-      const enabled = memberships.has(String(user.id));
-      const label = `${user.name} in conference ${conference.name}`;
-      return `
-        <td class="target-matrix__coupling target-matrix__target-column target-matrix__column--user" data-matrix-column="${columnIndex}">
-          <button
-            type="button"
-            class="target-matrix-toggle conference-membership-toggle"
-            data-conference-id="${conference.id}"
-            data-user-id="${user.id}"
-            aria-label="${escapeHtml(label)}"
-            aria-pressed="${enabled ? 'true' : 'false'}"
-            title="${escapeHtml(label)}"
-          ></button>
-        </td>
-      `;
-    }).join('');
-    return `
-      <tr>
-        <th class="target-matrix__user-name" scope="row" title="${escapeHtml(conference.name)}">${escapeHtml(conference.name)}</th>
-        ${cells}
-      </tr>
-    `;
-  }).join('');
-  const matrixTableWidth = 7.5 + (columnUsers.length * 1.9);
-  const targetColumnDefinitions = columnUsers.map(() => (
-    '<col class="target-matrix__target-col" />'
-  )).join('');
-
-  conferenceMembershipMatrixContainer.innerHTML = `
-    <table class="target-matrix" style="--matrix-table-width: ${matrixTableWidth}rem">
-      <colgroup>
-        <col class="target-matrix__profile-column" />
-        ${targetColumnDefinitions}
-      </colgroup>
-      <thead>
-        <tr>
-          <th class="target-matrix__corner" rowspan="2" scope="col" aria-label="Conferences by users">
-            <span class="target-matrix__corner-label target-matrix__corner-label--users">Conferences</span>
-            <span class="target-matrix__corner-label target-matrix__corner-label--targets">Users</span>
-          </th>
-          <th class="target-matrix__group target-matrix__group--users" colspan="${columnUsers.length}" scope="colgroup">Users</th>
         </tr>
         <tr>${columnHeaders}</tr>
       </thead>
@@ -2223,38 +2200,12 @@ async function handleTargetMatrixToggle(toggle, forcedEnabled = null) {
 
     setCachedTargetAssignment(userId, targetType, targetId, enabled);
     scheduleUserTargetEditorRefresh(userId);
+    if (targetType === 'conference') {
+      scheduleConferenceMembershipEditorRefresh(targetId, userId);
+    }
   } catch (error) {
     toggle.setAttribute('aria-pressed', String(wasEnabled));
     showMessage(error.message || 'Target update failed', 'error', 'matrix');
-  } finally {
-    toggle.disabled = false;
-  }
-}
-
-async function handleConferenceMembershipToggle(toggle, forcedEnabled = null) {
-  const conferenceId = Number(toggle.dataset.conferenceId);
-  const userId = Number(toggle.dataset.userId);
-  const wasEnabled = toggle.getAttribute('aria-pressed') === 'true';
-  const enabled = typeof forcedEnabled === 'boolean' ? forcedEnabled : !wasEnabled;
-  if (!Number.isFinite(conferenceId) || !Number.isFinite(userId)) return;
-  if (enabled === wasEnabled || toggle.disabled) return;
-
-  toggle.setAttribute('aria-pressed', String(enabled));
-  toggle.disabled = true;
-  try {
-    const response = await authedFetch(`/conferences/${conferenceId}/users/${userId}`, {
-      method: enabled ? 'POST' : 'DELETE',
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || 'Conference membership update failed');
-    }
-
-    setCachedConferenceMembership(conferenceId, userId, enabled);
-    scheduleConferenceMembershipEditorRefresh(conferenceId, userId);
-  } catch (error) {
-    toggle.setAttribute('aria-pressed', String(wasEnabled));
-    showMessage(error.message || 'Conference membership update failed', 'error', 'matrix');
   } finally {
     toggle.disabled = false;
   }
@@ -2314,9 +2265,8 @@ async function refreshAdminLists({ users: refreshUsers = false, conferences: ref
 
   if (refreshUsers || refreshConferences || refreshFeeds) {
     renderTargetMatrix(users, conferences, feeds);
-    renderConferenceMembershipMatrix(users, conferences);
+    await loadProductions({ selectId: selectedProductionId });
   }
-
 }
 
 async function renderUserList(users, conferences, feeds, bridges = currentBridgeRegistry) {
@@ -2367,9 +2317,6 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
     li.dataset.entityId = String(user.id);
     li.hidden = true;
 
-    const optionsHtml = conferences.length
-      ? conferences.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')
-      : '<option value="" disabled selected>No conferences</option>';
     const bridgeControls = !isSuperadmin && !isGuestProfile
       ? `
         <div class="nested-block">
@@ -2377,7 +2324,6 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
             <label class="admin-switch bridge-input-switch" for="bridge-enabled-${user.id}">
               <input type="checkbox" id="bridge-enabled-${user.id}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
               <span class="admin-switch__track" aria-hidden="true"></span>
-              <span class="admin-switch__state" aria-hidden="true"></span>
               <span>Use this user as bridge endpoint</span>
             </label>
             <div class="bridge-config-options" id="bridge-options-${user.id}" ${isBridgeEndpoint ? '' : 'hidden'}>
@@ -2427,7 +2373,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
                 </div>
               </div>
             </div>
-            <button type="submit" class="small">Save bridge</button>
+            <button type="submit" class="small">Save</button>
           </form>
         </div>
       `
@@ -2452,19 +2398,10 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
       </div>
       <div class="nested" id="user-nested-${user.id}" onclick="event.stopPropagation()">
         <div class="nested-block">
-          <strong>Conferences</strong>
-          <div class="inline-controls">
-            <select id="add-user-conf-${user.id}">${optionsHtml}</select>
-            <button type="button" class="small" ${conferences.length ? '' : 'disabled'} onclick="assignUserToConference(${user.id})">Add to conference</button>
-          </div>
-          <ul id="user-confs-${user.id}"></ul>
-        </div>
-        <div class="nested-block">
           <strong>Target Buttons</strong>
           <div class="inline-controls">
             <select id="add-target-type-${user.id}">
               <option value="user">User</option>
-              <option value="conference">Conference</option>
               <option value="feed">Feed</option>
             </select>
             <select id="add-target-id-${user.id}"></select>
@@ -2480,7 +2417,6 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
   }
 
   await Promise.all(visibleUsers.map(async (user) => {
-    await updateUserConferenceOptions(user.id, conferences);
     await loadUserTargets(user.id, users, conferences, feeds);
   }));
   initializeBridgeEndpointForms();
@@ -2521,7 +2457,6 @@ async function renderFeedList(feeds) {
             <label class="admin-switch bridge-input-switch" for="bridge-enabled-${formKey}">
               <input type="checkbox" id="bridge-enabled-${formKey}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
               <span class="admin-switch__track" aria-hidden="true"></span>
-              <span class="admin-switch__state" aria-hidden="true"></span>
               <span>Use this feed as bridge input</span>
             </label>
             <div class="bridge-config-options" id="bridge-options-${formKey}" ${isBridgeEndpoint ? '' : 'hidden'}>
@@ -2542,7 +2477,7 @@ async function renderFeedList(feeds) {
                 </div>
               </div>
             </div>
-            <button type="submit" class="small">Save bridge</button>
+            <button type="submit" class="small">Save</button>
           </form>
         </div>
       </div>
@@ -2554,7 +2489,6 @@ async function renderFeedList(feeds) {
 }
 
 async function renderConferenceList(conferences, users) {
-  conferenceMembershipsByConference.clear();
   const confList = document.getElementById('conf-list');
   confList.innerHTML = '';
 
@@ -2939,13 +2873,16 @@ async function loadUserTargets(userId, allUsers, allConfs, allFeeds = []) {
   }, {});
   const ul = document.getElementById(`user-targets-${userId}`);
   ul.innerHTML = targets.map(t => {
+    const isConference = t.targetType === 'conference';
     return `
       <li class="list-chip draggable-target" draggable="true"
           data-type="${escapeHtml(t.targetType)}" data-id="${escapeHtml(t.targetId)}">
         <span class="drag-handle" title="Drag to reorder">☰</span>
         <span class="chip-label">${escapeHtml(t.name)}</span>
         <span class="badge">${escapeHtml(t.targetType)}</span>
-        <button type="button" class="small danger" onclick="removeTarget(${userId}, '${t.targetType}', '${t.targetId}')">Remove</button>
+        ${isConference
+          ? '<span class="badge" title="Managed by conference membership">automatic</span>'
+          : `<button type="button" class="small danger" onclick="removeTarget(${userId}, '${t.targetType}', '${t.targetId}')">Remove</button>`}
       </li>
     `;
   }).join('');
@@ -2967,11 +2904,6 @@ async function loadUserTargets(userId, allUsers, allConfs, allFeeds = []) {
     if (type === 'user') {
       const used = usedByType.user || new Set();
       options = selectableUsers
-        .filter(item => !used.has(String(item.id)))
-        .map(item => `<option value="${item.id}">${escapeHtml(item.name)}</option>`);
-    } else if (type === 'conference') {
-      const used = usedByType.conference || new Set();
-      options = (allConfs || [])
         .filter(item => !used.has(String(item.id)))
         .map(item => `<option value="${item.id}">${escapeHtml(item.name)}</option>`);
     } else if (type === 'feed') {
@@ -4120,6 +4052,34 @@ productionList?.addEventListener('click', (event) => {
   loadProductionDetail(button.dataset.productionSelect);
 });
 
+multipleProductionsInput?.addEventListener('change', async () => {
+  const enabled = multipleProductionsInput.checked;
+  multipleProductionsInput.disabled = true;
+  try {
+    await productionRequest('/admin/settings/multiple-productions', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    await loadProductions({ selectId: selectedProductionId });
+    showMessage(`Multiple Productions ${enabled ? 'enabled' : 'disabled'}.`, 'success', 'matrix');
+  } catch (error) {
+    multipleProductionsInput.checked = !enabled;
+    if (error?.status === 404) {
+      multipleProductionsSupported = false;
+      showMessage(
+        'Restart the Talktome server to enable Multiple Productions.',
+        'warning',
+        'matrix'
+      );
+    } else {
+      showMessage(error.message || 'Failed to update production mode', 'error', 'matrix');
+    }
+  } finally {
+    multipleProductionsInput.disabled = !multipleProductionsSupported || !adminState.isGlobalAdmin;
+  }
+});
+
 productionCreateForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const name = productionCreateName?.value?.trim() || '';
@@ -4170,26 +4130,31 @@ productionDeleteButton?.addEventListener('click', async () => {
   }
 });
 
-async function updateProductionMembership(button, shouldBeMember) {
-  const userId = Number(button?.dataset.productionMember);
-  if (!selectedProductionId || !Number.isFinite(userId)) return;
+async function updateProductionEntity(button, shouldBeMember) {
+  const entityType = button?.dataset.productionEntityType;
+  const entityId = Number(button?.dataset.productionEntityId);
+  const pathByType = { user: 'users', conference: 'conferences', feed: 'feeds' };
+  const path = pathByType[entityType];
+  if (!selectedProductionId || !path || !Number.isFinite(entityId)) return;
   button.disabled = true;
   try {
     if (shouldBeMember) {
-      await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}`, {
+      await productionRequest(`/admin/productions/${selectedProductionId}/${path}/${entityId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isAdmin: false }),
+        ...(entityType === 'user' ? {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isAdmin: false }),
+        } : {}),
       });
     } else {
-      await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}`, { method: 'DELETE' });
+      await productionRequest(`/admin/productions/${selectedProductionId}/${path}/${entityId}`, { method: 'DELETE' });
     }
     await loadProductionDetail(selectedProductionId, {
-      preferredOrderUserId: shouldBeMember ? userId : null,
+      preferredOrderUserId: entityType === 'user' && shouldBeMember ? entityId : null,
     });
   } catch (error) {
     button.disabled = false;
-    showMessage(error.message || 'Failed to update member', 'error', 'productions');
+    showMessage(error.message || 'Failed to update production contents', 'error', 'matrix');
   }
 }
 
@@ -4217,30 +4182,30 @@ productionMembersList?.addEventListener('click', async (event) => {
     return;
   }
 
-  const memberButton = event.target.closest('[data-production-member]');
+  const memberButton = event.target.closest('[data-production-entity-type][data-production-entity-id]');
   if (memberButton) {
     event.stopPropagation();
     if (!memberButton.disabled) {
-      updateProductionMembership(memberButton, memberButton.dataset.isMember !== 'true');
+      updateProductionEntity(memberButton, memberButton.dataset.isMember !== 'true');
     }
     return;
   }
 
   if (event.target.closest('button, input, a, select')) return;
-  const row = event.target.closest('[data-production-member-row]');
-  const button = row?.querySelector('[data-production-member]');
+  const row = event.target.closest('[data-production-entity-row]');
+  const button = row?.querySelector('[data-production-entity-type][data-production-entity-id]');
   if (!button || button.disabled) return;
-  updateProductionMembership(button, button.dataset.isMember !== 'true');
+  updateProductionEntity(button, button.dataset.isMember !== 'true');
 });
 
 productionMembersList?.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' && event.key !== ' ') return;
   if (event.target.closest('button, input, a, select')) return;
-  const row = event.target.closest('[data-production-member-row]');
-  const button = row?.querySelector('[data-production-member]');
+  const row = event.target.closest('[data-production-entity-row]');
+  const button = row?.querySelector('[data-production-entity-type][data-production-entity-id]');
   if (!button || button.disabled) return;
   event.preventDefault();
-  updateProductionMembership(button, button.dataset.isMember !== 'true');
+  updateProductionEntity(button, button.dataset.isMember !== 'true');
 });
 
 productionOrderUser?.addEventListener('change', () => {
@@ -4385,11 +4350,6 @@ function setupMatrixInteractions(container, toggleSelector, toggleHandler) {
 
 setupMatrixInteractions(targetMatrixContainer, '.target-matrix-toggle', handleTargetMatrixToggle);
 setupMatrixInteractions(productionTargetMatrixContainer, '.production-target-toggle', handleProductionTargetToggle);
-setupMatrixInteractions(
-  conferenceMembershipMatrixContainer,
-  '.conference-membership-toggle',
-  handleConferenceMembershipToggle
-);
 
 if (mediaNetworkQrButton) {
   mediaNetworkQrButton.addEventListener('click', () => openAdminImageLightbox());

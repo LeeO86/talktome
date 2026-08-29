@@ -153,6 +153,7 @@ const {
   getFeedById,
   getAllProductions,
   getProductionById,
+  getPrimaryProduction,
   getProductionsForUser,
   isUserInProduction,
   isUserProductionAdmin,
@@ -162,6 +163,17 @@ const {
   getProductionMembers,
   setProductionUser,
   removeProductionUser,
+  getProductionConferences,
+  getProductionFeeds,
+  setProductionConference,
+  removeProductionConference,
+  setProductionFeed,
+  removeProductionFeed,
+  getProductionConferencesForUser,
+  getProductionUsersForConference,
+  getAllConfiguredUsersForConference,
+  setProductionConferenceMembership,
+  removeProductionConferenceMembership,
   getProductionTargets,
   addProductionTarget,
   removeProductionTarget,
@@ -181,6 +193,7 @@ const {
   getUserTargetAudioStates,
   replaceUserTargetAudioStates,
   getFeedIdsForUser,
+  getProductionFeedIdsForUser,
   getUsersForFeed,
   updateFeedBridgeEndpoint,
   getOrCreateApplePttChannelForUser,
@@ -336,6 +349,62 @@ function saveRuntimeConfig(config) {
   return configPath;
 }
 
+function areMultipleProductionsEnabled(config = loadRuntimeConfig() || {}) {
+  return config?.multipleProductions === true;
+}
+
+function normalizeActiveProductionId(value, userId) {
+  const requestedId = value === null || value === undefined || value === "" || value === "default"
+    ? Number(getPrimaryProduction()?.id)
+    : Number(value);
+  const productionId = areMultipleProductionsEnabled()
+    ? requestedId
+    : Number(getPrimaryProduction()?.id);
+  if (productionId === null) return null;
+  if (!Number.isInteger(productionId) || productionId <= 0 || !getProductionById(productionId)) {
+    throw new Error("Production not found");
+  }
+  if (userId !== null && userId !== undefined && !isUserInProduction(userId, productionId)) {
+    throw new Error("User is not a member of this production");
+  }
+  return productionId;
+}
+
+function getEffectiveConferencesForUser(userId, productionId = null) {
+  return productionId === null || productionId === undefined
+    ? getConferencesForUser(userId)
+    : getProductionConferencesForUser(userId, productionId);
+}
+
+function getEffectiveConferencesForPeer(peer) {
+  if (!peer || !isOperatorPeer(peer)) return [];
+  const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+  if (userId === null || userId === undefined) return [];
+  return getEffectiveConferencesForUser(userId, peer.productionId ?? null);
+}
+
+function getEffectiveFeedIdsForPeer(peer) {
+  if (!peer || !isOperatorPeer(peer)) return [];
+  const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+  if (userId === null || userId === undefined) return [];
+  return peer.productionId === null || peer.productionId === undefined
+    ? getFeedIdsForUser(userId)
+    : getProductionFeedIdsForUser(userId, peer.productionId);
+}
+
+function getEnabledProductionsForUser(userId) {
+  return areMultipleProductionsEnabled() ? getProductionsForUser(userId) : [];
+}
+
+function addEntityToPrimaryProductionWhenSingle(type, entityId) {
+  if (areMultipleProductionsEnabled()) return;
+  const productionId = getPrimaryProduction()?.id;
+  if (!productionId) return;
+  if (type === "user") setProductionUser(productionId, entityId);
+  else if (type === "conference") setProductionConference(productionId, entityId);
+  else if (type === "feed") setProductionFeed(productionId, entityId);
+}
+
 function getDefaultRtcPortRange() {
   return {
     start: DEFAULT_RTC_PORT_START,
@@ -418,6 +487,7 @@ function resolveGuestLoginSettings(config, { createProfile = false, persist = fa
 
   if (!profile && createProfile) {
     profile = getOrCreateGuestProfile();
+    addEntityToPrimaryProductionWhenSingle("user", profile.id);
   }
 
   const enabled = rawGuestConfig.enabled === true && !!profile;
@@ -1129,7 +1199,14 @@ function requireCompanionApiKey(req, res, next) {
 }
 
 function resolveCompanionProduction(auth, value) {
-  if (value === null || value === undefined || value === "") return null;
+  if (!areMultipleProductionsEnabled()) return getPrimaryProduction()?.id ?? null;
+  if (value === null || value === undefined || value === "") {
+    const primaryId = getPrimaryProduction()?.id ?? null;
+    if (primaryId === null || hasCompanionGlobalAccess(auth) || isUserInProduction(auth?.userId, primaryId)) {
+      return primaryId;
+    }
+    return getProductionsForUser(auth?.userId)[0]?.id ?? null;
+  }
   const productionId = Number(value);
   if (!Number.isFinite(productionId) || !getProductionById(productionId)) {
     const error = new Error("Production not found");
@@ -1547,7 +1624,8 @@ function getPeerActiveTalkProducers(peer) {
 
 function getPeerActiveTalkTargets(peer) {
   if (peer?.pttTalking) {
-    return normalizeRuntimeTalkTargets(peer.activeTalkTargets);
+    return normalizeRuntimeTalkTargets(peer.activeTalkTargets)
+      .filter((target) => isTalkTargetAllowedForPeer(peer, target));
   }
 
   const activeProducers = getPeerActiveTalkProducers(peer);
@@ -1560,7 +1638,8 @@ function getPeerActiveTalkTargets(peer) {
   ));
 
   if (hasGenericTalkProducer) {
-    return normalizeRuntimeTalkTargets(peer.activeTalkTargets);
+    return normalizeRuntimeTalkTargets(peer.activeTalkTargets)
+      .filter((target) => isTalkTargetAllowedForPeer(peer, target));
   }
 
   return normalizeRuntimeTalkTargets(
@@ -1568,7 +1647,7 @@ function getPeerActiveTalkTargets(peer) {
       type: producer?.appData?.type,
       id: producer?.appData?.id,
     }))
-  );
+  ).filter((target) => isTalkTargetAllowedForPeer(peer, target));
 }
 
 function getPeerActiveTalkInfo(peer) {
@@ -1577,7 +1656,7 @@ function getPeerActiveTalkInfo(peer) {
   }
 
   if (peer.pttTalking) {
-    const targets = normalizeRuntimeTalkTargets(peer.activeTalkTargets);
+    const targets = getPeerActiveTalkTargets(peer);
     if (targets.length === 0) {
       return null;
     }
@@ -1631,6 +1710,19 @@ function resolveAddressedUserIdsForTarget(target, speakerUserId) {
       return [];
     }
 
+    if (areMultipleProductionsEnabled()) {
+      const activeMembers = new Set();
+      for (const peer of peers.values()) {
+        if (!isPeerMemberOfConference(peer, conferenceId)) continue;
+        const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+        const numericUserId = Number(userId);
+        if (Number.isFinite(numericUserId) && numericUserId !== Number(speakerUserId)) {
+          activeMembers.add(numericUserId);
+        }
+      }
+      return Array.from(activeMembers);
+    }
+
     return Array.from(new Set(
       (getUsersForConference(conferenceId) || [])
         .map((member) => Number(member?.id))
@@ -1671,12 +1763,13 @@ function isPeerMemberOfConference(peer, conferenceId) {
   if (!Number.isFinite(numericConferenceId) || !isOperatorPeer(peer)) {
     return false;
   }
-  const membershipUserId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
-  if (membershipUserId === null || membershipUserId === undefined) {
-    return false;
-  }
-  return (getConferencesForUser(membershipUserId) || [])
+  return getEffectiveConferencesForPeer(peer)
     .some((conference) => Number(conference?.id) === numericConferenceId);
+}
+
+function isTalkTargetAllowedForPeer(peer, target) {
+  if (!target || !isOperatorPeer(peer)) return false;
+  return target.type !== "conference" || isPeerMemberOfConference(peer, target.id);
 }
 
 function resolveRecipientPeersForTarget(target, speakerSocketId) {
@@ -1875,6 +1968,7 @@ function buildIncomingTalkStateSnapshot() {
 
     if (activeTargets.length > 0) {
       for (const activeTarget of activeTargets) {
+        if (!isTalkTargetAllowedForPeer(peer, activeTarget)) continue;
         const activeEntry = buildAddressedEntry(activeTarget, peer, speakerName, activeAt);
         if (!activeEntry) continue;
         const addressedPeers = resolveRecipientPeersForTarget(activeTarget, speakerSocketId);
@@ -2196,53 +2290,21 @@ function buildOperatorTargetsForUser(userId, productionId = null) {
     }
   }
 
-  const explicitTargets = numericProductionId === null
+  const targets = numericProductionId === null
     ? (getUserTargets(userId) || [])
     : (getProductionTargets(userId, numericProductionId) || []);
-  const conferenceMemberships = getConferencesForUser(userId) || [];
-  const explicitConferenceIds = new Set();
-  const mergedTargets = [];
 
-  explicitTargets.forEach((target) => {
-    if (target?.targetType === "conference") {
-      const conferenceId = Number(target.targetId);
-      if (Number.isFinite(conferenceId)) {
-        explicitConferenceIds.add(conferenceId);
-      }
-      mergedTargets.push({
-        ...target,
-        canTalk: true,
-      });
-      return;
-    }
-    mergedTargets.push(target);
-  });
-
-  conferenceMemberships
-    .map((conference) => ({
-      targetType: "conference",
-      targetId: Number(conference?.id),
-      name: conference?.name || null,
-      canTalk: false,
-      membershipOnly: true,
-    }))
-    .filter((conference) => (
-      Number.isFinite(conference.targetId)
-      && !explicitConferenceIds.has(conference.targetId)
-    ))
-    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" }))
-    .forEach((conference) => {
-      mergedTargets.push(conference);
-    });
-
-  return mergedTargets.map((target) => {
+  return targets.map((target) => {
     if (target?.targetType !== "conference") {
       return target;
     }
 
     const conferenceId = Number(target.targetId);
     const members = Number.isFinite(conferenceId)
-      ? (getUsersForConference(conferenceId) || []).map((member) => ({
+      ? (numericProductionId === null
+        ? getUsersForConference(conferenceId)
+        : getProductionUsersForConference(conferenceId, numericProductionId)
+      ).map((member) => ({
         userId: Number(member.id),
         name: member.name || String(member.id),
       }))
@@ -2250,6 +2312,7 @@ function buildOperatorTargetsForUser(userId, productionId = null) {
 
     return {
       ...target,
+      canTalk: true,
       members,
     };
   });
@@ -2290,8 +2353,8 @@ function buildCompanionSnapshot(productionId = null) {
     serverTime: new Date().toISOString(),
     cutCameraUser,
     users,
-    conferences: getAllConferences(),
-    feeds: getAllFeeds(),
+    conferences: productionId === null ? getAllConferences() : getProductionConferences(productionId),
+    feeds: productionId === null ? getAllFeeds() : getProductionFeeds(productionId),
     production: productionId === null ? null : getProductionById(productionId),
   };
 }
@@ -2580,7 +2643,9 @@ app.get('/users/:id/targets', (req, res) => {
     const includeMemberships = ["1", "true", "yes", "on"].includes(
       String(req.query?.includeMemberships || "").trim().toLowerCase()
     );
-    const productionId = req.query?.productionId ?? null;
+    const productionId = areMultipleProductionsEnabled()
+      ? (req.query?.productionId ?? null)
+      : (getPrimaryProduction()?.id ?? null);
     if (productionId !== null && productionId !== undefined && productionId !== "") {
       if (!isUserInProduction(req.params.id, productionId)) {
         return res.status(403).json({ error: "User is not a member of this production" });
@@ -2603,7 +2668,7 @@ app.get('/users/:id/productions', (req, res) => {
     if (!user || user.is_superadmin) {
       return res.status(404).json({ error: 'User not found' });
     }
-    res.json(getProductionsForUser(req.params.id).map(({ id, name }) => ({ id, name })));
+    res.json(getEnabledProductionsForUser(req.params.id).map(({ id, name }) => ({ id, name })));
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to load productions' });
   }
@@ -2624,7 +2689,7 @@ app.get("/guest/targets", (req, res) => {
 
 function buildLoginIdentity(user, kind = "user") {
   const productions = kind === "user" || kind === "guest"
-    ? getProductionsForUser(user.id).map(({ id, name }) => ({ id, name }))
+    ? getEnabledProductionsForUser(user.id).map(({ id, name }) => ({ id, name }))
     : [];
   return {
     id: user.id,
@@ -2775,7 +2840,7 @@ app.post("/login/guest", (req, res) => {
       guestId: crypto.randomUUID(),
       guestProfileUserId: settings.profileUserId,
       name,
-      productions: getProductionsForUser(settings.profileUserId).map(({ id, name: productionName }) => ({
+      productions: getEnabledProductionsForUser(settings.profileUserId).map(({ id, name: productionName }) => ({
         id,
         name: productionName,
       })),
@@ -2903,6 +2968,8 @@ app.post("/admin/productions", requireAdmin, (req, res) => {
 app.get("/admin/productions/:productionId", requireProductionManager, (req, res) => {
   try {
     const members = getProductionMembers(req.productionId);
+    const conferences = getProductionConferences(req.productionId);
+    const feeds = getProductionFeeds(req.productionId);
     const targets = {};
     members.forEach((member) => {
       targets[String(member.id)] = getProductionTargets(member.id, req.productionId);
@@ -2910,8 +2977,8 @@ app.get("/admin/productions/:productionId", requireProductionManager, (req, res)
     res.json({
       production: getProductionById(req.productionId),
       members,
-      conferences: getAllConferences(),
-      feeds: getAllFeeds().map((feed) => ({ id: feed.id, name: feed.name })),
+      conferences,
+      feeds,
       targets,
       catalog: {
         users: getAllUsers()
@@ -2929,11 +2996,80 @@ app.get("/admin/productions/:productionId", requireProductionManager, (req, res)
   }
 });
 
+app.put("/admin/productions/:productionId/conferences/:conferenceId", requireProductionManager, (req, res) => {
+  try {
+    setProductionConference(req.productionId, req.params.conferenceId);
+    res.sendStatus(204);
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Failed to add conference to production" });
+  }
+});
+
+app.delete("/admin/productions/:productionId/conferences/:conferenceId", requireProductionManager, (req, res) => {
+  try {
+    removeProductionConference(req.productionId, req.params.conferenceId);
+    notifyConferenceMembersChanged(req.params.conferenceId);
+    res.sendStatus(204);
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Failed to remove conference from production" });
+  }
+});
+
+app.put("/admin/productions/:productionId/feeds/:feedId", requireProductionManager, (req, res) => {
+  try {
+    setProductionFeed(req.productionId, req.params.feedId);
+    res.sendStatus(204);
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Failed to add feed to production" });
+  }
+});
+
+app.delete("/admin/productions/:productionId/feeds/:feedId", requireProductionManager, (req, res) => {
+  try {
+    removeProductionFeed(req.productionId, req.params.feedId);
+    reconcileAllProducerRecipients();
+    res.sendStatus(204);
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Failed to remove feed from production" });
+  }
+});
+
+app.put("/admin/productions/:productionId/conferences/:conferenceId/users/:userId", requireProductionManager, (req, res) => {
+  try {
+    setProductionConferenceMembership(
+      req.productionId,
+      req.params.userId,
+      req.params.conferenceId
+    );
+    notifyTargetChange(req.params.userId);
+    notifyConferenceMembersChanged(req.params.conferenceId);
+    res.sendStatus(204);
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Failed to update conference membership" });
+  }
+});
+
+app.delete("/admin/productions/:productionId/conferences/:conferenceId/users/:userId", requireProductionManager, (req, res) => {
+  try {
+    removeProductionConferenceMembership(
+      req.productionId,
+      req.params.userId,
+      req.params.conferenceId
+    );
+    notifyTargetChange(req.params.userId);
+    notifyConferenceMembersChanged(req.params.conferenceId);
+    res.sendStatus(204);
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Failed to update conference membership" });
+  }
+});
+
 app.put("/admin/productions/:productionId", requireAdmin, (req, res) => {
   try {
     if (!updateProductionName(req.params.productionId, req.body?.name)) {
       return res.status(404).json({ error: "Production not found" });
     }
+    notifyAvailableProductionsChanged();
     res.json(getProductionById(req.params.productionId));
   } catch (err) {
     res.status(400).json({ error: err.message || "Failed to update production" });
@@ -2945,9 +3081,12 @@ app.delete("/admin/productions/:productionId", requireAdmin, (req, res) => {
     if (!deleteProduction(req.params.productionId)) {
       return res.status(404).json({ error: "Production not found" });
     }
+    resetPeersUsingProduction(req.params.productionId);
+    notifyAvailableProductionsChanged();
     res.sendStatus(204);
   } catch (err) {
-    res.status(500).json({ error: err.message || "Failed to delete production" });
+    const lastProduction = err.message === "The last production cannot be deleted";
+    res.status(lastProduction ? 409 : 500).json({ error: err.message || "Failed to delete production" });
   }
 });
 
@@ -2963,6 +3102,7 @@ app.put("/admin/productions/:productionId/users/:userId", requireProductionManag
       ? requestedAdmin
       : Boolean(existing?.isProductionAdmin);
     setProductionUser(req.productionId, req.params.userId, { isAdmin });
+    notifyAvailableProductionsChanged(req.params.userId);
     notifyTargetChange(req.params.userId);
     res.sendStatus(204);
   } catch (err) {
@@ -2978,6 +3118,8 @@ app.delete("/admin/productions/:productionId/users/:userId", requireProductionMa
       return res.status(403).json({ error: "Only global admins can remove production admins" });
     }
     removeProductionUser(req.productionId, req.params.userId);
+    resetPeersUsingProduction(req.productionId, req.params.userId);
+    notifyAvailableProductionsChanged(req.params.userId);
     notifyTargetChange(req.params.userId);
     res.sendStatus(204);
   } catch (err) {
@@ -3749,6 +3891,16 @@ app.get("/admin/settings/default-client", requireAdmin, (req, res) => {
   });
 });
 
+app.get("/admin/settings/multiple-productions", requireAdminSession, (req, res) => {
+  const primaryProduction = getPrimaryProduction();
+  res.json({
+    enabled: areMultipleProductionsEnabled(),
+    configurable: Boolean(req.adminSession.isGlobalAdmin),
+    primaryProductionId: primaryProduction?.id ?? null,
+    configPath: getConfigPath(),
+  });
+});
+
 app.put("/admin/settings/mdns", requireAdmin, (req, res) => {
   const nextHost = normalizeMdnsSetting(req.body?.mdnsHost);
   if (!nextHost) {
@@ -3873,6 +4025,7 @@ app.put("/admin/settings/guest-login", requireAdmin, (req, res) => {
   try {
     const currentConfig = loadRuntimeConfig() || {};
     const profile = getOrCreateGuestProfile();
+    addEntityToPrimaryProductionWhenSingle("user", profile.id);
     const updatedConfig = {
       ...currentConfig,
       guestLogin: {
@@ -3910,6 +4063,43 @@ app.put("/admin/settings/default-client", requireAdmin, (req, res) => {
     });
   } catch (err) {
     return res.status(400).json({ error: err.message || "Invalid default client settings" });
+  }
+});
+
+app.put("/admin/settings/multiple-productions", requireAdmin, (req, res) => {
+  if (typeof req.body?.enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled must be boolean" });
+  }
+  const enabled = req.body?.enabled === true;
+  try {
+    const currentConfig = loadRuntimeConfig() || {};
+    const configPath = saveRuntimeConfig({
+      ...currentConfig,
+      multipleProductions: enabled,
+    });
+    if (!enabled) {
+      const primaryProductionId = getPrimaryProduction()?.id ?? null;
+      for (const peer of peers.values()) {
+        if (!isOperatorPeer(peer)) continue;
+        const hadDifferentProduction = String(peer.productionId ?? "") !== String(primaryProductionId ?? "");
+        peer.productionId = primaryProductionId;
+        if (hadDifferentProduction) {
+          peer.socket.emit("active-production-reset", {
+            productionId: primaryProductionId,
+            reason: "multiple-productions-disabled",
+          });
+        }
+        peer.socket.emit("user-targets-updated");
+        peer.socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
+        peer.socket.emit("conference-members-updated", { conferenceId: null });
+      }
+      reconcileAllProducerRecipients();
+      broadcastRuntimeUserStates("multiple-productions-disabled");
+    }
+    notifyAvailableProductionsChanged();
+    return res.json({ enabled, configurable: true, configPath });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || "Failed to save production mode" });
   }
 });
 
@@ -4022,6 +4212,10 @@ app.post("/admin/config/import", requireAdmin, (req, res) => {
           });
         }
       }
+
+      if (Object.prototype.hasOwnProperty.call(bundle.serverConfig, "multipleProductions")) {
+        nextConfig.multipleProductions = bundle.serverConfig.multipleProductions === true;
+      }
     }
 
     importDatabaseSnapshot(bundle.database);
@@ -4070,7 +4264,7 @@ app.post("/api/v1/companion/auth/login", (req, res) => {
         isAdmin: !!user.is_admin,
         isSuperadmin: !!user.is_superadmin,
       },
-      productions: getProductionsForUser(user.id).map(({ id, name: productionName }) => ({
+      productions: getEnabledProductionsForUser(user.id).map(({ id, name: productionName }) => ({
         id,
         name: productionName,
       })),
@@ -4155,6 +4349,7 @@ app.post("/users", requireAdmin, (req, res) => {
   const { name, password } = req.body;
   try {
     const id = createUser(name, password);
+    addEntityToPrimaryProductionWhenSingle("user", id);
     scheduleAdminStatusBroadcast("user-created");
     res.json({ id });
   } catch (err) {
@@ -4170,6 +4365,7 @@ app.post("/conferences", requireAdmin, (req, res) => {
   const { name } = req.body;
   try {
     const id = createConference(name);
+    addEntityToPrimaryProductionWhenSingle("conference", id);
     res.json({ id });
   } catch (err) {
     if (err.message.includes("UNIQUE")) {
@@ -4187,6 +4383,7 @@ app.post("/feeds", requireAdmin, (req, res) => {
   }
   try {
     const id = createFeed(name, password);
+    addEntityToPrimaryProductionWhenSingle("feed", id);
     res.json({ id });
   } catch (err) {
     if (err.message.includes("exists")) {
@@ -4276,9 +4473,11 @@ app.put('/users/:id/targets/order', requireAdmin, (req, res) => {
 });
 
 app.get("/api/v1/companion/config", requireCompanionApiKey, (req, res) => {
-  const availableProductions = hasCompanionGlobalAccess(req.companionAuth)
-    ? getAllProductions().map(({ id, name }) => ({ id, name }))
-    : getProductionsForUser(req.companionAuth.userId).map(({ id, name }) => ({ id, name }));
+  const availableProductions = !areMultipleProductionsEnabled()
+    ? []
+    : hasCompanionGlobalAccess(req.companionAuth)
+      ? getAllProductions().map(({ id, name }) => ({ id, name }))
+      : getEnabledProductionsForUser(req.companionAuth.userId).map(({ id, name }) => ({ id, name }));
   res.json({
     version: 1,
     auth: {
@@ -4336,7 +4535,7 @@ app.get("/api/v1/companion/users", requireCompanionApiKey, (req, res) => {
 app.get("/api/v1/companion/conferences", requireCompanionApiKey, (req, res) => {
   try {
     const productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
-    res.json(getAllConferences());
+    res.json(productionId === null ? getAllConferences() : getProductionConferences(productionId));
   } catch (err) {
     res.status(err.statusCode || 400).json({ error: err.message });
   }
@@ -4345,7 +4544,7 @@ app.get("/api/v1/companion/conferences", requireCompanionApiKey, (req, res) => {
 app.get("/api/v1/companion/feeds", requireCompanionApiKey, (req, res) => {
   try {
     const productionId = resolveCompanionProduction(req.companionAuth, req.query?.productionId);
-    res.json(getAllFeeds());
+    res.json(productionId === null ? getAllFeeds() : getProductionFeeds(productionId));
   } catch (err) {
     res.status(err.statusCode || 400).json({ error: err.message });
   }
@@ -5464,6 +5663,7 @@ function notifyTargetChange(userId) {
       userId: Number(userId),
     });
   }
+  reconcileAllProducerRecipients();
 }
 
 function notifyConferenceMembersChanged(conferenceId, excludedProfileUserId = null) {
@@ -5477,6 +5677,39 @@ function notifyConferenceMembersChanged(conferenceId, excludedProfileUserId = nu
       conferenceId: numericConferenceId !== null && Number.isFinite(numericConferenceId)
         ? numericConferenceId
         : null,
+    });
+  }
+  reconcileAllProducerRecipients();
+}
+
+function resetPeersUsingProduction(productionId, userId = null) {
+  const productionKey = String(productionId);
+  const userKey = userId == null ? null : String(userId);
+  for (const peer of peers.values()) {
+    if (!isOperatorPeer(peer) || String(peer.productionId ?? "") !== productionKey) continue;
+    const profileUserId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+    if (userKey !== null && String(profileUserId) !== userKey) continue;
+    const fallbackProduction = getProductionsForUser(profileUserId)[0] || null;
+    peer.productionId = fallbackProduction?.id ?? null;
+    peer.socket.emit("active-production-reset", {
+      productionId: peer.productionId,
+      reason: "production-access-removed",
+    });
+    peer.socket.emit("user-targets-updated");
+    peer.socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
+    peer.socket.emit("conference-members-updated", { conferenceId: null });
+  }
+  reconcileAllProducerRecipients();
+}
+
+function notifyAvailableProductionsChanged(userId = null) {
+  const userKey = userId == null ? null : String(userId);
+  for (const peer of peers.values()) {
+    if (!isOperatorPeer(peer)) continue;
+    const profileUserId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+    if (userKey !== null && String(profileUserId) !== userKey) continue;
+    peer.socket.emit("available-productions-updated", {
+      productions: getEnabledProductionsForUser(profileUserId).map(({ id, name }) => ({ id, name })),
     });
   }
 }
@@ -6251,6 +6484,7 @@ function createBridgeControlSession({ bridgeId, userId = null, feedId = null, po
     guestProfileUserId: null,
     name: port.label,
     kind: entityType,
+    productionId: null,
     consumers: new Map(),
     producers: new Map(),
     activeTalkTargets: [],
@@ -6456,13 +6690,13 @@ function listActiveProducersForPeer(peer, peerId) {
   const loadConferenceIds = () => {
     if (conferenceIds !== null) return conferenceIds;
     conferenceIds = new Set(
-      (getConferencesForUser(peer.userId) || []).map((conference) => String(conference.id))
+      getEffectiveConferencesForPeer(peer).map((conference) => String(conference.id))
     );
     return conferenceIds;
   };
   const loadFeedIds = () => {
     if (feedIds !== null) return feedIds;
-    feedIds = new Set((getFeedIdsForUser(peer.userId) || []).map((id) => String(id)));
+    feedIds = new Set(getEffectiveFeedIdsForPeer(peer).map((id) => String(id)));
     return feedIds;
   };
 
@@ -6600,14 +6834,25 @@ function resolveApplePttRecipientUserIds({ type, targetId, targets = null, speak
       recipientUserIds.add(Number(targetUserId));
     }
   } else if (type === "conference") {
-    const members = getUsersForConference(targetId) || [];
-    for (const member of members) {
-      recipientUserIds.add(Number(member.id));
+    for (const userId of resolveAddressedUserIdsForTarget(
+      { type: "conference", id: targetId },
+      speakerUserId
+    )) {
+      recipientUserIds.add(Number(userId));
     }
   } else if (type === "feed") {
-    const listeners = getUsersForFeed(targetId) || [];
-    for (const listener of listeners) {
-      recipientUserIds.add(Number(listener.user_id));
+    if (areMultipleProductionsEnabled()) {
+      for (const peer of peers.values()) {
+        if (!isOperatorPeer(peer)) continue;
+        if (!getEffectiveFeedIdsForPeer(peer).some((id) => String(id) === String(targetId))) continue;
+        const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+        if (Number.isFinite(Number(userId))) recipientUserIds.add(Number(userId));
+      }
+    } else {
+      const listeners = getUsersForFeed(targetId) || [];
+      for (const listener of listeners) {
+        recipientUserIds.add(Number(listener.user_id));
+      }
     }
   }
 
@@ -6627,8 +6872,12 @@ function resolveApplePttSpeakerName(socketId) {
 function resolveProducerRecipientDeliveriesForTargets({ targets, speakerSocketId }) {
   const deliveries = [];
   const seenRecipients = new Set();
+  const speakerPeer = peers.get(speakerSocketId);
 
   for (const target of normalizeRuntimeTalkTargets(targets)) {
+    if (!isTalkTargetAllowedForPeer(speakerPeer, target)) {
+      continue;
+    }
     const recipients = resolveRecipientPeersForTarget(target, speakerSocketId);
     for (const { socketId: recipientSocketId } of recipients) {
       if (!recipientSocketId || seenRecipients.has(recipientSocketId)) continue;
@@ -6666,14 +6915,11 @@ function resolveProducerRecipientDeliveries({ appData, speakerSocketId }) {
 
   if (type === "feed") {
     const deliveries = [];
-    const listeners = getUsersForFeed(targetId) || [];
-    const listenerIds = new Set(listeners.map((row) => String(row.user_id)));
     for (const [sid, peer] of peers) {
       if (sid === speakerSocketId) continue;
       if (!isOperatorPeer(peer)) continue;
-      const listenerUserId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
-      if (listenerUserId === null || listenerUserId === undefined) continue;
-      if (listenerIds.has(String(listenerUserId))) {
+      const feedIds = new Set(getEffectiveFeedIdsForPeer(peer).map((id) => String(id)));
+      if (feedIds.has(String(targetId))) {
         deliveries.push({
           recipientSocketId: sid,
           appData: { ...appData },
@@ -6746,6 +6992,15 @@ function syncProducerRecipients({ producer, speakerSocketId, forceAnnounce = fal
 
   producer.__recipientDeliveries = nextDeliveries;
   return deliveries;
+}
+
+function reconcileAllProducerRecipients({ forceAnnounce = false } = {}) {
+  for (const [speakerSocketId, speakerPeer] of peers) {
+    for (const producer of speakerPeer?.producers?.values?.() || []) {
+      if (!producer || producer.closed) continue;
+      syncProducerRecipients({ producer, speakerSocketId, forceAnnounce });
+    }
+  }
 }
 
 function announceProducerToRecipients({
@@ -6823,6 +7078,7 @@ io.on("connection", (socket) => {
     guestProfileUserId: null,
     name:     null,
     kind:     "guest",
+    productionId: null,
     consumers: new Map(),
     producers: new Map(),
     activeTalkTargets: [],
@@ -6862,7 +7118,7 @@ io.on("connection", (socket) => {
     );
   });
 
-  socket.on("register-user", ({ id, name, kind = "user", force = false, guestProfileUserId = null } = {}, callback) => {
+  socket.on("register-user", ({ id, name, kind = "user", force = false, guestProfileUserId = null, productionId = null } = {}, callback) => {
     const peer = peers.get(socket.id);
     if (!peer) {
       if (typeof callback === "function") callback({ error: "Peer not registered" });
@@ -6909,6 +7165,19 @@ io.on("connection", (socket) => {
       effectiveName = identity.name;
     }
 
+    let activeProductionId = null;
+    try {
+      if (normalizedKind === "user") {
+        activeProductionId = normalizeActiveProductionId(productionId, effectiveId);
+      } else if (normalizedKind === "guest") {
+        const guestSettings = resolveGuestLoginSettings(loadRuntimeConfig() || {}, { createProfile: false });
+        activeProductionId = normalizeActiveProductionId(productionId, guestSettings.profileUserId);
+      }
+    } catch (error) {
+      if (typeof callback === "function") callback({ error: error.message || "Production access denied" });
+      return;
+    }
+
     if (normalizedKind === "user") {
       const existing = Array.from(peers.entries()).find(([sid, p]) => (
         sid !== socket.id
@@ -6949,6 +7218,7 @@ io.on("connection", (socket) => {
       peer.feedId = null;
       peer.guestId = null;
       peer.guestProfileUserId = null;
+      peer.productionId = activeProductionId;
       console.log(`[USER] Registered operator ${effectiveName} (${effectiveId}) on socket ${socket.id}`);
       socket.emit("cut-camera", effectiveName === cutCameraUser);
     } else if (normalizedKind === "feed") {
@@ -6978,6 +7248,7 @@ io.on("connection", (socket) => {
       peer.userId = null;
       peer.guestId = null;
       peer.guestProfileUserId = null;
+      peer.productionId = null;
       console.log(`[USER] Registered feed ${effectiveName} (${effectiveId}) on socket ${socket.id}`);
     } else {
       const settings = resolveGuestLoginSettings(loadRuntimeConfig() || {}, { createProfile: false });
@@ -6997,6 +7268,7 @@ io.on("connection", (socket) => {
       peer.feedId = null;
       peer.guestId = guestId;
       peer.guestProfileUserId = settings.profileUserId;
+      peer.productionId = activeProductionId;
       console.log(`[USER] Registered guest ${peer.name} (${guestId}) on socket ${socket.id}`);
     }
 
@@ -7024,15 +7296,44 @@ io.on("connection", (socket) => {
 
     if (normalizedKind === "feed") {
       socket.emit("conference-list", []);
+    } else {
+      socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
     }
 
     if (typeof callback === "function") {
+      const profileUserId = normalizedKind === "guest" ? peer.guestProfileUserId : peer.userId;
       callback({
         ok: true,
+        productionId: peer.productionId ?? null,
+        productions: profileUserId == null
+          ? []
+          : getEnabledProductionsForUser(profileUserId).map(({ id, name: productionName }) => ({
+            id,
+            name: productionName,
+          })),
         targetAudioStates: normalizedKind === "user" && peer.userId != null
           ? getUserTargetAudioStates(peer.userId)
           : [],
       });
+    }
+  });
+
+  socket.on("set-active-production", ({ productionId = null } = {}, callback = () => {}) => {
+    const peer = peers.get(socket.id);
+    if (!isOperatorPeer(peer)) {
+      callback({ ok: false, error: "Peer not registered" });
+      return;
+    }
+    const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+    try {
+      peer.productionId = normalizeActiveProductionId(productionId, userId);
+      socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
+      socket.emit("conference-members-updated", { conferenceId: null });
+      reconcileAllProducerRecipients({ forceAnnounce: true });
+      broadcastRuntimeUserStates("active-production-changed");
+      callback({ ok: true, productionId: peer.productionId });
+    } catch (error) {
+      callback({ ok: false, error: error.message || "Production access denied" });
     }
   });
 
@@ -7282,12 +7583,7 @@ io.on("connection", (socket) => {
       if (conferenceIds !== null) {
         return conferenceIds;
       }
-      const membershipUserId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
-      if (!membershipUserId) {
-        conferenceIds = new Set();
-        return conferenceIds;
-      }
-      const memberships = getConferencesForUser(membershipUserId) || [];
+      const memberships = getEffectiveConferencesForPeer(peer);
       conferenceIds = new Set(
         memberships.map((conf) => String(conf.id))
       );
@@ -7298,13 +7594,7 @@ io.on("connection", (socket) => {
       if (feedIds !== null) {
         return feedIds;
       }
-      const membershipUserId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
-      if (!membershipUserId) {
-        feedIds = new Set();
-        return feedIds;
-      }
-      const rows = getFeedIdsForUser(membershipUserId) || [];
-      feedIds = new Set(rows.map((id) => String(id)));
+      feedIds = new Set(getEffectiveFeedIdsForPeer(peer).map((id) => String(id)));
       return feedIds;
     };
 
