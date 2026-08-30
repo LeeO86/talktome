@@ -6754,6 +6754,53 @@ function closeProducerConsumersForRecipient({ producerId, recipientSocketId }) {
   }
 }
 
+function getProducerRoutingTargets(producer, speakerPeer) {
+  const type = String(producer?.appData?.type || "").trim().toLowerCase();
+  if (type === "talk") {
+    return normalizeRuntimeTalkTargets(speakerPeer?.activeTalkTargets || []);
+  }
+  if (["user", "conference", "guest"].includes(type)) {
+    return normalizeRuntimeTalkTargets([{ type, id: producer?.appData?.id }]);
+  }
+  return [];
+}
+
+function buildConferenceRoutingDiagnostics(targets, speakerSocketId) {
+  return targets
+    .filter((target) => target?.type === "conference")
+    .map((target) => ({
+      conferenceId: Number(target.id),
+      activePeers: Array.from(peers.entries())
+        .filter(([socketId, peer]) => socketId !== speakerSocketId && isOperatorPeer(peer))
+        .map(([socketId, peer]) => ({
+          socketId,
+          kind: peer.kind || null,
+          userId: peer.userId ?? null,
+          guestProfileUserId: peer.guestProfileUserId ?? null,
+          productionId: peer.productionId ?? null,
+          recognizedMember: isPeerMemberOfConference(peer, target.id),
+        })),
+    }));
+}
+
+function warnIfActiveProducerHasNoRecipients({ producer, speakerSocketId, speakerPeer, deliveries }) {
+  if (!producer || producer.paused || deliveries.length > 0) return;
+  const targets = getProducerRoutingTargets(producer, speakerPeer);
+  if (targets.length === 0) return;
+
+  console.warn(`[ROUTE][WARN] Active producer ${producer.id} has no recipients ${JSON.stringify({
+    speaker: {
+      socketId: speakerSocketId,
+      kind: speakerPeer?.kind || null,
+      userId: speakerPeer?.userId ?? null,
+      guestProfileUserId: speakerPeer?.guestProfileUserId ?? null,
+      productionId: speakerPeer?.productionId ?? null,
+    },
+    targets,
+    conferences: buildConferenceRoutingDiagnostics(targets, speakerSocketId),
+  })}`);
+}
+
 function syncProducerRecipients({ producer, speakerSocketId, forceAnnounce = false }) {
   if (!producer) return [];
 
@@ -6762,6 +6809,12 @@ function syncProducerRecipients({ producer, speakerSocketId, forceAnnounce = fal
   const deliveries = resolveProducerRecipientDeliveries({
     appData: producer.appData,
     speakerSocketId,
+  });
+  warnIfActiveProducerHasNoRecipients({
+    producer,
+    speakerSocketId,
+    speakerPeer,
+    deliveries,
   });
   const previousDeliveries = producer.__recipientDeliveries instanceof Map
     ? producer.__recipientDeliveries
@@ -7460,6 +7513,10 @@ io.on("connection", (socket) => {
 
     try {
       await producer.pause();
+      console.log(
+        `[SIGNAL] pause-producer ok socket=${socket.id} user=${peer.userId ?? peer.guestProfileUserId ?? "unknown"} `
+        + `producer=${producer.id} type=${producer.appData?.type || "unknown"}`
+      );
       callback({ ok: true });
     } catch (error) {
       console.error("[SIGNAL] pause-producer failed:", error);
@@ -7477,6 +7534,10 @@ io.on("connection", (socket) => {
 
     try {
       await producer.resume();
+      console.log(
+        `[SIGNAL] resume-producer ok socket=${socket.id} user=${peer.userId ?? peer.guestProfileUserId ?? "unknown"} `
+        + `producer=${producer.id} type=${producer.appData?.type || "unknown"}`
+      );
       callback({ ok: true });
     } catch (error) {
       console.error("[SIGNAL] resume-producer failed:", error);
@@ -7969,12 +8030,15 @@ io.on("connection", (socket) => {
           //----------------------------------------------------------------
           // 3️⃣  Routing
           //----------------------------------------------------------------
-          announceProducerToRecipients({
+          const initialRecipientSocketIds = announceProducerToRecipients({
             producerId: producer.id,
             appData,
             speakerSocketId: socket.id,
           });
-          console.log(`[ROUTE] Announced producer ${producer.id} for ${type} ${targetId ?? ""}`.trim());
+          console.log(
+            `[ROUTE] Announced producer ${producer.id} for ${type} ${targetId ?? ""} `
+            + `recipients=${initialRecipientSocketIds.length}`
+          );
 
           const applePttRecipientUserIds = await sendApplePttSpeakerStarted({
             type,
@@ -7996,12 +8060,16 @@ io.on("connection", (socket) => {
             producer.__startedAt = Date.now();
             syncPeerCompanionState(peer, { reason: "produce-resumed" });
             broadcastRuntimeUserStates("produce-resumed");
-            announceProducerToRecipients({
+            const resumedRecipientSocketIds = announceProducerToRecipients({
               producerId: producer.id,
               appData,
               speakerSocketId: socket.id,
               forceAnnounce: true,
             });
+            console.log(
+              `[ROUTE] Re-announced resumed producer ${producer.id} for ${type} ${targetId ?? ""} `
+              + `recipients=${resumedRecipientSocketIds.length}`
+            );
             void sendApplePttSpeakerStarted({
               type,
               targetId,
