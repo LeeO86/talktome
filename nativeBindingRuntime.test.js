@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
 const { fileSha256 } = require("./runtimeWorker");
+const { resolveBetterSqliteBinding } = require("./betterSqliteBinding");
 
 test("unpackaged and Docker server replace a stale persisted SQLite binding", (t) => {
   const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "talktome-native-binding-"));
@@ -26,13 +27,6 @@ test("unpackaged and Docker server replace a stale persisted SQLite binding", (t
   });
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  const installedBinding = path.join(
-    __dirname,
-    "node_modules",
-    "better-sqlite3",
-    "build",
-    "Release",
-    "better_sqlite3.node"
-  );
+  const installedBinding = resolveBetterSqliteBinding();
   assert.equal(fileSha256(runtimeBinding), fileSha256(installedBinding));
 });

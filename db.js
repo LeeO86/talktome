@@ -4,19 +4,12 @@ const path = require("path");
 const Database = require("better-sqlite3");
 const { getDataDir, getDataFile } = require("./dataPaths");
 const { syncRuntimeFile } = require("./runtimeWorker");
+const { getBetterSqliteBindingCandidates } = require("./betterSqliteBinding");
 
 function resolveNativeBinding() {
   const execDir = path.dirname(process.execPath);
-  const bundledPath = path.join(
-    __dirname,
-    "node_modules",
-    "better-sqlite3",
-    "build",
-    "Release",
-    "better_sqlite3.node"
-  );
   const candidates = [
-    bundledPath,
+    ...getBetterSqliteBindingCandidates(),
     path.join(execDir, "binaries", "better_sqlite3.node"),
     path.join(execDir, "better_sqlite3.node"),
   ];

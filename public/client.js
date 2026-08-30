@@ -259,6 +259,7 @@ let feedDimIncoming = hasServerDefaultClientSetting('dimWhenAddressed')
 let audioProcessingEnabled = false;
 let audioProcessingReinitializePending = false;
 let refreshTalkProducerForAudioProcessingChange = null;
+let ensureWarmTalkProducerAfterMicAccess = () => Promise.resolve(null);
 let leftHandModeEnabled = hasServerDefaultClientSetting('leftHandMode')
   ? serverDefaultClientSettings.leftHandMode === true
   : false;
@@ -2019,7 +2020,7 @@ async function requestInitialMicrophoneAccess({ reason = 'startup' } = {}) {
     }
 
     if (mediaInitialized && isOperatorSession() && session.kind === 'user') {
-      ensureWarmTalkProducer(`initial-mic-access:${reason}`).catch((error) => {
+      ensureWarmTalkProducerAfterMicAccess(`initial-mic-access:${reason}`).catch((error) => {
         console.warn('Failed to pre-warm talk producer after microphone access:', error);
       });
     }
@@ -4626,6 +4627,8 @@ let cachedOperatorTargets = null;
       warmTalkProducerPromise = null;
     }
   }
+
+  ensureWarmTalkProducerAfterMicAccess = ensureWarmTalkProducer;
 
   refreshTalkProducerForAudioProcessingChange = async function () {
     if (session.kind !== 'user') {
