@@ -1991,6 +1991,14 @@
           min-height: 0;
         }
 
+        body.left-hand-mode #intercom-app[style*="flex"] {
+          grid-template-columns: var(--phone-landscape-reply-width) minmax(0, 1fr);
+          grid-template-areas:
+            "session session"
+            "feed feed"
+            "reply targets";
+        }
+
         body.feed-mode #intercom-app {
           display: flex !important;
         }
