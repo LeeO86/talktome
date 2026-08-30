@@ -912,7 +912,45 @@ function loadOrCreateCompanionApiKey() {
   return generated;
 }
 
-const companionApiKey = loadOrCreateCompanionApiKey();
+function persistCompanionApiKey(apiKey) {
+  const directory = path.dirname(COMPANION_API_KEY_FILE);
+  const tempFile = path.join(
+    directory,
+    `.companion_api_key.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`,
+  );
+
+  fs.mkdirSync(directory, { recursive: true });
+  try {
+    fs.writeFileSync(tempFile, apiKey, { mode: 0o600, flag: "wx" });
+    fs.renameSync(tempFile, COMPANION_API_KEY_FILE);
+    try {
+      fs.chmodSync(COMPANION_API_KEY_FILE, 0o600);
+    } catch {}
+  } catch (err) {
+    try {
+      fs.unlinkSync(tempFile);
+    } catch {}
+    throw err;
+  }
+}
+
+let companionApiKey = loadOrCreateCompanionApiKey();
+
+function regenerateCompanionApiKey() {
+  if (readCompanionApiKeyFromEnv()) {
+    const err = new Error(
+      "The API key is managed by COMPANION_API_KEY and cannot be regenerated in the Admin page.",
+    );
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const generated = crypto.randomBytes(32).toString("hex");
+  persistCompanionApiKey(generated);
+  companionApiKey = generated;
+  console.log(`[COMPANION] Regenerated API key at ${COMPANION_API_KEY_FILE}`);
+  return generated;
+}
 
 function parseBearerToken(value) {
   if (typeof value !== "string") return null;
@@ -3029,6 +3067,18 @@ app.put("/admin/productions/:productionId/users/:userId/targets/order", requireP
 
 app.get("/admin/api-key", requireAdmin, (req, res) => {
   res.json({ apiKey: companionApiKey });
+});
+
+app.post("/admin/api-key/regenerate", requireAdmin, (req, res) => {
+  try {
+    const apiKey = regenerateCompanionApiKey();
+    res.json({ apiKey });
+  } catch (err) {
+    console.error(`[COMPANION] Failed to regenerate API key: ${err.message}`);
+    res.status(err.statusCode || 500).json({
+      error: err.message || "Failed to regenerate API key",
+    });
+  }
 });
 
 function statusIsoTimestamp(value) {

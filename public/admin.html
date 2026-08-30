@@ -1064,6 +1064,7 @@
 
       .api-key-actions {
         display: flex;
+        gap: 0.6rem;
         justify-content: flex-end;
       }
 
@@ -1408,6 +1409,86 @@
         display: block;
         width: min(100%, 560px);
         height: auto;
+      }
+
+      .admin-action-dialog {
+        position: fixed;
+        inset: 0;
+        z-index: 1100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: rgba(11, 17, 32, 0.82);
+        backdrop-filter: blur(6px);
+      }
+
+      .admin-action-dialog__panel {
+        width: min(92vw, 460px);
+        display: grid;
+        gap: 1rem;
+        padding: 1.25rem;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 16px;
+        background: rgba(19, 26, 42, 0.99);
+        box-shadow: 0 28px 64px rgba(0, 0, 0, 0.45);
+      }
+
+      .admin-action-dialog__title,
+      .admin-action-dialog__message {
+        margin: 0;
+      }
+
+      .admin-action-dialog__title {
+        font-size: 1.15rem;
+      }
+
+      .admin-action-dialog__message {
+        color: var(--muted);
+        white-space: pre-line;
+      }
+
+      .admin-action-dialog__field {
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .admin-action-dialog__field input {
+        width: 100%;
+      }
+
+      .admin-action-dialog__field .password-input-wrap:not(.has-password-toggle) input {
+        padding-right: 0.75rem;
+      }
+
+      .admin-action-dialog__error {
+        min-height: 1.25rem;
+        color: var(--danger);
+        font-size: 0.88rem;
+      }
+
+      .admin-action-dialog__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.65rem;
+      }
+
+      .admin-action-dialog__cancel {
+        background: rgba(148, 163, 184, 0.14);
+        color: var(--text);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+      }
+
+      .admin-action-dialog__confirm.danger {
+        background: #b91c1c;
+      }
+
+      .admin-action-dialog__confirm.danger:hover {
+        background: #991b1b;
+      }
+
+      body.admin-dialog-open {
+        overflow: hidden;
       }
 
       .config-transfer-grid {
@@ -3358,6 +3439,7 @@
                   </button>
                 </div>
                 <div class="api-key-actions">
+                  <button type="button" id="api-key-regenerate-btn" class="warning">Regenerate</button>
                   <button type="button" id="api-key-copy-btn">Copy API key</button>
                 </div>
               </div>
@@ -3446,7 +3528,7 @@
                     </span>
                   </label>
                   <div class="default-client-settings-actions">
-                    <button type="submit">Save defaults</button>
+                    <button type="submit">Save</button>
                   </div>
                 </div>
               </form>
@@ -3497,6 +3579,31 @@
           </button>
         </div>
       </div>
+    </div>
+
+    <div id="admin-action-dialog" class="admin-action-dialog is-hidden" role="dialog" aria-modal="true" aria-labelledby="admin-action-dialog-title" aria-describedby="admin-action-dialog-message">
+      <form id="admin-action-dialog-form" class="admin-action-dialog__panel" autocomplete="off">
+        <h2 id="admin-action-dialog-title" class="admin-action-dialog__title">Confirm action</h2>
+        <p id="admin-action-dialog-message" class="admin-action-dialog__message"></p>
+        <label id="admin-action-dialog-field" class="admin-action-dialog__field is-hidden" for="admin-action-dialog-input">
+          <span id="admin-action-dialog-label">Value</span>
+          <div class="password-input-wrap">
+            <input id="admin-action-dialog-input" type="text" />
+            <button type="button" id="admin-action-dialog-password-toggle" class="password-toggle is-hidden" data-password-toggle="admin-action-dialog-input" aria-label="Show password" aria-controls="admin-action-dialog-input" aria-pressed="false" title="Show password">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.75 12S6.1 5.75 12 5.75 21.25 12 21.25 12 17.9 18.25 12 18.25 2.75 12 2.75 12Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M12 15.25A3.25 3.25 0 1 0 12 8.75 3.25 3.25 0 0 0 12 15.25Z" stroke="currentColor" stroke-width="1.8"/>
+                <path class="password-toggle__slash" d="M4.75 4.75L19.25 19.25" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </button>
+          </div>
+        </label>
+        <div id="admin-action-dialog-error" class="admin-action-dialog__error is-hidden" aria-live="polite"></div>
+        <div class="admin-action-dialog__actions">
+          <button type="button" id="admin-action-dialog-cancel" class="admin-action-dialog__cancel">Cancel</button>
+          <button type="submit" id="admin-action-dialog-confirm" class="admin-action-dialog__confirm">Confirm</button>
+        </div>
+      </form>
     </div>
 
     <script src="admin.js"></script>
