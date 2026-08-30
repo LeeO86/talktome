@@ -93,7 +93,10 @@ private class PinnedTrustManager : X509ExtendedTrustManager() {
   }
 
   override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, socket: Socket) {
-    val host = (socket as? SSLSocket)?.session?.peerHost
+    // Must use the in-progress handshake session here: `socket.session` blocks
+    // until the handshake finishes, but Conscrypt invokes this callback from
+    // inside the handshake, so reading it deadlocks every TLS connection.
+    val host = runCatching { (socket as? SSLSocket)?.handshakeSession?.peerHost }.getOrNull()
     checkServer(chain, authType, host)
   }
 
