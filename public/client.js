@@ -2124,7 +2124,10 @@ function handleSettingsMenuOpened() {
   if (settingsMenuOpen) return;
   settingsMenuOpen = true;
   setActiveSettingsView('main');
-  refreshTargetHotkeyUiHandler(cachedUsers);
+  // The assigned handler owns the current user list inside the
+  // DOMContentLoaded scope. Passing that closure-scoped variable here used
+  // to throw because this function lives outside that scope.
+  refreshTargetHotkeyUiHandler();
   startInputMonitor();
 }
 
@@ -2156,7 +2159,7 @@ function setActiveSettingsView(nextView = 'main') {
   }
 
   if (resolvedView === 'shortcuts') {
-    renderTargetHotkeySettingsHandler(cachedUsers);
+    renderTargetHotkeySettingsHandler();
   }
 }
 
