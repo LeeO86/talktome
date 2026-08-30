@@ -6263,43 +6263,44 @@ let cachedOperatorTargets = null;
   let lastConnectedSocketId = null;
   let previousSocketId = null;
 
-  async function registerUserWithConflictPrompt({ id, name, kind, allowPrompt = true, guestProfileUserId = null } = {}) {
-    const first = await emitRegisterUser({ id, name, kind, guestProfileUserId, force: false });
+  async function registerUserWithConflictPrompt({ id, name, kind, allowPrompt = true, guestProfileUserId = null, productionId = null } = {}) {
+    const first = await emitRegisterUser({ id, name, kind, guestProfileUserId, productionId, force: false });
     if (first?.conflict && kind === 'user') {
       if (previousSocketId && first?.existing?.socketId === previousSocketId) {
-        return emitRegisterUser({ id, name, kind, guestProfileUserId, force: true });
+        return emitRegisterUser({ id, name, kind, guestProfileUserId, productionId, force: true });
       }
       if (!allowPrompt) return { conflict: true };
       const existingName = first?.existing?.name ? ` (${first.existing.name})` : '';
       const ok = confirm(`This user is already signed in${existingName}. Sign out the other session?`);
       if (!ok) return { cancelled: true };
-      const forced = await emitRegisterUser({ id, name, kind, guestProfileUserId, force: true });
+      const forced = await emitRegisterUser({ id, name, kind, guestProfileUserId, productionId, force: true });
       return forced?.ok ? forced : forced;
     }
     return first?.ok ? first : first;
   }
 
-  function buildRegistrationKey({ id, name, kind, allowPrompt = true, guestProfileUserId = null } = {}) {
+  function buildRegistrationKey({ id, name, kind, allowPrompt = true, guestProfileUserId = null, productionId = null } = {}) {
     return JSON.stringify({
       id: id ?? null,
       name: name ?? null,
       kind: kind ?? null,
       guestProfileUserId: guestProfileUserId ?? null,
+      productionId: productionId ?? null,
       allowPrompt: !!allowPrompt,
     });
   }
 
-  async function registerIdentity({ id, name, kind, allowPrompt = true, guestProfileUserId = null } = {}) {
-    const key = buildRegistrationKey({ id, name, kind, allowPrompt, guestProfileUserId });
+  async function registerIdentity({ id, name, kind, allowPrompt = true, guestProfileUserId = null, productionId = null } = {}) {
+    const key = buildRegistrationKey({ id, name, kind, allowPrompt, guestProfileUserId, productionId });
     if (activeRegistrationPromise && activeRegistrationKey === key) {
       return activeRegistrationPromise;
     }
 
     const promise = (async () => {
       if (kind === 'user') {
-        return registerUserWithConflictPrompt({ id, name, kind, allowPrompt, guestProfileUserId });
+        return registerUserWithConflictPrompt({ id, name, kind, allowPrompt, guestProfileUserId, productionId });
       }
-      const result = await emitRegisterUser({ id, name, kind, guestProfileUserId, force: false });
+      const result = await emitRegisterUser({ id, name, kind, guestProfileUserId, productionId, force: false });
       return result?.ok ? result : result;
     })();
 
@@ -6325,6 +6326,7 @@ let cachedOperatorTargets = null;
       name: session.name,
       kind: session.kind,
       guestProfileUserId: session.kind === 'guest' ? session.guestProfileUserId : null,
+      productionId: session.productionId,
       allowPrompt: allowPromptForUser,
     });
   }
@@ -6413,6 +6415,13 @@ let cachedOperatorTargets = null;
           if (session.kind === 'user') {
             applyPersistedTargetAudioStates(registration.targetAudioStates || []);
           }
+          applyRegisteredProductionState(session, registration);
+          const registeredProduction = (session.productions || []).find((production) => (
+            String(production.id) === String(session.productionId)
+          )) || null;
+          persistActiveProduction(session, registeredProduction);
+          if (session.kind === 'guest') persistGuestSession(session);
+          applyProductionSessionUI();
         }
         setSessionDisplay(session.name);
       }
@@ -6489,11 +6498,12 @@ let cachedOperatorTargets = null;
   function chooseProduction(identity, { preferStored = false } = {}) {
     const productions = Array.isArray(identity?.productions) ? identity.productions : [];
     if (productions.length === 0) return Promise.resolve(null);
+    if (productions.length === 1) return Promise.resolve(productions[0]);
 
     if (preferStored) {
       const storageKey = getActiveProductionStorageKey(identity);
       const storedId = storageKey ? localStorage.getItem(storageKey) : null;
-      if (storedId === DEFAULT_PRODUCTION_STORAGE_VALUE) return Promise.resolve(null);
+      if (storedId === DEFAULT_PRODUCTION_STORAGE_VALUE) return Promise.resolve(productions[0]);
       const stored = productions.find((production) => String(production.id) === String(storedId));
       if (stored) return Promise.resolve(stored);
     }
@@ -6511,15 +6521,11 @@ let cachedOperatorTargets = null;
         productionLoginPanel?.classList.add('is-hidden');
         resolve(selection);
       };
-      const choices = [
-        { id: null, name: 'Default' },
-        ...productions,
-      ];
-      choices.forEach((production) => {
+      productions.forEach((production) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = production.name;
-        button.addEventListener('click', () => finish(production.id === null ? null : production), { once: true });
+        button.addEventListener('click', () => finish(production), { once: true });
         productionLoginOptions?.appendChild(button);
       });
     });
@@ -6528,23 +6534,17 @@ let cachedOperatorTargets = null;
   function applyProductionSessionUI() {
     const productions = Array.isArray(session?.productions) ? session.productions : [];
     if (activeProductionLabelEl) {
-      const productionLabel = session.productionName || (productions.length > 0 ? 'Default' : '');
+      const productionLabel = session.productionName || '';
       activeProductionLabelEl.textContent = productionLabel ? `· ${productionLabel}` : '';
       activeProductionLabelEl.classList.toggle('is-hidden', !productionLabel);
     }
     if (productionSessionSelector && productionSessionSelect) {
-      productionSessionSelector.hidden = session.kind === 'feed' || productions.length === 0;
-      const choices = [
-        { id: null, name: 'Default' },
-        ...productions,
-      ];
-      const options = choices.map((production) => {
+      productionSessionSelector.hidden = session.kind === 'feed' || productions.length < 2;
+      const options = productions.map((production) => {
         const option = document.createElement('option');
-        option.value = production.id === null ? DEFAULT_PRODUCTION_STORAGE_VALUE : String(production.id);
+        option.value = String(production.id);
         option.textContent = production.name;
-        option.selected = production.id === null
-          ? !session.productionId
-          : String(production.id) === String(session.productionId);
+        option.selected = String(production.id) === String(session.productionId);
         return option;
       });
       productionSessionSelect.replaceChildren(...options);
@@ -6556,6 +6556,22 @@ let cachedOperatorTargets = null;
     if (!storageKey) return;
     if (production?.id) localStorage.setItem(storageKey, String(production.id));
     else localStorage.setItem(storageKey, DEFAULT_PRODUCTION_STORAGE_VALUE);
+  }
+
+  function applyRegisteredProductionState(targetSession, registration) {
+    if (!targetSession || targetSession.kind === 'feed' || !registration?.ok) return;
+    if (Array.isArray(registration.productions)) {
+      targetSession.productions = registration.productions;
+    }
+    if (Object.prototype.hasOwnProperty.call(registration, 'productionId')) {
+      targetSession.productionId = registration.productionId == null
+        ? null
+        : String(registration.productionId);
+    }
+    const activeProduction = (targetSession.productions || []).find((production) => (
+      String(production.id) === String(targetSession.productionId)
+    ));
+    targetSession.productionName = activeProduction?.name || null;
   }
 
   function reconnectSocketWithBrowserSession({ timeoutMs = 10000 } = {}) {
@@ -6615,6 +6631,7 @@ let cachedOperatorTargets = null;
       id: kind === 'feed' ? nextSession.feedId : nextSession.userId,
       name: nextSession.name,
       kind: nextSession.kind,
+      productionId: nextSession.productionId,
       allowPrompt: true,
     });
     if (!reg?.ok) {
@@ -6622,6 +6639,8 @@ let cachedOperatorTargets = null;
       if (!reg?.cancelled) setLoginError(reg?.error || "Unable to sign in");
       return false;
     }
+
+    applyRegisteredProductionState(nextSession, reg);
 
     session = nextSession;
     feedManualStop = false;
@@ -6636,7 +6655,9 @@ let cachedOperatorTargets = null;
     localStorage.setItem(IDENTITY_KIND_KEY, kind);
     if (kind === 'user') {
       localStorage.setItem("userId", session.userId);
-      persistActiveProduction(user, production);
+      persistActiveProduction(user, (session.productions || []).find((item) => (
+        String(item.id) === String(session.productionId)
+      )) || null);
       localStorage.removeItem(FEED_ID_STORAGE_KEY);
     } else {
       localStorage.setItem(FEED_ID_STORAGE_KEY, session.feedId);
@@ -6657,16 +6678,22 @@ let cachedOperatorTargets = null;
   productionSessionSelect?.addEventListener('change', async () => {
     if (!isOperatorSession()) return;
     const selectedValue = productionSessionSelect.value;
-    const production = selectedValue === DEFAULT_PRODUCTION_STORAGE_VALUE
-      ? null
-      : (session.productions || []).find((item) => String(item.id) === String(selectedValue));
-    if (selectedValue !== DEFAULT_PRODUCTION_STORAGE_VALUE && !production) return;
-    const nextProductionId = production?.id ? String(production.id) : null;
+    const production = (session.productions || []).find((item) => String(item.id) === String(selectedValue));
+    if (!production) return;
+    const nextProductionId = String(production.id);
     if (String(nextProductionId || '') === String(session.productionId || '')) return;
 
     try {
       handleStopTalking({ preventDefault() {}, currentTarget: null });
     } catch {}
+    const result = await new Promise((resolve) => {
+      socket.emit('set-active-production', { productionId: nextProductionId }, (payload) => resolve(payload || {}));
+    });
+    if (!result?.ok) {
+      setLoginError(result?.error || 'Unable to change production');
+      applyProductionSessionUI();
+      return;
+    }
     session.productionId = nextProductionId;
     session.productionName = production?.name || null;
     loadedTargetHotkeyStorageKey = null;
@@ -6844,6 +6871,7 @@ let cachedOperatorTargets = null;
         name: nextSession.name,
         kind: 'guest',
         guestProfileUserId: nextSession.guestProfileUserId,
+        productionId: nextSession.productionId,
         allowPrompt: false,
       });
       if (!reg?.ok) {
@@ -6853,12 +6881,16 @@ let cachedOperatorTargets = null;
         return;
       }
 
+      applyRegisteredProductionState(nextSession, reg);
+
       session = nextSession;
       feedManualStop = false;
       shouldStartFeedWhenReady = false;
       clearStoredPersistentIdentity();
       persistGuestSession(nextSession);
-      persistActiveProduction(nextSession, production);
+      persistActiveProduction(nextSession, (nextSession.productions || []).find((item) => (
+        String(item.id) === String(nextSession.productionId)
+      )) || null);
 
       loginContainer.style.display = "none";
       intercomApp.style.display = "flex";
@@ -7019,6 +7051,35 @@ let cachedOperatorTargets = null;
       await renderTargetList(cachedUsers);
     }
     requestActiveProducers().catch(() => {});
+  });
+
+  socket.on('active-production-reset', async ({ productionId = null } = {}) => {
+    if (!isOperatorSession()) return;
+    try {
+      handleStopTalking({ preventDefault() {}, currentTarget: null });
+    } catch {}
+    session.productionId = productionId == null ? null : String(productionId);
+    session.productionName = (session.productions || []).find((production) => (
+      String(production.id) === String(session.productionId)
+    ))?.name || null;
+    loadedTargetHotkeyStorageKey = null;
+    persistActiveProduction(session, (session.productions || []).find((production) => (
+      String(production.id) === String(session.productionId)
+    )) || null);
+    if (session.kind === 'guest') persistGuestSession(session);
+    applyProductionSessionUI();
+    if (cachedUsers.length) await renderTargetList(cachedUsers);
+  });
+
+  socket.on('available-productions-updated', ({ productions = [] } = {}) => {
+    if (!isOperatorSession()) return;
+    session.productions = Array.isArray(productions) ? productions : [];
+    const activeProduction = session.productions.find((production) => (
+      String(production.id) === String(session.productionId)
+    ));
+    if (activeProduction) session.productionName = activeProduction.name || null;
+    if (session.kind === 'guest') persistGuestSession(session);
+    applyProductionSessionUI();
   });
 
   socket.on('conference-members-updated', async ({ conferenceId = null } = {}) => {

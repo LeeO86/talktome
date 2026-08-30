@@ -11,7 +11,7 @@ Local WebRTC intercom app built with Node.js, mediasoup and Socket.IO.
 - Program-audio feeds with volume and mute controls.
 - Camera tally and remote control through Bitfocus Companion, HTTP API, module and keyboard shortcuts.
 - Bridge Desktop Application to integrate NDI, OMT, hardware intercom systems, audio interfaces and mixing consoles.
-- Optional Productions with per-user target layouts and scoped production admins.
+- Optional multiple-production matrices with scoped users, conferences, feeds and production admins.
 
 ## Quick Start
 
@@ -186,24 +186,30 @@ for 12 hours and are invalidated by a server restart; with SSO, the next page
 load creates a new session automatically. Logging out of Talktome does not end
 the upstream identity-provider session, so a reload can sign the user in again.
 
-## Productions
+## Matrix and Productions
 
-Productions are optional layout scopes configured on the Admin `Productions`
-page. Users without a Production keep the existing global layout. Users assigned
-to one or more Productions can choose either the existing Default layout or a
-Production after login, and can switch between them from the application menu.
+The Admin `Matrix` page always contains the existing `Default` target and
+conference-membership matrices. Conference membership automatically provides
+the matching conference target button, so it does not need to be assigned a
+second time.
 
-Each Production has its own members and individual target assignment and order
-for every member. All globally configured conferences and feeds remain directly
-available as target choices. Production admins may manage
-those memberships and layouts without access to global users, server config,
-backups, or other Productions. Only global admins may create, rename, delete,
-or assign admins to Productions.
+Enable `Multiple Productions` on that page to add separate Production layouts.
+Each Production explicitly contains users, conferences and feeds and has its own
+conference memberships, target assignments and button order. Users assigned to
+one or more Productions can choose either `Default` or a Production after login
+and can switch from the application menu.
 
-Productions intentionally scope the UI layout only. Conference membership,
-audio routing, Bridge endpoints, mute and volume state remain global. Hiding a
-conference from a Production therefore does not remove an existing global audio
-membership.
+Conference identities remain global and may span Productions. Routing uses each
+connected user's currently loaded Production: speaking to a conference reaches
+all active users whose current Default or Production membership includes that
+conference, even when those users loaded different Productions. A user has only
+one active Talktome session at a time.
+
+Production admins may manage the contents, memberships and matrix of their own
+Productions without access to global users, server config, backups or other
+Productions. Only global admins may enable the feature, create, rename or delete
+Productions, or assign Production admins. Bridge endpoint configuration and
+personal mute/volume settings remain global.
 
 ## Companion and HTTP API
 

@@ -101,6 +101,7 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS productions (
                                                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
                                                    name       TEXT NOT NULL UNIQUE,
+                                                   is_primary INTEGER NOT NULL DEFAULT 0,
                                                    created_at TEXT NOT NULL,
                                                    updated_at TEXT NOT NULL
     );
@@ -110,6 +111,29 @@ db.exec(`
                                                        user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                                                        is_admin      INTEGER NOT NULL DEFAULT 0,
                                                        PRIMARY KEY (production_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS production_conferences (
+                                                             production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                                                             conference_id INTEGER NOT NULL REFERENCES conferences(id) ON DELETE CASCADE,
+                                                             PRIMARY KEY (production_id, conference_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS production_feeds (
+                                                        production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                                                        feed_id       INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                                                        PRIMARY KEY (production_id, feed_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS production_user_conference (
+                                                                  production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                                                                  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                                                                  conference_id INTEGER NOT NULL REFERENCES conferences(id) ON DELETE CASCADE,
+                                                                  PRIMARY KEY (production_id, user_id, conference_id),
+                                                                  FOREIGN KEY (production_id, user_id)
+                                                                    REFERENCES production_users(production_id, user_id) ON DELETE CASCADE,
+                                                                  FOREIGN KEY (production_id, conference_id)
+                                                                    REFERENCES production_conferences(production_id, conference_id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS production_user_targets (
@@ -134,6 +158,14 @@ db.exec(`
 
     CREATE INDEX IF NOT EXISTS idx_production_targets_user
       ON production_user_targets(production_id, user_id, target_type, target_id);
+
+    CREATE INDEX IF NOT EXISTS idx_production_conference_members
+      ON production_user_conference(conference_id, production_id, user_id);
+
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+                                                       key        TEXT PRIMARY KEY,
+                                                       applied_at TEXT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS user_bridge_endpoints (
                                                           user_id              INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -180,6 +212,162 @@ db.exec(`
 
     DROP TABLE IF EXISTS user_global_targets;
 `);
+
+ensureColumn("productions", "is_primary", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("users", "is_superadmin", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("users", "is_guest_profile", "INTEGER NOT NULL DEFAULT 0");
+
+// Conference membership now provides both conference reception and its talk
+// button. Preserve installations that previously configured those separately.
+// This must only run once: repeating it would re-add memberships an admin later
+// intentionally removed from an individual production.
+const productionScopeMigrationKey = "unified-production-matrix-v1";
+const productionScopeMigrationApplied = db.prepare(`
+  SELECT 1
+  FROM schema_migrations
+  WHERE key = ?
+`).get(productionScopeMigrationKey);
+
+if (!productionScopeMigrationApplied) {
+  db.transaction(() => {
+    db.exec(`
+  INSERT OR IGNORE INTO user_conference (user_id, conference_id)
+  SELECT user_id, target_conf
+  FROM user_conf_targets;
+
+  INSERT OR IGNORE INTO user_target_order (user_id, target_type, target_id, position)
+  SELECT
+    membership.user_id,
+    'conference',
+    membership.conference_id,
+    COALESCE((
+      SELECT MAX(existing.position) + 1
+      FROM user_target_order existing
+      WHERE existing.user_id = membership.user_id
+    ), 0) + ROW_NUMBER() OVER (
+      PARTITION BY membership.user_id
+      ORDER BY membership.conference_id
+    ) - 1
+  FROM user_conference membership
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM user_target_order existing
+    WHERE existing.user_id = membership.user_id
+      AND existing.target_type = 'conference'
+      AND existing.target_id = membership.conference_id
+  );
+
+  INSERT OR IGNORE INTO production_conferences (production_id, conference_id)
+  SELECT production_id, target_id
+  FROM production_user_targets
+  WHERE target_type = 'conference';
+
+  INSERT OR IGNORE INTO production_feeds (production_id, feed_id)
+  SELECT production_id, target_id
+  FROM production_user_targets
+  WHERE target_type = 'feed';
+
+  INSERT OR IGNORE INTO production_conferences (production_id, conference_id)
+  SELECT production_member.production_id, membership.conference_id
+  FROM production_users production_member
+  JOIN user_conference membership ON membership.user_id = production_member.user_id;
+
+  INSERT OR IGNORE INTO production_user_conference (production_id, user_id, conference_id)
+  SELECT production_member.production_id, production_member.user_id, membership.conference_id
+  FROM production_users production_member
+  JOIN user_conference membership ON membership.user_id = production_member.user_id
+  JOIN production_conferences production_conference
+    ON production_conference.production_id = production_member.production_id
+   AND production_conference.conference_id = membership.conference_id;
+
+  INSERT OR IGNORE INTO production_user_conference (production_id, user_id, conference_id)
+  SELECT target.production_id, target.user_id, target.target_id
+  FROM production_user_targets target
+  JOIN production_users production_member
+    ON production_member.production_id = target.production_id
+   AND production_member.user_id = target.user_id
+  JOIN production_conferences production_conference
+    ON production_conference.production_id = target.production_id
+   AND production_conference.conference_id = target.target_id
+  WHERE target.target_type = 'conference';
+
+  DELETE FROM user_conf_targets;
+  DELETE FROM production_user_targets WHERE target_type = 'conference';
+    `);
+    db.prepare(`
+      INSERT INTO schema_migrations (key, applied_at)
+      VALUES (?, ?)
+    `).run(productionScopeMigrationKey, new Date().toISOString());
+  })();
+}
+
+// Turn the former global matrix into the first real production. From this
+// point on there is no special, undeletable "Default" layout: whichever
+// production is marked primary is also the layout used in single mode.
+const primaryProductionMigrationKey = "materialized-primary-production-v1";
+const primaryProductionMigrationApplied = db.prepare(`
+  SELECT 1 FROM schema_migrations WHERE key = ?
+`).get(primaryProductionMigrationKey);
+
+if (!primaryProductionMigrationApplied) {
+  db.transaction(() => {
+    let name = "Default";
+    let suffix = 2;
+    while (db.prepare("SELECT 1 FROM productions WHERE name = ?").get(name)) {
+      name = `Default ${suffix++}`;
+    }
+    const now = new Date().toISOString();
+    const result = db.prepare(`
+      INSERT INTO productions (name, is_primary, created_at, updated_at)
+      VALUES (?, 1, ?, ?)
+    `).run(name, now, now);
+    const productionId = Number(result.lastInsertRowid);
+
+    db.prepare(`
+      INSERT OR IGNORE INTO production_users (production_id, user_id, is_admin)
+      SELECT ?, id, 0 FROM users WHERE is_superadmin = 0
+    `).run(productionId);
+    db.prepare(`
+      INSERT OR IGNORE INTO production_conferences (production_id, conference_id)
+      SELECT ?, id FROM conferences
+    `).run(productionId);
+    db.prepare(`
+      INSERT OR IGNORE INTO production_feeds (production_id, feed_id)
+      SELECT ?, id FROM feeds
+    `).run(productionId);
+    db.prepare(`
+      INSERT OR IGNORE INTO production_user_conference (production_id, user_id, conference_id)
+      SELECT ?, membership.user_id, membership.conference_id
+      FROM user_conference membership
+      JOIN users user ON user.id = membership.user_id AND user.is_superadmin = 0
+    `).run(productionId);
+    db.prepare(`
+      INSERT OR IGNORE INTO production_user_targets (production_id, user_id, target_type, target_id)
+      SELECT ?, target.user_id, 'user', target.target_user
+      FROM user_user_targets target
+      JOIN users source ON source.id = target.user_id AND source.is_superadmin = 0
+      JOIN users destination ON destination.id = target.target_user
+        AND destination.is_superadmin = 0 AND destination.is_guest_profile = 0
+    `).run(productionId);
+    db.prepare(`
+      INSERT OR IGNORE INTO production_user_targets (production_id, user_id, target_type, target_id)
+      SELECT ?, target.user_id, 'feed', target.feed_id
+      FROM user_feed_targets target
+      JOIN users source ON source.id = target.user_id AND source.is_superadmin = 0
+    `).run(productionId);
+    db.prepare(`
+      INSERT OR IGNORE INTO production_target_order
+        (production_id, user_id, target_type, target_id, position)
+      SELECT ?, ordering.user_id, ordering.target_type, ordering.target_id, ordering.position
+      FROM user_target_order ordering
+      JOIN users source ON source.id = ordering.user_id AND source.is_superadmin = 0
+      WHERE ordering.target_type IN ('user', 'conference', 'feed')
+    `).run(productionId);
+    db.prepare(`
+      INSERT INTO schema_migrations (key, applied_at) VALUES (?, ?)
+    `).run(primaryProductionMigrationKey, now);
+  })();
+}
 
 function ensureColumn(table, column, definition) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
