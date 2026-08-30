@@ -1867,6 +1867,28 @@ function productionTargetKey(targetType, targetId) {
   return `${targetType}:${targetId}`;
 }
 
+function getProductionTargetState(targetType, target = null) {
+  if (!target) return 'off';
+  if (targetType === 'conference' && target.canTalk === false) return 'listen-only';
+  return 'talk';
+}
+
+function setProductionTargetToggleState(toggle, state) {
+  const normalizedState = ['talk', 'listen-only'].includes(state) ? state : 'off';
+  toggle.dataset.state = normalizedState;
+  toggle.setAttribute('aria-pressed', normalizedState === 'talk' ? 'true' : normalizedState === 'listen-only' ? 'mixed' : 'false');
+  if (toggle.dataset.targetType === 'conference' && toggle.dataset.label) {
+    const mode = normalizedState === 'talk'
+      ? 'talk and listen'
+      : normalizedState === 'listen-only'
+        ? 'listen only'
+        : 'not a member';
+    const description = `${toggle.dataset.label} (${mode})`;
+    toggle.setAttribute('aria-label', description);
+    toggle.title = description;
+  }
+}
+
 function renderProductionMembers(payload) {
   if (!productionMembersList) return;
   const memberMap = new Map(payload.members.map((member) => [String(member.id), member]));
@@ -1933,8 +1955,8 @@ function renderProductionTargetMatrix(payload) {
     </th>
   `).join('');
   const bodyRows = rowUsers.map((user) => {
-    const assignments = new Set((payload.targets[String(user.id)] || []).map((target) => (
-      productionTargetKey(target.targetType, target.targetId)
+    const assignments = new Map((payload.targets[String(user.id)] || []).map((target) => (
+      [productionTargetKey(target.targetType, target.targetId), target]
     )));
     const cells = columns.map((column, columnIndex) => {
       const self = column.targetType === 'user' && Number(column.id) === Number(user.id);
@@ -1942,12 +1964,22 @@ function renderProductionTargetMatrix(payload) {
         return `<td class="target-matrix__unavailable target-matrix__target-column target-matrix__column--user" data-matrix-column="${columnIndex}">&mdash;</td>`;
       }
       const label = `${column.name} as target for ${user.name}`;
+      const assignment = assignments.get(productionTargetKey(column.targetType, column.id));
+      const state = getProductionTargetState(column.targetType, assignment);
+      const conferenceTitle = state === 'talk'
+        ? `${label} (talk and listen)`
+        : state === 'listen-only'
+          ? `${label} (listen only)`
+          : `${label} (not a member)`;
       return `
         <td class="target-matrix__coupling target-matrix__target-column target-matrix__column--${escapeHtml(column.targetType)}" data-matrix-column="${columnIndex}">
           <button type="button" class="target-matrix-toggle production-target-toggle"
             data-user-id="${user.id}" data-target-type="${escapeHtml(column.targetType)}" data-target-id="${column.id}"
-            aria-label="${escapeHtml(label)}" title="${escapeHtml(column.targetType === 'conference' ? `${label} (also controls conference membership)` : label)}"
-            aria-pressed="${assignments.has(productionTargetKey(column.targetType, column.id))}"></button>
+            data-label="${escapeHtml(label)}"
+            data-state="${state}" ${column.targetType === 'conference' ? 'data-matrix-multistate="true"' : ''}
+            aria-label="${escapeHtml(column.targetType === 'conference' ? conferenceTitle : label)}"
+            title="${escapeHtml(column.targetType === 'conference' ? conferenceTitle : label)}"
+            aria-pressed="${state === 'talk' ? 'true' : state === 'listen-only' ? 'mixed' : 'false'}"></button>
         </td>
       `;
     }).join('');
@@ -2078,7 +2110,7 @@ async function loadProductions({ selectId = selectedProductionId } = {}) {
     const switchLabel = multipleProductionsInput.closest('label');
     if (switchLabel) {
       switchLabel.title = multipleProductionsSupported
-        ? 'Enable separate user, conference, feed and membership layouts for multiple productions.'
+        ? 'Enable separate matrices for multiple productions. Users, conferences, feeds, memberships and button order can then be configured independently for each production.'
         : 'Restart the Talktome server to enable Multiple Productions.';
     }
   }
@@ -2117,7 +2149,7 @@ async function loadData() {
     console.error('Failed to load Guest login settings:', error);
   });
   const { users, conferences, feeds, bridges } = await fetchAdminCollections();
-  await guestSettingsLoad;
+  await Promise.all([productionLoad, guestSettingsLoad]);
 
   // Render the matrix immediately. Per-user requests update its switches as
   // they arrive, including conference memberships.
@@ -2129,7 +2161,6 @@ async function loadData() {
   ]);
 
   await Promise.allSettled([
-    productionLoad,
     loadDefaultClientSettings(),
     loadMdnsSettings(),
     loadMediaNetworkSettings(),
@@ -2488,19 +2519,25 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
       ? '<span class="badge bridge">Bridge</span>'
       : '';
     const adminToggle = adminState.isAuthenticated
-      ? isSuperadmin || isGuestProfile
-        ? `<button type="button" class="small admin-role-toggle" disabled title="${isSuperadmin ? 'Superadmin role cannot be changed' : 'Guest profile cannot be made admin'}">Make admin</button>`
+      ? isSuperadmin
+        ? ''
+        : isGuestProfile
+          ? '<button type="button" class="small admin-role-toggle" disabled title="Guest profile cannot be made admin">Make admin</button>'
         : `<button type="button" class="small admin-role-toggle ${isAdmin ? 'warning' : ''}" onclick="toggleAdminRole(${user.id}, ${isAdmin ? 'false' : 'true'})">${isAdmin ? 'Remove admin' : 'Make admin'}</button>`
       : '';
     const passwordAttrs = isGuestProfile ? 'disabled title="Guest profile does not use a password"' : '';
-    const loginLinkAttrs = isSuperadmin
-      ? 'disabled title="Superadmin does not use a login URL"'
-      : isGuestProfile
+    const loginLinkAttrs = isGuestProfile
         ? 'disabled title="Guest profile does not use a login URL"'
         : '';
+    const copyLoginButton = isSuperadmin
+      ? ''
+      : `<button type="button" class="small" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>`;
     const deleteAttrs = isGuestProfile
       ? 'disabled title="Guest profile cannot be deleted"'
       : isAdmin ? 'disabled title="Admin accounts cannot be deleted"' : '';
+    const deleteButton = isSuperadmin
+      ? ''
+      : `<button type="button" class="small danger" onclick="deleteUser(${user.id})" ${deleteAttrs}>Delete</button>`;
     const stopTransmissionButton = !isSuperadmin && !isGuestProfile
       ? `<button type="button" class="small warning" data-stop-transmission-user-id="${user.id}" onclick="stopUserTransmission(${user.id}, this)" disabled>Stop transmission</button>`
       : '';
@@ -2570,25 +2607,9 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
         </div>
       `
       : '';
-
-    li.innerHTML = `
-      <div class="list-item-header">
-        <div class="list-item-title">
-          <span>${safeName}</span>
-          ${adminBadge}
-          ${guestBadge}
-          ${bridgeBadge}
-        </div>
-        <div class="inline-controls" onclick="event.stopPropagation()">
-          <button type="button" class="small" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>
-          <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
-          <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
-          ${stopTransmissionButton}
-          ${adminToggle}
-          <button type="button" class="small danger" onclick="deleteUser(${user.id})" ${deleteAttrs}>Delete</button>
-        </div>
-      </div>
-      <div class="nested" id="user-nested-${user.id}" onclick="event.stopPropagation()">
+    const targetControls = isSuperadmin
+      ? ''
+      : `
         <div class="nested-block">
           <strong>Target Buttons</strong>
           <div class="inline-controls">
@@ -2601,16 +2622,52 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
           </div>
           <ul id="user-targets-${user.id}"></ul>
         </div>
-        ${bridgeControls}
+      `;
+    const detailControls = targetControls || bridgeControls
+      ? `
+        <div class="nested" id="user-nested-${user.id}" onclick="event.stopPropagation()">
+          ${targetControls}
+          ${bridgeControls}
+        </div>
+      `
+      : '';
+
+    li.innerHTML = `
+      <div class="list-item-header">
+        <div class="list-item-title">
+          <span>${safeName}</span>
+          ${adminBadge}
+          ${guestBadge}
+          ${bridgeBadge}
+        </div>
+        <div class="inline-controls" onclick="event.stopPropagation()">
+          ${copyLoginButton}
+          <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
+          <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
+          ${stopTransmissionButton}
+          ${adminToggle}
+          ${deleteButton}
+        </div>
       </div>
+      ${detailControls}
     `;
 
     userList.appendChild(li);
   }
 
-  await Promise.all(visibleUsers.map(async (user) => {
+  const targetLoads = await Promise.allSettled(visibleUsers.map(async (user) => {
+    if (user.is_superadmin) {
+      cacheUserTargetAssignments(user.id, []);
+      return;
+    }
     await loadUserTargets(user.id, users, conferences, feeds);
   }));
+  targetLoads.forEach((result, index) => {
+    if (result.status !== 'rejected') return;
+    const user = visibleUsers[index];
+    cacheUserTargetAssignments(user.id, []);
+    console.warn(`Failed to load targets for ${user.name}:`, result.reason);
+  });
   initializeBridgeEndpointForms();
   await syncEntityMasterDetail('users', visibleUsers);
   syncStopTransmissionButtons();
@@ -2686,6 +2743,18 @@ async function renderConferenceList(conferences, users) {
 
   for (const conf of conferences) {
     const safeName = escapeHtml(conf.name);
+    const participantControls = multipleProductionsEnabled
+      ? ''
+      : `
+        <div class="nested" id="conf-controls-${conf.id}" onclick="event.stopPropagation()">
+          <strong>Participants</strong>
+          <div class="inline-controls">
+            <select id="add-conf-user-${conf.id}"></select>
+            <button type="button" class="small" id="add-conf-user-btn-${conf.id}" onclick="assignConferenceParticipant(${conf.id})">Add participant</button>
+          </div>
+          <ul id="conf-users-${conf.id}"></ul>
+        </div>
+      `;
     const li = document.createElement('li');
     li.className = 'list-item entity-detail-item';
     li.dataset.entityId = String(conf.id);
@@ -2700,19 +2769,14 @@ async function renderConferenceList(conferences, users) {
           <button type="button" class="small danger" onclick="deleteConference(${conf.id})">Delete</button>
         </div>
       </div>
-      <div class="nested" id="conf-controls-${conf.id}" onclick="event.stopPropagation()">
-        <strong>Participants</strong>
-        <div class="inline-controls">
-          <select id="add-conf-user-${conf.id}"></select>
-          <button type="button" class="small" id="add-conf-user-btn-${conf.id}" onclick="assignConferenceParticipant(${conf.id})">Add participant</button>
-        </div>
-        <ul id="conf-users-${conf.id}"></ul>
-      </div>
+      ${participantControls}
     `;
     confList.appendChild(li);
   }
 
-  await Promise.all(conferences.map(conf => updateConferenceParticipantOptions(conf.id, users)));
+  if (!multipleProductionsEnabled) {
+    await Promise.all(conferences.map(conf => updateConferenceParticipantOptions(conf.id, users)));
+  }
   await syncEntityMasterDetail('conferences', conferences);
 }
 
@@ -3001,7 +3065,6 @@ async function updateConferenceParticipantOptions(confId, allUsers, previousInde
   const users = Array.isArray(allUsers) ? allUsers : [];
   const available = users.filter(u => (
     !u.is_superadmin
-    && !u.is_guest_profile
     && !assignedIds.has(String(u.id))
   ));
 
@@ -3493,6 +3556,7 @@ window.unassignUser = async function (userId, confId) {
           ? renderConferenceParticipantList(confId)
           : Promise.resolve(),
       ]);
+      await loadProductions({ selectId: selectedProductionId });
     } else if (res.status === 404) {
       showMessage('⚠️ Relationship not found', 'warning', 'user');
     } else {
@@ -4209,6 +4273,7 @@ window.assignUserToConference = async function(userId) {
           ? renderConferenceParticipantList(confId)
           : Promise.resolve(),
       ]);
+      await loadProductions({ selectId: selectedProductionId });
     } else {
       showMessage('❌ Failed to assign user to conference', 'error', 'user');
     }
@@ -4245,6 +4310,7 @@ window.assignConferenceParticipant = async function(confId) {
           ? renderUserConferenceList(userId)
           : Promise.resolve(),
       ]);
+      await loadProductions({ selectId: selectedProductionId });
     } else {
       showMessage('❌ Failed to assign user to conference', 'error', 'conf');
     }
@@ -4289,41 +4355,62 @@ async function handleProductionTargetToggle(toggle, forcedEnabled = null) {
   const userId = Number(toggle.dataset.userId);
   const targetType = toggle.dataset.targetType;
   const targetId = Number(toggle.dataset.targetId);
-  const wasEnabled = toggle.getAttribute('aria-pressed') === 'true';
-  const enabled = typeof forcedEnabled === 'boolean' ? forcedEnabled : !wasEnabled;
-  if (!Number.isFinite(userId) || !Number.isFinite(targetId) || !targetType || enabled === wasEnabled) return;
+  const previousState = toggle.dataset.state || (toggle.getAttribute('aria-pressed') === 'true' ? 'talk' : 'off');
+  let nextState;
+  if (typeof forcedEnabled === 'string' && ['off', 'talk', 'listen-only'].includes(forcedEnabled)) {
+    nextState = forcedEnabled;
+  } else if (typeof forcedEnabled === 'boolean') {
+    nextState = forcedEnabled ? 'talk' : 'off';
+  } else if (targetType === 'conference') {
+    nextState = previousState === 'off' ? 'talk' : previousState === 'talk' ? 'listen-only' : 'off';
+  } else {
+    nextState = previousState === 'talk' ? 'off' : 'talk';
+  }
+  if (!Number.isFinite(userId) || !Number.isFinite(targetId) || !targetType || nextState === previousState) return;
 
-  toggle.setAttribute('aria-pressed', String(enabled));
+  setProductionTargetToggleState(toggle, nextState);
   toggle.disabled = true;
   try {
     const base = `/admin/productions/${selectedProductionId}/users/${userId}/targets`;
-    await productionRequest(
-      enabled ? base : `${base}/${encodeURIComponent(targetType)}/${targetId}`,
-      enabled
-        ? {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetType, targetId }),
-          }
-        : { method: 'DELETE' }
-    );
+    if (nextState === 'talk') {
+      await productionRequest(base, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetType, targetId }),
+      });
+    } else if (nextState === 'listen-only') {
+      await productionRequest(`${base}/conference/${targetId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'listen-only' }),
+      });
+    } else {
+      await productionRequest(`${base}/${encodeURIComponent(targetType)}/${targetId}`, { method: 'DELETE' });
+    }
     const targets = selectedProductionPayload.targets[String(userId)] || [];
-    if (enabled) {
+    const existingTarget = targets.find((target) => (
+      target.targetType === targetType && Number(target.targetId) === targetId
+    ));
+    if (nextState === 'talk' && !existingTarget) {
       const catalogs = targetType === 'user'
         ? selectedProductionPayload.members
         : targetType === 'conference'
           ? selectedProductionPayload.conferences
           : selectedProductionPayload.feeds;
       const target = catalogs.find((item) => Number(item.id) === targetId);
-      targets.push({ targetType, targetId, name: target?.name || String(targetId) });
-    } else {
+      targets.push({ targetType, targetId, name: target?.name || String(targetId), canTalk: true });
+    } else if (nextState === 'talk' && existingTarget) {
+      existingTarget.canTalk = true;
+    } else if (nextState === 'listen-only' && existingTarget) {
+      existingTarget.canTalk = false;
+    } else if (nextState === 'off') {
       selectedProductionPayload.targets[String(userId)] = targets.filter((target) => !(
         target.targetType === targetType && Number(target.targetId) === targetId
       ));
     }
     renderProductionOrder(selectedProductionPayload, productionOrderUser?.value);
   } catch (error) {
-    toggle.setAttribute('aria-pressed', String(wasEnabled));
+    setProductionTargetToggleState(toggle, previousState);
     showMessage(error.message || 'Target update failed', 'error', 'productions');
   } finally {
     toggle.disabled = false;
@@ -4346,6 +4433,7 @@ multipleProductionsInput?.addEventListener('change', async () => {
       body: JSON.stringify({ enabled }),
     });
     await loadProductions({ selectId: selectedProductionId });
+    await renderConferenceList(currentAdminCatalog.conferences, currentAdminCatalog.users);
     showMessage(`Multiple Productions ${enabled ? 'enabled' : 'disabled'}.`, 'success', 'matrix');
   } catch (error) {
     multipleProductionsInput.checked = !enabled;
@@ -4576,7 +4664,7 @@ function setupMatrixInteractions(container, toggleSelector, toggleHandler) {
   const paintToggle = (toggle) => {
     if (!paintSession || !toggle || paintSession.visited.has(toggle)) return;
     paintSession.visited.add(toggle);
-    toggleHandler(toggle, paintSession.enabled);
+    toggleHandler(toggle, paintSession.value);
   };
 
   container.addEventListener('click', (event) => {
@@ -4595,9 +4683,13 @@ function setupMatrixInteractions(container, toggleSelector, toggleHandler) {
 
     event.preventDefault();
     suppressPointerClick = true;
+    const currentState = toggle.dataset.state || (toggle.getAttribute('aria-pressed') === 'true' ? 'talk' : 'off');
+    const paintValue = toggle.dataset.matrixMultistate === 'true'
+      ? currentState === 'off' ? 'talk' : currentState === 'talk' ? 'listen-only' : 'off'
+      : toggle.getAttribute('aria-pressed') !== 'true';
     paintSession = {
       pointerId: event.pointerId,
-      enabled: toggle.getAttribute('aria-pressed') !== 'true',
+      value: paintValue,
       visited: new Set(),
     };
     container.classList.add('is-painting');

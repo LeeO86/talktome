@@ -548,12 +548,15 @@ function removeProductionFeed(productionId, feedId) {
 
 function getProductionConferencesForUser(userId, productionId) {
   return db.prepare(`
-    SELECT c.id, c.name
+    SELECT c.id, c.name, membership.can_talk AS canTalk
     FROM production_user_conference membership
     JOIN conferences c ON c.id = membership.conference_id
     WHERE membership.production_id = ? AND membership.user_id = ?
     ORDER BY c.name COLLATE NOCASE
-  `).all(Number(productionId), Number(userId));
+  `).all(Number(productionId), Number(userId)).map((conference) => ({
+    ...conference,
+    canTalk: Boolean(conference.canTalk),
+  }));
 }
 
 function getProductionUsersForConference(conferenceId, productionId) {
@@ -572,15 +575,12 @@ function getAllConfiguredUsersForConference(conferenceId) {
   return db.prepare(`
     SELECT DISTINCT u.id, u.name
     FROM users u
-    JOIN (
-      SELECT user_id FROM user_conference WHERE conference_id = ?
-      UNION
-      SELECT user_id FROM production_user_conference WHERE conference_id = ?
-    ) membership ON membership.user_id = u.id
+    JOIN production_user_conference membership ON membership.user_id = u.id
+      AND membership.conference_id = ?
     WHERE u.is_superadmin = 0
       AND u.is_guest_profile = 0
     ORDER BY u.name COLLATE NOCASE
-  `).all(Number(conferenceId), Number(conferenceId));
+  `).all(Number(conferenceId));
 }
 
 function setProductionConferenceMembership(productionId, userId, conferenceId) {
@@ -594,7 +594,9 @@ function setProductionConferenceMembership(productionId, userId, conferenceId) {
   }
   const add = db.transaction(() => {
     db.prepare(`INSERT OR IGNORE INTO production_user_conference
-      (production_id, user_id, conference_id) VALUES (?, ?, ?)`).run(pid, uid, cid);
+      (production_id, user_id, conference_id, can_talk) VALUES (?, ?, ?, 1)`).run(pid, uid, cid);
+    db.prepare(`UPDATE production_user_conference SET can_talk = 1
+      WHERE production_id = ? AND user_id = ? AND conference_id = ?`).run(pid, uid, cid);
     db.prepare(`DELETE FROM production_user_targets
       WHERE production_id = ? AND user_id = ? AND target_type = 'conference' AND target_id = ?`)
       .run(pid, uid, cid);
@@ -605,6 +607,33 @@ function setProductionConferenceMembership(productionId, userId, conferenceId) {
       VALUES (?, ?, 'conference', ?, ?)`).run(pid, uid, cid, max + 1);
   });
   add();
+}
+
+function setProductionConferenceListenOnly(productionId, userId, conferenceId) {
+  const pid = Number(productionId);
+  const uid = Number(userId);
+  const cid = Number(conferenceId);
+  if (!isUserInProduction(uid, pid)) throw new Error('User is not a member of this production');
+  if (!db.prepare(`SELECT 1 FROM production_conferences
+    WHERE production_id = ? AND conference_id = ?`).get(pid, cid)) {
+    throw new Error('Conference is not available in this production');
+  }
+  const setListenOnly = db.transaction(() => {
+    db.prepare(`INSERT INTO production_user_conference
+      (production_id, user_id, conference_id, can_talk) VALUES (?, ?, ?, 0)
+      ON CONFLICT(production_id, user_id, conference_id)
+      DO UPDATE SET can_talk = 0`).run(pid, uid, cid);
+    db.prepare(`DELETE FROM production_user_targets
+      WHERE production_id = ? AND user_id = ? AND target_type = 'conference' AND target_id = ?`)
+      .run(pid, uid, cid);
+    const max = db.prepare(`SELECT COALESCE(MAX(position), -1) AS maxPos
+      FROM production_target_order WHERE production_id = ? AND user_id = ?`).get(pid, uid).maxPos;
+    db.prepare(`INSERT OR IGNORE INTO production_target_order
+      (production_id, user_id, target_type, target_id, position)
+      VALUES (?, ?, 'conference', ?, ?)`).run(pid, uid, cid, max + 1);
+  });
+  setListenOnly();
+  return true;
 }
 
 function removeProductionConferenceMembership(productionId, userId, conferenceId) {
@@ -626,10 +655,10 @@ function removeProductionConferenceMembership(productionId, userId, conferenceId
 
 function getProductionTargets(userId, productionId) {
   return db.prepare(`
-    SELECT targetType, targetId, name
+    SELECT targetType, targetId, name, canTalk
     FROM (
       SELECT 'user' AS targetType, t.target_id AS targetId, u.name AS name,
-             o.position AS position, t.rowid AS fallback
+             1 AS canTalk, o.position AS position, t.rowid AS fallback
       FROM production_user_targets t
       JOIN users u ON t.target_type = 'user' AND u.id = t.target_id
         AND u.is_superadmin = 0 AND u.is_guest_profile = 0
@@ -642,7 +671,8 @@ function getProductionTargets(userId, productionId) {
 
       UNION ALL
 
-      SELECT 'conference', membership.conference_id, c.name, o.position, membership.rowid
+      SELECT 'conference', membership.conference_id, c.name, membership.can_talk,
+             o.position, membership.rowid
       FROM production_user_conference membership
       JOIN conferences c ON c.id = membership.conference_id
       LEFT JOIN production_target_order o
@@ -652,7 +682,7 @@ function getProductionTargets(userId, productionId) {
 
       UNION ALL
 
-      SELECT 'feed', t.target_id, f.name, o.position, t.rowid
+      SELECT 'feed', t.target_id, f.name, 0, o.position, t.rowid
       FROM production_user_targets t
       JOIN feeds f ON t.target_type = 'feed' AND f.id = t.target_id
       JOIN production_feeds available_feed
@@ -667,7 +697,10 @@ function getProductionTargets(userId, productionId) {
     Number(productionId), Number(userId),
     Number(productionId), Number(userId),
     Number(productionId), Number(userId)
-  );
+  ).map((target) => ({
+    ...target,
+    canTalk: Boolean(target.canTalk),
+  }));
 }
 
 function validateProductionTarget(productionId, userId, targetType, targetId) {
@@ -781,7 +814,7 @@ function exportDatabaseSnapshot() {
       ORDER BY production_id, feed_id
     `).all(),
     productionConferenceMemberships: db.prepare(`
-      SELECT production_id, user_id, conference_id
+      SELECT production_id, user_id, conference_id, can_talk
       FROM production_user_conference
       ORDER BY production_id, conference_id, user_id
     `).all(),
@@ -1039,8 +1072,8 @@ function importDatabaseSnapshot(snapshot) {
       VALUES (?, ?)
     `);
     const insertProductionConferenceMembership = db.prepare(`
-      INSERT INTO production_user_conference (production_id, user_id, conference_id)
-      VALUES (?, ?, ?)
+      INSERT INTO production_user_conference (production_id, user_id, conference_id, can_talk)
+      VALUES (?, ?, ?, ?)
     `);
     const insertProductionUserTarget = db.prepare(`
       INSERT INTO production_user_targets (production_id, user_id, target_type, target_id)
@@ -1200,7 +1233,8 @@ function importDatabaseSnapshot(snapshot) {
     });
     productionConferenceMemberships.forEach((row) => {
       insertProductionConferenceMembership.run(
-        Number(row.production_id), Number(row.user_id), Number(row.conference_id)
+        Number(row.production_id), Number(row.user_id), Number(row.conference_id),
+        row.can_talk === 0 || row.canTalk === false ? 0 : 1
       );
     });
     productionUserTargets.forEach((row) => {
@@ -1249,6 +1283,8 @@ function importDatabaseSnapshot(snapshot) {
 
     db.exec(`
       DELETE FROM user_conf_targets;
+      DELETE FROM user_conference;
+      DELETE FROM user_target_order WHERE target_type = 'conference';
       DELETE FROM production_user_targets WHERE target_type = 'conference';
     `);
 
@@ -2097,6 +2133,7 @@ module.exports = {
   getProductionUsersForConference,
   getAllConfiguredUsersForConference,
   setProductionConferenceMembership,
+  setProductionConferenceListenOnly,
   removeProductionConferenceMembership,
   getProductionTargets,
   addProductionTarget,

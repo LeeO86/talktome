@@ -129,8 +129,6 @@ const {
   createUser,
   createConference,
   createFeed,
-  addUserToConference,
-  removeUserFromConference,
   updateUserName,
   updateConferenceName,
   updateUserPassword,
@@ -142,8 +140,6 @@ const {
   updateUserLastOnline,
   getGuestProfileUser,
   getOrCreateGuestProfile,
-  getUsersForConference,
-  getConferencesForUser,
   getAllUsers,
   getUserById,
   getBridgeEndpointsForDevice,
@@ -171,8 +167,8 @@ const {
   removeProductionFeed,
   getProductionConferencesForUser,
   getProductionUsersForConference,
-  getAllConfiguredUsersForConference,
   setProductionConferenceMembership,
+  setProductionConferenceListenOnly,
   removeProductionConferenceMembership,
   getProductionTargets,
   addProductionTarget,
@@ -371,9 +367,25 @@ function normalizeActiveProductionId(value, userId) {
 }
 
 function getEffectiveConferencesForUser(userId, productionId = null) {
-  return productionId === null || productionId === undefined
-    ? getConferencesForUser(userId)
-    : getProductionConferencesForUser(userId, productionId);
+  const effectiveProductionId = productionId ?? getPrimaryProduction()?.id ?? null;
+  return effectiveProductionId === null
+    ? []
+    : getProductionConferencesForUser(userId, effectiveProductionId);
+}
+
+function getSingleProductionMembershipScope() {
+  if (areMultipleProductionsEnabled()) {
+    const error = new Error("Conference membership is production-specific; manage it in the selected Matrix production");
+    error.statusCode = 409;
+    throw error;
+  }
+  const productionId = Number(getPrimaryProduction()?.id);
+  if (!Number.isFinite(productionId)) {
+    const error = new Error("Primary production not found");
+    error.statusCode = 404;
+    throw error;
+  }
+  return productionId;
 }
 
 function getEffectiveConferencesForPeer(peer) {
@@ -1761,8 +1773,9 @@ function resolveAddressedUserIdsForTarget(target, speakerUserId) {
       return Array.from(activeMembers);
     }
 
+    const primaryProductionId = getPrimaryProduction()?.id ?? null;
     return Array.from(new Set(
-      (getUsersForConference(conferenceId) || [])
+      (primaryProductionId === null ? [] : getProductionUsersForConference(conferenceId, primaryProductionId))
         .map((member) => Number(member?.id))
         .filter((userId) => Number.isFinite(userId) && Number(userId) !== Number(speakerUserId))
     ));
@@ -1807,7 +1820,16 @@ function isPeerMemberOfConference(peer, conferenceId) {
 
 function isTalkTargetAllowedForPeer(peer, target) {
   if (!target || !isOperatorPeer(peer)) return false;
-  return target.type !== "conference" || isPeerMemberOfConference(peer, target.id);
+  if (target.type !== "conference") return true;
+  if (!isPeerMemberOfConference(peer, target.id)) return false;
+  if (!areMultipleProductionsEnabled() || peer.productionId == null) return true;
+
+  const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
+  return getProductionTargets(userId, peer.productionId).some((candidate) => (
+    candidate?.targetType === "conference"
+    && Number(candidate?.targetId) === Number(target.id)
+    && candidate.canTalk !== false
+  ));
 }
 
 function resolveRecipientPeersForTarget(target, speakerSocketId) {
@@ -2013,10 +2035,16 @@ function buildIncomingTalkStateSnapshot() {
         for (const addressedPeer of addressedPeers) {
           const recipientKey = getRecipientKeyForPeer(addressedPeer.peer);
           if (!recipientKey) continue;
-          mergeAddressedNowEntry(addressedNowByRecipient, recipientKey, activeEntry);
-          setReplyEntry(replyTargetByRecipient, recipientKey, activeEntry);
+          const canReply = activeEntry.replyTargetType !== "conference"
+            || isTalkTargetAllowedForPeer(addressedPeer.peer, {
+              type: "conference",
+              id: activeEntry.replyTargetId,
+            });
+          const recipientEntry = { ...activeEntry, canReply };
+          mergeAddressedNowEntry(addressedNowByRecipient, recipientKey, recipientEntry);
+          setReplyEntry(replyTargetByRecipient, recipientKey, recipientEntry);
           if (isPersistentUserPeer(addressedPeer.peer)) {
-            rememberIncomingReplyEntry(addressedPeer.peer.userId, activeEntry);
+            rememberIncomingReplyEntry(addressedPeer.peer.userId, recipientEntry);
           }
         }
       }
@@ -2318,9 +2346,9 @@ function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot =
 
 function buildOperatorTargetsForUser(userId, productionId = null) {
   const numericProductionId = productionId === null || productionId === undefined || productionId === ""
-    ? null
+    ? Number(getPrimaryProduction()?.id)
     : Number(productionId);
-  if (numericProductionId !== null) {
+  if (Number.isFinite(numericProductionId)) {
     if (!Number.isFinite(numericProductionId) || !isUserInProduction(userId, numericProductionId)) {
       const error = new Error("User is not a member of this production");
       error.statusCode = 403;
@@ -2328,9 +2356,9 @@ function buildOperatorTargetsForUser(userId, productionId = null) {
     }
   }
 
-  const targets = numericProductionId === null
-    ? (getUserTargets(userId) || [])
-    : (getProductionTargets(userId, numericProductionId) || []);
+  const targets = Number.isFinite(numericProductionId)
+    ? (getProductionTargets(userId, numericProductionId) || [])
+    : [];
 
   return targets.map((target) => {
     if (target?.targetType !== "conference") {
@@ -2339,9 +2367,9 @@ function buildOperatorTargetsForUser(userId, productionId = null) {
 
     const conferenceId = Number(target.targetId);
     const members = Number.isFinite(conferenceId)
-      ? (numericProductionId === null
-        ? getUsersForConference(conferenceId)
-        : getProductionUsersForConference(conferenceId, numericProductionId)
+      ? (Number.isFinite(numericProductionId)
+        ? getProductionUsersForConference(conferenceId, numericProductionId)
+        : []
       ).map((member) => ({
         userId: Number(member.id),
         name: member.name || String(member.id),
@@ -2350,7 +2378,7 @@ function buildOperatorTargetsForUser(userId, productionId = null) {
 
     return {
       ...target,
-      canTalk: true,
+      canTalk: target.canTalk !== false && Number(target.canTalk) !== 0,
       members,
     };
   });
@@ -2654,24 +2682,24 @@ app.get("/feeds", requireAdmin, (req, res) => {
 
 app.get("/users/:id/conferences", requireAdmin, (req, res) => {
   try {
-    const conferences = getConferencesForUser(req.params.id);
+    const productionId = getSingleProductionMembershipScope();
+    const conferences = getProductionConferencesForUser(req.params.id, productionId);
     res.json(conferences);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(err?.statusCode || 500).json({ error: err.message || "Internal server error" });
   }
 });
 
 app.get('/conferences/:id/users', requireAdmin, (req, res) => {
   const confId = req.params.id;
-  console.log(`[DEBUG] GET /conferences/${confId}/users → looking up in DB…`);
   try {
-    const users = getUsersForConference(confId);
-    console.log(`[DEBUG]  → found users:`, users);
+    const productionId = getSingleProductionMembershipScope();
+    const users = getProductionUsersForConference(confId, productionId);
     res.json(users);
   } catch (err) {
     console.error(`[ERROR] fetching users for conference ${confId}:`, err);
-    res.status(500).json({ error: err.message });
+    res.status(err?.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -3174,9 +3202,30 @@ app.post("/admin/productions/:productionId/users/:userId/targets", requireProduc
       req.body?.targetId
     );
     notifyTargetChange(req.params.userId);
+    if (req.body?.targetType === "conference") {
+      notifyConferenceMembersChanged(req.body?.targetId);
+    }
     res.sendStatus(204);
   } catch (err) {
     res.status(400).json({ error: err.message || "Failed to add production target" });
+  }
+});
+
+app.put("/admin/productions/:productionId/users/:userId/targets/conference/:targetId", requireProductionManager, (req, res) => {
+  try {
+    if (req.body?.mode !== "listen-only") {
+      return res.status(400).json({ error: "Unsupported conference target mode" });
+    }
+    setProductionConferenceListenOnly(
+      req.productionId,
+      req.params.userId,
+      req.params.targetId
+    );
+    notifyTargetChange(req.params.userId);
+    notifyConferenceMembersChanged(req.params.targetId);
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to update conference target" });
   }
 });
 
@@ -3189,6 +3238,9 @@ app.delete("/admin/productions/:productionId/users/:userId/targets/:type/:target
       req.params.targetId
     );
     notifyTargetChange(req.params.userId);
+    if (req.params.type === "conference") {
+      notifyConferenceMembersChanged(req.params.targetId);
+    }
     res.sendStatus(204);
   } catch (err) {
     res.status(400).json({ error: err.message || "Failed to remove production target" });
@@ -4446,11 +4498,16 @@ app.post("/feeds", requireAdmin, (req, res) => {
 });
 
 app.post('/conferences/:conferenceId/users/:userId', requireAdmin, (req, res) => {
-  addUserToConference(req.params.userId, req.params.conferenceId);
-  notifyTargetChange(req.params.userId);
-  notifyConferenceMembersChanged(req.params.conferenceId, req.params.userId);
-  broadcastRuntimeUserStates("conference-membership-added");
-  res.sendStatus(204);
+  try {
+    const productionId = getSingleProductionMembershipScope();
+    setProductionConferenceMembership(productionId, req.params.userId, req.params.conferenceId);
+    notifyTargetChange(req.params.userId);
+    notifyConferenceMembersChanged(req.params.conferenceId, req.params.userId);
+    broadcastRuntimeUserStates("conference-membership-added");
+    res.sendStatus(204);
+  } catch (err) {
+    res.status(err?.statusCode || 400).json({ error: err.message || "Failed to add conference member" });
+  }
 });
 
 
@@ -5630,14 +5687,15 @@ app.put('/feeds/:id/password', requireAdmin, (req, res) => {
 // === DELETE (specific routes FIRST) ===
 app.delete("/conferences/:conferenceId/users/:userId", requireAdmin, (req, res) => {
   try {
-    removeUserFromConference(req.params.userId, req.params.conferenceId);
+    const productionId = getSingleProductionMembershipScope();
+    removeProductionConferenceMembership(productionId, req.params.userId, req.params.conferenceId);
     notifyTargetChange(req.params.userId);
     notifyConferenceMembersChanged(req.params.conferenceId, req.params.userId);
     broadcastRuntimeUserStates("conference-membership-removed");
     res.sendStatus(204);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(err?.statusCode || 500).json({ error: err.message || "Internal server error" });
   }
 });
 

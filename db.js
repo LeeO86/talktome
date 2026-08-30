@@ -129,6 +129,7 @@ db.exec(`
                                                                   production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
                                                                   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                                                                   conference_id INTEGER NOT NULL REFERENCES conferences(id) ON DELETE CASCADE,
+                                                                  can_talk      INTEGER NOT NULL DEFAULT 1,
                                                                   PRIMARY KEY (production_id, user_id, conference_id),
                                                                   FOREIGN KEY (production_id, user_id)
                                                                     REFERENCES production_users(production_id, user_id) ON DELETE CASCADE,
@@ -216,6 +217,7 @@ db.exec(`
 ensureColumn("productions", "is_primary", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("users", "is_superadmin", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("users", "is_guest_profile", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("production_user_conference", "can_talk", "INTEGER NOT NULL DEFAULT 1");
 
 // Conference membership now provides both conference reception and its talk
 // button. Preserve installations that previously configured those separately.
@@ -366,6 +368,27 @@ if (!primaryProductionMigrationApplied) {
     db.prepare(`
       INSERT INTO schema_migrations (key, applied_at) VALUES (?, ?)
     `).run(primaryProductionMigrationKey, now);
+  })();
+}
+
+// Production-scoped conference memberships are authoritative. The former
+// global rows have already been copied into the primary production by the
+// migrations above and must not keep acting as a second, divergent model.
+const retiredGlobalConferenceMembershipsKey = "retired-global-conference-memberships-v1";
+const retiredGlobalConferenceMembershipsApplied = db.prepare(`
+  SELECT 1 FROM schema_migrations WHERE key = ?
+`).get(retiredGlobalConferenceMembershipsKey);
+
+if (!retiredGlobalConferenceMembershipsApplied) {
+  db.transaction(() => {
+    db.exec(`
+      DELETE FROM user_conf_targets;
+      DELETE FROM user_conference;
+      DELETE FROM user_target_order WHERE target_type = 'conference';
+    `);
+    db.prepare(`
+      INSERT INTO schema_migrations (key, applied_at) VALUES (?, ?)
+    `).run(retiredGlobalConferenceMembershipsKey, new Date().toISOString());
   })();
 }
 

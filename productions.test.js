@@ -49,13 +49,18 @@ test('keeps production layouts separate from the global target matrix', () => {
       db.getProductionTargets(anna, production).map((target) => target.targetType),
       ['conference', 'feed']
     );
+    db.setProductionConferenceListenOnly(production, anna, regie);
+    assert.equal(
+      db.getProductionTargets(anna, production).find((target) => target.targetType === 'conference').canTalk,
+      false
+    );
     assert.equal(db.isUserInProduction(anna, production), true);
     assert.equal(db.isUserProductionAdmin(daniel, production), true);
     assert.deepEqual(db.getProductionConferences(production).map(({ name }) => name), ['Regie']);
     assert.deepEqual(db.getProductionFeeds(production).map(({ name }) => name), ['Program']);
     assert.deepEqual(db.getProductionConferencesForUser(anna, production).map(({ name }) => name), ['Regie']);
     assert.deepEqual(db.getProductionConferencesForUser(luis, secondProduction).map(({ name }) => name), ['Regie']);
-    assert.deepEqual(db.getAllConfiguredUsersForConference(regie).map(({ name }) => name), ['Anna', 'Daniel', 'Luis']);
+    assert.deepEqual(db.getAllConfiguredUsersForConference(regie).map(({ name }) => name), ['Anna', 'Luis']);
     assert.deepEqual(db.getProductionFeedIdsForUser(anna, production), [program]);
 
     db.updateProductionTargetOrder(production, anna, [
@@ -74,14 +79,38 @@ test('keeps production layouts separate from the global target matrix', () => {
     assert.equal(snapshot.productionConferences.length, 2);
     assert.equal(snapshot.productionFeeds.length, 1);
     assert.equal(snapshot.productionConferenceMemberships.length, 2);
+    assert.equal(
+      snapshot.productionConferenceMemberships.find((membership) => (
+        Number(membership.production_id) === Number(production)
+        && Number(membership.user_id) === Number(anna)
+        && Number(membership.conference_id) === Number(regie)
+      )).can_talk,
+      0
+    );
 
     db.importDatabaseSnapshot(snapshot);
     assert.equal(db.getProductionById(production).name, 'Morning show');
     assert.equal(db.getProductionTargets(anna, production).length, 2);
+    assert.equal(
+      db.getProductionTargets(anna, production).find((target) => target.targetType === 'conference').canTalk,
+      false
+    );
+    db.setProductionConferenceMembership(production, anna, regie);
+    assert.equal(
+      db.getProductionTargets(anna, production).find((target) => target.targetType === 'conference').canTalk,
+      true
+    );
+    db.setProductionConferenceListenOnly(production, anna, regie);
     assert.equal(db.getProductionUsersForConference(regie, production).length, 1);
     db.removeProductionTarget(production, anna, 'conference', regie);
     assert.equal(db.getProductionConferencesForUser(anna, production).length, 0);
     assert.deepEqual(db.getProductionTargets(anna, production).map((target) => target.targetType), ['feed']);
+    db.setProductionConferenceListenOnly(production, anna, regie);
+    assert.equal(
+      db.getProductionTargets(anna, production).find((target) => target.targetType === 'conference').canTalk,
+      false
+    );
+    db.removeProductionTarget(production, anna, 'conference', regie);
 
     const legacySnapshot = { ...snapshot };
     delete legacySnapshot.productions;
@@ -145,7 +174,7 @@ test('migrates legacy production layouts once without restoring removed membersh
     assert.equal(primary.name, 'Default');
     assert.deepEqual(db.getProductionMembers(primary.id).map((item) => item.id), [1]);
     assert.deepEqual(db.getProductionConferencesForUser(1, primary.id).map((item) => item.id), [1]);
-    assert.deepEqual(db.getUserTargets(1).map((target) => target.targetType), ['conference']);
+    assert.deepEqual(db.getUserTargets(1).map((target) => target.targetType), []);
     assert.deepEqual(db.getProductionConferences(1).map((item) => item.id), [1]);
     assert.deepEqual(db.getProductionFeeds(1).map((item) => item.id), [1]);
     assert.deepEqual(db.getProductionConferencesForUser(1, 1).map((item) => item.id), [1]);

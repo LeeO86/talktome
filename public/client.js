@@ -5547,6 +5547,7 @@ let cachedOperatorTargets = null;
       fromName: typeof rawEntry.fromName === 'string' ? rawEntry.fromName : '',
       replyTargetType: ['user', 'conference', 'guest'].includes(replyTargetType) ? replyTargetType : null,
       replyTargetId,
+      canReply: rawEntry.canReply !== false,
       at: Number.isFinite(at) ? at : 0,
     };
   }
@@ -5653,6 +5654,18 @@ let cachedOperatorTargets = null;
 
   function resolveReplyTargetFromIncomingEntry(entry) {
     if (!entry) return null;
+    if (entry.canReply === false) return null;
+    const replyConferenceId = entry.replyTargetType === 'conference'
+      ? Number(entry.replyTargetId)
+      : entry.targetType === 'conference'
+        ? Number(entry.targetId)
+        : NaN;
+    if (
+      Number.isFinite(replyConferenceId)
+      && listenOnlyConferenceKeys.has(`conf-${replyConferenceId}`)
+    ) {
+      return null;
+    }
     const explicitReplyTarget = resolveExplicitReplyTarget(entry);
     if (explicitReplyTarget) return explicitReplyTarget;
 
@@ -5660,18 +5673,6 @@ let cachedOperatorTargets = null;
       const conferenceId = Number(entry.targetId);
       if (!Number.isFinite(conferenceId)) return null;
       const conferenceKey = `conf-${conferenceId}`;
-      if (listenOnlyConferenceKeys.has(conferenceKey)) {
-        const numericFromUserId = Number(entry.fromUserId);
-        if (Number.isFinite(numericFromUserId)) {
-          const socketId = resolveUserSocketId(numericFromUserId);
-          const onlineUser = cachedUsers.find((candidate) => Number(candidate?.userId) === numericFromUserId);
-          return {
-            type: 'user',
-            id: socketId || numericFromUserId,
-            label: onlineUser?.name || entry.fromName || String(numericFromUserId),
-          };
-        }
-      }
       return {
         type: 'conference',
         id: conferenceId,
@@ -5718,12 +5719,16 @@ let cachedOperatorTargets = null;
       updateSpeakerHighlight(targetKey, true);
     }
 
-    const replyTarget = resolveReplyTargetFromIncomingEntry(incomingTalkState.replyTarget)
-      || resolveReplyTargetFromIncomingEntry(incomingTalkState.addressedNow[0] || null);
+    const replyEntry = incomingTalkState.replyTarget
+      || incomingTalkState.addressedNow[0]
+      || null;
+    const replyTarget = resolveReplyTargetFromIncomingEntry(replyEntry);
     if (replyTarget) {
       lastTarget = replyTarget;
+      updateReplyButtonState();
+    } else {
+      clearReplyTarget();
     }
-    updateReplyButtonState();
 
     applyFeedDucking();
   }
