@@ -238,9 +238,11 @@ const styles = StyleSheet.create({
   rowSpeaking: {
     borderColor: 'rgba(117,242,184,0.32)',
   },
+  // Amber "armed" highlight: red is reserved for live transmission (Talk button),
+  // so the selected destination must not look like it is already on air.
   rowSelected: {
-    backgroundColor: 'rgba(226,59,74,0.16)',
-    borderColor: 'rgba(226,59,74,0.62)',
+    backgroundColor: 'rgba(255,176,32,0.16)',
+    borderColor: 'rgba(255,176,32,0.66)',
   },
   rowOffline: {
     opacity: 0.72,
