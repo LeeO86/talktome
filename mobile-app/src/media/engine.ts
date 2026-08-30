@@ -27,7 +27,7 @@ import {
   shouldReplaceRemoteConsumer,
   type ConsumerPriorityContext,
 } from './consumerBudget';
-import { STANDARD_OPUS, talkGumConstraints } from './opus';
+import { STANDARD_OPUS, talkGumConstraints, type OpusProfile } from './opus';
 
 type RemoteConsumer = {
   producer: ActiveProducer;
@@ -48,6 +48,7 @@ export class MediaEngine {
   private stoppedFeedKeys = new Set<string>();
   private conferenceListen: ConferenceListenState = EMPTY_CONFERENCE_LISTEN;
   private operatorAudio: OperatorAudioSettings = DEFAULT_OPERATOR_AUDIO;
+  private talkOpus: OpusProfile = STANDARD_OPUS;
   private talking = false;
   private incomingAddressed = false;
   overBudget = false;
@@ -58,6 +59,11 @@ export class MediaEngine {
 
   setIceOverride(servers: IceServer[]): void {
     this.iceOverride = servers;
+  }
+
+  /** Must be set before warmTalkProducer creates the talk producer. */
+  setTalkOpusProfile(profile: OpusProfile): void {
+    this.talkOpus = profile;
   }
 
   async start(): Promise<void> {
@@ -121,7 +127,7 @@ export class MediaEngine {
 
     const producer = await this.sendTransport.produce({
       track: track as never,
-      ...STANDARD_OPUS,
+      ...this.talkOpus,
       appData: { type: 'talk' },
     });
     this.talkProducer = producer;

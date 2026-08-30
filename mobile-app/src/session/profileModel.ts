@@ -37,8 +37,11 @@ export function cachedPttChannel(profile: SavedProfile): CachedPttChannel | null
 export type ProfileBundle = {
   profiles: SavedProfile[];
   lastProfileId: string | null;
-  leftHanded: boolean;
+  /** Undefined until the user toggles it, so a server default can apply. */
+  leftHanded?: boolean;
   talkSelectMode: boolean;
+  /** Undefined until the user toggles it, so a server default can apply. */
+  lockMultipleTargets?: boolean;
 };
 
 export function profileIdentity(serverAddress: string, username: string): string {

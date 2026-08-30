@@ -1,6 +1,10 @@
 // Derived from talktome-apple APIClient.swift @ 004d6e76 by Daniel Jocher.
 // Adds /login/options, /login/session, /api/v1/health, logout, and an explicit cookie jar.
 
+import {
+  parseDefaultClientSettingsScript,
+  type ServerClientDefaults,
+} from '../protocol/clientDefaults';
 import type { Production } from '../protocol/productions';
 import {
   talkTargetFromResponse,
@@ -24,6 +28,19 @@ export class ApiClient {
       throw await this.serverError(response);
     }
     return (await readJson<HealthResponse>(response)) ?? { ok: true };
+  }
+
+  /** Admin-configured default client settings (server 1.4.4+). Empty on old servers. */
+  async defaultClientSettings(): Promise<ServerClientDefaults> {
+    try {
+      const response = await this.http.request('/default-client-settings.js');
+      if (!response.ok) {
+        return {};
+      }
+      return parseDefaultClientSettingsScript(await response.text());
+    } catch {
+      return {};
+    }
   }
 
   async loginOptions(): Promise<LoginOptions> {

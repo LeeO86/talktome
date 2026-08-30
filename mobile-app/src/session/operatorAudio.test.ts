@@ -5,6 +5,7 @@ import {
   dimDbFromSliderPosition,
   feedDuckingFactor,
   normalizeOperatorAudio,
+  resolveOperatorAudio,
   shouldDuckFeeds,
   sliderPositionFromDimDb,
 } from './operatorAudio';
@@ -28,6 +29,31 @@ describe('operatorAudio', () => {
 
   it('ducks at -14 dB like the web client', () => {
     expect(feedDuckingFactor(-14)).toBeCloseTo(10 ** (-14 / 20), 8);
+  });
+
+  it('applies server defaults only where the user has no explicit choice', () => {
+    const resolved = resolveOperatorAudio(
+      { feedDimSelf: false },
+      {
+        dimAmountDb: -12,
+        dimFeedsWhileSpeaking: true,
+        dimWhenAddressed: false,
+        audioAutoProcessing: false,
+      },
+    );
+    // Explicit user choice wins over the server default.
+    expect(resolved.feedDimSelf).toBe(false);
+    // Untouched keys follow the server defaults.
+    expect(resolved.feedDimDb).toBe(-12);
+    expect(resolved.feedDimIncoming).toBe(false);
+    expect(resolved.echoCancellation).toBe(false);
+    expect(resolved.noiseSuppression).toBe(false);
+    expect(resolved.autoGainControl).toBe(false);
+  });
+
+  it('falls back to the builtin defaults without server settings', () => {
+    expect(resolveOperatorAudio({}, {})).toEqual(DEFAULT_OPERATOR_AUDIO);
+    expect(resolveOperatorAudio({})).toEqual(DEFAULT_OPERATOR_AUDIO);
   });
 
   it('dims feeds when addressed by default, not while speaking', () => {

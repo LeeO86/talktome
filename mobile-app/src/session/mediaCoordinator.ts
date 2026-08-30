@@ -1,6 +1,7 @@
 import { AppState, Platform } from 'react-native';
 
 import { MediaEngine } from '../media/engine';
+import { talkOpusProfile } from '../media/opus';
 import {
   activeFeedKeysFromProducers,
   defaultAudioPreference,
@@ -26,7 +27,11 @@ import {
 import { readAudioRouteSnapshot, selectAudioRoute, type AudioRouteSnapshot } from '../audio/routes';
 import { shouldWaitForPendingSystemPttJoin } from '../ptt/joinGate';
 import { saveAudioPreferences } from './audioPrefs';
-import { saveOperatorAudio, type OperatorAudioSettings } from './operatorAudio';
+import {
+  resolveOperatorAudio,
+  saveOperatorAudioOverrides,
+  type OperatorAudioSettings,
+} from './operatorAudio';
 import { HOLD_HINT, useSessionStore } from './state';
 import type { SessionController } from './sessionController';
 
@@ -53,6 +58,7 @@ export class MediaCoordinator {
 
     if (!this.c.media) {
       this.c.media = new MediaEngine(signaling);
+      this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.serverClientDefaults.audioProfile));
       this.c.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
       this.c.media.setConferenceListen(useSessionStore.getState().conferenceListen);
       this.c.media.setOperatorAudio(useSessionStore.getState().operatorAudio);
@@ -115,8 +121,10 @@ export class MediaCoordinator {
       // ignore
     }
     this.c.media = new MediaEngine(signaling);
+    this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.serverClientDefaults.audioProfile));
     this.c.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
     this.c.media.setConferenceListen(useSessionStore.getState().conferenceListen);
+    this.c.media.setOperatorAudio(useSessionStore.getState().operatorAudio);
     await this.prepareAudioForMedia();
     await this.c.media.start();
     await this.c.media.warmTalkProducer();
@@ -206,11 +214,14 @@ export class MediaCoordinator {
   }
 
   setOperatorAudio(patch: Partial<OperatorAudioSettings>): void {
-    const operatorAudio = { ...useSessionStore.getState().operatorAudio, ...patch };
+    // Every key the user touches becomes an explicit choice that outlives
+    // server-configured defaults, matching the web client's precedence.
+    this.c.operatorAudioOverrides = { ...this.c.operatorAudioOverrides, ...patch };
+    const operatorAudio = resolveOperatorAudio(this.c.operatorAudioOverrides, this.c.serverClientDefaults);
     useSessionStore.setState({ operatorAudio });
     this.c.media?.setOperatorAudio(operatorAudio);
     this.syncFeedDucking();
-    void saveOperatorAudio(operatorAudio);
+    void saveOperatorAudioOverrides(this.c.operatorAudioOverrides);
     if (
       patch.echoCancellation != null ||
       patch.noiseSuppression != null ||

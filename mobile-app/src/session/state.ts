@@ -27,6 +27,7 @@ export type SessionUiState = {
   allowInsecureLocalTLS: boolean;
   leftHanded: boolean;
   talkSelectMode: boolean;
+  lockMultipleTargets: boolean;
   selectedTalkTarget: TalkTarget | null;
   replyTarget: TalkTarget | null;
   loginOptions: LoginOptions | null;
@@ -105,6 +106,7 @@ export const initialState: SessionUiState = {
   allowInsecureLocalTLS: false,
   leftHanded: false,
   talkSelectMode: false,
+  lockMultipleTargets: false,
   selectedTalkTarget: null,
   replyTarget: null,
   loginOptions: null,

@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import type { ServerClientDefaults } from '../protocol/clientDefaults';
+
 const KEY = 'talktome.operator-audio';
 
 export const FEED_DIM_DB_OPTIONS = [-6, -12, -14, -18, -24] as const;
@@ -27,6 +29,15 @@ export const DEFAULT_OPERATOR_AUDIO: OperatorAudioSettings = {
   audioRouteId: 'speaker',
 };
 
+const BOOLEAN_KEYS = [
+  'feedDimSelf',
+  'feedDimIncoming',
+  'volumeFader',
+  'echoCancellation',
+  'noiseSuppression',
+  'autoGainControl',
+] as const;
+
 export function normalizeOperatorAudio(
   value?: Partial<OperatorAudioSettings> | null,
 ): OperatorAudioSettings {
@@ -43,6 +54,43 @@ export function normalizeOperatorAudio(
         ? value.audioRouteId.trim()
         : DEFAULT_OPERATOR_AUDIO.audioRouteId,
   };
+}
+
+/**
+ * Server-configured defaults mapped onto the mobile settings shape. These only
+ * fill keys the user has never touched on this device; explicit choices win,
+ * matching the web client's localStorage-over-server precedence.
+ */
+export function operatorAudioServerDefaults(
+  defaults: ServerClientDefaults,
+): Partial<OperatorAudioSettings> {
+  const mapped: Partial<OperatorAudioSettings> = {};
+  if (typeof defaults.dimAmountDb === 'number') {
+    mapped.feedDimDb = normalizeFeedDimDb(defaults.dimAmountDb);
+  }
+  if (typeof defaults.dimFeedsWhileSpeaking === 'boolean') {
+    mapped.feedDimSelf = defaults.dimFeedsWhileSpeaking;
+  }
+  if (typeof defaults.dimWhenAddressed === 'boolean') {
+    mapped.feedDimIncoming = defaults.dimWhenAddressed;
+  }
+  if (typeof defaults.audioAutoProcessing === 'boolean') {
+    mapped.echoCancellation = defaults.audioAutoProcessing;
+    mapped.noiseSuppression = defaults.audioAutoProcessing;
+    mapped.autoGainControl = defaults.audioAutoProcessing;
+  }
+  return mapped;
+}
+
+export function resolveOperatorAudio(
+  overrides: Partial<OperatorAudioSettings>,
+  serverDefaults: ServerClientDefaults = {},
+): OperatorAudioSettings {
+  return normalizeOperatorAudio({
+    ...DEFAULT_OPERATOR_AUDIO,
+    ...operatorAudioServerDefaults(serverDefaults),
+    ...overrides,
+  });
 }
 
 export function normalizeFeedDimDb(value: number | null | undefined): number {
@@ -76,18 +124,41 @@ export function shouldDuckFeeds(input: {
   return (input.dimSelf && input.talking) || (input.dimIncoming && input.incomingAddressed);
 }
 
-export async function loadOperatorAudio(): Promise<OperatorAudioSettings> {
+/**
+ * Loads only the keys the user explicitly changed on this device. Installs
+ * that predate per-key tracking stored the full object; all of those keys
+ * count as explicit choices, which keeps them stable under server defaults.
+ */
+export async function loadOperatorAudioOverrides(): Promise<Partial<OperatorAudioSettings>> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) {
-    return DEFAULT_OPERATOR_AUDIO;
+    return {};
   }
   try {
-    return normalizeOperatorAudio(JSON.parse(raw) as Partial<OperatorAudioSettings>);
+    return pickOperatorAudioKeys(JSON.parse(raw) as Record<string, unknown>);
   } catch {
-    return DEFAULT_OPERATOR_AUDIO;
+    return {};
   }
 }
 
-export async function saveOperatorAudio(settings: OperatorAudioSettings): Promise<void> {
-  await AsyncStorage.setItem(KEY, JSON.stringify(normalizeOperatorAudio(settings)));
+export async function saveOperatorAudioOverrides(
+  overrides: Partial<OperatorAudioSettings>,
+): Promise<void> {
+  await AsyncStorage.setItem(KEY, JSON.stringify(pickOperatorAudioKeys(overrides)));
+}
+
+function pickOperatorAudioKeys(raw: Record<string, unknown>): Partial<OperatorAudioSettings> {
+  const overrides: Partial<OperatorAudioSettings> = {};
+  for (const key of BOOLEAN_KEYS) {
+    if (typeof raw[key] === 'boolean') {
+      overrides[key] = raw[key] as boolean;
+    }
+  }
+  if (typeof raw.feedDimDb === 'number') {
+    overrides.feedDimDb = normalizeFeedDimDb(raw.feedDimDb);
+  }
+  if (typeof raw.audioRouteId === 'string' && raw.audioRouteId.trim()) {
+    overrides.audioRouteId = raw.audioRouteId.trim();
+  }
+  return overrides;
 }

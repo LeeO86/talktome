@@ -37,11 +37,28 @@ export class TalkCoordinator {
     const key = talkTargetIdentity(target);
     const state = useSessionStore.getState();
     if (state.talkLocked && state.lockedTargetKeys.includes(key) && this.c.overrideFrom === null) {
+      // Tapping a locked target: with multi-lock drop just that lock,
+      // otherwise stop talking entirely (single-lock web behavior).
+      if (state.lockMultipleTargets && this.c.lockedTargets.length > 1) {
+        await this.removeLock(target);
+        return;
+      }
       await this.unlockTalk();
       return;
     }
 
     if (state.talkLocked && !state.talkingTargetKeys.includes(key)) {
+      if (state.lockMultipleTargets) {
+        // Multi-lock: hold an extra target on top of the locked set.
+        this.c.talkingTargets = addTalkTarget(this.c.talkingTargets, target);
+        this.publishTalkState(true);
+        try {
+          await media.startTalking(this.c.talkingTargets, true);
+        } catch (error) {
+          this.failTalk(error);
+        }
+        return;
+      }
       this.c.overrideFrom = this.c.lockedTargets.length > 0 ? this.c.lockedTargets : this.c.talkingTargets;
       this.c.talkingTargets = [target];
       this.publishTalkState(true);
@@ -69,7 +86,13 @@ export class TalkCoordinator {
     }
     await this.c.background.prepareAudioForTalk();
     this.c.talkingTargets = addTalkTarget(this.c.talkingTargets, target);
-    this.c.lockedTargets = this.c.talkingTargets;
+    // Multi-lock adds this target to the existing lock set; single-lock
+    // locks the whole current talking set (previous locks were already
+    // replaced by the pressTalk override path).
+    this.c.lockedTargets =
+      useSessionStore.getState().lockMultipleTargets && this.c.lockedTargets.length > 0
+        ? addTalkTarget(this.c.lockedTargets, target)
+        : this.c.talkingTargets;
     this.c.overrideFrom = null;
     this.publishTalkState(true);
     try {
@@ -95,7 +118,20 @@ export class TalkCoordinator {
       return;
     }
 
-    if (useSessionStore.getState().talkLocked) {
+    const lockedState = useSessionStore.getState();
+    if (lockedState.talkLocked) {
+      // Multi-lock: releasing a held (unlocked) target drops only that
+      // target; the locked set keeps transmitting.
+      if (
+        target &&
+        lockedState.lockMultipleTargets &&
+        !lockedState.lockedTargetKeys.includes(talkTargetIdentity(target)) &&
+        lockedState.talkingTargetKeys.includes(talkTargetIdentity(target))
+      ) {
+        this.c.talkingTargets = removeTalkTarget(this.c.talkingTargets, target);
+        this.publishTalkState(true);
+        this.c.media?.syncTalkTargets(this.c.talkingTargets, true);
+      }
       return;
     }
 
@@ -293,6 +329,31 @@ export class TalkCoordinator {
     }
     const next = targets.find((target) => talkTargetIdentity(target) === talkTargetIdentity(selected)) ?? null;
     useSessionStore.setState({ selectedTalkTarget: next });
+  }
+
+  /** Drops one lock from a multi-lock set; stops talking if it was the last. */
+  private async removeLock(target: TalkTarget): Promise<void> {
+    this.c.lockedTargets = removeTalkTarget(this.c.lockedTargets, target);
+    this.c.talkingTargets = removeTalkTarget(this.c.talkingTargets, target);
+    if (this.c.talkingTargets.length === 0) {
+      await this.unlockTalk();
+      return;
+    }
+    this.publishTalkState(this.c.lockedTargets.length > 0);
+    this.c.media?.syncTalkTargets(this.c.talkingTargets, this.c.lockedTargets.length > 0);
+  }
+
+  /** Called when multi-lock is switched off while several locks are active. */
+  async collapseToSingleLock(): Promise<void> {
+    const keep = this.c.lockedTargets[0];
+    if (this.c.lockedTargets.length <= 1 || !keep) {
+      return;
+    }
+    this.c.lockedTargets = [keep];
+    this.c.talkingTargets = [keep];
+    this.publishTalkState(true);
+    this.c.media?.syncTalkTargets(this.c.talkingTargets, true);
+    useSessionStore.setState({ statusMessage: `Locked to ${keep.label}.` });
   }
 
   async unlockTalk(): Promise<void> {

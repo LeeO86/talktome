@@ -31,7 +31,12 @@ import type { BleTargetSelection } from '../ble/target';
 import { slideToLockHint } from '../talk/slideToLock';
 import { loadAudioPreferences } from './audioPrefs';
 import { loadConferenceListen } from './conferenceListen';
-import { loadOperatorAudio, type OperatorAudioSettings } from './operatorAudio';
+import {
+  loadOperatorAudioOverrides,
+  resolveOperatorAudio,
+  type OperatorAudioSettings,
+} from './operatorAudio';
+import type { ServerClientDefaults } from '../protocol/clientDefaults';
 import { pttNativeAvailable } from '../ptt/native';
 import { SystemPttJoinGate } from '../ptt/joinGate';
 import {
@@ -83,19 +88,29 @@ export class SessionController {
   fgsSync: Promise<void> = Promise.resolve();
   readonly blePolicy = new BleButtonPolicy();
 
+  // Server-configured client defaults (1.4.4+) and per-key explicit choices.
+  // Explicit choices always beat server defaults, like the web client.
+  serverClientDefaults: ServerClientDefaults = {};
+  operatorAudioOverrides: Partial<OperatorAudioSettings> = {};
+  private leftHandedExplicit = false;
+  private lockMultipleTargetsExplicit = false;
+
   readonly talk = new TalkCoordinator(this);
   readonly mediaCoordinator = new MediaCoordinator(this);
   readonly background = new BackgroundCoordinator(this);
 
   async hydrate(): Promise<void> {
-    const [bundle, audioPreferences, blePreferences, conferenceListen, operatorAudio] = await Promise.all([
+    const [bundle, audioPreferences, blePreferences, conferenceListen, operatorAudioOverrides] = await Promise.all([
       loadProfileBundle(),
       loadAudioPreferences(),
       loadBlePreferences(),
       loadConferenceListen(),
-      loadOperatorAudio(),
+      loadOperatorAudioOverrides(),
       hydrateTlsPins(),
     ]);
+    this.operatorAudioOverrides = operatorAudioOverrides;
+    this.leftHandedExplicit = typeof bundle.leftHanded === 'boolean';
+    this.lockMultipleTargetsExplicit = typeof bundle.lockMultipleTargets === 'boolean';
     const last = bundle.profiles.find((item) => item.id === bundle.lastProfileId) ?? bundle.profiles[0] ?? null;
     useSessionStore.setState({
       hydrated: true,
@@ -107,8 +122,9 @@ export class SessionController {
       allowInsecureLocalTLS: last?.allowInsecureLocalTLS ?? false,
       productionId: last?.productionId ?? null,
       productionName: last?.productionName ?? null,
-      leftHanded: bundle.leftHanded,
+      leftHanded: bundle.leftHanded ?? false,
       talkSelectMode: bundle.talkSelectMode,
+      lockMultipleTargets: bundle.lockMultipleTargets ?? false,
       audioSessionAvailable: audioSessionAvailable(),
       pttAvailable: pttNativeAvailable(),
       capabilityReason: this.background.capabilityReason({
@@ -117,7 +133,7 @@ export class SessionController {
       }),
       audioPreferences,
       conferenceListen,
-      operatorAudio,
+      operatorAudio: resolveOperatorAudio(operatorAudioOverrides),
       ...this.mediaCoordinator.audioDeviceFields(),
       ...bleFieldsFromSelection(blePreferences.target, blePreferences.shortPressLocksTalk),
     });
@@ -432,8 +448,7 @@ export class SessionController {
     const next = await removeProfile(profileId, {
       profiles: state.profiles,
       lastProfileId: state.activeProfileId,
-      leftHanded: state.leftHanded,
-      talkSelectMode: state.talkSelectMode,
+      ...this.layoutBundleFields(state),
     });
     const fallback = next.profiles.find((item) => item.id === next.lastProfileId) ?? next.profiles[0];
     useSessionStore.setState({
@@ -503,6 +518,7 @@ export class SessionController {
       allowInsecureLocalTLS: next.allowInsecureLocalTLS,
       leftHanded: next.leftHanded,
       talkSelectMode: next.talkSelectMode,
+      lockMultipleTargets: next.lockMultipleTargets,
       productionId: next.productionId,
       productionName: next.productionName,
       profiles: next.profiles,
@@ -535,8 +551,7 @@ export class SessionController {
       await saveProfileBundle({
         profiles: state.profiles,
         lastProfileId: state.activeProfileId,
-        leftHanded: state.leftHanded,
-        talkSelectMode: state.talkSelectMode,
+        ...this.layoutBundleFields(state),
       });
       return;
     }
@@ -570,8 +585,7 @@ export class SessionController {
     await saveProfileBundle({
       profiles,
       lastProfileId: id,
-      leftHanded: state.leftHanded,
-      talkSelectMode: state.talkSelectMode,
+      ...this.layoutBundleFields(state),
     });
     if (state.rememberPassword && password) {
       await savePasswordForProfile(id, password);
@@ -580,8 +594,27 @@ export class SessionController {
     }
   }
 
+  /** Persist layout prefs; unset values stay undefined so server defaults apply. */
+  private layoutBundleFields(state: SessionUiState) {
+    return {
+      leftHanded: this.leftHandedExplicit ? state.leftHanded : undefined,
+      talkSelectMode: state.talkSelectMode,
+      lockMultipleTargets: this.lockMultipleTargetsExplicit ? state.lockMultipleTargets : undefined,
+    };
+  }
+
   setLeftHanded(leftHanded: boolean): void {
+    this.leftHandedExplicit = true;
     useSessionStore.setState({ leftHanded, statusMessage: slideToLockHint(leftHanded) });
+    this.persistLayout();
+  }
+
+  setLockMultipleTargets(lockMultipleTargets: boolean): void {
+    this.lockMultipleTargetsExplicit = true;
+    useSessionStore.setState({ lockMultipleTargets });
+    if (!lockMultipleTargets) {
+      void this.talk.collapseToSingleLock();
+    }
     this.persistLayout();
   }
 
@@ -621,6 +654,12 @@ export class SessionController {
       },
       onConferenceMembersUpdated: () => {
         void this.mediaCoordinator.refreshTargets();
+      },
+      onForceStopTransmission: () => {
+        // An admin stopped this client's transmission; drop talk and locks.
+        void this.talk.unlockTalk().then(() => {
+          useSessionStore.setState({ statusMessage: 'Transmission stopped by the server.' });
+        });
       },
       onIncomingTalkState: (incoming) => {
         useSessionStore.setState({ incoming });
@@ -831,6 +870,7 @@ export class SessionController {
     }
 
     this.lastSocketId = this.signaling.socketId;
+    await this.refreshServerClientDefaults();
     const productions = Array.isArray(identity.productions) ? identity.productions : [];
     const rememberedProductionId = useSessionStore.getState().productionId;
     const rememberedProductionName = useSessionStore.getState().productionName;
@@ -868,6 +908,24 @@ export class SessionController {
       throw new Error('Not signed in.');
     }
     return this.api;
+  }
+
+  /**
+   * Pulls the admin-configured client defaults (server 1.4.4+) and applies
+   * them to every setting the user has not explicitly changed on this device.
+   */
+  private async refreshServerClientDefaults(): Promise<void> {
+    this.serverClientDefaults = (await this.api?.defaultClientSettings()) ?? {};
+    const defaults = this.serverClientDefaults;
+    const operatorAudio = resolveOperatorAudio(this.operatorAudioOverrides, defaults);
+    useSessionStore.setState({ operatorAudio });
+    this.media?.setOperatorAudio(operatorAudio);
+    if (!this.leftHandedExplicit && typeof defaults.leftHandMode === 'boolean') {
+      useSessionStore.setState({ leftHanded: defaults.leftHandMode });
+    }
+    if (!this.lockMultipleTargetsExplicit && typeof defaults.lockMultipleTargets === 'boolean') {
+      useSessionStore.setState({ lockMultipleTargets: defaults.lockMultipleTargets });
+    }
   }
 
   // Talk façade.

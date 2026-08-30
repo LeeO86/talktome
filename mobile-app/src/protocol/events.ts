@@ -18,6 +18,7 @@ export const SocketEvent = {
   conferenceList: 'conference-list',
   conferenceMembersUpdated: 'conference-members-updated',
   cutCamera: 'cut-camera',
+  forceStopTransmission: 'force-stop-transmission',
   sessionKicked: 'session-kicked',
   getRouterRtpCapabilities: 'get-router-rtp-capabilities',
   createSendTransport: 'create-send-transport',

@@ -42,8 +42,11 @@ export async function loadProfileBundle(): Promise<ProfileBundle> {
       return {
         profiles: Array.isArray(parsed.profiles) ? parsed.profiles.filter(isSavedProfile) : [],
         lastProfileId: typeof parsed.lastProfileId === 'string' ? parsed.lastProfileId : null,
-        leftHanded: Boolean(parsed.leftHanded),
+        // Keys absent from storage stay undefined so server defaults can apply.
+        leftHanded: typeof parsed.leftHanded === 'boolean' ? parsed.leftHanded : undefined,
         talkSelectMode: Boolean(parsed.talkSelectMode),
+        lockMultipleTargets:
+          typeof parsed.lockMultipleTargets === 'boolean' ? parsed.lockMultipleTargets : undefined,
       };
     } catch {
       // fall through to legacy
@@ -100,7 +103,7 @@ async function loadPasswords(): Promise<Record<string, string>> {
 async function migrateLegacyProfile(): Promise<ProfileBundle> {
   const raw = await AsyncStorage.getItem(LEGACY_PROFILE_KEY);
   if (!raw) {
-    return { profiles: [], lastProfileId: null, leftHanded: false, talkSelectMode: false };
+    return { profiles: [], lastProfileId: null, talkSelectMode: false };
   }
   try {
     const profile = JSON.parse(raw) as RememberedProfile;
@@ -130,6 +133,6 @@ async function migrateLegacyProfile(): Promise<ProfileBundle> {
     await SecureStore.deleteItemAsync(LEGACY_PASSWORD_KEY);
     return bundle;
   } catch {
-    return { profiles: [], lastProfileId: null, leftHanded: false, talkSelectMode: false };
+    return { profiles: [], lastProfileId: null, talkSelectMode: false };
   }
 }

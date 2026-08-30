@@ -80,6 +80,18 @@ export function SettingsScreen({ visible, onClose }: Props) {
               ring to set level in dB and mute. Double-tap a ring to mute. Tap a conference icon to set who you hear.
             </Text>
             <View style={styles.row}>
+              <Text style={styles.rowLabel}>Lock multiple targets</Text>
+              <Switch
+                value={store.lockMultipleTargets}
+                onValueChange={(value) => session.setLockMultipleTargets(value)}
+                trackColor={{ true: '#3DD6F5' }}
+              />
+            </View>
+            <Text style={styles.footnote}>
+              Slide-to-lock adds targets to the locked set instead of replacing it. Tap a locked
+              card to drop just that target — same as the web client.
+            </Text>
+            <View style={styles.row}>
               <Text style={styles.rowLabel}>Horizontal volume fader</Text>
               <Switch
                 value={audio.volumeFader}

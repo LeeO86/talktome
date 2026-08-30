@@ -32,6 +32,7 @@ export type SignalingHandlers = {
   onTargetsUpdated?: () => void;
   onConferenceMembersUpdated?: (conferenceId?: number | null) => void;
   onIncomingTalkState?: (state: IncomingTalkState) => void;
+  onForceStopTransmission?: () => void;
   onProducerStarted?: (producer: ActiveProducer) => void;
   onProducerClosed?: (producer: ActiveProducer) => void;
   onConsumerClosed?: (consumerId: string) => void;
@@ -335,6 +336,9 @@ export class SignalingClient {
       if (typeof record.consumerId === 'string' && record.consumerId) {
         this.handlers.onConsumerClosed?.(record.consumerId);
       }
+    });
+    socket.on(SocketEvent.forceStopTransmission, () => {
+      this.handlers.onForceStopTransmission?.();
     });
     socket.on(SocketEvent.sessionKicked, (payload) => {
       const record = payload && typeof payload === 'object' ? (payload as SessionKickInfo) : {};
