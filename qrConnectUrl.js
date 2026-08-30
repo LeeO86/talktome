@@ -44,7 +44,15 @@ function selectAdminQrUrl({ configuredUrl, requestUrl, adapterUrl } = {}) {
   return adapter || requested;
 }
 
+function buildLoginUrl(connectUrl, token) {
+  const normalized = normalizeConnectUrl(connectUrl);
+  const normalizedToken = typeof token === "string" ? token.trim() : "";
+  if (!normalized || !normalizedToken) return "";
+  return `${normalized}/#login=${encodeURIComponent(normalizedToken)}`;
+}
+
 module.exports = {
+  buildLoginUrl,
   isLocalOnlyConnectUrl,
   normalizeConnectUrl,
   selectAdminQrUrl,

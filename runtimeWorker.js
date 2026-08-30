@@ -16,7 +16,7 @@ function filesMatch(sourcePath, destinationPath) {
   return fileSha256(sourcePath) === fileSha256(destinationPath);
 }
 
-function syncRuntimeExecutable(sourcePath, destinationPath) {
+function syncRuntimeFile(sourcePath, destinationPath, { executable = false } = {}) {
   if (!sourcePath || !fs.existsSync(sourcePath)) {
     throw new Error(`Runtime source is missing: ${sourcePath || "unknown"}`);
   }
@@ -27,27 +27,32 @@ function syncRuntimeExecutable(sourcePath, destinationPath) {
 
   fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
   if (filesMatch(sourcePath, destinationPath)) {
-    fs.chmodSync(destinationPath, 0o755);
+    if (executable) fs.chmodSync(destinationPath, 0o755);
     return { updated: false, destinationPath };
   }
 
   const temporaryPath = `${destinationPath}.tmp-${process.pid}-${Date.now()}`;
   try {
     fs.copyFileSync(sourcePath, temporaryPath);
-    fs.chmodSync(temporaryPath, 0o755);
+    if (executable) fs.chmodSync(temporaryPath, 0o755);
     fs.renameSync(temporaryPath, destinationPath);
   } catch (error) {
     try {
       fs.rmSync(temporaryPath, { force: true });
     } catch {}
-    throw new Error(`Failed to update runtime executable ${destinationPath}: ${error.message}`);
+    throw new Error(`Failed to update runtime file ${destinationPath}: ${error.message}`);
   }
 
   return { updated: true, destinationPath };
+}
+
+function syncRuntimeExecutable(sourcePath, destinationPath) {
+  return syncRuntimeFile(sourcePath, destinationPath, { executable: true });
 }
 
 module.exports = {
   fileSha256,
   filesMatch,
   syncRuntimeExecutable,
+  syncRuntimeFile,
 };

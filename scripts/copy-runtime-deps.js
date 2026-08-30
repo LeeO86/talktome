@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { resolveBetterSqliteBinding } = require("../betterSqliteBinding");
 
 const target = String(process.argv[2] || "").trim().toLowerCase();
 
@@ -9,14 +10,7 @@ if (!target) {
 }
 
 const rootDir = path.resolve(__dirname, "..");
-const sqliteSource = path.join(
-  rootDir,
-  "node_modules",
-  "better-sqlite3",
-  "build",
-  "Release",
-  "better_sqlite3.node"
-);
+const sqliteSource = resolveBetterSqliteBinding();
 
 const workerName = target === "win64" ? "mediasoup-worker.exe" : "mediasoup-worker";
 const workerSource = path.join(

@@ -14,7 +14,7 @@ const { createBrowserSessionStore } = require("./browserSessions");
 const { loadProxySsoConfig, resolveProxySsoIdentity } = require("./proxySso");
 const { getDataDir } = require("./dataPaths");
 const { ApplePttPushService } = require("./applePttPushService");
-const { normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
+const { buildLoginUrl, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
 const {
   listMediaNetworkInterfaces,
@@ -31,6 +31,12 @@ const {
   shouldCloseBridgeSessionAfterEventStreamClose,
 } = require("./bridgeSessionLiveness");
 const { syncRuntimeExecutable } = require("./runtimeWorker");
+const {
+  normalizeConfiguredDefaultClientSettings,
+  resolveDefaultClientSettings,
+  serializeDefaultClientSettingsScript,
+} = require("./defaultClientSettings");
+const { stopPeerTransmission } = require("./transmissionControl");
 
 const SERVER_APP_VERSION = resolveServerAppVersion();
 const CLIENT_ICE_CONFIG = resolveClientIceConfig(process.env);
@@ -532,6 +538,14 @@ app.get("/", (req, res) => {
   }
 });
 
+app.get("/default-client-settings.js", (req, res) => {
+  const config = loadRuntimeConfig() || {};
+  res.setHeader("Cache-Control", "no-store");
+  res.type("application/javascript").send(
+    serializeDefaultClientSettingsScript(config.defaultClientSettings)
+  );
+});
+
 function findSocketIoClientPath() {
   const socketIoEntry = require.resolve("socket.io");
   let socketIoPkgDir = path.dirname(socketIoEntry);
@@ -898,7 +912,45 @@ function loadOrCreateCompanionApiKey() {
   return generated;
 }
 
-const companionApiKey = loadOrCreateCompanionApiKey();
+function persistCompanionApiKey(apiKey) {
+  const directory = path.dirname(COMPANION_API_KEY_FILE);
+  const tempFile = path.join(
+    directory,
+    `.companion_api_key.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`,
+  );
+
+  fs.mkdirSync(directory, { recursive: true });
+  try {
+    fs.writeFileSync(tempFile, apiKey, { mode: 0o600, flag: "wx" });
+    fs.renameSync(tempFile, COMPANION_API_KEY_FILE);
+    try {
+      fs.chmodSync(COMPANION_API_KEY_FILE, 0o600);
+    } catch {}
+  } catch (err) {
+    try {
+      fs.unlinkSync(tempFile);
+    } catch {}
+    throw err;
+  }
+}
+
+let companionApiKey = loadOrCreateCompanionApiKey();
+
+function regenerateCompanionApiKey() {
+  if (readCompanionApiKeyFromEnv()) {
+    const err = new Error(
+      "The API key is managed by COMPANION_API_KEY and cannot be regenerated in the Admin page.",
+    );
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const generated = crypto.randomBytes(32).toString("hex");
+  persistCompanionApiKey(generated);
+  companionApiKey = generated;
+  console.log(`[COMPANION] Regenerated API key at ${COMPANION_API_KEY_FILE}`);
+  return generated;
+}
 
 function parseBearerToken(value) {
   if (typeof value !== "string") return null;
@@ -3017,6 +3069,18 @@ app.get("/admin/api-key", requireAdmin, (req, res) => {
   res.json({ apiKey: companionApiKey });
 });
 
+app.post("/admin/api-key/regenerate", requireAdmin, (req, res) => {
+  try {
+    const apiKey = regenerateCompanionApiKey();
+    res.json({ apiKey });
+  } catch (err) {
+    console.error(`[COMPANION] Failed to regenerate API key: ${err.message}`);
+    res.status(err.statusCode || 500).json({
+      error: err.message || "Failed to regenerate API key",
+    });
+  }
+});
+
 function statusIsoTimestamp(value) {
   const timestamp = Number(value);
   return Number.isFinite(timestamp) && timestamp > 0
@@ -3409,6 +3473,81 @@ app.get("/admin/status", requireAdmin, (req, res) => {
   res.json(buildAdminStatusSnapshot());
 });
 
+async function forceStopUserTransmission(userId) {
+  const found = findUserPeerByUserId(userId);
+  if (!found?.peer) return null;
+
+  const { socketId, peer } = found;
+  const talkProducers = getPeerTalkProducers(peer, { includePaused: true });
+  const appleRecipientUserIds = [...new Set(talkProducers.flatMap((producer) => (
+    Array.isArray(producer?.__applePttRecipientUserIds) ? producer.__applePttRecipientUserIds : []
+  )))];
+  const result = await stopPeerTransmission(peer, talkProducers);
+
+  for (const producer of talkProducers) {
+    producer.__applePttRecipientUserIds = [];
+    if (String(producer?.appData?.type || "").trim().toLowerCase() === "talk") {
+      syncProducerRecipients({ producer, speakerSocketId: socketId });
+    }
+  }
+
+  try {
+    peer.socket?.emit("force-stop-transmission", {
+      reason: "admin-stop-transmission",
+      at: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn(`[ADMIN] Failed to notify user ${userId} about stopped transmission:`, error?.message || error);
+  }
+
+  syncPeerCompanionState(peer, { reason: "admin-stop-transmission" });
+  broadcastRuntimeUserStates("admin-stop-transmission");
+  void sendApplePttServiceUpdate({
+    recipientUserIds: appleRecipientUserIds,
+    reason: "admin-stop-transmission",
+  }).catch((error) => {
+    console.warn("[APPLE-PTT] Failed to send forced-stop update:", error?.message || error);
+  });
+
+  return result;
+}
+
+app.post("/admin/users/:id/stop-transmission", requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ error: "Invalid user id" });
+  }
+
+  const user = getUserById(userId);
+  if (!user || user.is_superadmin || user.is_guest_profile) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  try {
+    const result = await forceStopUserTransmission(userId);
+    if (!result) {
+      return res.status(409).json({ error: "User is not online" });
+    }
+    if (result.errors.length > 0) {
+      console.error(`[ADMIN] Failed to stop all transmission producers for user ${userId}`, result.errors);
+      return res.status(500).json({ error: "Failed to stop all active transmission producers" });
+    }
+    console.log(
+      `[ADMIN] Stopped transmission for user ${userId} (${user.name}); `
+      + `paused=${result.pausedProducerCount}, closed=${result.closedProducerCount}`
+    );
+    return res.json({
+      ok: true,
+      stopped: result.hadActiveTransmission,
+      pausedProducerCount: result.pausedProducerCount,
+      closedProducerCount: result.closedProducerCount,
+    });
+  } catch (error) {
+    console.error(`[ADMIN] Failed to stop transmission for user ${userId}:`, error);
+    return res.status(500).json({ error: "Failed to stop transmission" });
+  }
+});
+
 app.post("/admin/restart", requireAdmin, requireSuperAdmin, (req, res) => {
   if (!isServerRestartSupported()) {
     return res.status(409).json({ error: "Server restart is not available for unmanaged command-line starts" });
@@ -3533,15 +3672,10 @@ function resolvePreferredAdminQrIpAddress(activeAddress) {
 }
 
 async function buildAdminMediaNetworkQrPayload(activeAddress, req = null) {
-  const qrIpAddress = resolvePreferredAdminQrIpAddress(activeAddress);
+  const qrUrl = resolveAdminConnectUrl(activeAddress, req);
   const configuredPublicConnectUrl = resolveConfiguredAdminPublicConnectUrl();
   const requestConnectUrl = resolveAdminRequestConnectUrl(req);
-  const adapterConnectUrl = buildHttpsConnectUrl(qrIpAddress);
-  const qrUrl = selectAdminQrUrl({
-    configuredUrl: configuredPublicConnectUrl,
-    requestUrl: requestConnectUrl,
-    adapterUrl: adapterConnectUrl,
-  });
+  const qrIpAddress = resolvePreferredAdminQrIpAddress(activeAddress);
   const publicConnectUrl = configuredPublicConnectUrl || requestConnectUrl;
   const activeMdnsHost = mdnsHostname || "off";
   const mdnsUrl = mdnsHostname ? buildHttpsConnectUrl(mdnsHostname) : "";
@@ -3572,6 +3706,18 @@ async function buildAdminMediaNetworkQrPayload(activeAddress, req = null) {
     mdnsUrl: mdnsUrl || null,
     qrCodeDataUrl,
   };
+}
+
+function resolveAdminConnectUrl(activeAddress, req = null) {
+  const qrIpAddress = resolvePreferredAdminQrIpAddress(activeAddress);
+  const configuredPublicConnectUrl = resolveConfiguredAdminPublicConnectUrl();
+  const requestConnectUrl = resolveAdminRequestConnectUrl(req);
+  const adapterConnectUrl = buildHttpsConnectUrl(qrIpAddress);
+  return selectAdminQrUrl({
+    configuredUrl: configuredPublicConnectUrl,
+    requestUrl: requestConnectUrl,
+    adapterUrl: adapterConnectUrl,
+  });
 }
 
 app.get("/admin/settings/media-network", requireAdmin, async (req, res) => {
@@ -3642,6 +3788,15 @@ app.get("/admin/settings/guest-login", requireAdmin, (req, res) => {
     console.error("Error loading guest login setting:", err);
     res.status(500).json({ error: "Failed to load guest login setting" });
   }
+});
+
+app.get("/admin/settings/default-client", requireAdmin, (req, res) => {
+  const config = loadRuntimeConfig() || {};
+  res.json({
+    settings: resolveDefaultClientSettings(config.defaultClientSettings),
+    configured: Object.prototype.hasOwnProperty.call(config, "defaultClientSettings"),
+    configPath: getConfigPath(),
+  });
 });
 
 app.put("/admin/settings/mdns", requireAdmin, (req, res) => {
@@ -3789,6 +3944,25 @@ app.put("/admin/settings/guest-login", requireAdmin, (req, res) => {
   }
 });
 
+app.put("/admin/settings/default-client", requireAdmin, (req, res) => {
+  try {
+    const settings = normalizeConfiguredDefaultClientSettings(req.body, { strict: true });
+    const currentConfig = loadRuntimeConfig() || {};
+    const updatedConfig = {
+      ...currentConfig,
+      defaultClientSettings: settings,
+    };
+    const configPath = saveRuntimeConfig(updatedConfig);
+    return res.json({
+      settings: resolveDefaultClientSettings(settings),
+      configured: true,
+      configPath,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message || "Invalid default client settings" });
+  }
+});
+
 app.get("/admin/config/export", requireAdmin, (req, res) => {
   try {
     const bundle = {
@@ -3884,6 +4058,19 @@ app.post("/admin/config/import", requireAdmin, (req, res) => {
           enabled: bundle.serverConfig.guestLogin.enabled === true,
           profileUserId: Number.isFinite(importedGuestProfileId) ? importedGuestProfileId : null,
         };
+      }
+
+      if (Object.prototype.hasOwnProperty.call(bundle.serverConfig, "defaultClientSettings")) {
+        try {
+          nextConfig.defaultClientSettings = normalizeConfiguredDefaultClientSettings(
+            bundle.serverConfig.defaultClientSettings,
+            { strict: true }
+          );
+        } catch (error) {
+          return res.status(400).json({
+            error: `Config file contains invalid default client settings: ${error.message}`,
+          });
+        }
       }
     }
 
@@ -4003,8 +4190,11 @@ app.put("/admin/users/:id/admin", requireAdmin, (req, res) => {
 app.post("/admin/users/:id/login-link", requireAdmin, (req, res) => {
   try {
     const token = createUserLoginToken(req.params.id);
+    const active = resolveTransportAnnouncedAddress();
+    const connectUrl = resolveAdminConnectUrl(active.announcedAddress, req);
+    const loginUrl = buildLoginUrl(connectUrl, token);
     res.setHeader("Cache-Control", "no-store");
-    return res.json({ token });
+    return res.json({ token, loginUrl: loginUrl || null });
   } catch (err) {
     const status = err.message === "User not found" ? 404 : 400;
     return res.status(status).json({ error: err.message || "Failed to create login link" });

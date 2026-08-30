@@ -92,6 +92,7 @@ const productionOrderList = document.getElementById('production-order-list');
 const configExportBtn = document.getElementById('config-export-btn');
 const configImportBtn = document.getElementById('config-import-btn');
 const configImportFile = document.getElementById('config-import-file');
+const apiKeyRegenerateBtn = document.getElementById('api-key-regenerate-btn');
 const apiKeyCopyBtn = document.getElementById('api-key-copy-btn');
 const apiKeyValueInput = document.getElementById('api-key-value');
 const containerRestartPanel = document.getElementById('container-restart-panel');
@@ -104,10 +105,202 @@ const mediaNetworkQrDownloadButton = document.getElementById('media-network-qr-d
 const guestLoginEnabledInput = document.getElementById('guest-login-enabled');
 const guestLoginStatus = document.getElementById('guest-login-status');
 const guestLoginProfile = document.getElementById('guest-login-profile');
+const defaultClientSettingsForm = document.getElementById('default-client-settings-form');
+const defaultClientAudioProfile = document.getElementById('default-client-audio-profile');
+const defaultClientDimAmount = document.getElementById('default-client-dim-amount');
+const defaultClientDimSelf = document.getElementById('default-client-dim-self');
+const defaultClientDimIncoming = document.getElementById('default-client-dim-incoming');
+const defaultClientAudioProcessing = document.getElementById('default-client-audio-processing');
+const defaultClientLeftHand = document.getElementById('default-client-left-hand');
+const defaultClientLockMultiple = document.getElementById('default-client-lock-multiple');
 const adminImageLightbox = document.getElementById('admin-image-lightbox');
 const adminImageLightboxClose = document.getElementById('admin-image-lightbox-close');
 const adminImageLightboxImage = document.getElementById('admin-image-lightbox-image');
 const adminImageLightboxDownloadButton = document.getElementById('admin-image-lightbox-download');
+const adminActionDialog = document.getElementById('admin-action-dialog');
+const adminActionDialogForm = document.getElementById('admin-action-dialog-form');
+const adminActionDialogTitle = document.getElementById('admin-action-dialog-title');
+const adminActionDialogMessage = document.getElementById('admin-action-dialog-message');
+const adminActionDialogField = document.getElementById('admin-action-dialog-field');
+const adminActionDialogLabel = document.getElementById('admin-action-dialog-label');
+const adminActionDialogInput = document.getElementById('admin-action-dialog-input');
+const adminActionDialogPasswordToggle = document.getElementById('admin-action-dialog-password-toggle');
+const adminActionDialogError = document.getElementById('admin-action-dialog-error');
+const adminActionDialogCancel = document.getElementById('admin-action-dialog-cancel');
+const adminActionDialogConfirm = document.getElementById('admin-action-dialog-confirm');
+
+let activeAdminActionDialog = null;
+
+function closeAdminActionDialog(result) {
+  const state = activeAdminActionDialog;
+  if (!state) return;
+
+  activeAdminActionDialog = null;
+  adminActionDialog?.classList.add('is-hidden');
+  document.body.classList.remove('admin-dialog-open');
+  adminActionDialogForm?.reset();
+  adminActionDialogError?.classList.add('is-hidden');
+  if (adminActionDialogError) adminActionDialogError.textContent = '';
+
+  const returnFocus = state.returnFocus;
+  state.resolve(result);
+  window.setTimeout(() => {
+    if (returnFocus?.isConnected && typeof returnFocus.focus === 'function') {
+      returnFocus.focus();
+    }
+  }, 0);
+}
+
+function showAdminActionDialogError(message) {
+  if (!adminActionDialogError) return;
+  adminActionDialogError.textContent = message;
+  adminActionDialogError.classList.toggle('is-hidden', !message);
+}
+
+function openAdminActionDialog({
+  mode = 'confirm',
+  title = 'Confirm action',
+  message = '',
+  label = 'Value',
+  value = '',
+  inputType = 'text',
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  danger = false,
+  required = false,
+  minLength = 0,
+  validationMessage = '',
+} = {}) {
+  if (!adminActionDialog || !adminActionDialogForm) {
+    return Promise.resolve(mode === 'input' ? null : false);
+  }
+
+  if (activeAdminActionDialog) closeAdminActionDialog(null);
+
+  return new Promise((resolve) => {
+    const hasInput = mode === 'input';
+    const canCancel = mode !== 'notice';
+    activeAdminActionDialog = {
+      resolve,
+      mode,
+      canCancel,
+      required,
+      minLength: Number(minLength) || 0,
+      validationMessage,
+      returnFocus: document.activeElement,
+    };
+
+    adminActionDialogTitle.textContent = title;
+    adminActionDialogMessage.textContent = message;
+    adminActionDialogField.classList.toggle('is-hidden', !hasInput);
+    adminActionDialogLabel.textContent = label;
+    const isPassword = inputType === 'password';
+    adminActionDialogInput.type = isPassword ? 'password' : 'text';
+    adminActionDialogInput.autocomplete = isPassword ? 'new-password' : 'off';
+    adminActionDialogInput.value = String(value ?? '');
+    adminActionDialogInput.parentElement?.classList.toggle('has-password-toggle', isPassword);
+    adminActionDialogPasswordToggle.classList.toggle('is-hidden', !isPassword);
+    adminActionDialogPasswordToggle.setAttribute('aria-pressed', 'false');
+    adminActionDialogPasswordToggle.setAttribute('aria-label', 'Show password');
+    adminActionDialogPasswordToggle.title = 'Show password';
+    adminActionDialogCancel.textContent = cancelLabel;
+    adminActionDialogCancel.classList.toggle('is-hidden', !canCancel);
+    adminActionDialogConfirm.textContent = confirmLabel;
+    adminActionDialogConfirm.classList.toggle('danger', Boolean(danger));
+    showAdminActionDialogError('');
+
+    document.body.classList.add('admin-dialog-open');
+    adminActionDialog.classList.remove('is-hidden');
+    window.requestAnimationFrame(() => {
+      if (hasInput) {
+        adminActionDialogInput.focus();
+        adminActionDialogInput.select();
+      } else {
+        adminActionDialogConfirm.focus();
+      }
+    });
+  });
+}
+
+function adminConfirm(message, options = {}) {
+  return openAdminActionDialog({ mode: 'confirm', message, ...options });
+}
+
+function adminPrompt(message, value = '', options = {}) {
+  return openAdminActionDialog({
+    mode: 'input',
+    title: 'Change value',
+    message,
+    value,
+    required: true,
+    ...options,
+  });
+}
+
+function adminNotice(message, options = {}) {
+  return openAdminActionDialog({
+    mode: 'notice',
+    title: 'Notice',
+    message,
+    confirmLabel: 'OK',
+    ...options,
+  });
+}
+
+adminActionDialogForm?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const state = activeAdminActionDialog;
+  if (!state) return;
+
+  if (state.mode === 'input') {
+    const value = adminActionDialogInput.value;
+    if (state.required && !value.trim()) {
+      showAdminActionDialogError(state.validationMessage || 'Please enter a value.');
+      adminActionDialogInput.focus();
+      return;
+    }
+    if (state.minLength > 0 && value.trim().length < state.minLength) {
+      showAdminActionDialogError(
+        state.validationMessage || `Please enter at least ${state.minLength} characters.`
+      );
+      adminActionDialogInput.focus();
+      return;
+    }
+    closeAdminActionDialog(value);
+    return;
+  }
+
+  closeAdminActionDialog(true);
+});
+
+adminActionDialogCancel?.addEventListener('click', () => closeAdminActionDialog(null));
+adminActionDialog?.addEventListener('pointerdown', (event) => {
+  if (event.target === adminActionDialog && activeAdminActionDialog?.canCancel) {
+    closeAdminActionDialog(null);
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (!activeAdminActionDialog || adminActionDialog.classList.contains('is-hidden')) return;
+  if (event.key === 'Escape' && activeAdminActionDialog.canCancel) {
+    event.preventDefault();
+    closeAdminActionDialog(null);
+    return;
+  }
+  if (event.key !== 'Tab') return;
+
+  const focusable = [...adminActionDialog.querySelectorAll('button:not([disabled]):not(.is-hidden), input:not([disabled]):not(.is-hidden)')]
+    .filter((element) => element.offsetParent !== null);
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 
 function syncExpandedAdminBarOffset() {
   if (!adminBar?.classList.contains('has-expanded-message')) {
@@ -1057,14 +1250,21 @@ async function logoutAdmin(message) {
 async function enforcePasswordChange() {
   if (!adminState.mustChangePassword) return true;
 
-  const newPassword = prompt('Please set a new admin password (min 4 characters).');
-  if (!newPassword) {
+  const newPassword = await adminPrompt(
+    'Please set a new admin password.',
+    '',
+    {
+      title: 'Change admin password',
+      label: 'New password',
+      inputType: 'password',
+      confirmLabel: 'Update password',
+      minLength: 4,
+      validationMessage: 'Password must be at least 4 characters.',
+    }
+  );
+  if (newPassword === null) {
     await logoutAdmin('Password change required before continuing.');
     return false;
-  }
-  if (newPassword.trim().length < 4) {
-    alert('Password must be at least 4 characters.');
-    return enforcePasswordChange();
   }
 
   try {
@@ -1075,14 +1275,14 @@ async function enforcePasswordChange() {
     });
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}));
-      alert(payload.error || 'Failed to update password.');
+      await adminNotice(payload.error || 'Failed to update password.', { title: 'Password update failed' });
       return enforcePasswordChange();
     }
     adminState.mustChangePassword = false;
     showMessage('✅ Admin password updated', 'success');
     return true;
   } catch (err) {
-    alert('Failed to update password.');
+    await adminNotice('Failed to update password.', { title: 'Password update failed' });
     return enforcePasswordChange();
   }
 }
@@ -1213,6 +1413,24 @@ function formatStatusPacketLoss(networkStats) {
   return `${packetLossPercent.toFixed(packetLossPercent >= 10 ? 0 : 1)}%`;
 }
 
+function syncStopTransmissionButtons(users = latestAdminStatus?.users || []) {
+  const statusByUserId = new Map(
+    (Array.isArray(users) ? users : []).map((user) => [Number(user.id), user])
+  );
+
+  document.querySelectorAll('[data-stop-transmission-user-id]').forEach((button) => {
+    if (button.dataset.requestPending === 'true') return;
+    const user = statusByUserId.get(Number(button.dataset.stopTransmissionUserId));
+    const canStop = Boolean(user?.online && user?.talking);
+    button.disabled = !canStop;
+    button.title = canStop
+      ? 'Immediately stop this user\'s active transmission'
+      : user?.online
+        ? 'User is not transmitting'
+        : 'User is offline';
+  });
+}
+
 function renderAdminStatus(payload = {}) {
   const canRestartServer = Boolean(adminState.isSuperAdmin && payload.restartSupported);
   containerRestartPanel?.classList.toggle('is-hidden', !canRestartServer);
@@ -1231,6 +1449,7 @@ function renderAdminStatus(payload = {}) {
   feeds.sort(sortByOnlineAndName);
   bridges.sort(sortByOnlineAndName);
   companions.sort(sortByOnlineAndName);
+  syncStopTransmissionButtons(users);
 
   setStatusText('status-summary-users', `${summary.usersOnline || 0} / ${summary.usersTotal || 0}`);
   setStatusText('status-summary-bridges', `${summary.bridgesOnline || 0} / ${summary.bridgesTotal || 0}`);
@@ -1848,6 +2067,7 @@ async function loadData() {
     return;
   }
   await loadGuestLoginSettings();
+  await loadDefaultClientSettings();
   const { users, conferences, feeds, bridges } = await fetchAdminCollections();
   await loadMdnsSettings();
   await loadMediaNetworkSettings();
@@ -2331,6 +2551,9 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
     const deleteAttrs = isGuestProfile
       ? 'disabled title="Guest profile cannot be deleted"'
       : isAdmin ? 'disabled title="Admin accounts cannot be deleted"' : '';
+    const stopTransmissionButton = !isSuperadmin && !isGuestProfile
+      ? `<button type="button" class="small warning" data-stop-transmission-user-id="${user.id}" onclick="stopUserTransmission(${user.id}, this)" disabled>Stop transmission</button>`
+      : '';
     const li = document.createElement('li');
     li.className = 'list-item entity-detail-item';
     li.dataset.entityId = String(user.id);
@@ -2343,8 +2566,10 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
       ? `
         <div class="nested-block">
           <form class="bridge-config-form" id="bridge-config-${user.id}" data-bridge-config-user-id="${user.id}" onsubmit="saveBridgeEndpoint(event, ${user.id})">
-            <label class="toggle-row" for="bridge-enabled-${user.id}">
-              <input type="checkbox" id="bridge-enabled-${user.id}" ${isBridgeEndpoint ? 'checked' : ''}>
+            <label class="admin-switch bridge-input-switch" for="bridge-enabled-${user.id}">
+              <input type="checkbox" id="bridge-enabled-${user.id}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
+              <span class="admin-switch__track" aria-hidden="true"></span>
+              <span class="admin-switch__state" aria-hidden="true"></span>
               <span>Use this user as bridge endpoint</span>
             </label>
             <div class="bridge-config-options" id="bridge-options-${user.id}" ${isBridgeEndpoint ? '' : 'hidden'}>
@@ -2412,6 +2637,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
           <button type="button" class="small" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>
           <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
+          ${stopTransmissionButton}
           ${adminToggle}
           <button type="button" class="small danger" onclick="deleteUser(${user.id})" ${deleteAttrs}>Delete</button>
         </div>
@@ -2451,6 +2677,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
   }));
   initializeBridgeEndpointForms();
   await syncEntityMasterDetail('users', visibleUsers);
+  syncStopTransmissionButtons();
 }
 
 async function renderFeedList(feeds) {
@@ -2483,8 +2710,10 @@ async function renderFeedList(feeds) {
       <div class="nested" id="feed-nested-${feed.id}" onclick="event.stopPropagation()">
         <div class="nested-block">
           <form class="bridge-config-form" id="bridge-config-${formKey}" data-bridge-config-key="${formKey}" onsubmit="saveFeedBridgeEndpoint(event, ${feed.id})">
-            <label class="toggle-row" for="bridge-enabled-${formKey}">
-              <input type="checkbox" id="bridge-enabled-${formKey}" ${isBridgeEndpoint ? 'checked' : ''}>
+            <label class="admin-switch bridge-input-switch" for="bridge-enabled-${formKey}">
+              <input type="checkbox" id="bridge-enabled-${formKey}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
+              <span class="admin-switch__track" aria-hidden="true"></span>
+              <span class="admin-switch__state" aria-hidden="true"></span>
               <span>Use this feed as bridge input</span>
             </label>
             <div class="bridge-config-options" id="bridge-options-${formKey}" ${isBridgeEndpoint ? '' : 'hidden'}>
@@ -2740,6 +2969,19 @@ async function loadGuestLoginSettings() {
     const profileName = payload?.profileName || 'Guest';
     guestLoginProfile.textContent = profileName;
   }
+  return payload;
+}
+
+async function loadDefaultClientSettings() {
+  const payload = await fetchJSON('/admin/settings/default-client');
+  const settings = payload?.settings || {};
+  if (defaultClientAudioProfile) defaultClientAudioProfile.value = settings.audioProfile || 'ultra-low';
+  if (defaultClientDimAmount) defaultClientDimAmount.value = String(settings.dimAmountDb ?? -14);
+  if (defaultClientDimSelf) defaultClientDimSelf.checked = settings.dimFeedsWhileSpeaking === true;
+  if (defaultClientDimIncoming) defaultClientDimIncoming.checked = settings.dimWhenAddressed === true;
+  if (defaultClientAudioProcessing) defaultClientAudioProcessing.checked = settings.audioAutoProcessing === true;
+  if (defaultClientLeftHand) defaultClientLeftHand.checked = settings.leftHandMode === true;
+  if (defaultClientLockMultiple) defaultClientLockMultiple.checked = settings.lockMultipleTargets === true;
   return payload;
 }
 
@@ -3068,7 +3310,11 @@ window.removeTarget = async function(userId, type, tid) {
 
 
 window.editFeed = async function(feedId, currentName) {
-  const newName = prompt('New feed name:', currentName);
+  const newName = await adminPrompt('Enter a new name for this feed.', currentName, {
+    title: 'Rename feed',
+    label: 'Feed name',
+    confirmLabel: 'Save',
+  });
   if (!newName || newName === currentName) return;
 
   try {
@@ -3094,12 +3340,15 @@ window.editFeed = async function(feedId, currentName) {
 
 window.resetFeedPassword = async function(feedId, feedName) {
   const label = feedName ?? 'this feed';
-  const newPassword = prompt(`Enter a new password for ${label}:`);
+  const newPassword = await adminPrompt(`Enter a new password for ${label}.`, '', {
+    title: 'Reset feed password',
+    label: 'New password',
+    inputType: 'password',
+    confirmLabel: 'Reset password',
+    minLength: 4,
+    validationMessage: 'Password must be at least 4 characters.',
+  });
   if (!newPassword) return;
-  if (newPassword.length < 4) {
-    showMessage('⚠️ Password should be at least 4 characters', 'warning', 'feed');
-    return;
-  }
 
   try {
     const res = await authedFetch(`/feeds/${feedId}/password`, {
@@ -3121,7 +3370,11 @@ window.resetFeedPassword = async function(feedId, feedName) {
 };
 
 window.deleteFeed = async function(feedId) {
-  if (!confirm('Are you sure you want to delete this feed?')) return;
+  if (!await adminConfirm('Are you sure you want to delete this feed?', {
+    title: 'Delete feed',
+    confirmLabel: 'Delete',
+    danger: true,
+  })) return;
   try {
     const res = await authedFetch(`/feeds/${feedId}`, { method: 'DELETE' });
     if (res.ok) {
@@ -3138,7 +3391,11 @@ window.deleteFeed = async function(feedId) {
 
 
 window.editUser = async function (userId, currentName) {
-  const newName = prompt('New username:', currentName);
+  const newName = await adminPrompt('Enter a new name for this user.', currentName, {
+    title: 'Rename user',
+    label: 'Username',
+    confirmLabel: 'Save',
+  });
   if (!newName || newName === currentName) return;
 
   try {
@@ -3157,6 +3414,39 @@ window.editUser = async function (userId, currentName) {
   } catch (err) {
     showMessage('❌ Failed to update user', 'error', 'user');
     console.error(err);
+  }
+};
+
+window.stopUserTransmission = async function (userId, button) {
+  const userName = latestAdminStatus?.users?.find((user) => Number(user.id) === Number(userId))?.name || 'User';
+  if (button) {
+    button.dataset.requestPending = 'true';
+    button.disabled = true;
+  }
+
+  try {
+    const res = await authedFetch(`/admin/users/${userId}/stop-transmission`, { method: 'POST' });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || 'Failed to stop transmission');
+    }
+
+    const statusUser = latestAdminStatus?.users?.find((user) => Number(user.id) === Number(userId));
+    if (statusUser) statusUser.talking = false;
+
+    showMessage(
+      payload.stopped
+        ? `✅ Transmission stopped for ${userName}`
+        : `ℹ️ ${userName} was no longer transmitting`,
+      payload.stopped ? 'success' : 'warning',
+      'user'
+    );
+  } catch (err) {
+    console.error('Error stopping user transmission:', err);
+    showMessage(`❌ ${err.message}`, 'error', 'user');
+  } finally {
+    if (button) delete button.dataset.requestPending;
+    syncStopTransmissionButtons();
   }
 };
 
@@ -3186,7 +3476,11 @@ window.toggleUserConfs = async function (userId, toggleBtn) {
 
 // === Rename conferences ===
 window.editConference = async function(confId, currentName) {
-  const newName = prompt('New conference name:', currentName);
+  const newName = await adminPrompt('Enter a new name for this conference.', currentName, {
+    title: 'Rename conference',
+    label: 'Conference name',
+    confirmLabel: 'Save',
+  });
   if (!newName || newName === currentName) return;
 
   try {
@@ -3236,9 +3530,13 @@ window.toggleConfUsers = async function (confId, toggleBtn) {
 
 
 
-window.confirmUnassign = function (userId, confId) {
-  if (confirm('Are you sure you want to remove this user from the conference?')) {
-    unassignUser(userId, confId);
+window.confirmUnassign = async function (userId, confId) {
+  if (await adminConfirm('Are you sure you want to remove this user from the conference?', {
+    title: 'Remove conference member',
+    confirmLabel: 'Remove',
+    danger: true,
+  })) {
+    await unassignUser(userId, confId);
   }
 };
 
@@ -3274,7 +3572,11 @@ window.unassignUser = async function (userId, confId) {
   }
 };
 window.deleteUser = async function (userId) {
-  if (!confirm('Are you sure you want to delete this user?')) return;
+  if (!await adminConfirm('Are you sure you want to delete this user?', {
+    title: 'Delete user',
+    confirmLabel: 'Delete',
+    danger: true,
+  })) return;
   try {
     const res = await authedFetch(`/users/${userId}`, {
       method: 'DELETE'
@@ -3306,7 +3608,11 @@ window.toggleFeedBridge = function(feedId, toggleBtn) {
 
 window.toggleAdminRole = async function (userId, shouldMakeAdmin) {
   const label = shouldMakeAdmin ? 'grant admin rights' : 'remove admin rights';
-  if (!confirm(`Are you sure you want to ${label} for this user?`)) return;
+  if (!await adminConfirm(`Are you sure you want to ${label} for this user?`, {
+    title: 'Change admin rights',
+    confirmLabel: shouldMakeAdmin ? 'Make admin' : 'Remove admin',
+    danger: !shouldMakeAdmin,
+  })) return;
   try {
     const res = await authedFetch(`/admin/users/${userId}/admin`, {
       method: 'PUT',
@@ -3338,7 +3644,8 @@ window.copyUserLoginUrl = async function (userId, userName, button) {
       throw new Error(payload.error || 'Failed to create login URL');
     }
 
-    const loginUrl = `${window.location.origin}/#login=${encodeURIComponent(payload.token)}`;
+    const loginUrl = payload.loginUrl
+      || `${window.location.origin}/#login=${encodeURIComponent(payload.token)}`;
     await copyTextToClipboard(loginUrl);
     if (button) button.textContent = 'Copied';
     showMessage(`✅ Login URL copied for ${userName}`, 'success', 'user');
@@ -3455,7 +3762,11 @@ window.saveFeedBridgeEndpoint = async function(event, feedId) {
 };
 
 window.deleteConference = async function (confId) {
-  if (!confirm('Are you sure you want to delete this conference?')) return;
+  if (!await adminConfirm('Are you sure you want to delete this conference?', {
+    title: 'Delete conference',
+    confirmLabel: 'Delete',
+    danger: true,
+  })) return;
   try {
     const res = await authedFetch(`/conferences/${confId}`, {
       method: 'DELETE'
@@ -3719,6 +4030,40 @@ if (guestLoginEnabledInput) {
   });
 }
 
+if (defaultClientSettingsForm) {
+  defaultClientSettingsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const submitButton = defaultClientSettingsForm.querySelector('button[type="submit"]');
+    const settings = {
+      audioProfile: defaultClientAudioProfile?.value || 'ultra-low',
+      dimAmountDb: Number(defaultClientDimAmount?.value ?? -14),
+      dimFeedsWhileSpeaking: Boolean(defaultClientDimSelf?.checked),
+      dimWhenAddressed: Boolean(defaultClientDimIncoming?.checked),
+      audioAutoProcessing: Boolean(defaultClientAudioProcessing?.checked),
+      leftHandMode: Boolean(defaultClientLeftHand?.checked),
+      lockMultipleTargets: Boolean(defaultClientLockMultiple?.checked),
+    };
+
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const res = await authedFetch('/admin/settings/default-client', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'Failed to save default client settings');
+      await loadDefaultClientSettings();
+      showMessage('✅ Default client settings saved', 'success', 'config');
+    } catch (error) {
+      console.error('Failed to save default client settings:', error);
+      showMessage(`❌ ${error.message || 'Failed to save default client settings'}`, 'error', 'config');
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
+}
+
 if (configExportBtn) {
   configExportBtn.addEventListener('click', async () => {
     try {
@@ -3774,9 +4119,56 @@ if (apiKeyCopyBtn) {
   });
 }
 
+if (apiKeyRegenerateBtn) {
+  apiKeyRegenerateBtn.addEventListener('click', async () => {
+    if (!await adminConfirm(
+      'Regenerating the API key immediately invalidates the old key. Companion, Bridge and automation clients using it must be updated. Continue?',
+      {
+        title: 'Regenerate API key',
+        confirmLabel: 'Regenerate',
+        danger: true,
+      },
+    )) {
+      return;
+    }
+
+    apiKeyRegenerateBtn.disabled = true;
+    if (apiKeyCopyBtn) apiKeyCopyBtn.disabled = true;
+    const originalLabel = apiKeyRegenerateBtn.textContent;
+    apiKeyRegenerateBtn.textContent = 'Regenerating…';
+
+    try {
+      const res = await authedFetch('/admin/api-key/regenerate', { method: 'POST' });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.apiKey) {
+        throw new Error(payload.error || 'Failed to regenerate API key');
+      }
+
+      clearApiKeyField();
+      currentApiKey = payload.apiKey;
+      if (apiKeyValueInput) {
+        apiKeyValueInput.value = currentApiKey;
+        apiKeyValueInput.placeholder = '';
+      }
+      showMessage('✅ API key regenerated. Update all clients using the old key.', 'success', 'config');
+    } catch (err) {
+      console.error('Failed to regenerate API key:', err);
+      showMessage(err.message || 'Failed to regenerate API key', 'error', 'config');
+    } finally {
+      apiKeyRegenerateBtn.disabled = false;
+      apiKeyRegenerateBtn.textContent = originalLabel;
+      if (apiKeyCopyBtn) apiKeyCopyBtn.disabled = false;
+    }
+  });
+}
+
 if (containerRestartBtn) {
   containerRestartBtn.addEventListener('click', async () => {
-    if (!confirm('Restart the server now? All connected clients will be disconnected briefly.')) {
+    if (!await adminConfirm('Restart the server now? All connected clients will be disconnected briefly.', {
+      title: 'Restart server',
+      confirmLabel: 'Restart',
+      danger: true,
+    })) {
       return;
     }
 
@@ -3809,7 +4201,14 @@ if (configImportBtn) {
       return;
     }
 
-    const confirmed = confirm('Importing will replace the current users, conferences, feeds and target configuration. Continue?');
+    const confirmed = await adminConfirm(
+      'Importing will replace the current users, conferences, feeds and target configuration. Continue?',
+      {
+        title: 'Import configuration',
+        confirmLabel: 'Import',
+        danger: true,
+      }
+    );
     if (!confirmed) return;
 
     configImportBtn.disabled = true;
@@ -3925,12 +4324,15 @@ window.assignConferenceParticipant = async function(confId) {
 
 window.resetPassword = async function(userId, userName) {
   const label = userName ?? 'this user';
-  const newPassword = prompt(`Enter a new password for ${label}:`);
+  const newPassword = await adminPrompt(`Enter a new password for ${label}.`, '', {
+    title: 'Reset user password',
+    label: 'New password',
+    inputType: 'password',
+    confirmLabel: 'Reset password',
+    minLength: 4,
+    validationMessage: 'Password must be at least 4 characters.',
+  });
   if (!newPassword) return;
-  if (newPassword.length < 4) {
-    showMessage('⚠️ Password should be at least 4 characters', 'warning', 'user');
-    return;
-  }
 
   try {
     const res = await authedFetch(`/users/${userId}/password`, {
@@ -4024,7 +4426,15 @@ productionCreateForm?.addEventListener('submit', async (event) => {
 
 productionRenameButton?.addEventListener('click', async () => {
   if (!selectedProductionPayload || !selectedProductionId) return;
-  const name = prompt('Production name:', selectedProductionPayload.production.name)?.trim();
+  const name = (await adminPrompt(
+    'Enter a new name for this production.',
+    selectedProductionPayload.production.name,
+    {
+      title: 'Rename production',
+      label: 'Production name',
+      confirmLabel: 'Save',
+    }
+  ))?.trim();
   if (!name || name === selectedProductionPayload.production.name) return;
   try {
     await productionRequest(`/admin/productions/${selectedProductionId}`, {
@@ -4041,7 +4451,14 @@ productionRenameButton?.addEventListener('click', async () => {
 
 productionDeleteButton?.addEventListener('click', async () => {
   if (!selectedProductionPayload || !selectedProductionId) return;
-  if (!confirm(`Delete production “${selectedProductionPayload.production.name}”? Global users, conferences and feeds will not be deleted.`)) return;
+  if (!await adminConfirm(
+    `Delete production “${selectedProductionPayload.production.name}”? Global users, conferences and feeds will not be deleted.`,
+    {
+      title: 'Delete production',
+      confirmLabel: 'Delete',
+      danger: true,
+    }
+  )) return;
   try {
     await productionRequest(`/admin/productions/${selectedProductionId}`, { method: 'DELETE' });
     selectedProductionId = null;
@@ -4083,7 +4500,11 @@ productionMembersList?.addEventListener('click', async (event) => {
     const shouldMakeAdmin = adminButton.dataset.shouldMakeAdmin === 'true';
     if (!selectedProductionId || !Number.isFinite(userId)) return;
     const action = shouldMakeAdmin ? 'make this user a production admin' : 'remove production admin rights from this user';
-    if (!confirm(`Are you sure you want to ${action}?`)) return;
+    if (!await adminConfirm(`Are you sure you want to ${action}?`, {
+      title: 'Change production admin rights',
+      confirmLabel: shouldMakeAdmin ? 'Make admin' : 'Remove admin',
+      danger: !shouldMakeAdmin,
+    })) return;
     adminButton.disabled = true;
     try {
       await productionRequest(`/admin/productions/${selectedProductionId}/users/${userId}`, {

@@ -715,9 +715,12 @@
         grid-column: 1 / -1;
       }
 
-      .bridge-config-form .toggle-row {
+      .bridge-config-form .bridge-input-switch {
         grid-column: 1 / -1;
         margin: 0;
+        min-height: var(--control-height);
+        color: var(--text);
+        font-weight: 600;
       }
 
       .bridge-config-options {
@@ -837,6 +840,53 @@
 
       .config-panel > h3 + .setting-meta {
         margin-top: auto;
+      }
+
+      .default-client-settings-panel {
+        grid-column: 1 / -1;
+      }
+
+      .default-client-settings-form {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .default-client-settings-selects,
+      .default-client-settings-toggles {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem 1rem;
+      }
+
+      .default-client-setting-field {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .default-client-setting-field > label,
+      .default-client-setting-toggle > span:first-child {
+        color: var(--text);
+        font-size: 0.9rem;
+        font-weight: 600;
+      }
+
+      .default-client-setting-toggle {
+        min-height: 2.2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 8px;
+        padding: 0.55rem 0.7rem;
+        cursor: pointer;
+      }
+
+      .default-client-settings-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        min-height: 2.2rem;
       }
 
       .config-panel input:not([type='file']):not([type='checkbox']),
@@ -1014,6 +1064,7 @@
 
       .api-key-actions {
         display: flex;
+        gap: 0.6rem;
         justify-content: flex-end;
       }
 
@@ -1063,7 +1114,7 @@
         margin-bottom: 0;
       }
 
-      .guest-login-switch {
+      .admin-switch {
         position: relative;
         display: inline-flex;
         align-items: center;
@@ -1073,7 +1124,7 @@
         user-select: none;
       }
 
-      .guest-login-switch input {
+      .admin-switch input {
         position: absolute;
         width: 1px;
         height: 1px;
@@ -1083,7 +1134,7 @@
         pointer-events: none;
       }
 
-      .guest-login-switch__track {
+      .admin-switch__track {
         position: relative;
         width: 2.8rem;
         height: 1.5rem;
@@ -1094,7 +1145,7 @@
         transition: border-color 0.15s ease, background 0.15s ease;
       }
 
-      .guest-login-switch__track::after {
+      .admin-switch__track::after {
         content: '';
         position: absolute;
         top: 0.17rem;
@@ -1107,40 +1158,40 @@
         transition: transform 0.15s ease, background 0.15s ease;
       }
 
-      .guest-login-switch__state {
+      .admin-switch__state {
         min-width: 1.7rem;
         color: var(--muted);
         font-size: 0.8rem;
         font-weight: 700;
       }
 
-      .guest-login-switch__state::before {
+      .admin-switch__state::before {
         content: 'Off';
       }
 
-      .guest-login-switch input:checked + .guest-login-switch__track {
+      .admin-switch input:checked + .admin-switch__track {
         border-color: rgba(59, 130, 246, 0.75);
         background: rgba(37, 99, 235, 0.75);
       }
 
-      .guest-login-switch input:checked + .guest-login-switch__track::after {
+      .admin-switch input:checked + .admin-switch__track::after {
         background: #fff;
         transform: translateX(1.3rem);
       }
 
-      .guest-login-switch input:checked ~ .guest-login-switch__state {
+      .admin-switch input:checked ~ .admin-switch__state {
         color: var(--text);
       }
 
-      .guest-login-switch input:checked ~ .guest-login-switch__state::before {
+      .admin-switch input:checked ~ .admin-switch__state::before {
         content: 'On';
       }
 
-      .guest-login-switch input:focus-visible + .guest-login-switch__track {
+      .admin-switch input:focus-visible + .admin-switch__track {
         box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
       }
 
-      .guest-login-switch:has(input:disabled) {
+      .admin-switch:has(input:disabled) {
         cursor: wait;
         opacity: 0.6;
       }
@@ -1196,6 +1247,16 @@
         }
 
         .config-layout > .config-panel:nth-of-type(6) {
+          grid-column: 2;
+          grid-row: 4;
+        }
+
+        .config-layout > .default-client-settings-panel {
+          grid-column: 1 / -1;
+          grid-row: auto;
+        }
+
+        #container-restart-panel.is-hidden ~ .config-backup-panel {
           grid-column: 2;
           grid-row: 4;
         }
@@ -1348,6 +1409,86 @@
         display: block;
         width: min(100%, 560px);
         height: auto;
+      }
+
+      .admin-action-dialog {
+        position: fixed;
+        inset: 0;
+        z-index: 1100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: rgba(11, 17, 32, 0.82);
+        backdrop-filter: blur(6px);
+      }
+
+      .admin-action-dialog__panel {
+        width: min(92vw, 460px);
+        display: grid;
+        gap: 1rem;
+        padding: 1.25rem;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 16px;
+        background: rgba(19, 26, 42, 0.99);
+        box-shadow: 0 28px 64px rgba(0, 0, 0, 0.45);
+      }
+
+      .admin-action-dialog__title,
+      .admin-action-dialog__message {
+        margin: 0;
+      }
+
+      .admin-action-dialog__title {
+        font-size: 1.15rem;
+      }
+
+      .admin-action-dialog__message {
+        color: var(--muted);
+        white-space: pre-line;
+      }
+
+      .admin-action-dialog__field {
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .admin-action-dialog__field input {
+        width: 100%;
+      }
+
+      .admin-action-dialog__field .password-input-wrap:not(.has-password-toggle) input {
+        padding-right: 0.75rem;
+      }
+
+      .admin-action-dialog__error {
+        min-height: 1.25rem;
+        color: var(--danger);
+        font-size: 0.88rem;
+      }
+
+      .admin-action-dialog__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.65rem;
+      }
+
+      .admin-action-dialog__cancel {
+        background: rgba(148, 163, 184, 0.14);
+        color: var(--text);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+      }
+
+      .admin-action-dialog__confirm.danger {
+        background: #b91c1c;
+      }
+
+      .admin-action-dialog__confirm.danger:hover {
+        background: #991b1b;
+      }
+
+      body.admin-dialog-open {
+        overflow: hidden;
       }
 
       .config-transfer-grid {
@@ -2473,6 +2614,15 @@
           grid-template-columns: 1fr;
         }
 
+        .default-client-settings-selects,
+        .default-client-settings-toggles {
+          grid-template-columns: 1fr;
+        }
+
+        .default-client-settings-actions {
+          justify-content: stretch;
+        }
+
         #media-network-form {
           grid-template-columns: 1fr;
         }
@@ -3241,11 +3391,11 @@
                 </div>
 
                 <form id="guest-login-form" class="guest-login-form" autocomplete="off">
-                  <label class="guest-login-switch" for="guest-login-enabled">
+                  <label class="admin-switch" for="guest-login-enabled">
                     <span class="visually-hidden">Allow passwordless Guest login</span>
                     <input type="checkbox" id="guest-login-enabled" role="switch" />
-                    <span class="guest-login-switch__track" aria-hidden="true"></span>
-                    <span class="guest-login-switch__state" aria-hidden="true"></span>
+                    <span class="admin-switch__track" aria-hidden="true"></span>
+                    <span class="admin-switch__state" aria-hidden="true"></span>
                   </label>
                 </form>
               </div>
@@ -3289,6 +3439,7 @@
                   </button>
                 </div>
                 <div class="api-key-actions">
+                  <button type="button" id="api-key-regenerate-btn" class="warning">Regenerate</button>
                   <button type="button" id="api-key-copy-btn">Copy API key</button>
                 </div>
               </div>
@@ -3303,7 +3454,87 @@
               <button type="button" id="container-restart-btn" class="warning">Restart server</button>
             </section>
 
-            <section class="config-panel" aria-labelledby="config-backup-heading">
+            <section class="config-panel default-client-settings-panel" aria-labelledby="config-default-client-heading">
+              <h3 id="config-default-client-heading">Default client settings</h3>
+
+              <div class="setting-meta">
+                <div>These values apply when a client has no personal setting saved yet; existing and future personal client choices continue to take precedence.</div>
+              </div>
+
+              <form id="default-client-settings-form" class="default-client-settings-form" autocomplete="off">
+                <div class="default-client-settings-selects">
+                  <div class="default-client-setting-field">
+                    <label for="default-client-audio-profile">Audio profile</label>
+                    <select id="default-client-audio-profile">
+                      <option value="ultra-low">Ultra low (5 ms frame)</option>
+                      <option value="low">Low (10 ms frame)</option>
+                      <option value="standard">Standard (20 ms frame)</option>
+                    </select>
+                  </div>
+                  <div class="default-client-setting-field">
+                    <label for="default-client-dim-amount">Dim amount</label>
+                    <select id="default-client-dim-amount">
+                      <option value="-6">-6 dB</option>
+                      <option value="-12">-12 dB</option>
+                      <option value="-14">-14 dB</option>
+                      <option value="-18">-18 dB</option>
+                      <option value="-24">-24 dB</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="default-client-settings-toggles">
+                  <label class="default-client-setting-toggle">
+                    <span>Dim feeds while speaking</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-dim-self" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                      <span class="admin-switch__state" aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  <label class="default-client-setting-toggle">
+                    <span>Dim when addressed</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-dim-incoming" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                      <span class="admin-switch__state" aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  <label class="default-client-setting-toggle">
+                    <span>Audio auto processing</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-audio-processing" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                      <span class="admin-switch__state" aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  <label class="default-client-setting-toggle">
+                    <span>Left-hand mode</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-left-hand" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                      <span class="admin-switch__state" aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  <label
+                    class="default-client-setting-toggle"
+                    title="Keep locked targets active while temporarily talking to or locking additional targets."
+                  >
+                    <span>Lock multiple targets</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-lock-multiple" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                      <span class="admin-switch__state" aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  <div class="default-client-settings-actions">
+                    <button type="submit">Save</button>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <section class="config-panel config-backup-panel" aria-labelledby="config-backup-heading">
               <h3 id="config-backup-heading">Backup and restore</h3>
 
               <div class="setting-meta">
@@ -3348,6 +3579,31 @@
           </button>
         </div>
       </div>
+    </div>
+
+    <div id="admin-action-dialog" class="admin-action-dialog is-hidden" role="dialog" aria-modal="true" aria-labelledby="admin-action-dialog-title" aria-describedby="admin-action-dialog-message">
+      <form id="admin-action-dialog-form" class="admin-action-dialog__panel" autocomplete="off">
+        <h2 id="admin-action-dialog-title" class="admin-action-dialog__title">Confirm action</h2>
+        <p id="admin-action-dialog-message" class="admin-action-dialog__message"></p>
+        <label id="admin-action-dialog-field" class="admin-action-dialog__field is-hidden" for="admin-action-dialog-input">
+          <span id="admin-action-dialog-label">Value</span>
+          <div class="password-input-wrap">
+            <input id="admin-action-dialog-input" type="text" />
+            <button type="button" id="admin-action-dialog-password-toggle" class="password-toggle is-hidden" data-password-toggle="admin-action-dialog-input" aria-label="Show password" aria-controls="admin-action-dialog-input" aria-pressed="false" title="Show password">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.75 12S6.1 5.75 12 5.75 21.25 12 21.25 12 17.9 18.25 12 18.25 2.75 12 2.75 12Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M12 15.25A3.25 3.25 0 1 0 12 8.75 3.25 3.25 0 0 0 12 15.25Z" stroke="currentColor" stroke-width="1.8"/>
+                <path class="password-toggle__slash" d="M4.75 4.75L19.25 19.25" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </button>
+          </div>
+        </label>
+        <div id="admin-action-dialog-error" class="admin-action-dialog__error is-hidden" aria-live="polite"></div>
+        <div class="admin-action-dialog__actions">
+          <button type="button" id="admin-action-dialog-cancel" class="admin-action-dialog__cancel">Cancel</button>
+          <button type="submit" id="admin-action-dialog-confirm" class="admin-action-dialog__confirm">Confirm</button>
+        </div>
+      </form>
     </div>
 
     <script src="admin.js"></script>
