@@ -220,14 +220,22 @@ async function main() {
   const staleRuntimeDir = path.join(dataDir, "runtime");
   const staleWorkerName = process.platform === "win32" ? "mediasoup-worker.exe" : "mediasoup-worker";
   const staleWorkerPath = path.join(staleRuntimeDir, staleWorkerName);
+  const staleSqliteBindingPath = path.join(staleRuntimeDir, "better_sqlite3.node");
   await mkdir(staleRuntimeDir, { recursive: true });
   await writeFile(staleWorkerPath, "outdated mediasoup worker used to verify runtime upgrades\n");
+  await writeFile(staleSqliteBindingPath, "outdated Node 18 better-sqlite3 binding\n");
   if (process.platform !== "win32") {
     await chmod(staleWorkerPath, 0o755);
   }
   const launchedExecutable = mode === "server"
     ? await stageServerRuntime(executable, tempRoot)
     : executable;
+  if (mode === "server") {
+    await writeFile(
+      path.join(path.dirname(launchedExecutable), "better_sqlite3.node"),
+      "outdated Node 18 binding left beside the upgraded server executable\n"
+    );
+  }
 
   if (mode === "server" && expectedVersion) {
     verifyPackagedServerVersion(launchedExecutable, expectedVersion);

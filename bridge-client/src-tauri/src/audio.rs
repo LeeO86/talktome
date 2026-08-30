@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, SampleRate, SupportedBufferSize, SupportedStreamConfigRange};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -61,12 +61,64 @@ pub struct AudioDeviceSnapshotEntry {
 
 const DEVICE_DETAILS_TIMEOUT: Duration = Duration::from_secs(2);
 const SYSTEM_DIRECTION_TIMEOUT: Duration = Duration::from_secs(4);
+const PROBE_RETRY_COOLDOWN: Duration = Duration::from_secs(30);
 
 // Native driver calls cannot be cancelled safely. A timed-out worker is left
-// detached, and these sets prevent another worker from entering the same bad
-// driver path during the current process lifetime.
-static TIMED_OUT_DEVICE_PROBES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-static TIMED_OUT_DIRECTIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+// detached, so retries are delayed. The quarantine uses stable endpoint IDs and
+// is cleared when the lightweight snapshot observes a topology change.
+static TIMED_OUT_DEVICE_PROBES: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+static TIMED_OUT_DIRECTIONS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+static LAST_SYSTEM_DEVICE_SNAPSHOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn is_probe_quarantined(quarantine: &Mutex<HashMap<String, Instant>>, key: &str) -> bool {
+    let Ok(mut entries) = quarantine.lock() else {
+        return false;
+    };
+    let Some(timed_out_at) = entries.get(key).copied() else {
+        return false;
+    };
+    if timed_out_at.elapsed() < PROBE_RETRY_COOLDOWN {
+        return true;
+    }
+    entries.remove(key);
+    false
+}
+
+fn quarantine_probe(quarantine: &Mutex<HashMap<String, Instant>>, key: String) {
+    if let Ok(mut entries) = quarantine.lock() {
+        entries.insert(key, Instant::now());
+    }
+}
+
+fn clear_probe_quarantines() {
+    if let Some(quarantine) = TIMED_OUT_DEVICE_PROBES.get() {
+        if let Ok(mut entries) = quarantine.lock() {
+            entries.clear();
+        }
+    }
+    if let Some(quarantine) = TIMED_OUT_DIRECTIONS.get() {
+        if let Ok(mut entries) = quarantine.lock() {
+            entries.clear();
+        }
+    }
+}
+
+fn update_system_device_snapshot(devices: &[AudioDeviceSnapshotEntry]) {
+    let mut identities = devices
+        .iter()
+        .map(|device| format!("{}:{}", device.direction, device.id))
+        .collect::<Vec<_>>();
+    identities.sort();
+    let signature = identities.join("\n");
+    let snapshots = LAST_SYSTEM_DEVICE_SNAPSHOT.get_or_init(|| Mutex::new(None));
+    let Ok(mut previous) = snapshots.lock() else {
+        return;
+    };
+    if previous.as_ref() != Some(&signature) {
+        clear_probe_quarantines();
+        *previous = Some(signature);
+    }
+}
 
 pub fn list_audio_devices() -> Result<AudioInventory, String> {
     let host = cpal::default_host();
@@ -98,11 +150,8 @@ struct SystemDirectionProbe {
 
 fn spawn_system_direction_probe(host_name: String, direction: &'static str) -> SystemDirectionProbe {
     let probe_key = format!("{host_name}:{direction}");
-    let timed_out = TIMED_OUT_DIRECTIONS.get_or_init(|| Mutex::new(HashSet::new()));
-    if timed_out
-        .lock()
-        .is_ok_and(|directions| directions.contains(&probe_key))
-    {
+    let timed_out = TIMED_OUT_DIRECTIONS.get_or_init(|| Mutex::new(HashMap::new()));
+    if is_probe_quarantined(timed_out, &probe_key) {
         return SystemDirectionProbe {
             direction,
             probe_key,
@@ -162,7 +211,7 @@ fn collect_system_direction_probe(
     devices: &mut Vec<AudioDeviceInfo>,
     warnings: &mut Vec<String>,
 ) {
-    let timed_out = TIMED_OUT_DIRECTIONS.get_or_init(|| Mutex::new(HashSet::new()));
+    let timed_out = TIMED_OUT_DIRECTIONS.get_or_init(|| Mutex::new(HashMap::new()));
     let Some(receiver) = probe.receiver else {
         warnings.push(format!(
             "Skipped all system audio {}s: device enumeration stopped responding earlier.",
@@ -177,9 +226,7 @@ fn collect_system_direction_probe(
             warnings.append(&mut skipped);
         }
         Err(error) => {
-            if let Ok(mut directions) = timed_out.lock() {
-                directions.insert(probe.probe_key);
-            }
+            quarantine_probe(timed_out, probe.probe_key);
             let reason = match error {
                 mpsc::RecvTimeoutError::Timeout => format!(
                     "device enumeration did not respond within {} seconds",
@@ -203,16 +250,13 @@ fn describe_devices_with_timeout(
     devices: impl Iterator<Item = (usize, Device)>,
     default_name: Option<&str>,
 ) -> (Vec<AudioDeviceInfo>, Vec<String>) {
-    let timed_out = TIMED_OUT_DEVICE_PROBES.get_or_init(|| Mutex::new(HashSet::new()));
+    let timed_out = TIMED_OUT_DEVICE_PROBES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut pending = Vec::new();
     let mut warnings = Vec::new();
 
     for (index, device) in devices {
-        let probe_key = format!("{host_name}:{direction}:{index}");
-        if timed_out
-            .lock()
-            .is_ok_and(|probes| probes.contains(&probe_key))
-        {
+        let probe_key = device_probe_key(host_name, direction, index, &device);
+        if is_probe_quarantined(timed_out, &probe_key) {
             warnings.push(format!(
                 "Skipped {direction} audio device #{index}: its driver stopped responding earlier."
             ));
@@ -246,18 +290,14 @@ fn describe_devices_with_timeout(
                 "Skipped {direction} audio device #{index}: {error}"
             )),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Ok(mut probes) = timed_out.lock() {
-                    probes.insert(probe_key);
-                }
+                quarantine_probe(timed_out, probe_key);
                 warnings.push(format!(
                     "Skipped {direction} audio device #{index}: its driver did not respond within {} seconds.",
                     DEVICE_DETAILS_TIMEOUT.as_secs()
                 ));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if let Ok(mut probes) = timed_out.lock() {
-                    probes.insert(probe_key);
-                }
+                quarantine_probe(timed_out, probe_key);
                 warnings.push(format!(
                     "Skipped {direction} audio device #{index}: its driver probe stopped unexpectedly."
                 ));
@@ -308,6 +348,8 @@ pub fn list_audio_device_snapshot() -> Result<AudioDeviceSnapshot, String> {
         }
         Err(err) => eprintln!("failed to enumerate output devices: {err}"),
     }
+
+    update_system_device_snapshot(&devices);
 
     devices.extend(network_audio::audio_device_snapshot(Duration::from_millis(
         100,
@@ -419,6 +461,13 @@ fn device_id_for(host_name: &str, direction: &str, index: usize, device: &Device
         .unwrap_or_else(|_| {
             stable_enough_device_id(host_name, direction, index, &device.to_string())
         })
+}
+
+fn device_probe_key(host_name: &str, direction: &str, index: usize, device: &Device) -> String {
+    device
+        .id()
+        .map(|native_id| format!("{host_name}:{direction}:{native_id:?}"))
+        .unwrap_or_else(|_| format!("{host_name}:{direction}:fallback-index:{index}"))
 }
 
 fn supported_configs_for(

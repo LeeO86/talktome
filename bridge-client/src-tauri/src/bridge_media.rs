@@ -16,7 +16,8 @@ use std::os::windows::process::CommandExt;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{
-    SampleFormat, SampleRate, Stream, StreamConfig, SupportedStreamConfigRange, SAMPLE_RATE_48K,
+    ErrorKind, SampleFormat, SampleRate, Stream, StreamConfig, SupportedStreamConfigRange,
+    SAMPLE_RATE_48K,
 };
 use serde::{Deserialize, Serialize};
 
@@ -222,6 +223,7 @@ pub struct BridgeMediaInputStats {
     pub stream_id: String,
     pub rms_db: f32,
     pub captured_frames: u64,
+    pub xrun_count: u64,
     pub dropped_chunks: u64,
     pub dropped_frames: u64,
     pub ffmpeg_warning_count: u64,
@@ -281,6 +283,7 @@ struct BridgeInputRuntime {
     last_error: Arc<Mutex<Option<String>>>,
     level_milli_db: Arc<AtomicI32>,
     captured_frames: Arc<AtomicU64>,
+    xrun_count: Arc<AtomicU64>,
     dropped_chunks: Arc<AtomicU64>,
     dropped_frames: Arc<AtomicU64>,
     ffmpeg_warning_count: Arc<AtomicU64>,
@@ -591,6 +594,8 @@ impl BridgeInputRuntime {
         let callback_level = Arc::clone(&level_milli_db);
         let captured_frames = Arc::new(AtomicU64::new(0));
         let callback_captured_frames = Arc::clone(&captured_frames);
+        let xrun_count = Arc::new(AtomicU64::new(0));
+        let callback_xrun_count = Arc::clone(&xrun_count);
         let dropped_chunks = Arc::new(AtomicU64::new(0));
         let callback_dropped_chunks = Arc::clone(&dropped_chunks);
         let dropped_frames = Arc::new(AtomicU64::new(0));
@@ -659,7 +664,14 @@ impl BridgeInputRuntime {
                         },
                         move |err| {
                             let message = format!("bridge input stream error: {err}");
-                            eprintln!("{message}");
+                            if is_recoverable_stream_error(err.kind()) {
+                                if matches!(err.kind(), ErrorKind::Xrun) {
+                                    callback_xrun_count.fetch_add(1, Ordering::Relaxed);
+                                }
+                                eprintln!("[bridge-media][input][recoverable] {message}");
+                                return;
+                            }
+                            eprintln!("[bridge-media][input][fatal] {message}");
                             if let Ok(mut last_error) = stream_error.lock() {
                                 *last_error = Some(message);
                             }
@@ -747,6 +759,7 @@ impl BridgeInputRuntime {
             last_error,
             level_milli_db,
             captured_frames,
+            xrun_count,
             dropped_chunks,
             dropped_frames,
             ffmpeg_warning_count,
@@ -860,7 +873,11 @@ impl BridgeOutputMixerRuntime {
                     },
                     move |err| {
                         let message = format!("bridge output stream error: {err}");
-                        eprintln!("{message}");
+                        if is_recoverable_stream_error(err.kind()) {
+                            eprintln!("[bridge-media][output][recoverable] {message}");
+                            return;
+                        }
+                        eprintln!("[bridge-media][output][fatal] {message}");
                         if let Ok(mut last_error) = stream_error.lock() {
                             *last_error = Some(message);
                         }
@@ -1014,6 +1031,11 @@ impl BridgeOutputRuntime {
                 "32",
                 "-f",
                 "sdp",
+                // FFmpeg's SDP demuxer otherwise stops after ten seconds
+                // without RTP. Talk producers stay alive between PTT uses,
+                // so the bridge decoder must remain ready across idle gaps.
+                "-listen_timeout",
+                "-1",
                 "-i",
                 "pipe:0",
                 "-ac",
@@ -1234,6 +1256,13 @@ fn validate_stream_id(stream_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn is_recoverable_stream_error(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::Xrun | ErrorKind::RealtimeDenied | ErrorKind::DeviceChanged
+    )
+}
+
 fn validate_assignment(assignment: &BridgeChannelAssignment, label: &str) -> Result<(), String> {
     if assignment.device_id.trim().is_empty() {
         return Err(format!("{label} device is required"));
@@ -1287,6 +1316,7 @@ fn status_from(state: &BridgeMediaState) -> BridgeMediaStatus {
             stream_id: stream_id.clone(),
             rms_db: runtime.level_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
             captured_frames: runtime.captured_frames.load(Ordering::Relaxed),
+            xrun_count: runtime.xrun_count.load(Ordering::Relaxed),
             dropped_chunks: runtime.dropped_chunks.load(Ordering::Relaxed),
             dropped_frames: runtime.dropped_frames.load(Ordering::Relaxed),
             ffmpeg_warning_count: runtime.ffmpeg_warning_count.load(Ordering::Relaxed),
@@ -1345,6 +1375,15 @@ fn read_last_error(last_error: &Arc<Mutex<Option<String>>>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_non_fatal_stream_notifications_are_recoverable() {
+        assert!(is_recoverable_stream_error(ErrorKind::Xrun));
+        assert!(is_recoverable_stream_error(ErrorKind::RealtimeDenied));
+        assert!(is_recoverable_stream_error(ErrorKind::DeviceChanged));
+        assert!(!is_recoverable_stream_error(ErrorKind::StreamInvalidated));
+        assert!(!is_recoverable_stream_error(ErrorKind::DeviceNotAvailable));
+    }
 
     #[test]
     fn builds_minimal_rtcp_receiver_report() {
