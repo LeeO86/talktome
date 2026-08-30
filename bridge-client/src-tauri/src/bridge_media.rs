@@ -1031,6 +1031,11 @@ impl BridgeOutputRuntime {
                 "32",
                 "-f",
                 "sdp",
+                // FFmpeg's SDP demuxer otherwise stops after ten seconds
+                // without RTP. Talk producers stay alive between PTT uses,
+                // so the bridge decoder must remain ready across idle gaps.
+                "-listen_timeout",
+                "-1",
                 "-i",
                 "pipe:0",
                 "-ac",
