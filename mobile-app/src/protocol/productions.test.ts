@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_PRODUCTION, productionChoices, resolveProduction, visibleProductionName } from './productions';
 
 describe('productionChoices', () => {
-  it('always offers Default first, then server productions', () => {
+  it('offers a synthetic Default first when the server does not announce one', () => {
     expect(
       productionChoices([
         { id: 2, name: 'Test-von-Adi' },
@@ -13,6 +13,18 @@ describe('productionChoices', () => {
       DEFAULT_PRODUCTION,
       { id: 2, name: 'Test-von-Adi' },
       { id: 1, name: 'Studio' },
+    ]);
+  });
+
+  it('does not double Default when the server announces one', () => {
+    expect(
+      productionChoices([
+        { id: 1, name: 'Default' },
+        { id: 2, name: 'Studio' },
+      ]),
+    ).toEqual([
+      { id: 1, name: 'Default' },
+      { id: 2, name: 'Studio' },
     ]);
   });
 });

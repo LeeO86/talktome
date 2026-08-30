@@ -13,7 +13,10 @@ export type ProductionChoice = {
 export const DEFAULT_PRODUCTION: ProductionChoice = { id: null, name: 'Default' };
 
 export function productionChoices(productions: Production[]): ProductionChoice[] {
-  return [DEFAULT_PRODUCTION, ...productions];
+  // Newer servers announce Default as a real production; only synthesize it
+  // for older servers so the picker never shows two Default entries.
+  const serverHasDefault = productions.some((item) => item.name.trim().toLowerCase() === 'default');
+  return serverHasDefault ? [...productions] : [DEFAULT_PRODUCTION, ...productions];
 }
 
 export function resolveProduction(

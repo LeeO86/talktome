@@ -94,7 +94,9 @@ private struct HoldTalkRow: View {
     .padding(.vertical, 8)
     .listRowBackground(rowBackground)
     .contentShape(Rectangle())
-    .onLongPressGesture(minimumDuration: 0.01, maximumDistance: 72, pressing: { pressing in
+    // maximumDistance .infinity keeps the press alive while the finger drifts;
+    // talk only stops when the finger lifts.
+    .onLongPressGesture(minimumDuration: 0.01, maximumDistance: .infinity, pressing: { pressing in
       if pressing {
         remote.beginTalk(target)
       } else {
