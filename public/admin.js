@@ -1622,9 +1622,14 @@ function startStatusStream() {
       renderAdminStatus(snapshot);
       const refreshUsers = Boolean(refresh.users || reason === 'bridge-endpoint-updated');
       const refreshFeeds = Boolean(refresh.feeds || reason === 'bridge-feed-endpoint-updated');
-      if (refreshUsers || refreshFeeds) {
-        refreshAdminLists({ users: refreshUsers, feeds: refreshFeeds }).catch((error) => {
-          console.error('Failed to refresh bridge endpoint config:', error);
+      const refreshConferences = Boolean(refresh.conferences);
+      if (refreshUsers || refreshConferences || refreshFeeds) {
+        refreshAdminLists({
+          users: refreshUsers,
+          conferences: refreshConferences,
+          feeds: refreshFeeds,
+        }).catch((error) => {
+          console.error('Failed to refresh admin data after a server update:', error);
         });
       }
       stopServerHealthProbe();

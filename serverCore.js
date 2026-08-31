@@ -888,6 +888,12 @@ function scheduleAdminStatusBroadcast(reason = "status-changed") {
     pendingAdminStatusRefresh.users = true;
   } else if (reason === "bridge-feed-endpoint-updated") {
     pendingAdminStatusRefresh.feeds = true;
+  } else if (
+    reason === "conference-membership-added"
+    || reason === "conference-membership-removed"
+  ) {
+    pendingAdminStatusRefresh.users = true;
+    pendingAdminStatusRefresh.conferences = true;
   }
   if (adminStatusBroadcastTimer !== null) return;
   adminStatusBroadcastTimer = setTimeout(() => {
