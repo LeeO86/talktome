@@ -2607,7 +2607,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
         </div>
       `
       : '';
-    const targetControls = isSuperadmin
+    const targetControls = isSuperadmin || multipleProductionsEnabled
       ? ''
       : `
         <div class="nested-block">
@@ -2615,6 +2615,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
           <div class="inline-controls">
             <select id="add-target-type-${user.id}">
               <option value="user">User</option>
+              <option value="conference">Conference</option>
               <option value="feed">Feed</option>
             </select>
             <select id="add-target-id-${user.id}"></select>
@@ -2656,8 +2657,9 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
   }
 
   const targetLoads = await Promise.allSettled(visibleUsers.map(async (user) => {
-    if (user.is_superadmin) {
+    if (user.is_superadmin || multipleProductionsEnabled) {
       cacheUserTargetAssignments(user.id, []);
+      updateBridgeTriggerTargetOptions(user.id, []);
       return;
     }
     await loadUserTargets(user.id, users, conferences, feeds);
@@ -3127,6 +3129,8 @@ async function loadUserTargets(userId, allUsers, allConfs, allFeeds = []) {
     return acc;
   }, {});
   const ul = document.getElementById(`user-targets-${userId}`);
+  updateBridgeTriggerTargetOptions(userId, targets);
+  if (!ul) return;
   ul.innerHTML = targets.map(t => {
     const isConference = t.targetType === 'conference';
     return `
@@ -3135,14 +3139,11 @@ async function loadUserTargets(userId, allUsers, allConfs, allFeeds = []) {
         <span class="drag-handle" title="Drag to reorder">☰</span>
         <span class="chip-label">${escapeHtml(t.name)}</span>
         <span class="badge">${escapeHtml(t.targetType)}</span>
-        ${isConference
-          ? '<span class="badge" title="Managed by conference membership">automatic</span>'
-          : `<button type="button" class="small danger" onclick="removeTarget(${userId}, '${t.targetType}', '${t.targetId}')">Remove</button>`}
+        ${isConference ? '<span class="badge" title="Conference membership">membership</span>' : ''}
+        <button type="button" class="small danger" onclick="removeTarget(${userId}, '${t.targetType}', '${t.targetId}')">Remove</button>
       </li>
     `;
   }).join('');
-  updateBridgeTriggerTargetOptions(userId, targets);
-
   initTargetOrdering(userId, ul);
 
   const selType = document.getElementById(`add-target-type-${userId}`);
@@ -3159,6 +3160,11 @@ async function loadUserTargets(userId, allUsers, allConfs, allFeeds = []) {
     if (type === 'user') {
       const used = usedByType.user || new Set();
       options = selectableUsers
+        .filter(item => !used.has(String(item.id)))
+        .map(item => `<option value="${item.id}">${escapeHtml(item.name)}</option>`);
+    } else if (type === 'conference') {
+      const used = usedByType.conference || new Set();
+      options = allConfs
         .filter(item => !used.has(String(item.id)))
         .map(item => `<option value="${item.id}">${escapeHtml(item.name)}</option>`);
     } else if (type === 'feed') {
@@ -3262,6 +3268,10 @@ window.addTarget = async function(userId) {
     if (!res.ok) {
       showMessage('❌ Failed to add target', 'error', 'user');
     } else {
+      setCachedTargetAssignment(userId, type, id, true);
+      if (type === 'conference') {
+        scheduleConferenceMembershipEditorRefresh(id, userId);
+      }
       // Refresh only that user’s target list
       const users = await fetchJSON('/users');
       const confs = await fetchJSON('/conferences');
@@ -3292,6 +3302,10 @@ window.removeTarget = async function(userId, type, tid) {
     if (!res.ok) {
       showMessage('❌ Failed to remove target', 'error', 'user');
     } else {
+      setCachedTargetAssignment(userId, type, tid, false);
+      if (type === 'conference') {
+        scheduleConferenceMembershipEditorRefresh(tid, userId);
+      }
       const users = await fetchJSON('/users');
       const confs = await fetchJSON('/conferences');
       const feeds = await fetchJSON('/feeds');
@@ -3542,6 +3556,7 @@ window.unassignUser = async function (userId, confId) {
     });
     if (res.ok) {
       showMessage('✅ User removed from conference', 'success', 'user');
+      scheduleUserTargetEditorRefresh(userId);
       const [users, confs] = await Promise.all([
         fetchJSON('/users'),
         fetchJSON('/conferences'),
@@ -4259,6 +4274,7 @@ window.assignUserToConference = async function(userId) {
     });
     if (res.ok) {
       showMessage('✅ User assigned to conference', 'success', 'user');
+      scheduleUserTargetEditorRefresh(userId);
       const [users, confs] = await Promise.all([
         fetchJSON('/users'),
         fetchJSON('/conferences'),
@@ -4296,6 +4312,7 @@ window.assignConferenceParticipant = async function(confId) {
     });
     if (res.ok) {
       showMessage('✅ User assigned to conference', 'success', 'conf');
+      scheduleUserTargetEditorRefresh(userId);
       const [users, confs] = await Promise.all([
         fetchJSON('/users'),
         fetchJSON('/conferences'),
@@ -4433,7 +4450,15 @@ multipleProductionsInput?.addEventListener('change', async () => {
       body: JSON.stringify({ enabled }),
     });
     await loadProductions({ selectId: selectedProductionId });
-    await renderConferenceList(currentAdminCatalog.conferences, currentAdminCatalog.users);
+    await Promise.all([
+      renderUserList(
+        currentAdminCatalog.users,
+        currentAdminCatalog.conferences,
+        currentAdminCatalog.feeds,
+        currentBridgeRegistry
+      ),
+      renderConferenceList(currentAdminCatalog.conferences, currentAdminCatalog.users),
+    ]);
     showMessage(`Multiple Productions ${enabled ? 'enabled' : 'disabled'}.`, 'success', 'matrix');
   } catch (error) {
     multipleProductionsInput.checked = !enabled;

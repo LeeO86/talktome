@@ -4514,38 +4514,17 @@ app.post('/conferences/:conferenceId/users/:userId', requireAdmin, (req, res) =>
 app.post('/users/:id/targets', requireAdmin, (req, res) => {
   const { targetType, targetId } = req.body;
   try {
-    if (targetType === 'user') {
-      const numericTargetId = Number(targetId);
-      if (!Number.isFinite(numericTargetId)) {
-        return res.status(400).json({ error: 'Invalid target user id' });
-      }
-      const targetUser = getUserById(numericTargetId);
-      if (!targetUser) {
-        return res.status(404).json({ error: 'Target user not found' });
-      }
-      if (targetUser.is_superadmin) {
-        return res.status(400).json({ error: 'Superadmin users cannot be targets' });
-      }
-      if (targetUser.is_guest_profile) {
-        return res.status(400).json({ error: 'Guest profile cannot be a direct target' });
-      }
-      addUserTargetToUser(req.params.id, targetId);
-    } else if (targetType === 'conference') {
-      addUserTargetToConference(req.params.id, targetId);
-    } else if (targetType === 'feed') {
-      addUserTargetToFeed(req.params.id, targetId);
-    } else {
-      return res.status(400).json({ error: 'Unsupported target type' });
-    }
+    const productionId = getSingleProductionMembershipScope();
+    addProductionTarget(productionId, req.params.id, targetType, targetId);
     notifyTargetChange(req.params.id);
+    if (targetType === 'conference') {
+      notifyConferenceMembersChanged(targetId, req.params.id);
+      broadcastRuntimeUserStates("conference-membership-added");
+    }
     res.sendStatus(204);
   } catch (err) {
     console.error('Error in add-target:', err);
-    const lower = String(err?.message || '').toLowerCase();
-    if (lower.includes('superadmin users cannot be targets') || lower.includes('target user not found') || lower.includes('guest profile cannot be a direct target')) {
-      return res.status(400).json({ error: err.message });
-    }
-    res.status(500).json({ error: err.message });
+    res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to add target' });
   }
 });
 
@@ -4570,12 +4549,13 @@ app.put('/users/:id/targets/order', requireAdmin, (req, res) => {
   }
 
   try {
-    updateUserTargetOrder(req.params.id, normalized);
+    const productionId = getSingleProductionMembershipScope();
+    updateProductionTargetOrder(productionId, req.params.id, normalized);
     notifyTargetChange(req.params.id);
     res.sendStatus(204);
   } catch (err) {
     console.error('Failed to update target order:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to reorder targets' });
   }
 });
 
@@ -5747,11 +5727,16 @@ app.delete("/conferences/:id", requireAdmin, (req, res) => {
 
 app.delete("/users/:id/targets/:type/:tid", requireAdmin, (req, res) => {
   try {
-    removeUserTarget(req.params.id, req.params.type, req.params.tid);
+    const productionId = getSingleProductionMembershipScope();
+    removeProductionTarget(productionId, req.params.id, req.params.type, req.params.tid);
     notifyTargetChange(req.params.id);
+    if (req.params.type === 'conference') {
+      notifyConferenceMembersChanged(req.params.tid, req.params.id);
+      broadcastRuntimeUserStates("conference-membership-removed");
+    }
     res.sendStatus(204);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to remove target' });
   }
 });
 
