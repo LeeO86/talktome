@@ -780,6 +780,21 @@ function renderBridgeInstanceOptions(selectedBridgeId) {
   return options.join('');
 }
 
+function renderBridgeProductionOptions(productions = [], selectedProductionId = null) {
+  const selected = String(selectedProductionId || '');
+  const options = ['<option value="">Select production</option>'];
+  const knownSelected = productions.some((production) => String(production.id) === selected);
+  if (selected && !knownSelected) {
+    options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (saved, unavailable)</option>`);
+  }
+  productions.forEach((production) => {
+    const value = String(production.id);
+    const selectedAttr = value === selected ? ' selected' : '';
+    options.push(`<option value="${escapeHtml(value)}"${selectedAttr}>${escapeHtml(production.name || value)}</option>`);
+  });
+  return options.join('');
+}
+
 function setBridgeSelectOptions(select, options, selectedValue, fallbackLabel) {
   select.innerHTML = '';
   const emptyOption = document.createElement('option');
@@ -882,14 +897,17 @@ function syncBridgeEndpointFormsWithRegistry() {
   });
 }
 
-function updateBridgeTriggerTargetOptions(userId, targets = []) {
+function updateBridgeTriggerTargetOptions(userId, targets = [], { includeUnavailable = true } = {}) {
   const select = document.getElementById(`bridge-trigger-target-${userId}`);
   if (!select) return;
 
   const savedValue = select.dataset.savedValue || '';
   const preferredValue = select.value || savedValue;
   const triggerTargets = targets
-    .filter((target) => target.targetType === 'user' || target.targetType === 'conference')
+    .filter((target) => (
+      target.targetType === 'user'
+      || (target.targetType === 'conference' && target.canTalk !== false)
+    ))
     .map((target) => ({
       value: `${target.targetType}:${target.targetId}`,
       label: `${target.name} (${target.targetType})`,
@@ -903,13 +921,25 @@ function updateBridgeTriggerTargetOptions(userId, targets = []) {
     select.appendChild(option);
   }
 
-  if (preferredValue && !triggerTargets.some((target) => target.value === preferredValue)) {
+  if (includeUnavailable && preferredValue && !triggerTargets.some((target) => target.value === preferredValue)) {
     const option = document.createElement('option');
     option.value = preferredValue;
     option.textContent = `${preferredValue} (saved, unavailable)`;
     select.appendChild(option);
   }
   select.value = [...select.options].some((option) => option.value === preferredValue) ? preferredValue : '';
+}
+
+async function loadBridgeTriggerTargetsForProduction(userId, { includeUnavailable = true } = {}) {
+  const productionId = document.getElementById(`bridge-production-${userId}`)?.value || '';
+  if (!productionId) {
+    updateBridgeTriggerTargetOptions(userId, [], { includeUnavailable });
+    return;
+  }
+  const targets = await fetchJSON(
+    `/users/${userId}/targets?includeMemberships=1&productionId=${encodeURIComponent(productionId)}`
+  );
+  updateBridgeTriggerTargetOptions(userId, targets, { includeUnavailable });
 }
 
 function updateBridgeRegistryFromStatus(snapshot = {}) {
@@ -929,6 +959,7 @@ function initializeBridgeEndpointForms() {
     const bridgeSelect = document.getElementById(`bridge-device-${formKey}`);
     const inputDeviceSelect = document.getElementById(`bridge-input-device-${formKey}`);
     const outputDeviceSelect = document.getElementById(`bridge-output-device-${formKey}`);
+    const productionSelect = document.getElementById(`bridge-production-${formKey}`);
     if (!bridgeSelect || bridgeSelect.dataset.bridgeReady === 'true') return;
 
     enabledToggle?.addEventListener('change', () => {
@@ -978,6 +1009,19 @@ function initializeBridgeEndpointForms() {
     });
     const triggerModeSelect = document.getElementById(`bridge-trigger-mode-${formKey}`);
     triggerModeSelect?.addEventListener('change', () => syncBridgeTriggerControls(formKey));
+    if (form.dataset.bridgeConfigUserId && productionSelect) {
+      productionSelect.addEventListener('change', () => {
+        const targetSelect = document.getElementById(`bridge-trigger-target-${formKey}`);
+        if (targetSelect) {
+          targetSelect.dataset.savedValue = '';
+          targetSelect.value = '';
+        }
+        loadBridgeTriggerTargetsForProduction(formKey, { includeUnavailable: false }).catch((error) => {
+          console.error('Failed to load bridge targets for production:', error);
+          updateBridgeTriggerTargetOptions(formKey, [], { includeUnavailable: false });
+        });
+      });
+    }
     syncBridgeTriggerControls(formKey);
     bridgeSelect.dataset.bridgeReady = 'true';
     updateBridgeEndpointDeviceOptions(formKey);
@@ -2561,11 +2605,19 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
               <span>Use this user as bridge endpoint</span>
             </label>
             <div class="bridge-config-options" id="bridge-options-${user.id}" ${isBridgeEndpoint ? '' : 'hidden'}>
-              <div class="field-group bridge-instance-field">
-                <label for="bridge-device-${user.id}">Bridge device</label>
-                <select id="bridge-device-${user.id}">
-                  ${renderBridgeInstanceOptions(user.bridge_device || '')}
-                </select>
+              <div class="bridge-scope-row">
+                <div class="field-group">
+                  <label for="bridge-device-${user.id}">Bridge device</label>
+                  <select id="bridge-device-${user.id}">
+                    ${renderBridgeInstanceOptions(user.bridge_device || '')}
+                  </select>
+                </div>
+                <div class="field-group">
+                  <label for="bridge-production-${user.id}">Production</label>
+                  <select id="bridge-production-${user.id}">
+                    ${renderBridgeProductionOptions(user.bridge_productions || [], user.bridge_production_id)}
+                  </select>
+                </div>
               </div>
               <div class="bridge-channel-row">
                 <div class="field-group">
@@ -2664,7 +2716,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
   const targetLoads = await Promise.allSettled(visibleUsers.map(async (user) => {
     if (user.is_superadmin || multipleProductionsEnabled) {
       cacheUserTargetAssignments(user.id, []);
-      updateBridgeTriggerTargetOptions(user.id, []);
+      await loadBridgeTriggerTargetsForProduction(user.id);
       return;
     }
     await loadUserTargets(user.id, users, conferences, feeds);
@@ -2716,11 +2768,19 @@ async function renderFeedList(feeds) {
               <span>Use this feed as bridge input</span>
             </label>
             <div class="bridge-config-options" id="bridge-options-${formKey}" ${isBridgeEndpoint ? '' : 'hidden'}>
-              <div class="field-group bridge-instance-field">
-                <label for="bridge-device-${formKey}">Bridge device</label>
-                <select id="bridge-device-${formKey}">
-                  ${renderBridgeInstanceOptions(feed.bridge_device || '')}
-                </select>
+              <div class="bridge-scope-row">
+                <div class="field-group">
+                  <label for="bridge-device-${formKey}">Bridge device</label>
+                  <select id="bridge-device-${formKey}">
+                    ${renderBridgeInstanceOptions(feed.bridge_device || '')}
+                  </select>
+                </div>
+                <div class="field-group">
+                  <label for="bridge-production-${formKey}">Production</label>
+                  <select id="bridge-production-${formKey}">
+                    ${renderBridgeProductionOptions(feed.bridge_productions || [], feed.bridge_production_id)}
+                  </select>
+                </div>
               </div>
               <div class="bridge-channel-row">
                 <div class="field-group">
@@ -3694,6 +3754,7 @@ window.saveBridgeEndpoint = async function(event, userId) {
     const payload = {
       enabled,
       bridgeDevice: document.getElementById(`bridge-device-${userId}`)?.value || '',
+      productionId: Number(document.getElementById(`bridge-production-${userId}`)?.value) || null,
       inputDevice: document.getElementById(`bridge-input-device-${userId}`)?.value || '',
       inputLeftChannel: inputPair.left,
       inputRightChannel: inputPair.right,
@@ -3705,6 +3766,9 @@ window.saveBridgeEndpoint = async function(event, userId) {
     if (payload.enabled) {
       if (!payload.bridgeDevice) {
         throw new Error('Bridge device is required when bridge endpoint is enabled');
+      }
+      if (!payload.productionId) {
+        throw new Error('Production is required when bridge endpoint is enabled');
       }
       validateOptionalBridgeDeviceChannel(payload.inputDevice, payload.inputLeftChannel, 'Input');
       validateOptionalBridgeDeviceChannel(payload.outputDevice, payload.outputLeftChannel, 'Output');
@@ -3745,6 +3809,7 @@ window.saveFeedBridgeEndpoint = async function(event, feedId) {
     const payload = {
       enabled: Boolean(document.getElementById(`bridge-enabled-${formKey}`)?.checked),
       bridgeDevice: document.getElementById(`bridge-device-${formKey}`)?.value || '',
+      productionId: Number(document.getElementById(`bridge-production-${formKey}`)?.value) || null,
       inputDevice: document.getElementById(`bridge-input-device-${formKey}`)?.value || '',
       inputLeftChannel: inputPair.left,
       inputRightChannel: inputPair.right,
@@ -3752,6 +3817,9 @@ window.saveFeedBridgeEndpoint = async function(event, feedId) {
     if (payload.enabled) {
       if (!payload.bridgeDevice) {
         throw new Error('Bridge device is required when bridge endpoint is enabled');
+      }
+      if (!payload.productionId) {
+        throw new Error('Production is required when bridge endpoint is enabled');
       }
       validateOptionalBridgeDeviceChannel(payload.inputDevice, payload.inputLeftChannel, 'Input');
     }

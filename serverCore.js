@@ -151,6 +151,7 @@ const {
   getProductionById,
   getPrimaryProduction,
   getProductionsForUser,
+  getProductionsForFeed,
   isUserInProduction,
   isUserProductionAdmin,
   createProduction,
@@ -1400,59 +1401,92 @@ function getBridgeRegistrySnapshot() {
 
 function buildBridgeRuntimeConfig(bridgeId) {
   const normalizedBridgeId = normalizeBridgeId(bridgeId);
-  const userPorts = getBridgeEndpointsForDevice(normalizedBridgeId).map((row) => ({
-    id: `user-${row.user_id}`,
-    kind: "user",
-    userId: Number(row.user_id),
-    feedId: null,
-    label: row.user_name || `User ${row.user_id}`,
-    enabled: true,
-    input: {
-      deviceId: row.input_device,
-      leftChannel: Number(row.input_left_channel),
-      rightChannel: Number(row.input_right_channel),
-    },
-    output: {
-      deviceId: row.output_device,
-      leftChannel: Number(row.output_left_channel),
-      rightChannel: Number(row.output_right_channel),
-    },
-    trigger: {
-      mode: row.trigger_mode === "audio-level" ? "audio-level" : "external",
-      target: row.trigger_target_type && row.trigger_target_id
-        ? {
-            type: row.trigger_target_type,
-            id: Number(row.trigger_target_id),
-          }
-        : null,
-      thresholdDb: Number.isFinite(Number(row.trigger_threshold_db))
-        ? Number(row.trigger_threshold_db)
-        : -45,
-    },
-    triggerTargets: getUserTargets(row.user_id)
-      .filter((target) => target.targetType === "user" || target.targetType === "conference")
-      .map((target) => ({
-        type: target.targetType,
-        id: Number(target.targetId),
-        name: target.name || `${target.targetType} ${target.targetId}`,
-      })),
-    updatedAt: row.updated_at || null,
-  }));
-  const feedPorts = getFeedBridgeEndpointsForDevice(normalizedBridgeId).map((row) => ({
-    id: `feed-${row.feed_id}`,
-    kind: "feed",
-    userId: null,
-    feedId: Number(row.feed_id),
-    label: row.feed_name || `Feed ${row.feed_id}`,
-    enabled: true,
-    input: {
-      deviceId: row.input_device,
-      leftChannel: Number(row.input_left_channel),
-      rightChannel: Number(row.input_right_channel),
-    },
-    output: null,
-    updatedAt: row.updated_at || null,
-  }));
+  const serializeTriggerTargets = (userId, productionId) => (
+    Number.isInteger(Number(productionId))
+      ? getProductionTargets(userId, productionId)
+        .filter((target) => (
+          target.targetType === "user"
+          || (target.targetType === "conference" && target.canTalk !== false)
+        ))
+        .map((target) => ({
+          type: target.targetType,
+          id: Number(target.targetId),
+          name: target.name || `${target.targetType} ${target.targetId}`,
+        }))
+      : []
+  );
+  const userPorts = getBridgeEndpointsForDevice(normalizedBridgeId).map((row) => {
+    const productions = getProductionsForUser(row.user_id).map((production) => ({
+      id: Number(production.id),
+      name: production.name || `Production ${production.id}`,
+      triggerTargets: serializeTriggerTargets(row.user_id, production.id),
+    }));
+    const selectedProduction = productions.find((production) => (
+      Number(production.id) === Number(row.production_id)
+    )) || productions[0] || null;
+    return {
+      id: `user-${row.user_id}`,
+      kind: "user",
+      userId: Number(row.user_id),
+      feedId: null,
+      label: row.user_name || `User ${row.user_id}`,
+      enabled: true,
+      productionId: selectedProduction?.id ?? null,
+      productionName: selectedProduction?.name ?? null,
+      productions,
+      input: {
+        deviceId: row.input_device,
+        leftChannel: Number(row.input_left_channel),
+        rightChannel: Number(row.input_right_channel),
+      },
+      output: {
+        deviceId: row.output_device,
+        leftChannel: Number(row.output_left_channel),
+        rightChannel: Number(row.output_right_channel),
+      },
+      trigger: {
+        mode: row.trigger_mode === "audio-level" ? "audio-level" : "external",
+        target: row.trigger_target_type && row.trigger_target_id
+          ? {
+              type: row.trigger_target_type,
+              id: Number(row.trigger_target_id),
+            }
+          : null,
+        thresholdDb: Number.isFinite(Number(row.trigger_threshold_db))
+          ? Number(row.trigger_threshold_db)
+          : -45,
+      },
+      triggerTargets: selectedProduction?.triggerTargets || [],
+      updatedAt: row.updated_at || null,
+    };
+  });
+  const feedPorts = getFeedBridgeEndpointsForDevice(normalizedBridgeId).map((row) => {
+    const productions = getProductionsForFeed(row.feed_id).map((production) => ({
+      id: Number(production.id),
+      name: production.name || `Production ${production.id}`,
+    }));
+    const selectedProduction = productions.find((production) => (
+      Number(production.id) === Number(row.production_id)
+    )) || productions[0] || null;
+    return {
+      id: `feed-${row.feed_id}`,
+      kind: "feed",
+      userId: null,
+      feedId: Number(row.feed_id),
+      label: row.feed_name || `Feed ${row.feed_id}`,
+      enabled: true,
+      productionId: selectedProduction?.id ?? null,
+      productionName: selectedProduction?.name ?? null,
+      productions,
+      input: {
+        deviceId: row.input_device,
+        leftChannel: Number(row.input_left_channel),
+        rightChannel: Number(row.input_right_channel),
+      },
+      output: null,
+      updatedAt: row.updated_at || null,
+    };
+  });
   const ports = [...userPorts, ...feedPorts];
   const signature = JSON.stringify(ports);
   return {
@@ -1824,6 +1858,14 @@ function isPeerMemberOfConference(peer, conferenceId) {
     .some((conference) => Number(conference?.id) === numericConferenceId);
 }
 
+function arePeersInSameActiveProduction(firstPeer, secondPeer) {
+  if (!areMultipleProductionsEnabled()) return true;
+  const firstProductionId = Number(firstPeer?.productionId);
+  const secondProductionId = Number(secondPeer?.productionId);
+  if (!Number.isFinite(firstProductionId) || !Number.isFinite(secondProductionId)) return true;
+  return firstProductionId === secondProductionId;
+}
+
 function isTalkTargetAllowedForPeer(peer, target) {
   if (!target || !isOperatorPeer(peer)) return false;
   if (target.type !== "conference") return true;
@@ -1842,9 +1884,16 @@ function resolveRecipientPeersForTarget(target, speakerSocketId) {
   if (!target) return [];
   const recipients = [];
   const seen = new Set();
+  const speakerPeer = peers.get(speakerSocketId);
 
   const addRecipient = (socketId, peer) => {
-    if (!socketId || socketId === speakerSocketId || !isOperatorPeer(peer) || seen.has(socketId)) {
+    if (
+      !socketId
+      || socketId === speakerSocketId
+      || !isOperatorPeer(peer)
+      || !arePeersInSameActiveProduction(speakerPeer, peer)
+      || seen.has(socketId)
+    ) {
       return;
     }
     seen.add(socketId);
@@ -2675,7 +2724,10 @@ let cutCameraUser = null;
 
 // === GET ===
 app.get("/users", requireAdmin, (req, res) => {
-  res.json(getAllUsers());
+  res.json(getAllUsers().map((user) => ({
+    ...user,
+    bridge_productions: getProductionsForUser(user.id).map(({ id, name }) => ({ id, name })),
+  })));
 });
 
 app.get("/conferences", requireAdmin, (req, res) => {
@@ -2683,7 +2735,10 @@ app.get("/conferences", requireAdmin, (req, res) => {
 });
 
 app.get("/feeds", requireAdmin, (req, res) => {
-  res.json(getAllFeeds());
+  res.json(getAllFeeds().map((feed) => ({
+    ...feed,
+    bridge_productions: getProductionsForFeed(feed.id).map(({ id, name }) => ({ id, name })),
+  })));
 });
 
 app.get("/users/:id/conferences", requireAdmin, (req, res) => {
@@ -4755,6 +4810,7 @@ app.put("/api/v1/bridge/:bridgeId/ports/:kind/:id", requireBridgeApiAuth, (req, 
     if (
       message.includes("channel") ||
       message.includes("required") ||
+      message.toLowerCase().includes("production") ||
       message.toLowerCase().includes("trigger") ||
       message.includes("Invalid user id") ||
       message.includes("Invalid feed id")
@@ -5576,6 +5632,7 @@ app.put('/users/:id/bridge-endpoint', requireAdmin, (req, res) => {
     if (
       message.includes('channel') ||
       message.includes('required') ||
+      message.toLowerCase().includes('production') ||
       message.includes('Invalid user id')
     ) {
       return res.status(400).json({ error: message });
@@ -5604,6 +5661,7 @@ app.put('/feeds/:id/bridge-endpoint', requireAdmin, (req, res) => {
     if (
       message.includes('channel') ||
       message.includes('required') ||
+      message.toLowerCase().includes('production') ||
       message.includes('Invalid feed id')
     ) {
       return res.status(400).json({ error: message });
@@ -6550,6 +6608,7 @@ function createBridgeControlSession({ bridgeId, userId = null, feedId = null, po
     kind: entityType,
     userId: isFeedPort ? null : Number(port.userId),
     feedId: isFeedPort ? Number(port.feedId) : null,
+    productionId: port.productionId == null ? null : Number(port.productionId),
     port,
     events: [],
     eventStreams: new Set(),
@@ -6583,7 +6642,7 @@ function createBridgeControlSession({ bridgeId, userId = null, feedId = null, po
     guestProfileUserId: null,
     name: port.label,
     kind: entityType,
-    productionId: null,
+    productionId: port.productionId == null ? null : Number(port.productionId),
     consumers: new Map(),
     producers: new Map(),
     activeTalkTargets: [],
@@ -7014,9 +7073,11 @@ function resolveProducerRecipientDeliveries({ appData, speakerSocketId }) {
 
   if (type === "feed") {
     const deliveries = [];
+    const speakerPeer = peers.get(speakerSocketId);
     for (const [sid, peer] of peers) {
       if (sid === speakerSocketId) continue;
       if (!isOperatorPeer(peer)) continue;
+      if (!arePeersInSameActiveProduction(speakerPeer, peer)) continue;
       const feedIds = new Set(getEffectiveFeedIdsForPeer(peer).map((id) => String(id)));
       if (feedIds.has(String(targetId))) {
         deliveries.push({

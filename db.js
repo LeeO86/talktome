@@ -172,6 +172,7 @@ db.exec(`
                                                           user_id              INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                                                           enabled              INTEGER NOT NULL DEFAULT 0,
                                                           bridge_device        TEXT    NOT NULL DEFAULT '',
+                                                          production_id        INTEGER REFERENCES productions(id) ON DELETE SET NULL,
                                                           input_device         TEXT    NOT NULL DEFAULT '',
                                                           input_left_channel   INTEGER,
                                                           input_right_channel  INTEGER,
@@ -189,6 +190,7 @@ db.exec(`
                                                           feed_id              INTEGER PRIMARY KEY REFERENCES feeds(id) ON DELETE CASCADE,
                                                           enabled              INTEGER NOT NULL DEFAULT 0,
                                                           bridge_device        TEXT    NOT NULL DEFAULT '',
+                                                          production_id        INTEGER REFERENCES productions(id) ON DELETE SET NULL,
                                                           input_device         TEXT    NOT NULL DEFAULT '',
                                                           input_left_channel   INTEGER,
                                                           input_right_channel  INTEGER,
@@ -410,5 +412,57 @@ ensureColumn("user_bridge_endpoints", "trigger_mode", "TEXT NOT NULL DEFAULT 'ex
 ensureColumn("user_bridge_endpoints", "trigger_target_type", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("user_bridge_endpoints", "trigger_target_id", "INTEGER");
 ensureColumn("user_bridge_endpoints", "trigger_threshold_db", "REAL NOT NULL DEFAULT -45");
+ensureColumn("user_bridge_endpoints", "production_id", "INTEGER REFERENCES productions(id) ON DELETE SET NULL");
+ensureColumn("feed_bridge_endpoints", "production_id", "INTEGER REFERENCES productions(id) ON DELETE SET NULL");
+
+db.exec(`
+  UPDATE user_bridge_endpoints
+  SET production_id = COALESCE(
+    (
+      SELECT production.id
+      FROM productions production
+      JOIN production_users membership
+        ON membership.production_id = production.id
+       AND membership.user_id = user_bridge_endpoints.user_id
+      WHERE production.is_primary = 1
+      LIMIT 1
+    ),
+    (
+      SELECT production.id
+      FROM productions production
+      JOIN production_users membership
+        ON membership.production_id = production.id
+       AND membership.user_id = user_bridge_endpoints.user_id
+      ORDER BY production.name COLLATE NOCASE, production.id
+      LIMIT 1
+    )
+  )
+  WHERE production_id IS NULL;
+`);
+
+db.exec(`
+  UPDATE feed_bridge_endpoints
+  SET production_id = COALESCE(
+    (
+      SELECT production.id
+      FROM productions production
+      JOIN production_feeds membership
+        ON membership.production_id = production.id
+       AND membership.feed_id = feed_bridge_endpoints.feed_id
+      WHERE production.is_primary = 1
+      LIMIT 1
+    ),
+    (
+      SELECT production.id
+      FROM productions production
+      JOIN production_feeds membership
+        ON membership.production_id = production.id
+       AND membership.feed_id = feed_bridge_endpoints.feed_id
+      ORDER BY production.name COLLATE NOCASE, production.id
+      LIMIT 1
+    )
+  )
+  WHERE production_id IS NULL;
+`);
 
 module.exports = db;

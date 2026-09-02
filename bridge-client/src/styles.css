@@ -326,9 +326,20 @@ h3 {
   justify-content: space-between;
 }
 
-.managed-port-title > div:first-child {
-  display: grid;
-  gap: 0.1rem;
+.managed-port-identity {
+  align-items: center;
+  display: flex;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.managed-port-kind {
+  background: #17345f;
+  border-radius: 999px;
+  color: #bfdbfe !important;
+  font-size: 0.68rem !important;
+  font-weight: 700;
+  padding: 0.16rem 0.45rem;
 }
 
 .managed-port-actions {
@@ -359,6 +370,10 @@ h3 {
   display: grid;
   gap: 0.45rem 0.55rem;
   grid-template-columns: minmax(0, 1fr) 8rem;
+}
+
+.managed-port-control--production {
+  max-width: 24rem;
 }
 
 .managed-port-trigger-grid {

@@ -31,6 +31,20 @@ test('keeps production layouts separate from the global target matrix', () => {
     db.setProductionFeed(production, program);
     db.addProductionTarget(production, anna, 'conference', regie);
     db.addProductionTarget(production, anna, 'feed', program);
+    db.updateUserBridgeEndpoint(anna, {
+      enabled: true,
+      bridgeDevice: 'test-bridge',
+      productionId: production,
+    });
+    db.updateFeedBridgeEndpoint(program, {
+      enabled: true,
+      bridgeDevice: 'test-bridge',
+      productionId: production,
+    });
+    assert.equal(db.getUserById(anna).bridge_production_id, production);
+    assert.equal(db.getAllFeeds().find((feed) => feed.id === program).bridge_production_id, production);
+    assert.equal(db.getBridgeEndpointsForDevice('test-bridge')[0].production_id, production);
+    assert.equal(db.getFeedBridgeEndpointsForDevice('test-bridge')[0].production_id, production);
 
     const secondProduction = db.createProduction('Evening show');
     db.setProductionUser(secondProduction, luis);
@@ -43,6 +57,14 @@ test('keeps production layouts separate from the global target matrix', () => {
     assert.equal(db.deleteProduction(originalPrimary.id), true);
     assert.equal(db.getPrimaryProduction().id, secondProduction);
     assert.equal(db.getPrimaryProduction().name, 'Evening show');
+    assert.deepEqual(
+      db.getPrimaryProductionTargets(luis).map((target) => ({
+        targetType: target.targetType,
+        name: target.name,
+        canTalk: target.canTalk,
+      })),
+      [{ targetType: 'conference', name: 'Regie', canTalk: true }]
+    );
 
     assert.deepEqual(db.getUserTargets(anna).map((target) => target.targetType), ['user']);
     assert.deepEqual(
@@ -79,6 +101,8 @@ test('keeps production layouts separate from the global target matrix', () => {
     assert.equal(snapshot.productionConferences.length, 2);
     assert.equal(snapshot.productionFeeds.length, 1);
     assert.equal(snapshot.productionConferenceMemberships.length, 2);
+    assert.equal(snapshot.userBridgeEndpoints[0].production_id, production);
+    assert.equal(snapshot.feedBridgeEndpoints[0].production_id, production);
     assert.equal(
       snapshot.productionConferenceMemberships.find((membership) => (
         Number(membership.production_id) === Number(production)
@@ -91,6 +115,8 @@ test('keeps production layouts separate from the global target matrix', () => {
     db.importDatabaseSnapshot(snapshot);
     assert.equal(db.getProductionById(production).name, 'Morning show');
     assert.equal(db.getProductionTargets(anna, production).length, 2);
+    assert.equal(db.getUserById(anna).bridge_production_id, production);
+    assert.equal(db.getAllFeeds().find((feed) => feed.id === program).bridge_production_id, production);
     assert.equal(
       db.getProductionTargets(anna, production).find((target) => target.targetType === 'conference').canTalk,
       false

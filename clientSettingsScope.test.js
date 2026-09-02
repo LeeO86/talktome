@@ -31,3 +31,17 @@ test("settings handlers do not reference the closure-scoped cached user list", (
   assert.match(viewHandler, /renderTargetHotkeySettingsHandler\(\);/);
   assert.doesNotMatch(viewHandler, /cachedUsers/);
 });
+
+test("feed ducking does not change listen-only conference playback levels", () => {
+  const playbackLevel = sourceBetween(
+    "function setPlaybackEntryLevel(",
+    "function mutePlaybackEntry(",
+  );
+  const feedDucking = sourceBetween(
+    "function applyFeedDucking()",
+    "async function startFeedStream(",
+  );
+
+  assert.doesNotMatch(playbackLevel, /listenOnlyConferenceKeys|feedDuckingFactor/);
+  assert.doesNotMatch(feedDucking, /listenOnlyConferenceKeys/);
+});

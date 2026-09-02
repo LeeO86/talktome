@@ -5209,15 +5209,6 @@ let cachedOperatorTargets = null;
     return isFeedKey(entry?.key || '');
   }
 
-  function shouldDimListenOnlyConferenceEntry(entry) {
-    if (!isOperatorSession()) return false;
-    if (!supportsFeedDimming()) return false;
-    if (!feedDuckingActive || feedDuckingFactor >= 0.999) return false;
-    const key = String(entry?.key || '');
-    if (!listenOnlyConferenceKeys.has(key) || !key.startsWith('conf-')) return false;
-    return true;
-  }
-
   function getFeedEntryLevel(entry, value) {
     const base = Math.max(0, Math.min(1, Number(value) || 0));
     if (entry?.feedDuckingNode) {
@@ -5315,9 +5306,7 @@ let cachedOperatorTargets = null;
     const audioEl = entry.audio || entry.playbackBus?.audio || null;
     const playbackGainNode = entry.playbackGainNode || entry.gainNode || null;
     const base = Math.max(0, Math.min(1, value));
-    let applied = shouldDimListenOnlyConferenceEntry(entry)
-      ? Math.max(0, Math.min(1, base * feedDuckingFactor))
-      : base;
+    let applied = base;
     const memberExcluded = isConferenceMemberEntryExcluded(entry);
     const conferenceId = entry?.type === 'conference'
       ? Number(String(entry.key || '').replace(/^conf-/, ''))
@@ -5879,16 +5868,6 @@ let cachedOperatorTargets = null;
 
         setFeedEntryLevel(entry, entry.volume ?? defaultVolume);
       }
-    }
-
-    for (const key of listenOnlyConferenceKeys) {
-      forEachStreamEntry(key, (entry) => {
-        if (mutedPeers.has(key)) {
-          mutePlaybackEntry(entry);
-        } else {
-          setPlaybackEntryLevel(entry, entry.volume ?? defaultVolume);
-        }
-      });
     }
   }
 

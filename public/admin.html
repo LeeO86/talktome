@@ -725,6 +725,13 @@
         grid-column: 1 / -1;
       }
 
+      .bridge-scope-row {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem;
+      }
+
       .bridge-config-form .bridge-input-switch {
         grid-column: 1 / -1;
         margin: 0;
@@ -2872,6 +2879,11 @@
         .bridge-channel-row {
           grid-column: 1;
           grid-template-columns: 1fr 1fr;
+        }
+
+        .bridge-scope-row {
+          grid-column: 1;
+          grid-template-columns: 1fr;
         }
 
         .bridge-channel-row .field-group:first-child {
