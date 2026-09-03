@@ -12,9 +12,11 @@ import {
 } from '../audio/session';
 import {
   iosPttEnabled,
+  shouldHandOffPlaybackToSystemPtt,
   shouldOwnAudioSession,
   shouldReactivateCaptureForTalk,
   shouldStartBackgroundKeepalive,
+  shouldTeardownAudioWhenNotOwningSession,
 } from '../audio/policy';
 import { subscribeAudioRoutes } from '../audio/routes';
 import { advertisedCapability } from '../background/capability';
@@ -345,22 +347,26 @@ export class BackgroundCoordinator {
   }
 
   private async handleBleButton(pressed: boolean): Promise<void> {
-    const action = this.c.blePolicy.handle(pressed, useSessionStore.getState().bleShortPressLocks);
-    if (!action) {
-      return;
-    }
+    const state = useSessionStore.getState();
     const target = resolveBleTalkTarget({
-      selection: bleSelectionFromState(useSessionStore.getState()),
-      replyTarget: useSessionStore.getState().replyTarget,
-      targets: useSessionStore.getState().targets,
+      selection: bleSelectionFromState(state),
+      replyTarget: state.replyTarget,
+      targets: state.targets,
     });
     if (!target) {
       useSessionStore.setState({
         error:
-          bleSelectionFromState(useSessionStore.getState()).kind === 'reply'
+          bleSelectionFromState(state).kind === 'reply'
             ? 'No one to reply to. Pick a Bluetooth Button target in Settings.'
             : 'Choose a Bluetooth Button target in Settings first.',
       });
+      return;
+    }
+    const action = this.c.blePolicy.handle(pressed, {
+      shortPressLocks: state.bleShortPressLocks,
+      lockedToTarget: state.talkLocked && state.lockedTargetKeys.includes(talkTargetIdentity(target)),
+    });
+    if (!action) {
       return;
     }
     if (action === 'startTalk') {
@@ -369,6 +375,10 @@ export class BackgroundCoordinator {
     }
     if (action === 'lockTalk') {
       await this.c.talk.lockTalk(target);
+      return;
+    }
+    if (action === 'unlockTalk') {
+      await this.c.talk.unlockTalk();
       return;
     }
     await this.c.talk.releaseTalk(target);
@@ -518,14 +528,17 @@ export class BackgroundCoordinator {
     const state = useSessionStore.getState();
     const pttEnabled = iosPttEnabled();
     const available = audioSessionAvailable();
-    if (
-      !shouldOwnAudioSession({
-        platform: Platform.OS,
-        pttEnabled,
-        pttJoined: state.pttJoined,
-        operatorReady: state.operatorReady,
-      })
-    ) {
+    const sessionOwnership = {
+      platform: Platform.OS,
+      pttEnabled,
+      pttJoined: state.pttJoined,
+      operatorReady: state.operatorReady,
+    };
+    if (shouldHandOffPlaybackToSystemPtt(sessionOwnership)) {
+      await this.adoptSystemManagedPttAudio();
+      return;
+    }
+    if (shouldTeardownAudioWhenNotOwningSession(sessionOwnership)) {
       if (state.audioSessionActive || state.audioKeepalive) {
         await this.teardownAudioSession();
       } else {
@@ -736,9 +749,29 @@ export class BackgroundCoordinator {
     }
   }
 
-  private async handlePttAudioActivated(): Promise<void> {
+  private async adoptSystemManagedPttAudio(): Promise<void> {
+    try {
+      await stopBackgroundKeepalive();
+    } catch {
+      // Keep configuring around the system session even if keepalive stop fails.
+    }
     await prepareForSystemManagedIntercom();
     await setWebRTCAudioEnabled(true);
+    const available = audioSessionAvailable();
+    useSessionStore.setState({
+      audioSessionAvailable: available,
+      audioSessionActive: false,
+      audioKeepalive: false,
+      capabilityReason: this.capabilityReason({
+        audioSessionAvailable: available,
+        audioSessionActive: false,
+        audioKeepalive: false,
+      }),
+    });
+  }
+
+  private async handlePttAudioActivated(): Promise<void> {
+    await this.adoptSystemManagedPttAudio();
     await this.c.mediaCoordinator.refreshProducersFromPtt();
   }
 

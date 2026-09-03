@@ -18,6 +18,11 @@ describe('BLE button policy', () => {
 
   it('starts talk on press', () => {
     expect(talkActionForButtonPress()).toBe('startTalk');
+    expect(talkActionForButtonPress({ lockedToTarget: false })).toBe('startTalk');
+  });
+
+  it('does not start talk again while already locked to the BLE target', () => {
+    expect(talkActionForButtonPress({ lockedToTarget: true })).toBeNull();
   });
 
   it('locks on a short press when the setting is on', () => {
@@ -48,6 +53,25 @@ describe('BLE button policy', () => {
         shortPressLocks: false,
       }),
     ).toBe('stopTalk');
+  });
+
+  it('unlocks on release when the press was already locked to that target', () => {
+    expect(
+      talkActionForButtonRelease({
+        pressedAtMs: 1000,
+        releasedAtMs: 1100,
+        shortPressLocks: true,
+        unlockOnRelease: true,
+      }),
+    ).toBe('unlockTalk');
+    expect(
+      talkActionForButtonRelease({
+        pressedAtMs: 1000,
+        releasedAtMs: 1400,
+        shortPressLocks: true,
+        unlockOnRelease: true,
+      }),
+    ).toBe('unlockTalk');
   });
 
   it('accepts the documented button name', () => {

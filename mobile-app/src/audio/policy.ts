@@ -44,6 +44,31 @@ export function shouldPrepareSystemManagedAudioForMedia(input: {
   return input.platform === 'ios' && Boolean(input.pttEnabled && input.pttJoined);
 }
 
+/** Keep WebRTC playback running around the system session instead of deactivate(). */
+export function shouldHandOffPlaybackToSystemPtt(input: {
+  platform: string;
+  pttEnabled: boolean;
+  operatorReady: boolean;
+  pttJoined?: boolean;
+}): boolean {
+  return (
+    input.platform === 'ios' &&
+    input.pttEnabled &&
+    Boolean(input.pttJoined) &&
+    input.operatorReady
+  );
+}
+
+/** Tear down an app-owned session only when nothing else will keep playback alive. */
+export function shouldTeardownAudioWhenNotOwningSession(input: {
+  platform: string;
+  pttEnabled: boolean;
+  operatorReady: boolean;
+  pttJoined?: boolean;
+}): boolean {
+  return !shouldOwnAudioSession(input) && !shouldHandOffPlaybackToSystemPtt(input);
+}
+
 export function shouldStartBackgroundKeepalive(input: {
   platform: string;
   pttEnabled: boolean;

@@ -6,11 +6,13 @@ import {
   audioSessionCapabilityReason,
   audioSessionStatusLabel,
   iosPttEnabled,
+  shouldHandOffPlaybackToSystemPtt,
   shouldOwnAudioSession,
   shouldPrepareAudioForMedia,
   shouldPrepareSystemManagedAudioForMedia,
   shouldReactivateCaptureForTalk,
   shouldStartBackgroundKeepalive,
+  shouldTeardownAudioWhenNotOwningSession,
 } from './policy';
 
 describe('audio session policy', () => {
@@ -61,6 +63,56 @@ describe('audio session policy', () => {
     expect(
       shouldOwnAudioSession({
         platform: 'ios',
+        pttEnabled: true,
+        pttJoined: true,
+        operatorReady: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('hands feed playback to system PTT instead of tearing the session down', () => {
+    const joinedReady = {
+      platform: 'ios' as const,
+      pttEnabled: true,
+      pttJoined: true,
+      operatorReady: true,
+    };
+    expect(shouldHandOffPlaybackToSystemPtt(joinedReady)).toBe(true);
+    expect(shouldTeardownAudioWhenNotOwningSession(joinedReady)).toBe(false);
+    expect(
+      shouldHandOffPlaybackToSystemPtt({
+        platform: 'ios',
+        pttEnabled: true,
+        pttJoined: false,
+        operatorReady: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandOffPlaybackToSystemPtt({
+        platform: 'ios',
+        pttEnabled: true,
+        pttJoined: true,
+        operatorReady: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldTeardownAudioWhenNotOwningSession({
+        platform: 'ios',
+        pttEnabled: true,
+        pttJoined: true,
+        operatorReady: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldTeardownAudioWhenNotOwningSession({
+        platform: 'ios',
+        pttEnabled: false,
+        operatorReady: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandOffPlaybackToSystemPtt({
+        platform: 'android',
         pttEnabled: true,
         pttJoined: true,
         operatorReady: true,
