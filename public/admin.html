@@ -3091,6 +3091,28 @@
           position: relative;
         }
 
+        /* Keep every create control on the same full-width grid track. */
+        :is(#user-form, #conf-form, #feed-form) {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        :is(#user-form, #conf-form, #feed-form) > .field-group,
+        :is(#user-form, #conf-form, #feed-form) > button[type='submit'] {
+          grid-column: 1 / -1;
+          justify-self: stretch;
+          width: 100% !important;
+          max-width: none;
+        }
+
+        :is(#user-form, #conf-form, #feed-form) > .field-group > input,
+        :is(#user-form, #feed-form) > .field-group > .password-input-wrap,
+        :is(#user-form, #feed-form) > .field-group > .password-input-wrap > input {
+          display: block;
+          width: 100% !important;
+          max-width: none;
+          min-width: 0;
+        }
+
         .entity-detail-item,
         .entity-detail-item .nested,
         .entity-detail-item .nested-block,
