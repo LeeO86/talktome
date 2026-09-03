@@ -1,9 +1,14 @@
-//! Target identities shared by configuration, signalling and surfaces.
+//! Target identities, the hold/tap/lock talk model and per-target audio state.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+use crate::state::{InputSource, TargetRef};
 
 /// A routable Talktome target. Feeds are listen-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -70,9 +75,416 @@ impl fmt::Display for TargetKey {
     }
 }
 
+/// Result of a talk-model change: what the session must tell the server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TalkChange {
+    /// Targets to send in `talk-targets-updated` (empty = stop talking).
+    pub targets: Vec<TargetKey>,
+    pub talking: bool,
+    pub lock_active: bool,
+    /// The lock state toggled by this action, if any.
+    pub lock_toggled: Option<(TargetKey, bool)>,
+}
+
+#[derive(Debug, Clone)]
+struct HeldKey {
+    since: Instant,
+    /// True when pressing this key unlocked the target; a short release
+    /// must then not lock it again.
+    unlocked_on_press: bool,
+}
+
+/// Hold = talk while held, tap = toggle lock; reply resolves to the current
+/// reply target at press time.
+#[derive(Debug, Clone)]
+pub struct TalkModel {
+    tap_ms: u64,
+    lock_multiple: bool,
+    held: HashMap<(InputSource, TargetRef), (TargetKey, HeldKey)>,
+    locked: BTreeSet<TargetKey>,
+    reply_target: Option<TargetKey>,
+    vox_target: Option<TargetKey>,
+    vox_active: bool,
+}
+
+impl TalkModel {
+    pub fn new(tap_ms: u64, lock_multiple: bool) -> Self {
+        Self {
+            tap_ms,
+            lock_multiple,
+            held: HashMap::new(),
+            locked: BTreeSet::new(),
+            reply_target: None,
+            vox_target: None,
+            vox_active: false,
+        }
+    }
+
+    pub fn set_reply_target(&mut self, target: Option<TargetKey>) {
+        self.reply_target = target;
+    }
+
+    pub fn reply_target(&self) -> Option<TargetKey> {
+        self.reply_target
+    }
+
+    pub fn set_vox_target(&mut self, target: Option<TargetKey>) {
+        self.vox_target = target;
+    }
+
+    pub fn locked(&self) -> &BTreeSet<TargetKey> {
+        &self.locked
+    }
+
+    pub fn is_locked(&self, key: TargetKey) -> bool {
+        self.locked.contains(&key)
+    }
+
+    pub fn is_held(&self, key: TargetKey) -> bool {
+        self.held.values().any(|(k, _)| *k == key)
+    }
+
+    pub fn is_talking(&self) -> bool {
+        !self.active_targets().is_empty()
+    }
+
+    /// Union of held, locked and (when active) the VOX target.
+    pub fn active_targets(&self) -> Vec<TargetKey> {
+        let mut set: BTreeSet<TargetKey> = self.locked.clone();
+        for (key, _) in self.held.values() {
+            set.insert(*key);
+        }
+        if self.vox_active {
+            if let Some(target) = self.vox_target {
+                set.insert(target);
+            }
+        }
+        set.into_iter().filter(|k| k.can_talk()).collect()
+    }
+
+    fn resolve(&self, target: TargetRef) -> Option<TargetKey> {
+        match target {
+            TargetRef::Key(key) => key.can_talk().then_some(key),
+            TargetRef::Reply => self.reply_target,
+        }
+    }
+
+    fn change(&self, lock_toggled: Option<(TargetKey, bool)>) -> TalkChange {
+        let targets = self.active_targets();
+        TalkChange {
+            talking: !targets.is_empty(),
+            targets,
+            lock_active: !self.locked.is_empty(),
+            lock_toggled,
+        }
+    }
+
+    /// Returns `None` when the target cannot be talked to (unknown reply
+    /// target, feed) so the caller can flash an error.
+    pub fn press(&mut self, source: InputSource, target: TargetRef, now: Instant) -> Option<TalkChange> {
+        let key = self.resolve(target)?;
+        let unlocked_on_press = self.locked.remove(&key);
+        self.held.insert(
+            (source, target),
+            (
+                key,
+                HeldKey {
+                    since: now,
+                    unlocked_on_press,
+                },
+            ),
+        );
+        Some(self.change(unlocked_on_press.then_some((key, false))))
+    }
+
+    pub fn release(&mut self, source: InputSource, target: TargetRef, now: Instant) -> Option<TalkChange> {
+        let (key, held) = self.held.remove(&(source, target))?;
+        let mut toggled = None;
+        if now.duration_since(held.since) < Duration::from_millis(self.tap_ms) && !held.unlocked_on_press {
+            self.lock(key);
+            toggled = Some((key, true));
+        }
+        Some(self.change(toggled))
+    }
+
+    fn lock(&mut self, key: TargetKey) {
+        if !self.lock_multiple {
+            self.locked.clear();
+        }
+        self.locked.insert(key);
+    }
+
+    pub fn toggle_lock(&mut self, target: TargetRef) -> Option<TalkChange> {
+        let key = self.resolve(target)?;
+        let now_locked = if self.locked.remove(&key) {
+            false
+        } else {
+            self.lock(key);
+            true
+        };
+        Some(self.change(Some((key, now_locked))))
+    }
+
+    pub fn clear_locks(&mut self) -> TalkChange {
+        self.locked.clear();
+        self.change(None)
+    }
+
+    /// Drops everything (used when the session is lost).
+    pub fn reset(&mut self) -> TalkChange {
+        self.held.clear();
+        self.locked.clear();
+        self.vox_active = false;
+        self.change(None)
+    }
+
+    pub fn set_vox_active(&mut self, active: bool) -> Option<TalkChange> {
+        if self.vox_active == active || self.vox_target.is_none() {
+            return None;
+        }
+        self.vox_active = active;
+        Some(self.change(None))
+    }
+
+    /// Releases every key held by a given source kind (e.g. when the deck
+    /// disconnects) and reports the resulting change if anything was held.
+    pub fn release_all_from<F>(&mut self, mut matches: F) -> Option<TalkChange>
+    where
+        F: FnMut(&InputSource) -> bool,
+    {
+        let before = self.held.len();
+        self.held.retain(|(source, _), _| !matches(source));
+        (self.held.len() != before).then(|| self.change(None))
+    }
+}
+
+/// Per-target volume/mute, persisted per instance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AudioLevel {
+    pub volume: f32,
+    pub muted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct AudioStateFile {
+    levels: BTreeMap<String, AudioLevel>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AudioState {
+    default_volume: f32,
+    levels: BTreeMap<TargetKey, AudioLevel>,
+    path: Option<PathBuf>,
+}
+
+impl AudioState {
+    pub fn new(default_volume: f32) -> Self {
+        Self {
+            default_volume,
+            levels: BTreeMap::new(),
+            path: None,
+        }
+    }
+
+    /// Loads persisted levels from `<state_dir>/audio-state.json` if present.
+    pub fn load(state_dir: &Path, default_volume: f32) -> Self {
+        let path = state_dir.join("audio-state.json");
+        let mut state = Self::new(default_volume);
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(file) = serde_json::from_str::<AudioStateFile>(&text) {
+                for (key, level) in file.levels {
+                    if let Some(key) = TargetKey::parse(&key) {
+                        state.levels.insert(key, level);
+                    }
+                }
+            }
+        }
+        state.path = Some(path);
+        state
+    }
+
+    pub fn level(&self, key: TargetKey) -> AudioLevel {
+        self.levels.get(&key).cloned().unwrap_or(AudioLevel {
+            volume: self.default_volume,
+            muted: false,
+        })
+    }
+
+    pub fn set_volume(&mut self, key: TargetKey, volume: f32) -> AudioLevel {
+        let mut level = self.level(key);
+        level.volume = volume.clamp(0.0, 1.0);
+        self.levels.insert(key, level.clone());
+        level
+    }
+
+    pub fn step_volume(&mut self, key: TargetKey, delta: f32) -> AudioLevel {
+        let current = self.level(key).volume;
+        // Round to two decimals so repeated steps stay on clean values.
+        let next = ((current + delta) * 100.0).round() / 100.0;
+        self.set_volume(key, next)
+    }
+
+    pub fn toggle_mute(&mut self, key: TargetKey) -> AudioLevel {
+        let mut level = self.level(key);
+        level.muted = !level.muted;
+        self.levels.insert(key, level.clone());
+        level
+    }
+
+    /// Entries for `target-audio-state-snapshot`, restricted to known targets.
+    pub fn snapshot_entries<'a, I>(&self, targets: I) -> Vec<Value>
+    where
+        I: IntoIterator<Item = &'a TargetKey>,
+    {
+        targets
+            .into_iter()
+            .map(|key| {
+                let level = self.level(*key);
+                json!({
+                    "targetType": key.kind(),
+                    "targetId": key.id(),
+                    "volume": level.volume,
+                    "muted": level.muted,
+                })
+            })
+            .collect()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let Some(path) = &self.path else { return Ok(()) };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = AudioStateFile {
+            levels: self
+                .levels
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        };
+        let text = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(tmp, path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn deck(n: u8) -> InputSource {
+        InputSource::StreamDeck(n)
+    }
+
+    #[test]
+    fn hold_talks_and_tap_locks() {
+        let mut model = TalkModel::new(250, false);
+        let t0 = Instant::now();
+        let conf = TargetKey::Conference(1);
+        let change = model.press(deck(1), TargetRef::Key(conf), t0).unwrap();
+        assert!(change.talking);
+        assert_eq!(change.targets, vec![conf]);
+
+        // Long hold: release after 600 ms stops talking.
+        let change = model
+            .release(deck(1), TargetRef::Key(conf), t0 + Duration::from_millis(600))
+            .unwrap();
+        assert!(!change.talking);
+        assert!(!change.lock_active);
+
+        // Tap: release within 250 ms locks and keeps talking.
+        model.press(deck(1), TargetRef::Key(conf), t0).unwrap();
+        let change = model
+            .release(deck(1), TargetRef::Key(conf), t0 + Duration::from_millis(100))
+            .unwrap();
+        assert!(change.talking);
+        assert!(change.lock_active);
+        assert_eq!(change.lock_toggled, Some((conf, true)));
+        assert!(model.is_locked(conf));
+
+        // Tap again: unlocks on press and stays unlocked after release.
+        let change = model.press(deck(1), TargetRef::Key(conf), t0).unwrap();
+        assert!(change.talking, "still held");
+        assert_eq!(change.lock_toggled, Some((conf, false)));
+        let change = model
+            .release(deck(1), TargetRef::Key(conf), t0 + Duration::from_millis(50))
+            .unwrap();
+        assert!(!change.talking);
+        assert!(!model.is_locked(conf));
+    }
+
+    #[test]
+    fn single_lock_mode_replaces_previous_lock() {
+        let mut model = TalkModel::new(250, false);
+        let a = TargetKey::User(2);
+        let b = TargetKey::User(3);
+        model.toggle_lock(TargetRef::Key(a)).unwrap();
+        let change = model.toggle_lock(TargetRef::Key(b)).unwrap();
+        assert_eq!(change.targets, vec![b]);
+
+        let mut multi = TalkModel::new(250, true);
+        multi.toggle_lock(TargetRef::Key(a)).unwrap();
+        let change = multi.toggle_lock(TargetRef::Key(b)).unwrap();
+        assert_eq!(change.targets, vec![a, b]);
+        let change = multi.clear_locks();
+        assert!(!change.talking);
+    }
+
+    #[test]
+    fn reply_and_feeds() {
+        let mut model = TalkModel::new(250, false);
+        assert!(model.press(deck(0), TargetRef::Reply, Instant::now()).is_none());
+        model.set_reply_target(Some(TargetKey::User(7)));
+        let change = model.press(deck(0), TargetRef::Reply, Instant::now()).unwrap();
+        assert_eq!(change.targets, vec![TargetKey::User(7)]);
+        assert!(model
+            .press(deck(2), TargetRef::Key(TargetKey::Feed(1)), Instant::now())
+            .is_none());
+    }
+
+    #[test]
+    fn sources_are_independent_and_vox_adds_target() {
+        let mut model = TalkModel::new(250, true);
+        let conf = TargetKey::Conference(1);
+        let now = Instant::now();
+        model.press(deck(1), TargetRef::Key(conf), now).unwrap();
+        model
+            .press(InputSource::Companion("k".into()), TargetRef::Key(conf), now)
+            .unwrap();
+        let change = model
+            .release(InputSource::Companion("k".into()), TargetRef::Key(conf), now + Duration::from_secs(1))
+            .unwrap();
+        assert!(change.talking, "deck still holds the key");
+        let change = model.release_all_from(|s| matches!(s, InputSource::StreamDeck(_))).unwrap();
+        assert!(!change.talking);
+
+        model.set_vox_target(Some(TargetKey::User(5)));
+        let change = model.set_vox_active(true).unwrap();
+        assert_eq!(change.targets, vec![TargetKey::User(5)]);
+        assert!(model.set_vox_active(true).is_none());
+        let change = model.reset();
+        assert!(!change.talking);
+    }
+
+    #[test]
+    fn audio_state_steps_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AudioState::load(dir.path(), 0.9);
+        let key = TargetKey::Feed(3);
+        assert_eq!(state.level(key).volume, 0.9);
+        assert_eq!(state.step_volume(key, -0.1).volume, 0.8);
+        assert_eq!(state.step_volume(key, 0.5).volume, 1.0);
+        assert!(state.toggle_mute(key).muted);
+        state.save().unwrap();
+
+        let reloaded = AudioState::load(dir.path(), 0.5);
+        assert_eq!(reloaded.level(key), AudioLevel { volume: 1.0, muted: true });
+        assert_eq!(reloaded.level(TargetKey::User(1)).volume, 0.5);
+        let entries = reloaded.snapshot_entries([key].iter());
+        assert_eq!(entries[0]["targetType"], "feed");
+        assert_eq!(entries[0]["muted"], true);
+    }
 
     #[test]
     fn parses_and_formats_keys() {

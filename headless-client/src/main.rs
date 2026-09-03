@@ -1,8 +1,12 @@
 mod audio;
 mod config;
 mod devtools;
+mod health;
 mod rtc;
+mod run;
 mod signalling;
+mod state;
+mod surfaces;
 mod talk;
 mod tls;
 
@@ -150,10 +154,7 @@ fn main() -> Result<()> {
         }
         Command::Run => {
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(async move {
-                tracing::info!(event = "client-start", version = VERSION, instance = %loaded.config.instance);
-                anyhow::bail!("run mode is not implemented yet")
-            })
+            runtime.block_on(run::run(loaded.config))
         }
         Command::Dev(dev) => {
             let runtime = tokio::runtime::Runtime::new()?;

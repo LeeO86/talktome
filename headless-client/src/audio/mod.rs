@@ -1,6 +1,11 @@
 //! Local audio: Opus codec, capture/playback, jitter buffering and mixing.
 
 pub mod codec;
+pub mod io;
+pub mod jitter;
+pub mod mixer;
+pub mod resample;
+pub mod vox;
 
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait};

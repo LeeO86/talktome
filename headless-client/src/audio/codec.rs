@@ -69,6 +69,17 @@ impl OpusDecoder {
         Ok(&self.buffer[..samples])
     }
 
+    /// Recovers the frame *before* `packet` from its in-band FEC data (or PLC
+    /// when the packet carries none). `frame_samples` must be the size of the
+    /// missing frame.
+    pub fn decode_fec(&mut self, packet: &[u8], frame_samples: usize) -> Result<&[f32]> {
+        let samples = self
+            .inner
+            .decode_float(packet, &mut self.buffer[..frame_samples], true)
+            .context("opus fec decode")?;
+        Ok(&self.buffer[..samples])
+    }
+
     /// Packet-loss concealment for one missing frame of `frame_samples`.
     pub fn conceal(&mut self, frame_samples: usize) -> Result<&[f32]> {
         let samples = self
