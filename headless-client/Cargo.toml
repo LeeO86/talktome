@@ -79,12 +79,11 @@ priority = "optional"
 depends = "$auto, adduser, fonts-dejavu-core"
 recommends = "alsa-utils"
 maintainer-scripts = "debian/"
-systemd-units = { unit-name = "talktome-headless@", enable = false, start = false }
-conf-files = []
 assets = [
     ["target/release/talktome-headless", "usr/bin/", "755"],
+    ["deploy/systemd/talktome-headless@.service", "lib/systemd/system/", "644"],
     ["deploy/udev/60-talktome-streamdeck.rules", "lib/udev/rules.d/", "644"],
-    ["deploy/config.example.json", "usr/share/doc/talktome-headless/", "644"],
-    ["deploy/config.example.toml", "usr/share/doc/talktome-headless/", "644"],
+    ["deploy/config.example.json", "usr/share/talktome-headless/", "644"],
+    ["deploy/config.example.toml", "usr/share/talktome-headless/", "644"],
     ["README.md", "usr/share/doc/talktome-headless/", "644"],
 ]

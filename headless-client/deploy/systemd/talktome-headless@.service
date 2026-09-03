@@ -1,0 +1,39 @@
+[Unit]
+Description=Talktome headless intercom client (%i)
+Documentation=file:///usr/share/doc/talktome-headless/README.md
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/talktome-headless --instance %i
+# Optional: put TALKTOME_USER_PASSWORD (and other TALKTOME_* overrides) here
+# instead of the configuration file.
+EnvironmentFile=-/etc/talktome-headless/%i.env
+WatchdogSec=30
+Restart=always
+RestartSec=2
+User=talktome-headless
+Group=talktome-headless
+SupplementaryGroups=audio plugdev gpio
+StateDirectory=talktome-headless/%i
+StateDirectoryMode=0750
+RuntimeDirectory=talktome-headless/%i
+
+# Hardening. Audio (ALSA), HID (Stream Deck) and GPIO character devices must
+# stay reachable, so the device policy is left open and access is controlled
+# through the groups above and the udev rule.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=false
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

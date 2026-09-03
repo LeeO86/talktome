@@ -101,9 +101,12 @@ fn init_logging(config: Option<&Config>) {
     let json = match format {
         "json" => true,
         "text" => false,
-        _ => !std::io::stdout().is_terminal(),
+        _ => !std::io::stderr().is_terminal(),
     };
-    let builder = tracing_subscriber::fmt().with_env_filter(filter).with_target(false);
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_writer(std::io::stderr);
     if json {
         builder.json().flatten_event(true).with_current_span(false).init();
     } else {

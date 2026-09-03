@@ -1,0 +1,110 @@
+# Talktome headless client configuration (TOML flavour).
+# Copy to /etc/talktome-headless/<instance>.toml and start with
+#   systemctl enable --now talktome-headless@<instance>
+# Every value can also be set through TALKTOME_<SECTION>_<KEY> environment
+# variables, e.g. TALKTOME_USER_PASSWORD in /etc/talktome-headless/<instance>.env.
+
+# Defaults to the file name.
+instance = "cam1"
+
+[server]
+url = "https://talktome.local:8443"
+
+[tls]
+# Trust an additional CA (for self-signed server certificates) ...
+# ca_file = "/etc/talktome-headless/server-ca.pem"
+# ... or pin the server's leaf certificate ...
+# fingerprint_sha256 = "AB:CD:EF:..."
+# ... or (development only) accept any certificate.
+insecure = false
+
+[user]
+name = "Cam 1"
+password = "change-me"
+# Production id or name; omit to use the Default production.
+# production = "Studio A"
+
+[registration]
+# "takeover" (default): kick another session using this account after
+# takeover_delay_ms. "wait": retry every retry_ms until the account is free.
+conflict = "takeover"
+takeover_delay_ms = 1500
+retry_ms = 5000
+kicked_retry_ms = 10000
+
+[audio]
+# ALSA ids from `talktome-headless list-audio-devices`; omit for the default
+# device. "none" disables a direction, "tone" / "tone:1000" feeds a test tone,
+# "wav:/path.wav" records the mix instead of playing it.
+input_device = "plughw:CARD=Headset,DEV=0"
+output_device = "plughw:CARD=Headset,DEV=0"
+# standard (20 ms + FEC), low (10 ms) or ultra-low (5 ms)
+profile = "standard"
+input_gain_db = 0
+dim_db = -14
+dim_feeds_while_speaking = false
+dim_when_addressed = true
+jitter_min_ms = 20
+jitter_max_ms = 120
+reopen_ms = 2000
+default_volume = 0.9
+
+[vox]
+enabled = false
+target = "conference:1"
+threshold_db = -32
+hang_ms = 600
+
+[talk]
+# A press shorter than this toggles the talk lock instead of talking.
+tap_ms = 250
+lock_multiple = false
+
+[ice]
+# Normally left empty: STUN/TURN servers and the policy come from the server.
+# servers = [{ urls = ["turn:turn.example:3478"], username = "u", credential = "p" }]
+# transport_policy = "relay"
+
+[network]
+ice_disconnect_grace_ms = 4000
+
+[streamdeck]
+enabled = true
+# serial = "AL12K3456789"   # bind to one deck when several are attached
+brightness = 60
+font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+volume_step = 0.05
+volume_layer_timeout_s = 8
+# Middle switch of a Stream Deck Pedal
+# pedal_target = "conference:1"
+
+[gpio]
+enabled = true
+# chip = "gpiochip0"        # only needed when lines are given as offsets
+
+[gpio.outputs]
+tally = { line = "GPIO17", active_low = false }
+talking = { line = "GPIO27" }
+# incoming = { line = "GPIO18" }
+# connected = { line = "GPIO25" }
+
+[[gpio.inputs]]
+line = "GPIO22"
+action = "talk"           # talk | reply | lock_toggle | clear_locks | mute_toggle | volume_up | volume_down
+target = "conference:1"
+active_low = true         # button to ground with pull-up
+debounce_ms = 20
+
+[[gpio.inputs]]
+line = "GPIO23"
+action = "reply"
+active_low = true
+
+[health]
+# port = 9911               # GET http://127.0.0.1:9911/healthz
+bind = "127.0.0.1"
+
+[log]
+level = "info"
+# auto (JSON under systemd, text on a terminal), json or text
+format = "auto"
