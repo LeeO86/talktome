@@ -57,6 +57,50 @@
         display: none !important;
       }
 
+      .user-audio-settings-dialog {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background: rgba(2, 6, 23, 0.78);
+      }
+
+      .user-audio-settings-dialog__panel {
+        width: min(34rem, 100%);
+        max-height: calc(100dvh - 2rem);
+        overflow: auto;
+        padding: 1.25rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--card-bg);
+        box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.45);
+      }
+
+      .user-audio-settings-dialog__header,
+      .user-audio-settings-dialog__actions,
+      .user-audio-settings-row,
+      .user-audio-settings-switch {
+        display: flex;
+        align-items: center;
+      }
+
+      .user-audio-settings-dialog__header { justify-content: space-between; gap: 1rem; }
+      .user-audio-settings-dialog__header h2 { margin: 0; }
+      .user-audio-settings-dialog__close { min-width: 2.7rem; padding-inline: 0.7rem; font-size: 1.35rem; }
+      .user-audio-settings-form { display: grid; gap: 0.9rem; margin-top: 1rem; }
+      .user-audio-settings-row { justify-content: space-between; gap: 1rem; }
+      .user-audio-settings-row label { color: var(--text); font-weight: 650; }
+      .user-audio-settings-row select { width: min(15rem, 55%); }
+      .user-audio-settings-range { display: grid; gap: 0.35rem; }
+      .user-audio-settings-range__label { display: flex; justify-content: space-between; gap: 1rem; font-weight: 650; }
+      .user-audio-settings-range input { width: 100%; }
+      .user-audio-settings-switch { justify-content: space-between; gap: 1rem; min-height: 2.5rem; font-weight: 650; }
+      .user-audio-settings-dialog__actions { justify-content: flex-end; gap: 0.65rem; margin-top: 0.4rem; }
+      .user-audio-settings-error { color: #fca5a5; }
+      .user-settings-icon svg { width: 1.15rem; height: 1.15rem; display: block; }
+
       .admin-bar {
         position: fixed;
         top: 0;
@@ -124,6 +168,14 @@
       .admin-bar__nav a[aria-current='location'] {
         color: #fff;
         border-bottom-color: var(--primary);
+      }
+
+      @media (hover: none) and (pointer: coarse) {
+        .admin-bar__nav a:not([aria-current='location']):focus {
+          color: var(--muted);
+          border-bottom-color: transparent;
+          outline: none;
+        }
       }
 
       #admin-logout {
@@ -1558,15 +1610,31 @@
       }
 
       .drag-handle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 2rem;
+        min-height: 2rem;
         cursor: grab;
         font-size: 1rem;
         color: var(--muted);
         user-select: none;
+        touch-action: none;
         line-height: 1;
       }
 
       .draggable-target.dragging {
         opacity: 0.6;
+      }
+
+      .production-order-list.is-touch-reordering,
+      .item-list.is-touch-reordering {
+        user-select: none;
+      }
+
+      .production-order-list.is-touch-reordering .drag-handle,
+      .item-list.is-touch-reordering .drag-handle {
+        cursor: grabbing;
       }
 
       .inline-controls {
@@ -2284,6 +2352,8 @@
         background: transparent;
         box-shadow: none;
         cursor: crosshair;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
         transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
       }
 
@@ -2623,9 +2693,18 @@
         .admin-bar__nav {
           grid-column: 1 / -1;
           grid-row: 2;
-          justify-content: flex-start;
-          overflow-x: auto;
+          justify-content: space-between;
+          gap: 0;
+          width: 100%;
+          overflow-x: hidden;
           scrollbar-width: none;
+        }
+
+        .admin-bar__nav a {
+          min-width: 0;
+          min-height: 1.9rem;
+          padding: 0.25rem 0.3rem;
+          font-size: 0.72rem;
         }
 
         .admin-bar__actions {
@@ -2932,14 +3011,33 @@
           overflow: hidden;
         }
 
-        .entity-sidebar .entity-create-form,
+        .entity-sidebar .entity-create-form {
+          display: grid;
+          gap: 0.55rem;
+          inline-size: 100%;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+        }
+
+        .entity-sidebar .entity-create-form .field-group {
+          display: grid;
+          gap: 0.25rem;
+        }
+
         .entity-sidebar .entity-create-form .field-group,
         .entity-sidebar .entity-create-form .password-input-wrap,
         .entity-sidebar .entity-create-form input,
         .entity-sidebar .entity-create-form button[type='submit'] {
+          flex: 0 0 100%;
+          inline-size: 100%;
           width: 100%;
           max-width: 100%;
           min-width: 0;
+        }
+
+        .entity-sidebar .entity-create-form .password-input-wrap {
+          position: relative;
         }
 
         .entity-detail-item,
@@ -3058,7 +3156,8 @@
         }
 
         .admin-bar__nav a {
-          padding-inline: 0.55rem;
+          padding-inline: 0.18rem;
+          font-size: 0.68rem;
         }
 
         .entity-sidebar,
@@ -3877,6 +3976,22 @@
       </form>
     </div>
 
+    <div id="user-audio-settings-dialog" class="user-audio-settings-dialog is-hidden" role="dialog" aria-modal="true" aria-labelledby="user-audio-settings-title">
+      <form id="user-audio-settings-form" class="user-audio-settings-dialog__panel">
+        <div class="user-audio-settings-dialog__header">
+          <h2 id="user-audio-settings-title">Audio settings</h2>
+          <button type="button" class="user-audio-settings-dialog__close" id="user-audio-settings-close" aria-label="Close">&times;</button>
+        </div>
+        <div id="user-audio-settings-fields" class="user-audio-settings-form"></div>
+        <div id="user-audio-settings-error" class="user-audio-settings-error is-hidden" aria-live="polite"></div>
+        <div class="user-audio-settings-dialog__actions">
+          <button type="button" id="user-audio-settings-cancel">Cancel</button>
+          <button type="submit" id="user-audio-settings-save">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <script src="/userAudioSettings.js"></script>
     <script src="admin.js"></script>
   </body>
 </html>

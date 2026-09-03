@@ -620,6 +620,9 @@ function setupAdminNavigation() {
       event.preventDefault();
       const sectionKey = link.dataset.adminNav;
       activateAdminView(sectionKey);
+      if (window.matchMedia?.('(hover: none) and (pointer: coarse)').matches) {
+        link.blur();
+      }
     });
   });
 
@@ -2090,6 +2093,7 @@ function initProductionTargetOrdering(userId, list) {
     list.addEventListener('drop', (event) => event.preventDefault());
     list._productionDropReady = true;
   }
+  initTouchTargetOrdering(list, () => saveProductionTargetOrder(userId, list));
 }
 
 async function saveProductionTargetOrder(userId, list) {
@@ -2590,6 +2594,11 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
     const stopTransmissionButton = !isSuperadmin && !isGuestProfile
       ? `<button type="button" class="small warning" data-stop-transmission-user-id="${user.id}" onclick="stopUserTransmission(${user.id}, this)" disabled>Stop transmission</button>`
       : '';
+    const audioSettingsButton = !isSuperadmin && !isGuestProfile
+      ? `<button type="button" class="small icon-button user-settings-icon" onclick='openUserAudioSettings(${user.id}, ${JSON.stringify(user.name)})' aria-label="Audio settings for ${safeName}" title="Audio settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 13.5a7.8 7.8 0 0 0 .05-3l2-1.55-2-3.45-2.48 1a8.2 8.2 0 0 0-2.57-1.49L14 2.4h-4l-.4 2.61A8.2 8.2 0 0 0 7.03 6.5l-2.48-1-2 3.45 2 1.55a7.8 7.8 0 0 0 .05 3l-2.05 1.55 2 3.45 2.5-1a8.2 8.2 0 0 0 2.55 1.48L10 21.6h4l.4-2.62a8.2 8.2 0 0 0 2.55-1.48l2.5 1 2-3.45-2.05-1.55Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>`
+      : '';
     const li = document.createElement('li');
     li.className = 'list-item entity-detail-item';
     li.dataset.entityId = String(user.id);
@@ -2703,6 +2712,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
           <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
           ${stopTransmissionButton}
+          ${audioSettingsButton}
           ${adminToggle}
           ${deleteButton}
         </div>
@@ -3280,6 +3290,7 @@ function initTargetOrdering(userId, ul) {
   ul._dragOverHandler = onDragOver;
   ul.addEventListener('dragover', onDragOver);
   ul.addEventListener('drop', e => e.preventDefault());
+  initTouchTargetOrdering(ul, () => saveTargetOrder(userId, ul));
 }
 
 function getDragAfterElement(container, y) {
@@ -3292,6 +3303,68 @@ function getDragAfterElement(container, y) {
     }
     return closest;
   }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+}
+
+function initTouchTargetOrdering(list, onCommit) {
+  list._touchReorderCommit = onCommit;
+  if (list._touchReorderReady) return;
+
+  let session = null;
+  const finish = (event, cancelled = false) => {
+    if (!session || event.pointerId !== session.pointerId) return;
+    const { handle, item, moved, originalNextSibling } = session;
+    session = null;
+    item.classList.remove('dragging');
+    list.classList.remove('is-touch-reordering');
+    try {
+      handle.releasePointerCapture(event.pointerId);
+    } catch {}
+
+    if (cancelled) {
+      list.insertBefore(item, originalNextSibling);
+      return;
+    }
+    if (moved) list._touchReorderCommit?.();
+  };
+
+  list.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' || !event.isPrimary) return;
+    const handle = event.target.closest('.drag-handle');
+    const item = handle?.closest('.draggable-target');
+    if (!handle || !item || !list.contains(item)) return;
+
+    event.preventDefault();
+    session = {
+      pointerId: event.pointerId,
+      handle,
+      item,
+      moved: false,
+      originalNextSibling: item.nextSibling,
+    };
+    item.classList.add('dragging');
+    list.classList.add('is-touch-reordering');
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {}
+  });
+
+  list.addEventListener('pointermove', (event) => {
+    if (!session || event.pointerId !== session.pointerId) return;
+    event.preventDefault();
+    const afterElement = getDragAfterElement(list, event.clientY);
+    const previousNextSibling = session.item.nextSibling;
+    if (!afterElement) list.appendChild(session.item);
+    else if (afterElement !== session.item) list.insertBefore(session.item, afterElement);
+    if (session.item.nextSibling !== previousNextSibling) session.moved = true;
+
+    const edge = 56;
+    if (event.clientY < edge) window.scrollBy(0, -12);
+    else if (event.clientY > window.innerHeight - edge) window.scrollBy(0, 12);
+  }, { passive: false });
+
+  list.addEventListener('pointerup', (event) => finish(event));
+  list.addEventListener('pointercancel', (event) => finish(event, true));
+  list._touchReorderReady = true;
 }
 
 async function saveTargetOrder(userId, ul) {
@@ -4774,6 +4847,10 @@ function setupMatrixInteractions(container, toggleSelector, toggleHandler) {
     }
     toggleHandler(toggle);
   });
+  container.addEventListener('dblclick', (event) => {
+    if (!event.target.closest(toggleSelector)) return;
+    event.preventDefault();
+  });
   container.addEventListener('pointerdown', (event) => {
     if (event.pointerType === 'touch' || event.button !== 0) return;
     const toggle = event.target.closest(toggleSelector);
@@ -4875,9 +4952,117 @@ window.addEventListener('resize', () => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && userAudioSettingsDialog && !userAudioSettingsDialog.classList.contains('is-hidden')) {
+    closeUserAudioSettings();
+    return;
+  }
   if (event.key === 'Escape' && adminImageLightbox && !adminImageLightbox.classList.contains('is-hidden')) {
     closeAdminImageLightbox();
   }
+});
+
+const userAudioSettingsDialog = document.getElementById('user-audio-settings-dialog');
+const userAudioSettingsForm = document.getElementById('user-audio-settings-form');
+const userAudioSettingsFields = document.getElementById('user-audio-settings-fields');
+const userAudioSettingsTitle = document.getElementById('user-audio-settings-title');
+const userAudioSettingsError = document.getElementById('user-audio-settings-error');
+const userAudioSettingsSave = document.getElementById('user-audio-settings-save');
+let editingAudioSettingsUserId = null;
+
+function renderUserAudioSettingsFields(settings, targets = []) {
+  const settingsApi = window.TalktomeUserAudioSettings;
+  const checked = (key) => settings[key] ? 'checked' : '';
+  const options = (values, selected, label) => values.map((value) => (
+    `<option value="${escapeHtml(value)}" ${String(value) === String(selected) ? 'selected' : ''}>${escapeHtml(label(value))}</option>`
+  )).join('');
+  const targetOptions = targets.map((target) => {
+    const identity = `${target.type}:${target.id}`;
+    const typeLabel = target.type === 'conference' ? 'Conference' : 'User';
+    return `<option value="${escapeHtml(identity)}" ${identity === settings.voiceTriggerTarget ? 'selected' : ''}>${escapeHtml(target.name)} (${typeLabel})</option>`;
+  }).join('');
+  userAudioSettingsFields.innerHTML = `
+    <div class="user-audio-settings-row"><label for="admin-audio-profile">Audio profile</label><select id="admin-audio-profile">${options(settingsApi.AUDIO_PROFILES, settings.audioProfile, (value) => ({ 'ultra-low': 'Ultra low (5 ms frame)', low: 'Low (10 ms frame)', standard: 'Standard (20 ms frame)' }[value]))}</select></div>
+    <div class="user-audio-settings-row"><label for="admin-dim-amount">Dim amount</label><select id="admin-dim-amount">${options(settingsApi.DIM_AMOUNT_DB_OPTIONS, settings.dimAmountDb, (value) => `${value} dB`)}</select></div>
+    <label class="user-audio-settings-switch"><span>Dim feeds while speaking</span><span class="admin-switch"><input id="admin-dim-speaking" type="checkbox" role="switch" ${checked('dimFeedsWhileSpeaking')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Dim when addressed</span><span class="admin-switch"><input id="admin-dim-addressed" type="checkbox" role="switch" ${checked('dimWhenAddressed')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Audio auto processing</span><span class="admin-switch"><input id="admin-auto-processing" type="checkbox" role="switch" ${checked('audioAutoProcessing')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Left-hand mode</span><span class="admin-switch"><input id="admin-left-hand" type="checkbox" role="switch" ${checked('leftHandMode')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Lock multiple targets</span><span class="admin-switch"><input id="admin-lock-multiple" type="checkbox" role="switch" ${checked('lockMultipleTargets')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-mic-gain"><span>Manual mic gain</span><output id="admin-mic-gain-value">${Number(settings.userInputGainDb).toFixed(1)} dB</output></label><input id="admin-mic-gain" type="range" min="-30" max="40" step="0.5" value="${settings.userInputGainDb}"></div>
+    <label class="user-audio-settings-switch"><span>Level trigger</span><span class="admin-switch"><input id="admin-level-trigger" type="checkbox" role="switch" ${checked('voiceTriggerEnabled')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <div class="user-audio-settings-row"><label for="admin-level-target">Target</label><select id="admin-level-target"><option value="">Select target</option>${targetOptions}</select></div>
+    <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-level-threshold"><span>Threshold</span><output id="admin-level-threshold-value">${Number(settings.voiceTriggerThresholdDb).toFixed(1)} dB</output></label><input id="admin-level-threshold" type="range" min="-60" max="-6" step="1" value="${settings.voiceTriggerThresholdDb}"></div>
+  `;
+  document.getElementById('admin-mic-gain')?.addEventListener('input', (event) => {
+    document.getElementById('admin-mic-gain-value').textContent = `${Number(event.target.value).toFixed(1)} dB`;
+  });
+  document.getElementById('admin-level-threshold')?.addEventListener('input', (event) => {
+    document.getElementById('admin-level-threshold-value').textContent = `${Number(event.target.value).toFixed(1)} dB`;
+  });
+}
+
+async function openUserAudioSettings(userId, userName) {
+  editingAudioSettingsUserId = Number(userId);
+  userAudioSettingsTitle.textContent = `Audio settings · ${userName}`;
+  userAudioSettingsFields.innerHTML = '<div class="setting-meta">Loading…</div>';
+  userAudioSettingsSave.disabled = true;
+  userAudioSettingsError.classList.add('is-hidden');
+  userAudioSettingsDialog.classList.remove('is-hidden');
+  try {
+    const response = await authedFetch(`/admin/users/${userId}/audio-settings`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Unable to load audio settings');
+    if (editingAudioSettingsUserId !== Number(userId)) return;
+    renderUserAudioSettingsFields(payload.settings, payload.targets);
+    userAudioSettingsSave.disabled = false;
+  } catch (error) {
+    userAudioSettingsFields.innerHTML = '';
+    userAudioSettingsError.textContent = error.message;
+    userAudioSettingsError.classList.remove('is-hidden');
+  }
+}
+
+function closeUserAudioSettings() {
+  editingAudioSettingsUserId = null;
+  userAudioSettingsDialog.classList.add('is-hidden');
+}
+
+userAudioSettingsForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!editingAudioSettingsUserId) return;
+  const settings = window.TalktomeUserAudioSettings.normalize({
+    audioProfile: document.getElementById('admin-audio-profile').value,
+    dimAmountDb: Number(document.getElementById('admin-dim-amount').value),
+    dimFeedsWhileSpeaking: document.getElementById('admin-dim-speaking').checked,
+    dimWhenAddressed: document.getElementById('admin-dim-addressed').checked,
+    audioAutoProcessing: document.getElementById('admin-auto-processing').checked,
+    leftHandMode: document.getElementById('admin-left-hand').checked,
+    lockMultipleTargets: document.getElementById('admin-lock-multiple').checked,
+    userInputGainDb: Number(document.getElementById('admin-mic-gain').value),
+    voiceTriggerEnabled: document.getElementById('admin-level-trigger').checked,
+    voiceTriggerTarget: document.getElementById('admin-level-target').value,
+    voiceTriggerThresholdDb: Number(document.getElementById('admin-level-threshold').value),
+  }, { strict: true });
+  userAudioSettingsSave.disabled = true;
+  try {
+    const response = await authedFetch(`/admin/users/${editingAudioSettingsUserId}/audio-settings`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Unable to save audio settings');
+    closeUserAudioSettings();
+    showMessage('Audio settings saved', 'success', 'users');
+  } catch (error) {
+    userAudioSettingsError.textContent = error.message;
+    userAudioSettingsError.classList.remove('is-hidden');
+  } finally {
+    userAudioSettingsSave.disabled = false;
+  }
+});
+document.getElementById('user-audio-settings-close')?.addEventListener('click', closeUserAudioSettings);
+document.getElementById('user-audio-settings-cancel')?.addEventListener('click', closeUserAudioSettings);
+userAudioSettingsDialog?.addEventListener('click', (event) => {
+  if (event.target === userAudioSettingsDialog) closeUserAudioSettings();
 });
 
 ensureAdminSession();

@@ -1,6 +1,7 @@
 const db = require('./db');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const { normalize: normalizeUserAudioSettings } = require('./public/userAudioSettings');
 
 const BRIDGE_ENDPOINT_TEXT_LIMIT = 200;
 const BRIDGE_TRIGGER_DEFAULT_THRESHOLD_DB = -45;
@@ -204,6 +205,23 @@ function getUserById(id) {
     LEFT JOIN user_bridge_endpoints ON user_bridge_endpoints.user_id = users.id
     WHERE users.id = ?
   `).get(id);
+}
+
+function getUserAudioSettings(userId) {
+  const row = db.prepare('SELECT audio_settings FROM users WHERE id = ?').get(userId);
+  if (!row) return null;
+  try {
+    return normalizeUserAudioSettings(JSON.parse(row.audio_settings || '{}'), { partial: true });
+  } catch {
+    return {};
+  }
+}
+
+function updateUserAudioSettings(userId, settings) {
+  const normalized = normalizeUserAudioSettings(settings, { strict: true, partial: true });
+  const result = db.prepare('UPDATE users SET audio_settings = ? WHERE id = ?')
+    .run(JSON.stringify(normalized), userId);
+  return result.changes > 0 ? normalized : null;
 }
 
 function getBridgeEndpointsForDevice(bridgeDevice) {
@@ -912,7 +930,7 @@ function exportDatabaseSnapshot() {
       ORDER BY production_id, user_id, position
     `).all(),
     users: db.prepare(`
-      SELECT id, name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile, login_token_hash, last_online_at
+      SELECT id, name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile, login_token_hash, last_online_at, audio_settings
       FROM users
       ORDER BY id
     `).all(),
@@ -1066,8 +1084,8 @@ function importDatabaseSnapshot(snapshot) {
     }
 
     const insertUser = db.prepare(`
-      INSERT INTO users (id, name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile, login_token_hash, last_online_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile, login_token_hash, last_online_at, audio_settings)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertConference = db.prepare(`
       INSERT INTO conferences (id, name)
@@ -1181,7 +1199,11 @@ function importDatabaseSnapshot(snapshot) {
         row.admin_must_change ? 1 : 0,
         row.is_guest_profile ? 1 : 0,
         row.login_token_hash ? String(row.login_token_hash) : null,
-        row.last_online_at ? String(row.last_online_at) : null
+        row.last_online_at ? String(row.last_online_at) : null,
+        JSON.stringify(normalizeUserAudioSettings(
+          typeof row.audio_settings === 'string' ? JSON.parse(row.audio_settings || '{}') : row.audio_settings,
+          { partial: true }
+        ))
       );
     });
 
@@ -2083,7 +2105,7 @@ function ensureDefaultAdmin() {
     return existingUser.id;
   }
 
-  const hash = bcrypt.hashSync('admin', 10);
+  const hash = bcrypt.hashSync('talktom3', 10);
   const stmt = db.prepare(`
     INSERT INTO users (name, password, is_admin, is_superadmin, admin_must_change)
     VALUES (?, ?, 1, 1, 1)
@@ -2223,6 +2245,8 @@ ensureDefaultAdmin();
 module.exports = {
   getAllUsers,
   getUserById,
+  getUserAudioSettings,
+  updateUserAudioSettings,
   getBridgeEndpointsForDevice,
   getFeedBridgeEndpointsForDevice,
   getGuestProfileUser,

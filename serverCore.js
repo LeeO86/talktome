@@ -16,6 +16,7 @@ const { getDataDir } = require("./dataPaths");
 const { ApplePttPushService } = require("./applePttPushService");
 const { buildLoginUrl, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
+const { installHttpRedirectOnHttpsPort } = require("./httpsRedirect");
 const {
   listMediaNetworkInterfaces,
   normalizeSocketAddress,
@@ -37,6 +38,10 @@ const {
   serializeDefaultClientSettingsScript,
 } = require("./defaultClientSettings");
 const { stopPeerTransmission } = require("./transmissionControl");
+const {
+  normalize: normalizeUserAudioSettings,
+  resolve: resolveUserAudioSettings,
+} = require("./public/userAudioSettings");
 
 const SERVER_APP_VERSION = resolveServerAppVersion();
 const CLIENT_ICE_CONFIG = resolveClientIceConfig(process.env);
@@ -142,6 +147,8 @@ const {
   getOrCreateGuestProfile,
   getAllUsers,
   getUserById,
+  getUserAudioSettings,
+  updateUserAudioSettings,
   getBridgeEndpointsForDevice,
   getFeedBridgeEndpointsForDevice,
   getAllConferences,
@@ -2728,6 +2735,57 @@ app.get("/users", requireAdmin, (req, res) => {
     ...user,
     bridge_productions: getProductionsForUser(user.id).map(({ id, name }) => ({ id, name })),
   })));
+});
+
+function getResolvedUserAudioSettings(userId) {
+  const config = loadRuntimeConfig() || {};
+  return resolveUserAudioSettings(
+    getUserAudioSettings(userId) || {},
+    resolveDefaultClientSettings(config.defaultClientSettings)
+  );
+}
+
+function getUserAudioSettingTargets(userId) {
+  const productions = getEnabledProductionsForUser(userId);
+  const source = productions.length
+    ? productions.flatMap((production) => getProductionTargets(userId, production.id))
+    : getUserTargets(userId);
+  const unique = new Map();
+  source
+    .filter((target) => ['user', 'conference'].includes(target.targetType) && target.canTalk !== false)
+    .forEach((target) => unique.set(`${target.targetType}:${target.targetId}`, {
+      id: Number(target.targetId),
+      type: target.targetType,
+      name: target.name,
+    }));
+  return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+app.get('/admin/users/:id/audio-settings', requireAdmin, (req, res) => {
+  const user = getUserById(req.params.id);
+  if (!user || user.is_superadmin || user.is_guest_profile) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  res.json({
+    settings: getResolvedUserAudioSettings(user.id),
+    targets: getUserAudioSettingTargets(user.id),
+  });
+});
+
+app.put('/admin/users/:id/audio-settings', requireAdmin, (req, res) => {
+  try {
+    const user = getUserById(req.params.id);
+    if (!user || user.is_superadmin || user.is_guest_profile) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const settings = normalizeUserAudioSettings(req.body?.settings, { strict: true });
+    updateUserAudioSettings(user.id, settings);
+    const resolved = getResolvedUserAudioSettings(user.id);
+    findUserPeerByUserId(user.id)?.peer?.socket?.emit('user-audio-settings-updated', { settings: resolved });
+    res.json({ ok: true, settings: resolved });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Invalid audio settings' });
+  }
 });
 
 app.get("/conferences", requireAdmin, (req, res) => {
@@ -5965,6 +6023,10 @@ const httpsOptions = {
 };
 
 const server = https.createServer(httpsOptions, app);
+installHttpRedirectOnHttpsPort(server, {
+  httpsPort: HTTPS_PORT,
+  fallbackHost: mdnsHostname || "localhost",
+});
 const io = socketIO(server, { serveClient: false });
 
 companionNamespace = io.of("/companion");
@@ -6342,17 +6404,28 @@ function startMdnsResponder(hostname) {
   return socket;
 }
 
-// Optional HTTP → HTTPS redirect server
 const http = require("http");
-if (HTTP_PORT !== null) {
-  const redirectServer = http.createServer((req, res) => {
-    const headerHost = req.headers.host?.replace(/:.*/, "");
-    const host = headerHost || mdnsHostname || "localhost";
-    res.writeHead(301, {
-      Location: `https://${host}:${HTTPS_PORT}${req.url}`,
-    });
-    res.end();
+
+function getHttpsRedirectHost(req) {
+  const rawHost = String(req.headers.host || "").trim();
+  const bracketedIpv6 = rawHost.match(/^(\[[0-9a-f:.]+\])(?::\d+)?$/i);
+  if (bracketedIpv6) return bracketedIpv6[1];
+  const hostname = rawHost.match(/^([a-z0-9.-]+)(?::\d+)?$/i);
+  return hostname?.[1] || mdnsHostname || "localhost";
+}
+
+function redirectToHttps(req, res) {
+  const host = getHttpsRedirectHost(req);
+  res.writeHead(301, {
+    Connection: "close",
+    Location: `https://${host}:${HTTPS_PORT}${req.url}`,
   });
+  res.end();
+}
+
+// Optional dedicated HTTP → HTTPS redirect server
+if (HTTP_PORT !== null) {
+  const redirectServer = http.createServer(redirectToHttps);
 
   redirectServer.listen(HTTP_PORT, () => {
     const sourceLabel = httpPortSource === "auto" ? "(auto for mDNS)" : "";
@@ -7527,6 +7600,10 @@ io.on("connection", (socket) => {
         targetAudioStates: normalizedKind === "user" && peer.userId != null
           ? getUserTargetAudioStates(peer.userId)
           : [],
+        userAudioSettings: normalizedKind === "user" && peer.userId != null
+          && Object.keys(getUserAudioSettings(peer.userId) || {}).length
+          ? getResolvedUserAudioSettings(peer.userId)
+          : null,
       });
     }
   });
@@ -7616,6 +7693,20 @@ io.on("connection", (socket) => {
       reason,
       fallbackName: peer.name || null,
     });
+  });
+
+  socket.on('user-audio-settings-update', ({ settings } = {}, callback = () => {}) => {
+    const peer = peers.get(socket.id);
+    if (!peer || peer.kind !== 'user' || peer.userId == null) {
+      return callback({ ok: false, error: 'Peer not registered' });
+    }
+    try {
+      const normalized = normalizeUserAudioSettings(settings, { strict: true });
+      updateUserAudioSettings(peer.userId, normalized);
+      callback({ ok: true, settings: getResolvedUserAudioSettings(peer.userId) });
+    } catch (error) {
+      callback({ ok: false, error: error.message || 'Invalid audio settings' });
+    }
   });
 
   socket.on("ptt-state", (payload = {}) => {

@@ -244,6 +244,7 @@ const persistedTargetAudioStateMap = new Map();
 const pendingOfflineUserTimers = new Map();
 let recoverExistingIncomingPlayback = () => {};
 let attemptPlayAudio = () => Promise.resolve();
+let persistUserAudioSettingsHandler = () => {};
 let loadedTargetHotkeyStorageKey = null;
 
 let feedDuckingDb = hasServerDefaultClientSetting('dimAmountDb')
@@ -1466,6 +1467,7 @@ function setAudioProcessingEnabled(enabled, { persist = true, updateUI = true, r
     } catch (err) {
       console.warn('Unable to persist audio processing preference:', err);
     }
+    persistUserAudioSettingsHandler();
   }
 
   if (reinitialize) {
@@ -2222,6 +2224,7 @@ function setUserInputGainDb(dbValue, { persist = true, apply = true } = {}) {
     } catch (err) {
       console.warn('Unable to persist user input gain:', err);
     }
+    persistUserAudioSettingsHandler();
   }
 
   if (apply && userProcessingChain?.gainNode) {
@@ -3266,6 +3269,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (error) {
         console.warn('Unable to persist left-hand mode:', error);
       }
+      persistUserAudioSettingsHandler();
     }
   }
 
@@ -3286,6 +3290,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (error) {
         console.warn('Unable to persist multiple-target lock mode:', error);
       }
+      persistUserAudioSettingsHandler();
     }
     if (wasEnabled && !lockMultipleTargetsEnabled && activeTalkLocks.size > 1) {
       const [lockToKeep, ...locksToRemove] = getActiveTalkLockEntries();
@@ -3326,6 +3331,7 @@ document.addEventListener("DOMContentLoaded", () => {
         qualitySelect.value = 'ultra-low';
       }
       localStorage.setItem('audioQualityProfile', qualitySelect.value);
+      persistUserAudioSettingsHandler();
       cleanupMicTrack();
       if (voiceTriggerEnabled) {
         startVoiceTriggerMonitoring();
@@ -3347,6 +3353,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (err) {
         console.warn('Unable to persist feed dim level:', err);
       }
+      persistUserAudioSettingsHandler();
     }
 
     if (apply) {
@@ -3375,6 +3382,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (err) {
         console.warn('Unable to persist self dim preference:', err);
       }
+      persistUserAudioSettingsHandler();
     }
     if (apply) {
       applyFeedDucking();
@@ -3400,6 +3408,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (err) {
         console.warn('Unable to persist incoming dim preference:', err);
       }
+      persistUserAudioSettingsHandler();
     }
     if (apply) {
       applyFeedDucking();
@@ -6398,6 +6407,8 @@ let cachedOperatorTargets = null;
           }
           if (session.kind === 'user') {
             applyPersistedTargetAudioStates(registration.targetAudioStates || []);
+            if (registration.userAudioSettings) applyUserAudioSettings(registration.userAudioSettings);
+            else persistUserAudioSettingsHandler();
           }
           applyRegisteredProductionState(session, registration);
           const registeredProduction = (session.productions || []).find((production) => (
@@ -6632,6 +6643,8 @@ let cachedOperatorTargets = null;
 
     if (kind === 'user') {
       applyPersistedTargetAudioStates(reg.targetAudioStates || []);
+      if (reg.userAudioSettings) applyUserAudioSettings(reg.userAudioSettings);
+      else persistUserAudioSettingsHandler();
     }
 
     clearStoredGuestSession();
@@ -7921,6 +7934,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       } catch (err) {
         console.warn('Unable to persist level trigger state:', err);
       }
+      persistUserAudioSettingsHandler();
     }
     updateVoiceTriggerControlsState();
     if (voiceTriggerEnabled) {
@@ -7945,6 +7959,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       } catch (err) {
         console.warn('Unable to persist level trigger target:', err);
       }
+      persistUserAudioSettingsHandler();
     }
     if (voiceTriggerActive) {
       stopVoiceTriggerTalk();
@@ -7961,8 +7976,65 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       } catch (err) {
         console.warn('Unable to persist level trigger threshold:', err);
       }
+      persistUserAudioSettingsHandler();
     }
   }
+
+  function currentUserAudioSettings() {
+    return {
+      audioProfile: qualitySelect?.value || currentQualityKey(),
+      dimAmountDb: feedDuckingDb,
+      dimFeedsWhileSpeaking: feedDimSelf,
+      dimWhenAddressed: feedDimIncoming,
+      audioAutoProcessing: audioProcessingEnabled,
+      leftHandMode: leftHandModeEnabled,
+      lockMultipleTargets: lockMultipleTargetsEnabled,
+      userInputGainDb,
+      voiceTriggerEnabled,
+      voiceTriggerTarget: voiceTriggerTargetIdentity,
+      voiceTriggerThresholdDb,
+    };
+  }
+
+  let userAudioSettingsSaveTimer = null;
+  persistUserAudioSettingsHandler = () => {
+    if (session.kind !== 'user' || !socket.connected) return;
+    clearTimeout(userAudioSettingsSaveTimer);
+    userAudioSettingsSaveTimer = setTimeout(() => {
+      socket.emit('user-audio-settings-update', { settings: currentUserAudioSettings() }, (result = {}) => {
+        if (!result.ok) console.warn('Unable to save user audio settings:', result.error);
+      });
+    }, 120);
+  };
+
+  function applyUserAudioSettings(value) {
+    if (!value || typeof value !== 'object') return;
+    const settings = window.TalktomeUserAudioSettings?.resolve
+      ? window.TalktomeUserAudioSettings.resolve(value)
+      : value;
+    const qualityChanged = qualitySelect
+      && QUALITY_PROFILES[settings.audioProfile]
+      && qualitySelect.value !== settings.audioProfile;
+    if (qualityChanged) qualitySelect.value = settings.audioProfile;
+    setFeedDuckingDb(Number(settings.dimAmountDb), { persist: false });
+    setFeedDimSelf(settings.dimFeedsWhileSpeaking, { persist: false });
+    setFeedDimIncoming(settings.dimWhenAddressed, { persist: false });
+    setAudioProcessingEnabled(settings.audioAutoProcessing, { persist: false });
+    setLeftHandMode(settings.leftHandMode, { persist: false });
+    setLockMultipleTargets(settings.lockMultipleTargets, { persist: false });
+    setUserInputGainDb(Number(settings.userInputGainDb), { persist: false });
+    setVoiceTriggerTargetIdentity(settings.voiceTriggerTarget, { persist: false });
+    setVoiceTriggerThresholdDb(Number(settings.voiceTriggerThresholdDb), { persist: false });
+    setVoiceTriggerEnabled(settings.voiceTriggerEnabled, { persist: false });
+    if (qualityChanged) {
+      cleanupMicTrack();
+      if (voiceTriggerEnabled) startVoiceTriggerMonitoring();
+    }
+  }
+
+  socket.on('user-audio-settings-updated', ({ settings } = {}) => {
+    if (session.kind === 'user') applyUserAudioSettings(settings);
+  });
 
   restartVoiceTriggerMonitorHandler = () => {
     stopVoiceTriggerMonitoring();

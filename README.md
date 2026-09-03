@@ -31,7 +31,7 @@ optional Talktome Bridge app.
 3. Open `/admin` on the same HTTPS URL.
 4. Log in with the initial admin account:
    - Username: `admin`
-   - Password: `admin`
+   - Password: `talktom3`
 5. Change the admin password when prompted.
 6. In Admin, create users, feeds and conferences, then assign targets to the users who should talk to each other.
 7. Operators log in at `/` with their user credentials and allow microphone access.
