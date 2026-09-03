@@ -94,13 +94,13 @@
         font-weight: 650;
         line-height: 1.25;
       }
-      .user-audio-settings-dialog__close {
+      .user-audio-settings-dialog button.user-audio-settings-dialog__close {
         display: grid;
         place-items: center;
-        width: 2.25rem;
-        min-width: 2.25rem;
-        height: 2.25rem;
-        min-height: 2.25rem;
+        width: 2.2rem;
+        min-width: 2.2rem;
+        height: 2.2rem;
+        min-height: 2.2rem;
         padding: 0;
         aspect-ratio: 1;
         font-size: 1.15rem;
@@ -1109,7 +1109,8 @@
       }
 
       .config-panel button:not(.media-network-qr-button),
-      .admin-action-dialog__actions button {
+      .admin-action-dialog__actions button,
+      .user-audio-settings-dialog__close {
         height: 2.2rem;
         min-height: 0;
         padding: 0.4rem 0.75rem;
@@ -1121,7 +1122,8 @@
       }
 
       .config-panel button:not(.media-network-qr-button):hover,
-      .admin-action-dialog__actions button:hover {
+      .admin-action-dialog__actions button:hover,
+      .user-audio-settings-dialog__close:hover {
         border-color: rgba(59, 130, 246, 0.58);
         background: rgba(37, 99, 235, 0.3);
       }

@@ -32,12 +32,12 @@ test('target button ordering supports touch pointers', () => {
 test('user audio settings dialog remains compact on regular screens', () => {
   assert.match(html, /\.user-audio-settings-dialog__panel\s*\{[^}]*width:\s*min\(44rem,\s*100%\);[^}]*font-size:\s*0\.86rem;/s);
   assert.match(html, /\.user-audio-settings-dialog__header h2\s*\{[^}]*font-size:\s*1\.15rem;[^}]*font-weight:\s*650;/s);
-  assert.match(html, /\.user-audio-settings-dialog__close\s*\{[^}]*width:\s*2\.25rem;[^}]*height:\s*2\.25rem;[^}]*aspect-ratio:\s*1;/s);
+  assert.match(html, /\.user-audio-settings-dialog button\.user-audio-settings-dialog__close\s*\{[^}]*width:\s*2\.2rem;[^}]*height:\s*2\.2rem;[^}]*aspect-ratio:\s*1;/s);
   assert.match(html, /\.user-audio-settings-form\s*\{[^}]*gap:\s*0\.5rem;/s);
   assert.match(html, /\.user-audio-settings-row select\s*\{[^}]*height:\s*2\.15rem;/s);
   assert.match(html, /\.user-audio-settings-range input\[type='range'\]\s*\{[^}]*height:\s*1\.15rem;/s);
   assert.match(html, /user-audio-settings-dialog__actions admin-action-dialog__actions/);
   assert.match(html, /id="user-audio-settings-cancel" class="admin-action-dialog__cancel"/);
   assert.match(html, /id="user-audio-settings-save" class="admin-action-dialog__confirm"/);
-  assert.match(html, /\.config-panel button:not\(\.media-network-qr-button\),\s*\.admin-action-dialog__actions button\s*\{[^}]*height:\s*2\.2rem;[^}]*min-height:\s*0;[^}]*padding:\s*0\.4rem 0\.75rem;[^}]*font-size:\s*0\.8rem;/s);
+  assert.match(html, /\.config-panel button:not\(\.media-network-qr-button\),\s*\.admin-action-dialog__actions button,\s*\.user-audio-settings-dialog__close\s*\{[^}]*height:\s*2\.2rem;[^}]*min-height:\s*0;[^}]*padding:\s*0\.4rem 0\.75rem;[^}]*font-size:\s*0\.8rem;/s);
 });
