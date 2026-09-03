@@ -140,11 +140,7 @@
       .user-audio-settings-dialog .admin-switch input:checked + .admin-switch__track::after {
         transform: translateX(1.12rem);
       }
-      .user-audio-settings-dialog__actions { justify-content: flex-end; gap: 0.55rem; margin-top: 0.3rem; }
-      .user-audio-settings-dialog__actions button {
-        min-height: 2.15rem;
-        padding: 0.35rem 0.8rem;
-      }
+      .user-audio-settings-dialog__actions { margin-top: 0.3rem; }
       .user-audio-settings-error { color: #fca5a5; }
       .user-settings-button { gap: 0.4rem; }
       .user-settings-button svg { width: 1.05rem; height: 1.05rem; display: block; }
@@ -4032,9 +4028,9 @@
         </div>
         <div id="user-audio-settings-fields" class="user-audio-settings-form"></div>
         <div id="user-audio-settings-error" class="user-audio-settings-error is-hidden" aria-live="polite"></div>
-        <div class="user-audio-settings-dialog__actions">
-          <button type="button" id="user-audio-settings-cancel">Cancel</button>
-          <button type="submit" id="user-audio-settings-save">Save</button>
+        <div class="user-audio-settings-dialog__actions admin-action-dialog__actions">
+          <button type="button" id="user-audio-settings-cancel" class="admin-action-dialog__cancel">Cancel</button>
+          <button type="submit" id="user-audio-settings-save" class="admin-action-dialog__confirm">Save</button>
         </div>
       </form>
     </div>

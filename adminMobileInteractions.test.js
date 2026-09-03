@@ -36,4 +36,7 @@ test('user audio settings dialog remains compact on regular screens', () => {
   assert.match(html, /\.user-audio-settings-form\s*\{[^}]*gap:\s*0\.5rem;/s);
   assert.match(html, /\.user-audio-settings-row select\s*\{[^}]*height:\s*2\.15rem;/s);
   assert.match(html, /\.user-audio-settings-range input\[type='range'\]\s*\{[^}]*height:\s*1\.15rem;/s);
+  assert.match(html, /user-audio-settings-dialog__actions admin-action-dialog__actions/);
+  assert.match(html, /id="user-audio-settings-cancel" class="admin-action-dialog__cancel"/);
+  assert.match(html, /id="user-audio-settings-save" class="admin-action-dialog__confirm"/);
 });
