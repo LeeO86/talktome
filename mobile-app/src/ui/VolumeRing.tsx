@@ -1,11 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { formatLinearLevelDbShort, volumeMeterFill } from '../protocol';
+import { VOLUME_METER_TICKS, formatLinearLevelDbShort, volumeMeterFill } from '../protocol';
 import { SpeakerIcon } from './icons';
 import { colors } from './theme';
 
-const TICKS = 22;
 const START_DEG = 218;
 const SWEEP_DEG = 284;
 const DOUBLE_PRESS_MS = 280;
@@ -31,7 +30,7 @@ export function VolumeRing({
 }: Props) {
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
   const size = compact ? 44 : 52;
-  const filled = muted ? 0 : Math.round(volumeMeterFill(level) * TICKS);
+  const filled = muted ? 0 : Math.round(volumeMeterFill(level) * VOLUME_METER_TICKS);
   const accent = muted ? colors.danger : dimmed ? 'rgba(255,255,255,0.38)' : colors.accent;
   const track = muted ? 'rgba(255,140,140,0.28)' : 'rgba(255,255,255,0.16)';
   const label = muted ? null : formatLinearLevelDbShort(level);
@@ -63,7 +62,7 @@ export function VolumeRing({
 
   const face = (
     <>
-      {Array.from({ length: TICKS }, (_, index) => (
+      {Array.from({ length: VOLUME_METER_TICKS }, (_, index) => (
         <View
           key={index}
           pointerEvents="none"
@@ -72,7 +71,7 @@ export function VolumeRing({
             {
               width: size,
               height: size,
-              transform: [{ rotate: `${START_DEG + (index / (TICKS - 1)) * SWEEP_DEG}deg` }],
+              transform: [{ rotate: `${START_DEG + (index / (VOLUME_METER_TICKS - 1)) * SWEEP_DEG}deg` }],
             },
           ]}
         >
