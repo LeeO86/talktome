@@ -1,779 +1,768 @@
 # Talktome Headless Client — Specification
 
-## Context
+`headless-client/` is a **Rust** Talktome endpoint for small Linux boards
+(Raspberry Pi first) that behaves like a normal Talktome *user* without a
+browser: it talks and listens over the same WebRTC path browsers use, is
+driven from a directly attached Elgato Stream Deck and/or GPIO buttons, and
+drives GPIO outputs for the user's camera tally. It is packaged as a Debian
+package (`talktome-headless`) for arm64, armhf and amd64.
 
-`gateway/radioGateway.js` is a working single-channel audio gateway that
-connects one ALSA device to Talktome over a **plain RTP** transport
-(`mediasoup` `PlainTransport`, unencrypted, no ICE/DTLS), registering
-itself with `force: true` on a normal Talktome user id. It is designed
-for a stationary host with a fixed network path
-(typically WireGuard) and stays in scope for that deployment,
-**unmodified**.
-
-The goal is to run a Talktome endpoint **on a mobile
-device** (a phone-class or portable Linux board,
-moving between Wi-Fi and cellular networks) with **multiple independent
-instances on the same physical device** (e.g. several channels/roles
-carried by one operator, or one device serving several radios/handsets).
-
-Two properties of `radioGateway.js` do not survive that move:
-
-1. **Plain RTP has no NAT/mobility story.** `comedia` address-learning
-   binds the server's send target to whatever source address the first
-   packet arrived from; a Wi-Fi↔cellular handover, a carrier-grade NAT
-   remapping, or a symmetric NAT changes that address and plain RTP has
-   no mechanism to recover — no ICE restart, no keepalive-driven
-   rebinding, nothing. It also carries audio in cleartext. WebRTC's
-   ICE (STUN/TURN, connectivity checks, restart) and mandatory DTLS-SRTP
-   are exactly the mechanism a mobile network path needs, and Talktome's
-   server already runs `router.createWebRtcTransport(...)` for every
-   browser user (`serverCore.js`, via `webrtcConfig.js`), so no
-   server-side change is required to use it.
-2. **`force: true` registration is a gateway-only shortcut.** A normal
-   browser client registers with `force: false` and only retries with
-   `force: true` after a human confirms they want to kick their own
-   prior session (`public/client.js`, `registerUserWithConflictPrompt`).
-   The gateway skips that entirely and always evicts whoever currently
-   holds the user id. A device meant to look like "just another
-   Talktome user" to the server should behave like one, not like a
-   privileged relay.
-
-This specification defines a **new, separate component** —
-`headless-client/` — that is architecturally *inspired by*
-`radioGateway.js` (its Audio Core / RX-TX Engine / Trigger Interface
-split, per §§4–11 of the design this gateway already implements) but is
-**not a refactor of it and does not modify `gateway/radioGateway.js` in
-any way**. The two components solve different deployment problems with
-different transports and different server-facing identities, and
-duplicating the *design pattern* (not the code) is the right call here
-— unlike the original gateway refactor, where duplicating code was
-explicitly rejected, here the transport and identity model are
-fundamentally different enough that a shared implementation would need
-transport-shaped conditionals throughout the core.
+This document replaces the earlier Node-oriented draft. Decisions that were
+taken during review are recorded in §19.
 
 ---
 
-# 1. Goals
+## 1. Context and goals
 
-The headless client must provide:
+Talktome already has three kinds of endpoints:
 
-1. A Talktome endpoint that runs headless during normal operation (no
-   display, keyboard, or webview attached, no interaction from whoever
-   is carrying the device) on a mobile Linux device — a local
-   configuration web interface for the installer/administrator is
-   still allowed (§10.1), it is simply not exposed to the end user.
-2. WebRTC transport (ICE + DTLS-SRTP) identical in kind to what a
-   browser client negotiates — no server-side changes.
-3. Registration as a normal Talktome user (`kind: "user"`,
-   conflict-aware, not an unconditional `force: true` takeover).
-4. Multiple independent instances running concurrently on one device,
-   each a distinct Talktome user/channel with its own audio device.
-5. Reuse of the existing Audio Core / Activity Detector / Trigger
-   Interface *design* from `radioGateway.js` for local audio I/O and
-   PTT/VOX behavior, with pluggable trigger backends — GPIO, VOX, and
-   Bitfocus Companion as a hardware-abstraction option (§8).
-6. No modification to `gateway/radioGateway.js` or its deployment.
-7. No Talktome server-side changes.
-8. Resilience to mobile network conditions: Wi-Fi↔cellular handover,
-   temporary loss of connectivity, NAT rebinding, restrictive firewalls
-   (TURN fallback).
+- the **browser client** (`public/client.js`) — a normal user over Socket.IO
+  signalling and mediasoup `WebRtcTransport`s;
+- the **Bridge** (`bridge-client/`) — a Tauri/Rust desktop app that uses the
+  bridge HTTP/SSE API and *plain RTP* (`PlainTransport`, unencrypted) to
+  connect studio audio interfaces, NDI and OMT;
+- the **radio gateway** (`gateway/radioGateway.js`) — a single-file Node
+  script that registers with the admin API key and `force: true`, also over
+  plain RTP, for a stationary radio interface.
+
+The headless client fills the remaining gap: a **dedicated hardware
+intercom panel / beltpack** that is a first-class Talktome user. It must:
+
+1. Run headless on a Raspberry Pi (or similar) under systemd, without a
+   display, keyboard or webview.
+2. Register as a **normal user** (`kind: "user"`) with the user's own
+   credentials — not with the admin API key and not as a bridge port — so
+   that everything the server does for a user (target routing, reply,
+   talk lock, camera tally, Companion targeting, per-target volume feedback)
+   works unchanged.
+3. Use **WebRTC** (ICE + DTLS-SRTP) exactly like the browser, including the
+   deployment's **STUN/TURN** servers and `iceTransportPolicy`, so it works
+   from **mobile networks** (LTE, roaming Wi-Fi, carrier-grade NAT).
+4. Present the user's **targets** (users, conferences, feeds) on a directly
+   attached **Stream Deck**: hold a key to talk, tap to lock, adjust volume
+   and mute per target, see who is calling and whether the camera is on air.
+5. Bring the user's **camera tally** and talk/incoming state to **GPIO
+   outputs**, and accept PTT/lock/reply on **GPIO inputs**.
+6. Support **several independent instances on one device** (one special
+   case: two GPIO-only instances, no Stream Deck). The normal deployment is
+   one instance per device.
+7. Be built and released by CI as **`.deb` packages** for the Raspberry Pi
+   OS variants in use (arm64, armhf) plus amd64 for testing on a PC.
+8. Require **no Talktome server changes** for the first release.
+
+## 2. Non-goals
+
+- No changes to `gateway/radioGateway.js`, the Bridge or the server.
+- No Companion-specific HTTP endpoint on the device. Bitfocus Companion
+  connects to the *server* and targets the user; the server forwards
+  `api-talk-command` / `api-target-audio-command` to the user's socket and
+  this client executes them (§9.4). This keeps a TX-keying surface off the
+  device and needs no extra token.
+- No configuration web UI in the first release. Configuration is a file
+  under `/etc/talktome-headless/` plus environment overrides (§12). A local
+  admin UI can be added later without changing anything below.
+- No video, no data channels, no NDI/OMT.
+- No ICE restart. The server does not expose `transport.restartIce()` and
+  the browser client does not use it either; recovery is by recreating the
+  transports (§6.6). Adding a `restart-ice` event server-side is an
+  optional follow-up (§18).
 
 ---
 
-# 2. Why WebRTC, not Plain RTP
+## 3. Architecture
 
 ```text
-              Plain RTP (existing gateway)         WebRTC (this spec)
-              ----------------------------         -------------------
-Transport     mediasoup PlainTransport              mediasoup WebRtcTransport
-Addressing    comedia (learned from 1st packet)     ICE (STUN/TURN, restart)
-Encryption    none                                  mandatory DTLS-SRTP
-Mobility      breaks on address change              ICE restart / consent refresh
-Server change none needed                           none needed (browsers already use it)
-Identity      force:true gateway takeover            normal conflict-aware user
+                 +--------------------------------------------------+
+                 |             talktome-headless (1 instance)        |
+                 |                                                  |
+   Stream Deck   |  surfaces::streamdeck ----+                      |
+   (USB HID) <-->|  surfaces::gpio ----------+--> talk (targets,    |
+   GPIO in/out<->|                           |    hold/lock/reply,  |
+                 |                           |    per-target audio) |
+                 |                           |        |      |      |
+                 |     signalling <----------+--------+      |      |
+                 |     (Socket.IO v4 client,                 |      |
+                 |      login, register-user,                |      |
+                 |      reconnect)                           v      |
+                 |          ^                    rtc (webrtc-rs:    |
+                 |          |                    send PC + recv PC, |
+                 |          |                    remote_sdp, ortc)  |
+                 |          |                         ^   |         |
+                 |          |                         |   v         |
+                 |          |                    audio (cpal ALSA,  |
+                 |          |                    opus, jitter,      |
+                 |          |                    mixer, VOX)        |
+                 |     health (sd_notify, /healthz, tracing)        |
+                 +----------|------------------------|--------------+
+                            |  wss:// Socket.IO      |  SRTP over ICE (UDP/TCP, TURN)
+                            v                        v
+                       Talktome server (Socket.IO + mediasoup WebRtcTransport)
+                            ^
+                            |  REST /api/v1/companion/... (Companion, optional)
+                       Bitfocus Companion
 ```
 
-The server-side `createWebRtcTransport` path (`webrtcConfig.js`,
-`buildWebRtcListenInfos`) already supports UDP+TCP listen candidates and
-an optional `announcedAddress`; TURN relay is available when
-`iceTransportPolicy=relay` is configured. This is the same path every
-browser tab uses today — the headless client is simply another WebRTC
-peer on that path, not a new server capability.
-
----
-
-# 3. Architecture
-
-```text
-                       headless-client
-                            |
-              +-------------+-------------+
-              |                           |
-        Talktome Core                Audio Core
-        (register as normal           (ALSA capture/
-         user, WebRTC signalling)       playback, PCM)
-              |                           |
-       Socket.IO / WebRTC            ALSA / resample
-              |                           |
-              +-------------+-------------+
-                            |
-                       TX/RX Control
-                            |
-                +-----------+-----------+
-                |           |           |
-              GPIO        Audio     Companion
-              Trigger     Trigger    Trigger
-```
-
-Repository structure (new, top-level, sibling to `gateway/` and
-`bridge-client/`):
+Repository layout (standalone crate, like `bridge-client/src-tauri`):
 
 ```text
 headless-client/
-  headlessClient.js        # entry point, one process = one instance
-
-  core/
-    audio.js                # ALSA capture/playback, PCM framing
-    talktome.js              # Socket.IO connection, normal-user registration
-    webrtc.js                # Device/transport/produce/consume over WebRTC
-    rx.js                    # Talktome -> local audio
-    tx.js                    # local audio -> Talktome
-    configWeb.js              # admin-only config UI/API (§10.1)
-
-  triggers/
-    gpioTrigger.js
-    audioTrigger.js
-    companionTrigger.js
-
+  Cargo.toml                       # bin "talktome-headless", [package.metadata.deb]
+  build.rs                         # embeds the build version (§14.3)
+  specification.md                 # this document
+  README.md                        # install / run / configure
+  src/
+    main.rs                        # CLI (clap): --instance, --config, --check-config, --version
+    config.rs                      # schema, JSON/TOML loading, env overrides, validation
+    signalling/
+      socketio.rs                  # minimal Socket.IO v4 / Engine.IO v4 client (WebSocket, rustls)
+      session.rs                   # login, register-user, reconnect, conflict policy, event routing
+    rtc/
+      mod.rs                       # transports lifecycle, produce/consume, recovery
+      remote_sdp.rs                # mediasoup params -> SDP for webrtc-rs
+      ortc.rs                      # local SDP -> rtpParameters / rtpCapabilities
+    audio/
+      capture.rs playback.rs       # cpal (ALSA) streams, device selection, hot-plug recovery
+      codec.rs                     # Opus encode/decode (libopus, static)
+      jitter.rs                    # per-consumer adaptive jitter buffer
+      mixer.rs                     # per-source gain/mute/dim, sum to output
+      vox.rs                       # level trigger (RMS, hysteresis, hang)
+    talk.rs                        # target model, hold/lock/reply, Companion commands, audio state
+    surfaces/
+      mod.rs                       # Surface trait + event bus
+      streamdeck/{mod,layout,render}.rs
+      gpio.rs
+      mock.rs                      # test backends (PNG keys / in-memory lines)
+    health.rs                      # sd_notify + watchdog, /healthz, structured logging
   deploy/
-    systemd/
-      talktome-headless@.service
+    systemd/talktome-headless@.service
+    udev/60-talktome-streamdeck.rules
+    config.example.json
+    config.example.toml
+  debian/
+    postinst prerm                 # system user, groups, udev reload
 ```
 
-`core/audio.js`, the `AudioActivityDetector`, and the Trigger Interface
-follow the same contracts as `radioGateway.js` §§7 and 9 — this is a
-parallel implementation of the same design, not a shared library import,
-since the two components are deployed and versioned independently.
+Crates: `tokio`, `webrtc` (webrtc-rs), `tokio-tungstenite` + `rustls`,
+`reqwest` (rustls), `serde`/`serde_json`/`toml`, `cpal`, `opus` (static
+libopus via `opusic-sys`), `rubato`, `elgato-streamdeck` (+ `image`,
+`ab_glyph`), `gpiocdev`, `sd-notify`, `tracing`, `clap`. TLS is rustls
+everywhere; the binary has no OpenSSL dependency.
 
 ---
 
-# 4. Talktome Registration (normal-user semantics)
+## 4. Identity and authentication
+
+The server (`serverCore.js`, `register-user`) accepts a user registration
+only if the socket carries one of:
+
+- a browser session cookie whose `kind`/`userId` match, or
+- Companion auth in the Socket.IO handshake (`auth.token` / `auth.apiKey`,
+  `Authorization: Bearer`, `x-api-key`): either the **global Companion API
+  key** (may register *any* user — the gateway shortcut) or a **user-scoped
+  token** from `POST /api/v1/companion/auth/login` that may register only
+  that user.
+
+The headless client uses the **user-scoped token**:
 
 ```text
-                 register-user({ kind:"user", force:false })
-                              |
-                    +---------+---------+
-                    |                   |
-                 accepted            conflict
-                    |                   |
-                  running        is it MY OWN stale
-                                  session (crash/restart)?
-                                        |
-                              +---------+---------+
-                              |                   |
-                             yes                  no
-                              |                   |
-                    retry force:true       fail startup,
-                    (self-recovery,        alert operator —
-                    no human prompt        do not silently
-                    needed — headless)     hijack another
-                              |            identity
-                          running
+config: server.url, user.name, user.password
+        |
+POST {url}/api/v1/companion/auth/login { name, password }
+        |  -> { token, expiresInMs (12 h), user: { id, name, ... }, productions: [...] }
+        v
+Socket.IO connect (wss, default namespace) with auth: { token }
+        |
+register-user { id: user.id, name: user.name, kind: "user", force, productionId }
+        |
+   +----+------------------+--------------------------+
+   | accepted (ack has no  | { conflict: true,        | { error }
+   |  error/conflict)      |   existing: {socketId,   |  -> log `registration-error`,
+   |                       |   name} }                |     back off, re-login if it
+   v                       v                          |     looks like an auth error
+ running            conflict policy (below)           v
 ```
 
-- Each instance owns exactly one Talktome user id, provisioned per
-  instance (not shared across instances on the same device).
-- On startup, register with `force: false`, mirroring normal-user
-  behavior.
-- A `conflict` response most commonly means this instance's own
-  previous process is still registered (crash without clean
-  disconnect, or a fast restart before the server's stale-socket
-  timeout). The client should retry once with `force: true` to recover
-  its own identity — this is self-recovery of a dedicated id, not the
-  gateway's blanket takeover of a shared one, and is safe *only*
-  because each instance has an id nothing else should ever be using.
-- If recovery also fails, or the operator has misconfigured two
-  instances with the same user id, the client must fail startup loudly
-  (health endpoint reports 503, log `registration-conflict`) rather
-  than looping on `force: true` against a genuinely different session.
-- No `guestProfileUserId` behavior is used; this is a plain registered
-  user like any authenticated browser session.
+- Tokens live in server memory for 12 h and vanish on a server restart. A
+  failed connect / `register-user` error `Authenticated identity does not
+  match registration` triggers a fresh login. The password is therefore
+  required in the config; there is no long-lived device token in the
+  server today (follow-up in §18).
+- No admin API key is stored on the device.
+- **Conflict policy** (`registration.conflict`):
+  `takeover` (default): wait `registration.takeover_delay_ms` (default
+  1500) and retry with `force: true`; the previous session receives
+  `session-kicked { reason: "duplicate-login" }`. This is correct for a
+  dedicated panel account that must always be online.
+  `wait`: retry without `force` every `registration.retry_ms` (default
+  5000) until the other session disappears; surfaces show a "conflict"
+  state meanwhile.
+- If this instance itself receives `session-kicked`, it stops media,
+  shows "kicked" on the surfaces and, under `takeover`, retries after
+  `registration.kicked_retry_ms` (default 10000) so two panels
+  misconfigured with the same account do not flap every second.
+- `productionId`: from `user.production` (name or id) if set, otherwise
+  `null` (server picks the Default production). `active-production-reset`
+  and `available-productions-updated` are honoured by reloading targets.
 
 ---
 
-# 5. WebRTC Core
+## 5. Signalling (Socket.IO)
 
-`core/webrtc.js` drives the same Socket.IO signalling sequence a browser
-client uses (`public/client.js`), so the server sees no difference:
+The client implements the subset of Socket.IO v4 / Engine.IO v4 that the
+server uses: WebSocket transport only, default namespace, JSON events,
+acknowledgements, ping/pong. Connection URL:
+`wss://host:port/socket.io/?EIO=4&transport=websocket`.
+
+Events **sent** by the client (all with ack unless noted):
 
 ```text
-get-router-rtp-capabilities
-        |
-device.load(routerRtpCapabilities)
-        |
-create-send-transport  ->  device.createSendTransport
-        |
-(on "connect")  ->  connect-send-transport { dtlsParameters }
-        |
-(on "produce")  ->  produce { kind, rtpParameters }  ->  producerId
-        |
-create-recv-transport  ->  device.createRecvTransport
-        |
-(on "connect")  ->  connect-recv-transport { dtlsParameters }
-        |
-on "new-producer"  ->  consume { producerId, rtpCapabilities }
-        |
-recvTransport.consume(...)  ->  resume-consumer
+register-user            { id, name, kind:"user", force, productionId }
+get-router-rtp-capabilities            -> RtpCapabilities
+create-send-transport    null          -> { id, iceParameters, iceCandidates, dtlsParameters,
+                                            iceServers, iceTransportPolicy }
+create-recv-transport    null          -> same shape
+connect-send-transport   { dtlsParameters }        -> {} | { error }
+connect-recv-transport   { dtlsParameters }        -> {} | { error }
+produce                  { kind:"audio", rtpParameters, appData:{ type:"talk" } } -> { id }
+pause-producer           { producerId }             -> {} | { error }
+resume-producer          { producerId }             -> {} | { error }
+producer-close           { producerId }             -> {}
+consume                  { producerId, rtpCapabilities } -> { id, producerId, kind, rtpParameters }
+resume-consumer          { consumerId }             -> {} | { error }
+close-consumer           { consumerId }             -> {}
+request-active-producers (no payload)  -> [ { peerId, speakerUserId, producerId, appData } ]
+talk-targets-updated     { reason, targets:[{type,id}] }             (no ack)
+ptt-state                { talking, lockActive, target, targets, reason } (no ack)
+target-audio-state-snapshot { reason, states:[{targetType,targetId,volume,muted}] } (no ack)
+api-talk-command-result / api-target-audio-command-result
+                         { commandId, ok, reason, action, targetType, targetId, target,
+                           targets, talking, lockActive }              (no ack)
+set-active-production    { productionId }           -> {} | { error }
+user-audio-settings-update { settings }             -> { ok, settings }
+user-logout              (no payload, on clean shutdown)
 ```
 
-`producer-close`, `consumer-closed`, and `request-active-producers` are
-handled the same way a browser client handles them.
+Events **received**:
 
-This core owns:
+```text
+new-producer        { peerId, speakerUserId, producerId, appData }
+                    appData is what the *recipient* should see:
+                    { type:"user", id:<speakerUserId>, targetPeer } for direct talk,
+                    { type:"conference", id } or { type:"feed", id }
+producer-closed     { peerId, speakerUserId, producerId, appData }
+consumer-closed     { consumerId }
+incoming-talk-state { state: { addressedNow:[{ fromUserId, fromName, targetType, targetId,
+                      replyTargetType, replyTargetId, canReply, at }], replyTarget } }
+user-list           [ { socketId, userId, feedId, guestId, kind, name } ]   (online peers)
+user-targets-updated (no payload; reload targets via REST)
+conference-list     [...]  conference-members-updated  available-productions-updated
+active-production-reset { productionId }
+cut-camera          <bool>   (sent at registration and on every change)
+session-kicked      { reason, bySocketId }
+api-talk-command    { commandId, action:"press"|"release"|"lock-toggle", targetType, targetId, inputKey }
+api-target-audio-command { commandId, action:"volume-up"|"volume-down"|"mute-toggle",
+                           targetType, targetId, step }
+```
 
-- ICE/DTLS/SRTP session lifecycle via the chosen WebRTC engine (§6)
-- `mediasoup-client`-equivalent `Device`/transport/producer/consumer
-  bookkeeping
-- ICE restart on connectivity loss (mobile handover) before falling
-  back to a full reconnect
-- TURN configuration passthrough (same `iceServers`/
-  `iceTransportPolicy` shape as `webrtcConfig.js` produces for browsers)
+REST (with `Authorization: Bearer <token>` where the server checks it):
 
-The Talktome Core (`core/talktome.js`) still owns the Socket.IO
-connection itself, reconnection, and registration (§4); `core/webrtc.js`
-owns everything that happens *on top of* that connection once
-registered.
+```text
+POST /api/v1/companion/auth/login                      { name, password }
+GET  /users/:id/targets?includeMemberships=1&productionId=<id>
+     -> [ { targetType:"user"|"conference"|"feed", targetId, name, canTalk, members[], ... } ]
+        in the admin-defined button order (same order as the browser's number keys)
+GET  /users/:id/productions                            -> [ { id, name } ]
+```
+
+Reconnect: exponential backoff 1 s → 30 s with jitter. On reconnect the
+client re-logs-in if the token is rejected, re-registers, and rebuilds the
+media state from scratch (§6.6) — the same behaviour as the browser after a
+socket loss.
 
 ---
 
-# 6. Headless WebRTC Engine — open technical decision
+## 6. WebRTC transport
 
-`mediasoup-client`'s browser-shaped API (`Device`, `sendTransport`,
-`recvTransport`) is written against a real `RTCPeerConnection` — it
-negotiates ICE/DTLS by driving an actual peer connection and reading back
-its SDP/candidates. There is no DOM on a headless Linux device, so this
-component needs a real WebRTC engine underneath, not a browser. This is
-the single biggest open risk in this spec and must be resolved with a
-short spike before committing to the full build:
+### 6.1 Engine
 
-```text
-Option A: @roamhq/wrtc (libwebrtc bindings, prebuilt native addon)
-  + real, battle-tested ICE/DTLS/SRTP; RTCPeerConnection-compatible
-    globals let mediasoup-client run close to unmodified
-  - prebuilt binaries must exist (and be validated) for the target
-    mobile Linux architecture (commonly aarch64); native addon
-    increases per-instance memory footprint
+`webrtc` (webrtc-rs). Chosen over `str0m` because it ships a full ICE agent
+with **TURN** (UDP/TCP/TLS, `relay` policy) and candidate re-gathering,
+which is exactly the mobile-network requirement, at the cost of speaking
+SDP to it. str0m's `DirectApi` would have avoided SDP but needs a
+hand-built TURN client; it remains the fallback if webrtc-rs proves too
+heavy on armhf (the transport is behind a small trait).
 
-Option B: werift-webrtc (pure JS/TS ICE/DTLS/SRTP)
-  + no native binary/cross-compile problem, easiest to run on whatever
-    arch the mobile device uses
-  - not a drop-in RTCPeerConnection global; mediasoup-client would need
-    a custom Handler written against werift's API, and werift's
-    real-world interop with mediasoup's WebRtcTransport is not yet
-    validated for this project
-  - higher CPU cost for crypto/ICE than a native engine, relevant on a
-    battery-powered mobile device
-```
+### 6.2 Mapping mediasoup signalling to SDP
 
-**Recommendation:** spike Option A first (native engine + as-unmodified-
-as-possible `mediasoup-client`), since it minimizes how much of the
-mediasoup signalling protocol this project has to reimplement by hand.
-Fall back to Option B only if prebuilt binaries are unavailable or
-unreliable on the target hardware. Either choice also determines how
-audio reaches the network:
+mediasoup is **ICE-lite** and signals ORTC-style parameters, not SDP.
+`rtc::remote_sdp` reproduces what `mediasoup-client`'s `RemoteSdp` does:
 
-- With a real engine, the engine performs Opus encode/decode internally
-  from/to raw PCM — `core/audio.js` hands PCM frames to an outbound
-  audio source and reads PCM frames from an inbound audio sink;
-  `ffmpeg` in this path is only used for ALSA-format resampling, not for
-  RTP or Opus.
-- This is a departure from `radioGateway.js`, where `ffmpeg` does the
-  RTP/Opus work directly against a `PlainTransport`. That is expected —
-  the transport is fundamentally different — not a sign the pattern was
-  copied wrong.
+- **Send transport**: create `RTCPeerConnection` (Opus-only
+  `MediaEngine`, header extensions registered from router capabilities),
+  add the local audio track, `create_offer()`, extract `rtpParameters`
+  from the local SDP (`rtc::ortc`: `mid`, `ssrc`, `cname`, Opus PT,
+  header-extension ids, `rtcp.mux/reducedSize`), then synthesise the
+  **answer**: `a=ice-lite`, `a=ice-ufrag/pwd` from `iceParameters`,
+  `a=candidate` lines from `iceCandidates` (udp and tcp), `a=fingerprint`
+  from `dtlsParameters.fingerprints` (sha-256 preferred), `a=setup:passive`
+  (client is DTLS client), `a=rtcp-mux`, `a=rtcp-rsize`, `a=recvonly`,
+  same PT/extension ids as the offer. `connect-send-transport` is sent with
+  `dtlsParameters: { role: "client", fingerprints: [local] }` when the
+  first offer is created (`produce` follows once the ack arrives).
+- **Receive transport**: the remote is the offerer. For each `consume`
+  ack, `remote_sdp` adds an `m=audio` section (`a=mid`, `a=sendonly`,
+  `a=ssrc`/`cname` from `rtpParameters.encodings`/`rtcp`, PT/extensions
+  from `rtpParameters`) and applies it via `set_remote_description(offer)`
+  → `create_answer()` → `set_local_description()`. Closed consumers become
+  `port 0`/inactive sections so mids stay stable.
+- `rtpCapabilities` sent in `consume` are the router capabilities filtered
+  to Opus and the extensions webrtc-rs registered.
 
-This section must be resolved (spike completed, engine chosen and
-recorded here) before Implementation Step 2 (§15) begins.
+### 6.3 ICE configuration
 
----
+`iceServers` and `iceTransportPolicy` from the `create-*-transport` ack
+are passed through to `RTCConfiguration` (`relay` → `RTCIceTransportPolicy::Relay`).
+Optional overrides in config (`ice.servers`, `ice.transport_policy`) exist
+for testing only; by default the client uses whatever the server hands to
+browsers.
 
-# 7. Audio Core
+### 6.4 Producer
 
-`core/audio.js` owns local audio I/O, following the same shape as
-`radioGateway.js`'s audio responsibilities but PCM-oriented rather than
-RTP-oriented per §6:
+One "warm" Opus producer with `appData: { type: "talk" }`, created paused
+right after the send transport connects (like `ensureWarmTalkProducer` in
+the browser). Talking = `resume-producer`; silence = `pause-producer`. The
+producer is also paused locally (no RTP written) so no audio leaks while
+the server-side pause is in flight.
 
-Responsibilities:
+### 6.5 Consumers
 
-- ALSA input (capture) per configured device
-- ALSA output (playback) per configured device
-- format/rate conversion to match the WebRTC engine's expected PCM
-  format
-- RMS calculation (reused by `AudioActivityDetector`, §8)
-- audio buffer handling
+`new-producer` (and the initial `request-active-producers` list) →
+`consume` → `resume-consumer`. Each consumer is a `TrackRemote`; RTP is
+read, depacketized and handed to `audio::jitter` keyed by the recipient
+appData (`user:<speakerUserId>`, `conference:<id>`, `feed:<id>`), which is
+also the key for volume/mute (§9.3). `producer-closed`/`consumer-closed`
+tear the consumer down. `request-active-producers` is re-sent after every
+`incoming-talk-state` with a non-empty `addressedNow` and every
+`user-targets-updated`, as the browser does.
 
-No GPIO/PTT logic lives here, same constraint as the existing gateway.
+### 6.6 Recovery on network change
 
----
+Trigger: ICE connection state `failed`, or `disconnected` for longer than
+`network.ice_disconnect_grace_ms` (default 4000), on either peer
+connection; or Socket.IO disconnect. Action: close both peer connections
+(the server closes its transports on socket disconnect or on the next
+transport creation), then `create-send-transport` … `produce` … and
+re-consume everything from `request-active-producers`. Talk state is
+preserved: if a key is still held or locked when recovery completes, the
+new producer is resumed and `talk-targets-updated` re-sent. Typical
+recovery time on LTE→Wi-Fi is one ICE gathering + DTLS round trip.
 
-# 8. Audio Activity Detector and Trigger Interface (reused design)
+### 6.7 Interop notes (filled in by the spike, §15 step 1)
 
-The detector and the interface below are reused **unchanged as designs**
-from `radioGateway.js` §§7 and 9:
-
-```js
-const detector = new AudioActivityDetector({ onThreshold, offThreshold, hangMs });
-detector.on("active", handler);
-detector.on("inactive", handler);
-detector.on("level", handler);
-detector.process(chunk);
-```
-
-```js
-trigger.on("active", handler);
-trigger.on("inactive", handler);
-await trigger.start();
-await trigger.stop();
-```
-
-- `triggers/gpioTrigger.js` — for a mobile board with a physical PTT
-  button (same lead/tail/serialization concerns as
-  `gateway/triggers/gpioTrigger.js` would have, per the original
-  spec's §10 — reimplemented here for this component's GPIO wiring,
-  not imported from the gateway).
-- `triggers/audioTrigger.js` — VOX/audio-level triggering using the
-  same detector as RX gating, per the original spec's §11.
-- `triggers/companionTrigger.js` — treats Bitfocus Companion as the
-  hardware abstraction layer instead of talking to a pin or bus
-  directly. Companion already supports a wide range of physical PTT
-  hardware (footswitches, relay/GPIO breakout boards, Stream Decks,
-  MIDI controllers), so this trigger keeps all of that
-  device-specific knowledge inside Companion — where it is already
-  built and maintained — rather than growing a new GPIO variant in
-  this codebase per device model. Integration is one HTTP call each
-  way: `companionTrigger.js` exposes a small local HTTP endpoint
-  (`POST /trigger/active`, `POST /trigger/inactive`) that a Companion
-  button/trigger action calls on press/release; the trigger turns
-  those calls into the same `active`/`inactive` events the interface
-  already defines. The endpoint must bind to localhost or a private
-  interface and require a shared-secret token (§10) — anything that
-  can POST to it can key TX.
-- TX/RX echo prevention (mute TX's own playback from retriggering
-  local RX) applies identically — see the original gateway spec §12
-  for the state machine; behavior is unchanged, only the transport
-  underneath differs.
-- GPIO and Companion are alternative hardware-abstraction choices, not
-  a progression — a deployment with simple, fixed wiring and no
-  Companion install may prefer `gpioTrigger.js` directly; a deployment
-  that already runs Companion for other control-surface needs, or
-  wants to swap PTT hardware without touching this codebase, should
-  prefer `companionTrigger.js`. Both sit behind the identical Trigger
-  Interface, so the choice is a deployment-time config value
-  (`TALKTOME_TRIGGER`, §10), not an architectural fork.
+Recorded here after the first working end-to-end run: webrtc-rs version,
+Opus payload type and header-extension ids negotiated with the router,
+DTLS role handling, and any deviations from `mediasoup-client` that were
+needed.
 
 ---
 
-# 9. Multi-instance Model
+## 7. Audio pipeline
 
-Each instance is a fully independent process:
-
-```text
-instance-a                          instance-b
-   |                                   |
-Talktome user A                   Talktome user B
-   |                                   |
-own WebRTC PeerConnection          own WebRTC PeerConnection
-   |                                   |
-own ALSA device (or own            own ALSA device (or own
-virtual/loopback device)           virtual/loopback device)
-   |                                   |
-own GPIO pin / own VOX config      own GPIO pin / own VOX config
-```
-
-Constraints:
-
-- No shared state between instances; no cross-instance coordination.
-- Each instance's Talktome user id, audio device, and (if used) GPIO
-  pin are distinct and configured independently — collisions are an
-  operator configuration error, not something the software resolves.
-- Killing or restarting one instance must not affect any other
-  instance on the same device.
-- On a device with limited physical audio hardware, instances may use
-  ALSA loopback/virtual devices (e.g. `snd-aloop`) to get independent
-  capture/playback endpoints without one physical card per instance —
-  this is a deployment/config concern, not a code-level one.
-
----
-
-# 10. Configuration
-
-```text
-TALKTOME_INSTANCE_ID=operator-a
-
-TALKTOME_USER_ID=...
-TALKTOME_SERVER_URL=...
-
-TALKTOME_ALSA_INPUT_DEVICE=...
-TALKTOME_ALSA_OUTPUT_DEVICE=...
-
-TALKTOME_ICE_SERVERS_JSON=...
-TALKTOME_ICE_TRANSPORT_POLICY=all|relay
-
-TALKTOME_TRIGGER=gpio|audio|companion
-
-TALKTOME_AUDIO_ACTIVITY_ON_THRESHOLD=...
-TALKTOME_AUDIO_ACTIVITY_OFF_THRESHOLD=...
-TALKTOME_AUDIO_ACTIVITY_HANG_MS=...
-
-TALKTOME_AUDIO_TRIGGER_ENABLED=false
-TALKTOME_AUDIO_TRIGGER_ON_THRESHOLD=...
-TALKTOME_AUDIO_TRIGGER_OFF_THRESHOLD=...
-TALKTOME_AUDIO_TRIGGER_HANG_MS=...
-
-TALKTOME_RADIO_TX_RX_MUTE_TAIL_MS=600
-
-TALKTOME_HEALTH_PORT=...
-```
-
-GPIO-specific settings (only required when `TALKTOME_TRIGGER=gpio`):
-
-```text
-TALKTOME_GPIO_PIN
-TALKTOME_PTT_LEAD_MS
-TALKTOME_PTT_TAIL_MS
-```
-
-Companion-specific settings (only required when
-`TALKTOME_TRIGGER=companion`):
-
-```text
-TALKTOME_COMPANION_TRIGGER_BIND=127.0.0.1
-TALKTOME_COMPANION_TRIGGER_PORT=...
-TALKTOME_COMPANION_TRIGGER_TOKEN=...
-```
-
-`TALKTOME_COMPANION_TRIGGER_TOKEN` must be sent by Companion's action
-(e.g. as a header or query parameter, depending on the HTTP module
-Companion uses) and checked before an `active`/`inactive` call is
-honored — this endpoint keys TX, so it must not be reachable by an
-unauthenticated caller on the network.
-
-`TALKTOME_ICE_SERVERS_JSON`/`TALKTOME_ICE_TRANSPORT_POLICY` mirror the
-shape `webrtcConfig.js` already produces for browser clients — this
-client should be configurable with the same STUN/TURN servers the
-Talktome deployment already runs, not a separate ICE configuration
-scheme.
-
-## 10.1 Configuration Web Interface
-
-`core/configWeb.js` may serve a small web UI/API for reading and
-changing an instance's configuration (the same fields as the env vars
-above) — useful for an installer setting up a device without editing
-an `EnvironmentFile` by hand, e.g. from a phone browser during
-deployment. This is an **admin surface, not a user feature**: the
-person carrying/wearing the device has no link, icon, or credential
-that leads to it.
-
-- Binds to `TALKTOME_ADMIN_BIND` (default `127.0.0.1`) and
-  `TALKTOME_ADMIN_PORT`; on a deployment with an admin/management
-  network (e.g. the WireGuard network noted in the Context), it should
-  bind there rather than on whatever network the device uses to reach
-  Talktome/TURN — not on an interface the end user's own traffic
-  shares.
-- Requires `TALKTOME_ADMIN_TOKEN`; unauthenticated requests are
-  rejected and logged (`admin-ui-rejected`), the same posture as the
-  Companion trigger endpoint (§8, §14).
-- Disabled entirely (`TALKTOME_ADMIN_PORT` unset) is a valid and
-  supported deployment choice — nothing else in this spec depends on
-  it existing.
-- Changes made through it must apply the same way a changed
-  `EnvironmentFile` + restart would — it is a friendlier editor for
-  the same configuration, not a second, independently-diverging
-  runtime state. It should also show the instance's current effective
-  configuration, not just accept blind writes.
+- **Devices**: `cpal` on ALSA; `audio.input_device` / `audio.output_device`
+  are ALSA names as listed by `talktome-headless --list-audio-devices`
+  (e.g. `plughw:CARD=Headset,DEV=0`). A Pi's headphone jack has no input;
+  a USB headset or USB audio interface is expected.
+- **Capture**: mono, device rate → `rubato` → 48 kHz, input gain
+  (`audio.input_gain_db`, default from the user's `userInputGainDb`
+  semantics: 0 dB unless configured), RMS level for VOX and meters.
+- **Encode**: libopus 48 kHz mono, `application = voip`, frame size
+  `audio.profile` = `standard` (20 ms, FEC on, 64 kbit/s) by default; `low`
+  (10 ms) and `ultra-low` (5 ms) mirror `QUALITY_PROFILES` in
+  `public/client.js` for LAN use. Frames go to a `TrackLocalStaticSample`.
+- **Decode**: per consumer, RTP → Opus decode with PLC/FEC → jitter buffer
+  (`audio.jitter_min_ms` 20 … `audio.jitter_max_ms` 120, adaptive) → mixer.
+- **Mixer**: `out = Σ source_i × volume_i × (muted_i ? 0 : 1) × dim_i`,
+  soft-clipped. `dim_i` implements `dimFeedsWhileSpeaking` (feeds dimmed by
+  `audio.dim_db`, default −14 dB, while the user talks) and
+  `dimWhenAddressed` (feeds dimmed while `addressedNow` is non-empty).
+- **Playback**: 48 kHz → device rate, stereo or mono as the device offers
+  (mono mix duplicated).
+- **VOX** (`vox.enabled`, `vox.target`, `vox.threshold_db`,
+  `vox.hang_ms`): a level trigger that acts like holding a key for the
+  configured target; mirrors `voiceTriggerEnabled/Target/ThresholdDb`.
+- **Hot-plug**: if a stream errors or the device disappears, the pipeline
+  keeps running (silence in, drop out) and retries opening the device every
+  `audio.reopen_ms` (default 2000); surfaces show "no audio device".
+- **Echo**: not handled. Panels are used with headsets; the server never
+  sends a user's own producer back to them.
 
 ---
 
-# 11. systemd
+## 8. Talk model
 
-Template unit, one per instance, mirroring the existing gateway pattern:
+Targets come from `GET /users/:id/targets?includeMemberships=1` in the
+admin-defined order; online state per target from `user-list`. A target is
+one of `user:<id>`, `conference:<id>`, `feed:<id>` (feeds are listen-only,
+`canTalk: false`), plus the virtual **reply** target.
 
-```text
-deploy/systemd/talktome-headless@.service
+- **Hold** a talk key → `talk-targets-updated { targets: [t] }` then
+  `resume-producer`; release → `pause-producer` then
+  `talk-targets-updated { targets: [] }` (unless other keys are still held
+  or locked, in which case the target list is re-sent without it).
+  Multiple simultaneously held keys talk to the union of their targets.
+- **Tap** (press and release within `talk.tap_ms`, default 250 ms) → toggle
+  a **talk lock** on that target. Locks keep the producer resumed. If
+  `talk.lock_multiple` is false (mirrors `lockMultipleTargets`), locking a
+  new target clears the previous lock. Any press-and-hold while locks are
+  active adds to the target list; release restores the locked set. A
+  dedicated "clear locks" action exists for GPIO and the deck status key.
+- **Reply** → talks to `incoming-talk-state.state.replyTarget` (falls back
+  to the most recent `addressedNow` entry); no target → no-op with an
+  error flash.
+- `ptt-state { talking, lockActive, target, targets, reason }` is emitted on
+  every change, mirroring the browser, so Companion/Admin see the panel's
+  state.
+- Local guards: no talking while not registered or while the send
+  transport is not connected (key turns amber, press is queued until the
+  producer exists or dropped after 2 s).
+
+---
+
+## 9. Per-target audio state, tally and Companion
+
+### 9.1 Volume and mute
+
+Per target key `user:<id>` / `conference:<id>` / `feed:<id>`:
+`volume` 0.0–1.0 (default 0.9), `muted` bool. Applied in the mixer. Changes
+come from the deck (§10), GPIO (§11), and Companion (§9.4). The browser
+keeps this state client-local and only *reports* it; the headless client
+does the same: state is persisted in
+`$STATE_DIRECTORY/audio-state.json` (`/var/lib/talktome-headless/<instance>/`)
+and reported with `target-audio-state-snapshot` after registration and on
+every change (debounced 200 ms) so Companion feedback shows the panel's
+levels.
+
+### 9.2 Camera tally
+
+Server model: a single global on-air user (`POST /cut-camera { user }`);
+each registered user socket receives `cut-camera <bool>` at registration
+and whenever the on-air user changes. The client mirrors this boolean to
+the GPIO `tally` output and the deck status key ("ON AIR"). There is no
+preview tally in the server today (§18). `POST /cut-camera` is
+unauthenticated on the server; that is pre-existing and out of scope.
+
+### 9.3 Indicators
+
+Derived states available to all surfaces: `connected` (registered and both
+transports connected), `talking`, `locked` (per target), `incoming` (per
+target, from `addressedNow`), `online` (per target, from `user-list`),
+`muted`/`volume` (per target), `on_air`, `conflict`/`kicked`/`no_audio`.
+
+### 9.4 Companion commands
+
+`api-talk-command` `press` / `release` / `lock-toggle` and
+`api-target-audio-command` `volume-up` / `volume-down` (step default 0.1) /
+`mute-toggle` are executed exactly like a local key, with `targetType`
+`user|conference|feed|reply` and `inputKey` treated as an independent
+virtual key so a Companion press does not cancel a physically held key.
+Every command is answered with the matching `-result` event carrying the
+`commandId`, `ok`, and `reason` (`target-not-available`,
+`unsupported-action`, `not-connected`).
+
+---
+
+## 10. Stream Deck surface
+
+- **Library**: `elgato-streamdeck` (hidapi). Supported: Original, Original
+  V2, MK.2, Mini, Mini MK.2, XL, XL V2, Stream Deck +, Stream Deck + XL,
+  Neo, Pedal. The device is opened by **serial** (`streamdeck.serial`); if
+  unset, the first Stream Deck found is used. Multiple instances on one
+  device must each set a distinct serial (or none for GPIO-only instances).
+- **udev**: `deploy/udev/60-talktome-streamdeck.rules` grants group
+  `plugdev` read/write on Elgato HID devices (vendor `0fd9`); the service
+  user is in `plugdev`.
+- **Rendering**: `image` + `ab_glyph`; font from `streamdeck.font_path`
+  (default `/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf`, package
+  dependency `fonts-dejavu-core`). Keys: dark grey idle, green while
+  talking, green with lock glyph when locked, amber pulsing while that
+  target addresses us, grey-dim when the target is offline, red speaker
+  glyph when muted, volume shown as a bar. Brightness from
+  `streamdeck.brightness` (default 60) with `streamdeck.idle_dim_s`.
+- **Layout** (auto, from the target order; overridable per key in
+  `streamdeck.layout`):
+  - Key 0: **status** (connection state, user name, "ON AIR" red when
+    tally is on). Tap: clear locks. Hold 2 s: next page.
+  - Key 1: **Reply** (shows who is calling).
+  - Remaining keys: targets in server order. Feeds show name + volume;
+    press toggles mute (they cannot be talked to).
+  - When there are more targets than keys, the last key is **next page**.
+  - **Volume on models without dials**: a **VOL** key (right-most on the
+    first row) toggles the volume layer; in that layer the target keys show
+    the volume bar, tap selects the target, `+` / `−` keys change it by
+    `streamdeck.volume_step` (0.05), hold a target key 600 ms toggles mute.
+    The layer times out after `streamdeck.volume_layer_timeout_s` (8 s).
+  - **Stream Deck + / + XL dials**: dial *n* controls the target on the
+    *n*-th key of the current page (excluding status/reply); rotate =
+    volume, press = mute toggle; the touch strip shows name, bar and mute
+    state per dial. Swiping the strip changes page.
+  - **Neo** touch points act as previous/next page.
+  - **Pedal**: left = reply, middle = `streamdeck.pedal_target`, right =
+    lock toggle of that target.
+- The surface runs in its own task; rendering is diffed so only changed
+  keys are re-sent (key images are JPEG/BMP per model, generated by the
+  library).
+
+---
+
+## 11. GPIO surface
+
+- **Library**: `gpiocdev` (Linux GPIO character device v2). Lines are
+  addressed by **line name** (e.g. `GPIO17`, robust across Pi 4/5 where the
+  chip number differs) or `chip` + `offset`. The service user is in group
+  `gpio` (Raspberry Pi OS grants `/dev/gpiochip*` to it).
+- **Outputs** (`gpio.outputs`): `tally` (camera on air), `talking`,
+  `incoming`, `connected`, `locked`; each with `active_low`.
+- **Inputs** (`gpio.inputs`): a list of `{ line, action, target, active_low,
+  debounce_ms }` with actions `talk` (hold = talk, tap = lock, same rules as
+  a deck key), `reply`, `lock_toggle`, `clear_locks`, `mute_toggle`,
+  `volume_up`, `volume_down`. Edge events are debounced in software
+  (`debounce_ms`, default 20) in addition to the kernel debounce where
+  available.
+- GPIO-only instances (the two-instances-per-Pi case) simply omit the
+  `streamdeck` section; two instances must not share lines.
+- A `mock` GPIO backend (env `TALKTOME_GPIO_BACKEND=mock`) writes line
+  states to a file and reads input events from a FIFO for tests.
+
+---
+
+## 12. Configuration
+
+One schema, loaded from `/etc/talktome-headless/<instance>.json` **or**
+`<instance>.toml` (format by extension; `--config <path>` overrides the
+location). Environment variables `TALKTOME_<SECTION>_<KEY>` override single
+values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
+`EnvironmentFile` can supply the password separately from the config file.
+
+```jsonc
+{
+  "instance": "cam1",                       // defaults to the file name
+  "server": { "url": "https://talktome.local:8443" },
+  "tls": {                                  // one of:
+    "ca_file": "/etc/talktome-headless/server-ca.pem",   // custom CA
+    "fingerprint_sha256": "AB:CD:...",                    // or pin the leaf cert
+    "insecure": false                                     // or accept anything (dev only)
+  },
+  "user": { "name": "Cam 1", "password": "…", "production": null },
+  "registration": { "conflict": "takeover", "takeover_delay_ms": 1500,
+                    "retry_ms": 5000, "kicked_retry_ms": 10000 },
+  "audio": { "input_device": "plughw:CARD=Headset,DEV=0",
+             "output_device": "plughw:CARD=Headset,DEV=0",
+             "profile": "standard", "input_gain_db": 0,
+             "dim_db": -14, "dim_feeds_while_speaking": false,
+             "dim_when_addressed": true,
+             "jitter_min_ms": 20, "jitter_max_ms": 120, "reopen_ms": 2000 },
+  "vox": { "enabled": false, "target": "conference:1", "threshold_db": -32, "hang_ms": 600 },
+  "talk": { "tap_ms": 250, "lock_multiple": false },
+  "ice": { "servers": null, "transport_policy": null },   // null = use the server's
+  "network": { "ice_disconnect_grace_ms": 4000 },
+  "streamdeck": { "enabled": true, "serial": null, "brightness": 60,
+                  "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                  "volume_step": 0.05, "volume_layer_timeout_s": 8,
+                  "pedal_target": "conference:1", "layout": {} },
+  "gpio": { "enabled": true, "chip": null,
+            "outputs": { "tally": { "line": "GPIO17", "active_low": false },
+                         "talking": { "line": "GPIO27" } },
+            "inputs": [ { "line": "GPIO22", "action": "talk", "target": "conference:1",
+                          "active_low": true, "debounce_ms": 20 },
+                        { "line": "GPIO23", "action": "reply", "active_low": true } ] },
+  "health": { "port": null },               // optional /healthz listener
+  "log": { "level": "info", "format": "auto" } // auto = JSON when under systemd
+}
 ```
+
+`talktome-headless --check-config` validates a file and prints the
+effective configuration with the password redacted.
+`--list-audio-devices`, `--list-streamdecks` and `--list-gpio` help with
+provisioning.
+
+---
+
+## 13. systemd, health and logging
+
+`deploy/systemd/talktome-headless@.service` (one unit per instance):
 
 ```ini
-[Service]
-ExecStart=/usr/bin/node /opt/talktome-headless/headless-client/headlessClient.js
-EnvironmentFile=/etc/talktome-headless/%i.env
-Restart=on-failure
-RestartSec=2
+[Unit]
+Description=Talktome headless client (%i)
+After=network-online.target sound.target
+Wants=network-online.target
 
+[Service]
+Type=notify
+ExecStart=/usr/bin/talktome-headless --instance %i
+EnvironmentFile=-/etc/talktome-headless/%i.env
+WatchdogSec=30
+Restart=always
+RestartSec=2
 User=talktome-headless
+SupplementaryGroups=audio plugdev gpio
+StateDirectory=talktome-headless/%i
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ```
 
-```text
-talktome-headless@operator-a
-talktome-headless@operator-b
-```
-
-Exact filesystem permissions must be adapted for the ALSA devices and
-GPIO access each instance needs.
-
----
-
-# 12. Health Endpoint
-
-```text
-GET /healthz
-```
-
-`200` when:
-
-- Talktome socket is connected and registered (not in conflict/failed
-  state, per §4)
-- WebRTC send and receive transports are connected (ICE state
-  `connected` or `completed`)
-- RX pipeline is alive
-- TX pipeline is operational
-
-`503` otherwise. Each instance binds its own `TALKTOME_HEALTH_PORT`.
+- `sd_notify(READY=1)` after the config is loaded and surfaces are open;
+  `WATCHDOG=1` from the main loop while signalling and audio tasks are
+  alive; `STATUS=` mirrors the connection state for `systemctl status`.
+- Optional `GET /healthz` on `health.port` (127.0.0.1): `200` when
+  registered and both transports are connected, else `503` with a JSON
+  body describing the failing component.
+- Logging via `tracing`; JSON lines when stdout is the journal, human
+  format on a TTY. Event names: `client-start`, `login`, `login-failed`,
+  `socket-connected`, `socket-disconnected`, `registered`,
+  `registration-conflict`, `registration-error`, `session-kicked`,
+  `transport-connected`, `ice-state`, `media-recovery`, `producer-created`,
+  `consumer-created`, `consumer-closed`, `talk-start`, `talk-stop`,
+  `lock-on`, `lock-off`, `incoming`, `tally`, `audio-device-lost`,
+  `audio-device-restored`, `streamdeck-connected`,
+  `streamdeck-disconnected`, `gpio-input`, `companion-command`,
+  `client-error`.
 
 ---
 
-# 13. Logging
+## 14. Packaging and CI/CD
 
-Structured JSON, same shape as the existing gateway spec:
+### 14.1 Debian package
 
-```json
-{
-  "ts": "2026-08-25T12:00:00.000Z",
-  "instance": "operator-a",
-  "event": "ice-restart"
-}
-```
+`cargo-deb` with `[package.metadata.deb]`: package `talktome-headless`,
+section `sound`, depends auto-detected (`libasound2`, `libudev1`, `libc6`)
+plus `fonts-dejavu-core`, `adduser`; recommends `alsa-utils`. Assets:
+`/usr/bin/talktome-headless`, `/lib/systemd/system/talktome-headless@.service`,
+`/lib/udev/rules.d/60-talktome-streamdeck.rules`,
+`/usr/share/doc/talktome-headless/config.example.{json,toml}`, README.
+`postinst` creates system user `talktome-headless` (groups `audio`,
+`plugdev`, `gpio` when they exist), creates `/etc/talktome-headless/` with
+mode 750, reloads udev rules; `prerm` stops running instances.
 
-Important events (superset of the existing gateway's list, §20 of the
-original spec, plus WebRTC-specific ones):
+### 14.2 Targets
 
-```text
-client-start
-client-connected
-client-registered
-registration-conflict
+- `arm64` — Raspberry Pi 3/4/5/Zero 2 W on 64-bit Raspberry Pi OS.
+- `armhf` (`armv7-unknown-linux-gnueabihf`) — 32-bit Raspberry Pi OS on
+  Pi 2/3/4.
+- `amd64` — Debian/Ubuntu PCs for testing.
 
-ice-connected
-ice-disconnected
-ice-restart
-dtls-connected
+All packages are built inside a `debian:bookworm` container so the
+binaries link against glibc 2.36 and run on Bookworm **and** Trixie. arm64
+and armhf are cross-compiled with Debian multiarch toolchains
+(`crossbuild-essential-*`, `libasound2-dev:<arch>`, `libudev-dev:<arch>`);
+libopus is compiled statically by `opusic-sys` (cmake).
 
-rx-active
-rx-inactive
-rx-muted
+### 14.3 Versioning
 
-tx-active
-tx-inactive
+Git tags remain the single source of truth (`scripts/resolve-build-version.js`).
+`Cargo.toml` keeps `0.0.0`. `build.rs` embeds `TALKTOME_BUILD_VERSION`
+(falling back to `git describe`) into `--version`. The Debian version is
+derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
+`1.2.5~dev.3+g<sha>` (tilde sorts before the release).
 
-audio-trigger-active
-audio-trigger-inactive
+### 14.4 Workflows
 
-gpio-ptt-on
-gpio-ptt-off
-
-companion-trigger-active
-companion-trigger-inactive
-companion-trigger-rejected
-
-producer-created
-producer-closed
-consumer-created
-consumer-closed
-
-client-error
-```
+- `.github/workflows/ci.yml` gains a `headless-client` job: `cargo fmt
+  --check`, `cargo clippy -D warnings`, `cargo test`, and `cargo deb` for
+  amd64 as a packaging smoke test.
+- `.github/workflows/headless-client-release.yml` (modelled on
+  `bridge-client-release.yml`): version job → build matrix
+  `amd64 | arm64 | armhf` in `debian:bookworm` → `cargo deb --target …
+  --deb-version …` → upload artifacts → install smoke test of the arm64 deb
+  on `ubuntu-24.04-arm` in a `debian:bookworm` container and of the amd64
+  deb in `debian:trixie` (`apt-get install ./…deb`, `--version`,
+  `--check-config` on the example) → on tags, upload to the draft release
+  with `scripts/upload-release-asset.sh`.
 
 ---
 
-# 14. Security
+## 15. Implementation order
 
-WebRTC's mandatory DTLS-SRTP means audio in transit is encrypted by
-default — an improvement over the existing gateway's cleartext plain
-RTP, though that gap is tracked separately and out of scope here.
-
-The same server-side `register-user` weakness noted in the original
-gateway spec (§25: a caller-supplied numeric user id with no credential
-check beyond socket connectivity, and `force: true` able to kick an
-existing session) still applies to this client and is not solved by
-using WebRTC or conflict-aware registration — a malicious actor with
-socket access could still force-kick this client's session. This
-remains a separate, pre-existing server-side concern.
-
-Additional considerations specific to running several instances on one
-mobile device:
-
-- Per-instance credentials/user ids must not be hardcoded into a shared
-  image — each instance's environment file provisions its own identity.
-- TURN credentials, if used, should be short-lived/instance-scoped
-  where the deployment's TURN server supports it, rather than one
-  static shared secret baked into every instance.
-- The Companion trigger's local HTTP endpoint (§8, §10) is itself a
-  keying mechanism reachable over the network Companion runs on; it
-  must bind to localhost or a private interface and reject calls
-  without `TALKTOME_COMPANION_TRIGGER_TOKEN`, the same way any other
-  TX-keying input would need to be protected.
-- The configuration web interface (§10.1) is an admin surface with
-  write access to an instance's identity/config — it needs the same
-  bind-to-private-interface-plus-token treatment as the Companion
-  endpoint, and must never be reachable from whatever network path
-  the end user's own device traffic uses.
+1. **Spike (gate)**: Socket.IO client, login, `register-user`, send
+   transport with webrtc-rs, `produce` a test tone; a second instance
+   consumes and writes the decoded audio to a WAV file. Run against the
+   repo's server (`node server.js`). Record §6.7.
+2. `config` (JSON/TOML/env, validation, CLI) and `signalling`
+   (reconnect, re-login, conflict policy, `session-kicked`).
+3. `rtc`: send/recv transports, `remote_sdp`, `ortc`, consume/resume/close,
+   recovery by recreation.
+4. `audio`: capture → Opus → track; tracks → decode → jitter → mixer →
+   playback; dim; VOX; device recovery.
+5. `talk`: targets from REST + `user-list`, hold/lock/reply, `ptt-state`,
+   Companion commands and results, per-target audio state persistence and
+   snapshot.
+6. `surfaces::gpio` (tally first, then inputs, LEDs) with the mock backend.
+7. `surfaces::streamdeck` (discovery by serial, layout, rendering, dials,
+   touch strip, paging, volume layer) with the PNG mock backend.
+8. `health`, systemd unit, udev rule, example configs, README.
+9. Packaging (`cargo-deb`, maintainer scripts, version mapping).
+10. CI job and release workflow.
+11. Two instances on one host: independent users, audio devices and GPIO
+    (mock), no cross-talk, independent restart.
 
 ---
 
-# 15. Implementation Order
+## 16. Verification
 
-**Step 1** — Spike the headless WebRTC engine choice (§6): register a
-throwaway user against the real Talktome server's `createWebRtcTransport`
-path from a headless Node process, produce a test tone, consume it back.
-Resolve and record the engine choice before continuing.
+- **Unit**: Socket.IO framing and acks; `remote_sdp` output against
+  fixtures taken from `mediasoup-client`; `ortc` extraction from webrtc-rs
+  offers; jitter buffer; mixer gain/dim/mute math; layout engine for every
+  deck model; config parsing (JSON, TOML, env overrides, validation).
+- **Integration (CI-capable)**: start the repo's server; two headless
+  instances with mock surfaces register as two users; A talks to B and the
+  decoded audio on B is verified (tone detection); Companion-style commands
+  via `POST /api/v1/companion/users/:id/talk` and `/target-audio` produce
+  the expected `command-result`; `POST /cut-camera` toggles the mock tally
+  line; killing A leaves B registered.
+- **Manual on hardware**: real Stream Deck models, GPIO tally into a camera
+  tally input, LTE → Wi-Fi handover with the deployment's TURN server,
+  `iceTransportPolicy=relay`, 2 h soak.
 
-**Step 2** — Build `core/talktome.js`: Socket.IO connection,
-conflict-aware normal-user registration (§4), reconnection handling.
+## 17. Success criteria
 
-**Step 3** — Build `core/webrtc.js` against the chosen engine: send
-transport, produce; recv transport, consume.
+- From the server's point of view the panel is an ordinary user: it shows
+  online in Admin, can be targeted by Companion, receives tally, and
+  routes exactly like the browser.
+- Audio flows both ways over ICE + DTLS-SRTP, including through TURN when
+  direct paths are blocked, with no server changes.
+- A network change (LTE ↔ Wi-Fi) recovers automatically within seconds
+  without operator action.
+- Stream Deck keys talk/lock/reply and adjust volume/mute per target; GPIO
+  tally follows `cut-camera`.
+- Two instances on one Pi run independently.
+- `.deb` packages for arm64, armhf and amd64 are produced by CI and install
+  cleanly on Bookworm and Trixie.
 
-**Step 4** — Build `core/audio.js`: ALSA capture/playback, PCM framing
-matched to the engine's audio source/sink API.
+## 18. Follow-ups (not in this release)
 
-**Step 5** — Wire RX/TX engines end to end for a single instance: mic →
-Talktome, Talktome → speaker.
+- Server: `restart-ice` event (`transport.restartIce()` → new
+  `iceParameters`) to avoid full transport recreation on handover.
+- Server: long-lived device tokens so the password need not live on the
+  device; authentication for `POST /cut-camera`; a preview (green) tally.
+- Local admin/config web UI (token-gated, admin network only).
+- Bridge: deliver `cut-camera` to bridge sessions
+  (`queueBridgeControlEvent` filter).
 
-**Step 6** — Introduce `AudioActivityDetector` and
-`triggers/audioTrigger.js`.
+## 19. Decision log
 
-**Step 7** — Introduce `triggers/gpioTrigger.js` for boards with a
-physical PTT input.
-
-**Step 8** — Introduce `triggers/companionTrigger.js`: local HTTP
-trigger endpoint plus a documented example Companion button config;
-verify press/release maps to `active`/`inactive` the same as GPIO, and
-that an unauthenticated call is rejected.
-
-**Step 9** — Introduce `core/configWeb.js` (§10.1): admin-only,
-token-gated, bound to a private/management interface; verify it can
-read and change an instance's config and that an unauthenticated or
-wrong-network request is rejected.
-
-**Step 10** — Add the health endpoint and structured logging.
-
-**Step 11** — Add the systemd template; run one instance under systemd.
-
-**Step 12** — Run two instances on the same device concurrently;
-verify isolation.
-
-**Step 13** — Mobile network resilience testing (§16): Wi-Fi↔cellular
-handover, TURN fallback, reconnect after connectivity loss.
-
----
-
-# 16. Verification
-
-## Registration
-
-- normal `force: false` registration succeeds when the user id is free
-- a genuine conflict (another live session) fails startup and is
-  reported via `/healthz`, not silently forced
-- restarting the same instance recovers its own id via the
-  self-recovery `force: true` retry
-
-## WebRTC transport
-
-- ICE connects using the deployment's configured STUN/TURN
-- audio produced by this client is audible to other Talktome
-  participants
-- audio produced by other participants is audible on this client's
-  output
-- TX/RX echo prevention holds (own playback does not retrigger own RX)
-
-## Configuration web interface
-
-- reachable from the admin/management interface, not from the network
-  path the end user's own device traffic uses
-- rejects requests without `TALKTOME_ADMIN_TOKEN`
-- a config change made through it takes effect the same way an
-  `EnvironmentFile` change + restart would
-- disabling it (`TALKTOME_ADMIN_PORT` unset) leaves the rest of the
-  instance fully functional
-
-## Mobile network resilience
-
-- switching the device from Wi-Fi to cellular mid-session recovers via
-  ICE restart without a full re-registration
-- temporary connectivity loss (elevator, tunnel) reconnects cleanly
-- a network that blocks direct UDP still connects via TURN relay when
-  `TALKTOME_ICE_TRANSPORT_POLICY=relay`
-
-## Multi-instance
-
-- two instances on one device, independent Talktome users, independent
-  ALSA devices (or independent loopback devices)
-- no audio cross-talk between instances
-- killing instance A does not affect instance B
-- systemd restarts only the failed instance
-
-## Trigger modes
-
-- GPIO PTT lead/tail timing works if configured
-- VOX/audio-trigger hysteresis and hang time work if configured
-- Companion button press/release maps to `active`/`inactive` with no
-  GPIO/pinctrl invocation on that instance
-- a Companion-trigger HTTP call without a valid
-  `TALKTOME_COMPANION_TRIGGER_TOKEN` is rejected and logged
-  (`companion-trigger-rejected`), not honored
-
----
-
-# 17. Success Criteria
-
-The implementation is complete when:
-
-- The client registers and operates as an indistinguishable normal
-  Talktome user from the server's point of view.
-- Audio flows both directions over a real WebRTC (ICE + DTLS-SRTP)
-  transport, with no Talktome server changes required.
-- The client survives a Wi-Fi↔cellular handover without manual
-  intervention.
-- Multiple instances run independently and concurrently on one mobile
-  Linux device with no cross-talk and independent failure/restart.
-- `gateway/radioGateway.js` is untouched.
-- `/healthz` gives a reliable per-instance signal for supervision.
-- Swapping the trigger backend (GPIO, VOX, or Companion) is a
-  `TALKTOME_TRIGGER` config change, not a code change to Audio/WebRTC/
-  Talktome core.
-
----
-
-## Closing summary
-
-```text
-                    Talktome Server
-                          │
-              (createWebRtcTransport — unchanged)
-                          │
-        ┌─────────────────┼─────────────────┐
-        │                 │                 │
-   Browser user     headless-client    headless-client
-                     instance A          instance B
-                     (mobile device 1)   (mobile device 1)
-```
-
-To the server, this client is just another WebRTC user. The mobility
-and multi-instance behavior live entirely on the client side — the same
-principle the original gateway refactor established for triggers
-(GPIO/Audio behind one interface) now applies one layer up: WebRTC
-transport and normal-user registration behind the same Audio Core /
-Activity Detector / Trigger design, running headless, once per instance.
+- Rust, not Node; standalone crate in `headless-client/`.
+- Normal-user identity via user-scoped Companion login token; no admin API
+  key on the device.
+- webrtc-rs with SDP synthesis (TURN built in) over str0m.
+- TURN is mandatory whenever the server configures one; devices are mobile.
+- Talk keys: hold = talk, tap = lock toggle.
+- Registration conflict: configurable, default take over.
+- Multi-instance kept (systemd template); Stream Deck bound by serial;
+  GPIO-only instances are the two-per-Pi case.
+- Config: one schema, JSON or TOML by file extension, env overrides.
+- Packages: arm64, armhf, amd64, built on Bookworm.
+- Dropped from the earlier draft: Companion HTTP trigger endpoint, config
+  web UI (deferred), radio TX/RX echo state machine, references to a
+  gateway design document that is not in this repository.
