@@ -142,6 +142,15 @@
       }
       .user-audio-settings-dialog__actions { margin-top: 0.3rem; }
       .user-audio-settings-error { color: #fca5a5; }
+      .user-audio-settings-notice {
+        margin-top: 0.75rem;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid rgba(245, 158, 11, 0.45);
+        border-radius: 0.5rem;
+        background: rgba(245, 158, 11, 0.1);
+        color: #fcd34d;
+        line-height: 1.4;
+      }
       .user-settings-button { gap: 0.4rem; }
       .user-settings-button svg { width: 1.05rem; height: 1.05rem; display: block; }
 
@@ -4023,6 +4032,9 @@
         <div class="user-audio-settings-dialog__header">
           <h2 id="user-audio-settings-title">Audio settings</h2>
           <button type="button" class="user-audio-settings-dialog__close" id="user-audio-settings-close" aria-label="Close">&times;</button>
+        </div>
+        <div id="user-audio-settings-notice" class="user-audio-settings-notice is-hidden" role="note">
+          This user is configured as a Bridge endpoint. These settings apply only when the user is logged in through a browser and do not affect Bridge audio.
         </div>
         <div id="user-audio-settings-fields" class="user-audio-settings-form"></div>
         <div id="user-audio-settings-error" class="user-audio-settings-error is-hidden" aria-live="polite"></div>

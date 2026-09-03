@@ -3473,6 +3473,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const guestDisplayNameInput = document.getElementById("guest-display-name");
   const productionLoginPanel = document.getElementById('production-login-panel');
   const productionLoginOptions = document.getElementById('production-login-options');
+  const bridgeLoginPanel = document.getElementById('bridge-login-panel');
+  const bridgeLoginCancel = document.getElementById('bridge-login-cancel');
+  const bridgeLoginContinue = document.getElementById('bridge-login-continue');
   const adminLoginLink = document.getElementById('admin-login-link');
   const intercomApp = document.getElementById("intercom-app");
   const loginError = document.getElementById("login-error");
@@ -6482,12 +6485,39 @@ let cachedOperatorTargets = null;
 
   function restoreCredentialLoginView(kind = 'user') {
     productionLoginPanel?.classList.add('is-hidden');
+    bridgeLoginPanel?.classList.add('is-hidden');
     loginForm?.classList.remove('is-hidden');
     adminLoginLink?.classList.remove('is-hidden');
     if (guestLoginPanel && guestLoginButton) {
       guestLoginButton.disabled = !guestLoginEnabled;
       guestLoginPanel.classList.toggle('is-hidden', !guestLoginEnabled);
     }
+  }
+
+  function confirmBridgeBrowserLogin(identity, { skip = false } = {}) {
+    if (skip || identity?.kind === 'feed' || !identity?.configuredAsBridge) {
+      return Promise.resolve(true);
+    }
+
+    loginForm?.classList.add('is-hidden');
+    guestLoginPanel?.classList.add('is-hidden');
+    productionLoginPanel?.classList.add('is-hidden');
+    adminLoginLink?.classList.add('is-hidden');
+    bridgeLoginPanel?.classList.remove('is-hidden');
+
+    return new Promise((resolve) => {
+      const finish = (confirmed) => {
+        bridgeLoginCancel?.removeEventListener('click', cancel);
+        bridgeLoginContinue?.removeEventListener('click', proceed);
+        bridgeLoginPanel?.classList.add('is-hidden');
+        resolve(confirmed);
+      };
+      const cancel = () => finish(false);
+      const proceed = () => finish(true);
+      bridgeLoginCancel?.addEventListener('click', cancel, { once: true });
+      bridgeLoginContinue?.addEventListener('click', proceed, { once: true });
+      bridgeLoginContinue?.focus();
+    });
   }
 
   function chooseProduction(identity, { preferStored = false } = {}) {
@@ -6598,8 +6628,20 @@ let cachedOperatorTargets = null;
     });
   }
 
-  async function completeCredentialLogin(user, { preferStoredProduction = false } = {}) {
+  async function completeCredentialLogin(user, { preferStoredProduction = false, skipBridgeWarning = false } = {}) {
     const kind = user.kind === 'feed' ? 'feed' : 'user';
+    const bridgeLoginConfirmed = await confirmBridgeBrowserLogin(user, { skip: skipBridgeWarning });
+    if (!bridgeLoginConfirmed) {
+      try {
+        await fetch('/api/v1/client/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+      } catch {}
+      restoreCredentialLoginView(kind);
+      return false;
+    }
     const production = kind === 'user'
       ? await chooseProduction(user, { preferStored: preferStoredProduction })
       : null;
@@ -6765,6 +6807,16 @@ let cachedOperatorTargets = null;
       return;
     }
 
+    try {
+      const browserIdentity = await fetchLoginIdentity('/login/session');
+      if (browserIdentity) {
+        await completeCredentialLogin(browserIdentity, { preferStoredProduction: true, skipBridgeWarning: true });
+        return;
+      }
+    } catch (err) {
+      console.warn('Unable to restore browser login session:', err);
+    }
+
     if (ssoLoginEnabled) {
       try {
         const ssoIdentity = await fetchLoginIdentity('/login/sso', { method: 'POST' });
@@ -6775,16 +6827,6 @@ let cachedOperatorTargets = null;
       } catch (err) {
         console.warn('Trusted-header SSO login failed:', err);
       }
-    }
-
-    try {
-      const browserIdentity = await fetchLoginIdentity('/login/session');
-      if (browserIdentity) {
-        await completeCredentialLogin(browserIdentity, { preferStoredProduction: true });
-        return;
-      }
-    } catch (err) {
-      console.warn('Unable to restore browser login session:', err);
     }
 
     const storedGuestSession = loadStoredGuestSession();

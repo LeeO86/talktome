@@ -4966,6 +4966,7 @@ const userAudioSettingsDialog = document.getElementById('user-audio-settings-dia
 const userAudioSettingsForm = document.getElementById('user-audio-settings-form');
 const userAudioSettingsFields = document.getElementById('user-audio-settings-fields');
 const userAudioSettingsTitle = document.getElementById('user-audio-settings-title');
+const userAudioSettingsNotice = document.getElementById('user-audio-settings-notice');
 const userAudioSettingsError = document.getElementById('user-audio-settings-error');
 const userAudioSettingsSave = document.getElementById('user-audio-settings-save');
 let editingAudioSettingsUserId = null;
@@ -5007,6 +5008,7 @@ async function openUserAudioSettings(userId, userName) {
   userAudioSettingsTitle.textContent = `Audio settings · ${userName}`;
   userAudioSettingsFields.innerHTML = '<div class="setting-meta">Loading…</div>';
   userAudioSettingsSave.disabled = true;
+  userAudioSettingsNotice?.classList.add('is-hidden');
   userAudioSettingsError.classList.add('is-hidden');
   userAudioSettingsDialog.classList.remove('is-hidden');
   try {
@@ -5014,6 +5016,7 @@ async function openUserAudioSettings(userId, userName) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || 'Unable to load audio settings');
     if (editingAudioSettingsUserId !== Number(userId)) return;
+    userAudioSettingsNotice?.classList.toggle('is-hidden', !payload.configuredAsBridge);
     renderUserAudioSettingsFields(payload.settings, payload.targets);
     userAudioSettingsSave.disabled = false;
   } catch (error) {

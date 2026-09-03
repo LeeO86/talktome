@@ -2147,6 +2147,14 @@
           <p>Choose a production</p>
           <div id="production-login-options" class="production-login-options"></div>
         </div>
+        <div id="bridge-login-panel" class="bridge-login-panel is-hidden" role="alert" aria-live="polite">
+          <strong>Bridge endpoint account</strong>
+          <p>This account is configured as a Bridge endpoint. Logging in through the browser may disconnect an active Bridge session.</p>
+          <div class="bridge-login-actions">
+            <button type="button" id="bridge-login-cancel" class="login-submit login-submit--secondary">Cancel</button>
+            <button type="button" id="bridge-login-continue" class="login-submit">Continue</button>
+          </div>
+        </div>
         <div id="guest-login-panel" class="guest-login-panel is-hidden">
           <div class="login-field">
             <label for="guest-display-name">Guest name</label>

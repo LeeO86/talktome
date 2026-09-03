@@ -237,6 +237,32 @@
   background: rgba(37, 99, 235, 0.3);
 }
 
+.bridge-login-panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #e2e8f0;
+}
+
+.bridge-login-panel strong {
+  color: #fbbf24;
+}
+
+.bridge-login-panel p {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.bridge-login-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
 .login-message {
   display: none;
   padding: 0.4rem 0.75rem;

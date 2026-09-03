@@ -44,6 +44,7 @@ test('admin and client share the per-user audio settings model', () => {
   const clientHtml = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
   const adminScript = fs.readFileSync(path.join(__dirname, 'public', 'admin.js'), 'utf8');
   const clientScript = fs.readFileSync(path.join(__dirname, 'public', 'client.js'), 'utf8');
+  const serverScript = fs.readFileSync(path.join(__dirname, 'serverCore.js'), 'utf8');
 
   assert.match(adminHtml, /src="\/userAudioSettings\.js"/);
   assert.match(clientHtml, /src="\/userAudioSettings\.js"/);
@@ -52,4 +53,18 @@ test('admin and client share the per-user audio settings model', () => {
   assert.doesNotMatch(adminScript, /class="small icon-button user-settings/);
   assert.match(clientScript, /user-audio-settings-update/);
   assert.match(clientScript, /user-audio-settings-updated/);
+  assert.match(serverScript, /configuredAsBridge: Boolean\(user\.bridge_enabled\)/);
+  assert.match(adminHtml, /id="user-audio-settings-notice"[\s\S]*?do not affect Bridge audio/);
+  assert.match(adminScript, /userAudioSettingsNotice\?\.classList\.toggle\('is-hidden', !payload\.configuredAsBridge\)/);
+});
+
+test('bridge endpoint browser login requires an explicit confirmation', () => {
+  const clientHtml = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const clientScript = fs.readFileSync(path.join(__dirname, 'public', 'client.js'), 'utf8');
+  const serverScript = fs.readFileSync(path.join(__dirname, 'serverCore.js'), 'utf8');
+
+  assert.match(clientHtml, /id="bridge-login-panel"[\s\S]*?may disconnect an active Bridge session/);
+  assert.match(clientScript, /confirmBridgeBrowserLogin/);
+  assert.match(clientScript, /if \(!bridgeLoginConfirmed\)/);
+  assert.match(serverScript, /configuredAsBridge: kind === "user" && Boolean\(storedUser\?\.bridge_enabled\)/);
 });

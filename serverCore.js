@@ -2769,6 +2769,7 @@ app.get('/admin/users/:id/audio-settings', requireAdmin, (req, res) => {
   res.json({
     settings: getResolvedUserAudioSettings(user.id),
     targets: getUserAudioSettingTargets(user.id),
+    configuredAsBridge: Boolean(user.bridge_enabled),
   });
 });
 
@@ -2876,11 +2877,13 @@ function buildLoginIdentity(user, kind = "user") {
   const productions = kind === "user" || kind === "guest"
     ? getEnabledProductionsForUser(user.id).map(({ id, name }) => ({ id, name }))
     : [];
+  const storedUser = kind === "user" ? getUserById(user.id) : null;
   return {
     id: user.id,
     name: user.name,
     kind,
     productions,
+    configuredAsBridge: kind === "user" && Boolean(storedUser?.bridge_enabled),
   };
 }
 
