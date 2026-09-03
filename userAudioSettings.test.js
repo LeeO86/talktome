@@ -48,7 +48,8 @@ test('admin and client share the per-user audio settings model', () => {
   assert.match(adminHtml, /src="\/userAudioSettings\.js"/);
   assert.match(clientHtml, /src="\/userAudioSettings\.js"/);
   assert.match(adminScript, /openUserAudioSettings/);
-  assert.match(adminScript, /user-settings-icon/);
+  assert.match(adminScript, /class="small user-settings-button"[\s\S]*?<span>Audio<\/span>[\s\S]*?<svg/);
+  assert.doesNotMatch(adminScript, /class="small icon-button user-settings/);
   assert.match(clientScript, /user-audio-settings-update/);
   assert.match(clientScript, /user-audio-settings-updated/);
 });

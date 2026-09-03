@@ -2595,7 +2595,8 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
       ? `<button type="button" class="small warning" data-stop-transmission-user-id="${user.id}" onclick="stopUserTransmission(${user.id}, this)" disabled>Stop transmission</button>`
       : '';
     const audioSettingsButton = !isSuperadmin && !isGuestProfile
-      ? `<button type="button" class="small icon-button user-settings-icon" onclick='openUserAudioSettings(${user.id}, ${JSON.stringify(user.name)})' aria-label="Audio settings for ${safeName}" title="Audio settings">
+      ? `<button type="button" class="small user-settings-button" onclick='openUserAudioSettings(${user.id}, ${JSON.stringify(user.name)})' aria-label="Audio settings for ${safeName}" title="Audio settings">
+          <span>Audio</span>
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="none"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 13.5a7.8 7.8 0 0 0 .05-3l2-1.55-2-3.45-2.48 1a8.2 8.2 0 0 0-2.57-1.49L14 2.4h-4l-.4 2.61A8.2 8.2 0 0 0 7.03 6.5l-2.48-1-2 3.45 2 1.55a7.8 7.8 0 0 0 .05 3l-2.05 1.55 2 3.45 2.5-1a8.2 8.2 0 0 0 2.55 1.48L10 21.6h4l.4-2.62a8.2 8.2 0 0 0 2.55-1.48l2.5 1 2-3.45-2.05-1.55Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>`
       : '';
