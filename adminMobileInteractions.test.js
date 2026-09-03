@@ -28,3 +28,12 @@ test('target button ordering supports touch pointers', () => {
   assert.match(script, /initTouchTargetOrdering\(list, \(\) => saveProductionTargetOrder/);
   assert.match(script, /initTouchTargetOrdering\(ul, \(\) => saveTargetOrder/);
 });
+
+test('user audio settings dialog remains compact on regular screens', () => {
+  assert.match(html, /\.user-audio-settings-dialog__panel\s*\{[^}]*width:\s*min\(44rem,\s*100%\);[^}]*font-size:\s*0\.86rem;/s);
+  assert.match(html, /\.user-audio-settings-dialog__header h2\s*\{[^}]*font-size:\s*1\.15rem;[^}]*font-weight:\s*650;/s);
+  assert.match(html, /\.user-audio-settings-dialog__close\s*\{[^}]*width:\s*2\.25rem;[^}]*height:\s*2\.25rem;[^}]*aspect-ratio:\s*1;/s);
+  assert.match(html, /\.user-audio-settings-form\s*\{[^}]*gap:\s*0\.5rem;/s);
+  assert.match(html, /\.user-audio-settings-row select\s*\{[^}]*height:\s*2\.15rem;/s);
+  assert.match(html, /\.user-audio-settings-range input\[type='range'\]\s*\{[^}]*height:\s*1\.15rem;/s);
+});

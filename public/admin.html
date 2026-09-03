@@ -68,10 +68,11 @@
       }
 
       .user-audio-settings-dialog__panel {
-        width: min(34rem, 100%);
+        width: min(44rem, 100%);
         max-height: calc(100dvh - 2rem);
         overflow: auto;
-        padding: 1.25rem;
+        padding: 1rem 1.1rem;
+        font-size: 0.86rem;
         border: 1px solid var(--border);
         border-radius: var(--radius);
         background: var(--card-bg);
@@ -87,17 +88,63 @@
       }
 
       .user-audio-settings-dialog__header { justify-content: space-between; gap: 1rem; }
-      .user-audio-settings-dialog__header h2 { margin: 0; }
-      .user-audio-settings-dialog__close { min-width: 2.7rem; padding-inline: 0.7rem; font-size: 1.35rem; }
-      .user-audio-settings-form { display: grid; gap: 0.9rem; margin-top: 1rem; }
+      .user-audio-settings-dialog__header h2 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 650;
+        line-height: 1.25;
+      }
+      .user-audio-settings-dialog__close {
+        display: grid;
+        place-items: center;
+        width: 2.25rem;
+        min-width: 2.25rem;
+        height: 2.25rem;
+        min-height: 2.25rem;
+        padding: 0;
+        aspect-ratio: 1;
+        font-size: 1.15rem;
+        line-height: 1;
+      }
+      .user-audio-settings-form { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
       .user-audio-settings-row { justify-content: space-between; gap: 1rem; }
-      .user-audio-settings-row label { color: var(--text); font-weight: 650; }
-      .user-audio-settings-row select { width: min(15rem, 55%); }
-      .user-audio-settings-range { display: grid; gap: 0.35rem; }
-      .user-audio-settings-range__label { display: flex; justify-content: space-between; gap: 1rem; font-weight: 650; }
-      .user-audio-settings-range input { width: 100%; }
-      .user-audio-settings-switch { justify-content: space-between; gap: 1rem; min-height: 2.5rem; font-weight: 650; }
-      .user-audio-settings-dialog__actions { justify-content: flex-end; gap: 0.65rem; margin-top: 0.4rem; }
+      .user-audio-settings-row label { color: var(--text); font-weight: 600; }
+      .user-audio-settings-row select {
+        width: min(19rem, 58%);
+        height: 2.15rem;
+        min-height: 2.15rem;
+        padding: 0.3rem 0.6rem;
+      }
+      .user-audio-settings-range { display: grid; gap: 0.2rem; }
+      .user-audio-settings-range__label { display: flex; justify-content: space-between; gap: 1rem; font-weight: 600; }
+      .user-audio-settings-range input[type='range'] {
+        width: 100%;
+        height: 1.15rem;
+        min-height: 1.15rem;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+      .user-audio-settings-switch { justify-content: space-between; gap: 1rem; min-height: 1.9rem; font-weight: 600; }
+      .user-audio-settings-dialog .admin-switch__track {
+        width: 2.45rem;
+        height: 1.3rem;
+      }
+      .user-audio-settings-dialog .admin-switch__track::after {
+        top: 0.14rem;
+        left: 0.14rem;
+        width: 0.9rem;
+        height: 0.9rem;
+      }
+      .user-audio-settings-dialog .admin-switch input:checked + .admin-switch__track::after {
+        transform: translateX(1.12rem);
+      }
+      .user-audio-settings-dialog__actions { justify-content: flex-end; gap: 0.55rem; margin-top: 0.3rem; }
+      .user-audio-settings-dialog__actions button {
+        min-height: 2.15rem;
+        padding: 0.35rem 0.8rem;
+      }
       .user-audio-settings-error { color: #fca5a5; }
       .user-settings-icon svg { width: 1.15rem; height: 1.15rem; display: block; }
 
