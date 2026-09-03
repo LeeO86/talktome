@@ -357,12 +357,39 @@ preserved: if a key is still held or locked when recovery completes, the
 new producer is resumed and `talk-targets-updated` re-sent. Typical
 recovery time on LTE→Wi-Fi is one ICE gathering + DTLS round trip.
 
-### 6.7 Interop notes (filled in by the spike, §15 step 1)
+### 6.7 Interop notes (from the spike, §15 step 1)
 
-Recorded here after the first working end-to-end run: webrtc-rs version,
-Opus payload type and header-extension ids negotiated with the router,
-DTLS role handling, and any deviations from `mediasoup-client` that were
-needed.
+Verified end to end against the repo's server (`node server.js`, mediasoup
+3.x) with `talktome-headless dev send-tone` on one user and `dev record` on
+another: a 440 Hz tone produced by the Rust client was received, decoded and
+written to WAV by the second instance (289 packets for a 6 s tone; the first
+~200 ms are lost while ICE/DTLS complete, as in a browser).
+
+- Engine: `webrtc` crate **0.17.x** (pion-derived API). The 0.20+ line is a
+  new sans-IO rewrite with a different API; it is the future migration
+  target but was not used.
+- Opus payload type: taken from the router's `preferredPayloadType`
+  (100 on this server) and registered as webrtc-rs' codec PT, so no PT
+  mapping is needed for produce or consume.
+- Header extensions: webrtc-rs assigns its own ids in the send offer
+  (`sdes:mid`, `ssrc-audio-level`, `abs-send-time`, `transport-cc`); the
+  `produce` parameters use those local ids. For consumers the router's
+  preferred ids (`mid`=1, `abs-send-time`=4, `ssrc-audio-level`=6 here) are
+  echoed into our remote offer and adopted by webrtc-rs as answerer.
+- DTLS roles: send transport = local offer `actpass`, synthesized answer
+  `passive`, `connect-send-transport { role: "client" }`. Receive transport
+  = synthesized offer `actpass`; **webrtc-rs must be forced to answer as
+  DTLS client** (`SettingEngine::set_answering_dtls_role(Client)`) because
+  it otherwise answers an `a=ice-lite` offer with `setup:passive` while we
+  tell mediasoup we are the client — both sides then wait for a ClientHello.
+- ICE: webrtc-rs discards STUN responses whose source address differs from
+  the signalled candidate. The server's announced address therefore has to
+  be the address it actually replies from (the README's LAN-IP rule); a
+  server announcing `127.0.0.1` while bound on another interface never
+  connects.
+- Renegotiation on the receive transport (new remote offer per consumer,
+  answer, `connect-recv-transport` once) works; `on_track` fires with the
+  consumer's SSRC.
 
 ---
 
