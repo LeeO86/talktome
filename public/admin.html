@@ -1108,7 +1108,8 @@
         min-width: 0;
       }
 
-      .config-panel button:not(.media-network-qr-button) {
+      .config-panel button:not(.media-network-qr-button),
+      .admin-action-dialog__actions button {
         height: 2.2rem;
         min-height: 0;
         padding: 0.4rem 0.75rem;
@@ -1119,7 +1120,8 @@
         box-shadow: none;
       }
 
-      .config-panel button:not(.media-network-qr-button):hover {
+      .config-panel button:not(.media-network-qr-button):hover,
+      .admin-action-dialog__actions button:hover {
         border-color: rgba(59, 130, 246, 0.58);
         background: rgba(37, 99, 235, 0.3);
       }
@@ -1565,19 +1567,6 @@
         display: flex;
         justify-content: flex-end;
         gap: 0.65rem;
-      }
-
-      .admin-action-dialog__actions button {
-        min-height: var(--control-height);
-        padding: 0.6rem 1rem;
-        font-size: 1rem;
-        font-weight: 600;
-      }
-
-      .admin-action-dialog__cancel {
-        background: rgba(148, 163, 184, 0.14);
-        color: var(--text);
-        border: 1px solid rgba(148, 163, 184, 0.28);
       }
 
       .admin-action-dialog__confirm.danger {
