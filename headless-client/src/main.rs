@@ -126,7 +126,7 @@ fn main() -> Result<()> {
         }
         Command::ListGpio => {
             init_logging(None);
-            return Ok(());
+            return surfaces::gpio::list();
         }
         _ => {}
     }
