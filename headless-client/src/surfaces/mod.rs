@@ -2,6 +2,7 @@
 
 pub mod gpio;
 pub mod mock;
+pub mod streamdeck;
 
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -18,5 +19,13 @@ pub fn spawn_all(config: &Config, bus: &Bus, shutdown: watch::Receiver<bool>, ta
     }
     if config.gpio.enabled && (!config.gpio.outputs.is_empty() || !config.gpio.inputs.is_empty()) {
         tasks.spawn(gpio::run(config.gpio.clone(), bus.clone(), shutdown.clone()));
+    }
+    if config.streamdeck.enabled {
+        tasks.spawn(streamdeck::run(
+            config.streamdeck.clone(),
+            config.talk.clone(),
+            bus.clone(),
+            shutdown.clone(),
+        ));
     }
 }

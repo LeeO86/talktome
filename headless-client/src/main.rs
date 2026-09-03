@@ -122,7 +122,7 @@ fn main() -> Result<()> {
         }
         Command::ListStreamdecks => {
             init_logging(None);
-            return Ok(());
+            return surfaces::streamdeck::list();
         }
         Command::ListGpio => {
             init_logging(None);
