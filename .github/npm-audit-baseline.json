@@ -1,24 +1,3 @@
 {
-  "allowedAdvisories": [
-    "https://github.com/advisories/GHSA-2328-f5f3-gj25",
-    "https://github.com/advisories/GHSA-23hp-3jrh-7fpw",
-    "https://github.com/advisories/GHSA-37ch-88jc-xwx2",
-    "https://github.com/advisories/GHSA-5m6q-g25r-mvwx",
-    "https://github.com/advisories/GHSA-83g3-92jg-28cx",
-    "https://github.com/advisories/GHSA-8x88-c5mf-7j5w",
-    "https://github.com/advisories/GHSA-9h5v-pfqq-x599",
-    "https://github.com/advisories/GHSA-9ppj-qmqm-q256",
-    "https://github.com/advisories/GHSA-gvwx-54wh-qm9j",
-    "https://github.com/advisories/GHSA-hmw2-7cc7-3qxx",
-    "https://github.com/advisories/GHSA-ppp5-5v6c-4jwp",
-    "https://github.com/advisories/GHSA-q67f-28xg-22rw",
-    "https://github.com/advisories/GHSA-q8mj-m7cp-5q26",
-    "https://github.com/advisories/GHSA-qffp-2rhf-9h96",
-    "https://github.com/advisories/GHSA-r292-9mhp-454m",
-    "https://github.com/advisories/GHSA-v422-hmwv-36x6",
-    "https://github.com/advisories/GHSA-vmf3-w455-68vh",
-    "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
-    "https://github.com/advisories/GHSA-w7fw-mjwx-w883",
-    "https://github.com/advisories/GHSA-w8wr-v893-vjvp"
-  ]
+  "allowedAdvisories": []
 }
