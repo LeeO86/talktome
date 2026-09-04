@@ -174,9 +174,16 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob globstar
+          # cargo-deb may place the same package under target/debian/ and
+          # target/<triple>/debian/; treat files with the same name as one.
           files=(headless-client/target/**/debian/*.deb)
-          if [[ ${#files[@]} -ne 1 ]]; then
-            printf 'Expected exactly one .deb, found %s\n' "${#files[@]}" >&2
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo 'No .deb produced' >&2
+            exit 1
+          fi
+          mapfile -t names < <(for f in "${files[@]}"; do basename "$f"; done | sort -u)
+          if [[ ${#names[@]} -ne 1 ]]; then
+            printf 'Expected exactly one package name, found %s\n' "${#names[@]}" >&2
             printf '%s\n' "${files[@]}" >&2
             exit 1
           fi
