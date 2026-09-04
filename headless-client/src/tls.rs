@@ -99,6 +99,20 @@ pub fn build_client_config(tls: &TlsConfig) -> Result<Arc<ClientConfig>> {
     Ok(Arc::new(config))
 }
 
+/// TLS config used to reach TURNS (`turns:` / TURN-over-TLS) servers.
+///
+/// Fingerprint pinning is the Talktome HTTPS leaf, which is the wrong
+/// certificate for the TURN host, so TURNS always uses system roots plus
+/// `tls.ca_file`. `tls.insecure` still disables verification.
+pub fn build_turn_client_config(tls: &TlsConfig) -> Result<Arc<ClientConfig>> {
+    if tls.insecure {
+        return build_client_config(tls);
+    }
+    let mut turn = tls.clone();
+    turn.fingerprint_sha256 = None;
+    build_client_config(&turn)
+}
+
 #[derive(Debug)]
 struct InsecureVerifier {
     provider: Arc<CryptoProvider>,
@@ -236,6 +250,11 @@ mod tests {
         .unwrap();
         build_client_config(&TlsConfig {
             insecure: true,
+            ..TlsConfig::default()
+        })
+        .unwrap();
+        build_turn_client_config(&TlsConfig {
+            fingerprint_sha256: Some("ab".repeat(32)),
             ..TlsConfig::default()
         })
         .unwrap();

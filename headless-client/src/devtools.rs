@@ -88,6 +88,7 @@ pub async fn connect_and_register(config: &Config) -> Result<Connected> {
 fn rtc_settings(config: &Config) -> RtcSettings {
     RtcSettings {
         ice_override: config.ice.clone(),
+        tls: config.tls.clone(),
         disconnected_timeout: Duration::from_millis(config.network.ice_disconnect_grace_ms),
         failed_timeout: Duration::from_millis(config.network.ice_disconnect_grace_ms * 3),
         keepalive_interval: Duration::from_secs(2),

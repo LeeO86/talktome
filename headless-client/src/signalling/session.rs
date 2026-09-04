@@ -487,6 +487,7 @@ impl Session {
         let grace = Duration::from_millis(self.config.network.ice_disconnect_grace_ms.max(1000));
         RtcSettings {
             ice_override: self.config.ice.clone(),
+            tls: self.config.tls.clone(),
             disconnected_timeout: grace,
             failed_timeout: grace * 3,
             keepalive_interval: Duration::from_secs(2),

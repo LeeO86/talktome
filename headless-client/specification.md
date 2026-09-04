@@ -288,12 +288,14 @@ socket loss.
 
 ### 6.1 Engine
 
-`webrtc` (webrtc-rs). Chosen over `str0m` because it ships a full ICE agent
-with **TURN** (UDP/TCP/TLS, `relay` policy) and candidate re-gathering,
-which is exactly the mobile-network requirement, at the cost of speaking
-SDP to it. str0m's `DirectApi` would have avoided SDP but needs a
-hand-built TURN client; it remains the fallback if webrtc-rs proves too
-heavy on armhf (the transport is behind a small trait).
+`webrtc` (webrtc-rs) 0.17. Chosen over `str0m` because it ships an ICE
+agent with TURN **over UDP**, candidate re-gathering and ICE restart, at
+the cost of speaking SDP to it. webrtc-ice 0.17 cannot allocate
+TURN-over-TCP or TURNS (`turns:host:443?transport=tcp`) itself — those
+URLs are rewritten to a local UDP TURN façade that forwards framed
+STUN/ChannelData over TCP or TLS to the real server. str0m remains the
+fallback if webrtc-rs proves too heavy on armhf (the transport is behind
+a small trait).
 
 ### 6.2 Mapping mediasoup signalling to SDP
 
@@ -328,6 +330,24 @@ are passed through to `RTCConfiguration` (`relay` → `RTCIceTransportPolicy::Re
 Optional overrides in config (`ice.servers`, `ice.transport_policy`) exist
 for testing only; by default the client uses whatever the server hands to
 browsers.
+
+webrtc-rs requires **literal IP addresses** in `a=candidate` lines.
+Hostname announced addresses (common when the Talktome media network is
+configured with a DNS name) are resolved to A/AAAA records before the
+remote SDP is applied. Bracketed IPv6 literals are unwrapped.
+
+`turns:` and `turn:?transport=tcp` URLs are not spoken natively by
+webrtc-ice 0.17. The client binds `127.0.0.1:<ephemeral>` and presents
+`turn:127.0.0.1:…?transport=udp` to webrtc-rs, bridging each ICE
+agent's UDP socket onto its own TCP or TLS connection to the real TURN
+server. TURNS uses the same CA store as the Talktome HTTPS client
+(`tls.ca_file` / system roots, or `tls.insecure`); the Talktome leaf
+fingerprint is not applied to the TURN host.
+
+Local ICE gathering is IPv4-only unless `ice.ipv6` is true. IPv6
+link-local addresses cannot be bound by webrtc-ice (EINVAL) and IPv6
+STUN lookup fails when the only IPv6 addresses on the box are
+link-local.
 
 ### 6.4 Producer
 

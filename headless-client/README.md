@@ -137,6 +137,30 @@ talktome-headless --instance cam1 dev record --out /tmp/heard.wav
 `audio.input_device = "tone"` and `audio.output_device = "wav:/tmp/out.wav"`
 do the same inside the running service.
 
+## Media / ICE troubleshooting
+
+The client registers as a normal user, then fails media setup if it cannot
+parse the server's ICE candidates or reach the media ports:
+
+- `setting remote answer: parse addr: invalid IP address syntax` — the
+  server announced a **hostname** (or a bracketed IPv6 literal) as the
+  WebRTC address. Current builds resolve hostnames to A/AAAA before
+  applying the SDP. Check `journalctl` for `ice-candidate-resolved` /
+  `send-ice-candidates`.
+- `Unable to handle URL in gather_candidates_relay turns:…?transport=tcp`
+  — webrtc-ice cannot speak TURNS. Current builds bridge those URLs to a
+  local UDP TURN façade (`turn-bridge-listen`, `ice-url-rewritten`). The
+  TURN host's certificate is verified with system roots plus
+  `tls.ca_file`; a Talktome `tls.fingerprint_sha256` pin does **not**
+  apply to the TURN server.
+- `could not listen udp fe80::… Invalid argument` and `No available ipv6
+  IP address found` — IPv6 link-local gathering. Leave `ice.ipv6` off
+  unless this device has a global IPv6 address.
+- Direct UDP to the server's announced IP still works when that IP is
+  reachable (ICE-lite). TURN is required when the announced address is
+  not reachable from the device (different network, UDP blocked, or
+  `iceTransportPolicy=relay`).
+
 ## Build from source
 
 ```bash

@@ -64,6 +64,9 @@ lock_multiple = false
 # Normally left empty: STUN/TURN servers and the policy come from the server.
 # servers = [{ urls = ["turn:turn.example:3478"], username = "u", credential = "p" }]
 # transport_policy = "relay"
+# Gather IPv6 ICE candidates. Leave off unless the box has a global IPv6
+# address; link-local-only IPv6 makes webrtc-ice fail to bind.
+# ipv6 = false
 
 [network]
 ice_disconnect_grace_ms = 4000
