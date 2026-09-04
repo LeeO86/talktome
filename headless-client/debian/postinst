@@ -16,6 +16,10 @@ case "$1" in
                 --gecos "Talktome headless client" "$USER"
         fi
         # Audio devices, Stream Deck HID (udev rule) and GPIO character devices.
+        # Only join groups that exist: systemd SupplementaryGroups= of a
+        # missing name (typically gpio off Raspberry Pi OS) fails the unit
+        # at step GROUP with status 216 before the binary runs. Membership
+        # here is enough because User= loads the user's groups from NSS.
         for grp in audio plugdev gpio; do
             if getent group "$grp" >/dev/null; then
                 adduser --quiet "$USER" "$grp" >/dev/null 2>&1 || true

@@ -211,3 +211,38 @@ fn main() -> Result<()> {
         Command::ListAudioDevices | Command::ListStreamdecks | Command::ListGpio => unreachable!(),
     }
 }
+
+#[cfg(test)]
+mod packaging_tests {
+    #[test]
+    fn systemd_unit_does_not_require_optional_groups() {
+        let unit = include_str!("../deploy/systemd/talktome-headless@.service");
+        for line in unit.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            assert!(
+                !trimmed.starts_with("SupplementaryGroups="),
+                "hardcoded SupplementaryGroups= fails with 216/GROUP when gpio/plugdev is missing: {trimmed}"
+            );
+        }
+        assert!(
+            unit.contains("User=talktome-headless"),
+            "User= still loads audio/plugdev/gpio from the user database"
+        );
+    }
+
+    #[test]
+    fn postinst_joins_device_groups_only_when_they_exist() {
+        let postinst = include_str!("../debian/postinst");
+        assert!(
+            postinst.contains("getent group \"$grp\""),
+            "postinst must skip missing audio/plugdev/gpio"
+        );
+        assert!(
+            postinst.contains("for grp in audio plugdev gpio"),
+            "postinst should still join device groups that exist"
+        );
+    }
+}
