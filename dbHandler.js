@@ -68,19 +68,9 @@ function normalizeBridgeTriggerThresholdDb(value) {
   );
 }
 
-function normalizeBridgeProductionId(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < 1) {
-    throw new Error('Bridge production id must be a positive integer');
-  }
-  return number;
-}
-
 function normalizeBridgeEndpointConfig(config = {}) {
   const enabled = Boolean(config.enabled);
   const bridgeDevice = normalizeBridgeText(config.bridgeDevice);
-  const productionId = normalizeBridgeProductionId(config.productionId);
   const inputDevice = normalizeBridgeText(config.inputDevice);
   const inputLeftChannel = normalizeBridgeChannel(config.inputLeftChannel, 'Input left channel');
   const inputRightChannel = normalizeBridgeChannel(config.inputRightChannel, 'Input right channel');
@@ -108,7 +98,6 @@ function normalizeBridgeEndpointConfig(config = {}) {
   return {
     enabled,
     bridgeDevice,
-    productionId,
     inputDevice,
     inputLeftChannel,
     inputRightChannel,
@@ -125,7 +114,6 @@ function normalizeBridgeEndpointConfig(config = {}) {
 function normalizeFeedBridgeEndpointConfig(config = {}) {
   const enabled = Boolean(config.enabled);
   const bridgeDevice = normalizeBridgeText(config.bridgeDevice);
-  const productionId = normalizeBridgeProductionId(config.productionId);
   const inputDevice = normalizeBridgeText(config.inputDevice);
   const inputLeftChannel = normalizeBridgeChannel(config.inputLeftChannel, 'Input left channel');
   const inputRightChannel = normalizeBridgeChannel(config.inputRightChannel, 'Input right channel');
@@ -141,7 +129,6 @@ function normalizeFeedBridgeEndpointConfig(config = {}) {
   return {
     enabled,
     bridgeDevice,
-    productionId,
     inputDevice,
     inputLeftChannel,
     inputRightChannel,
@@ -159,7 +146,6 @@ function getAllUsers() {
       users.last_online_at,
       COALESCE(user_bridge_endpoints.enabled, 0) AS bridge_enabled,
       COALESCE(user_bridge_endpoints.bridge_device, '') AS bridge_device,
-      user_bridge_endpoints.production_id AS bridge_production_id,
       COALESCE(user_bridge_endpoints.input_device, '') AS bridge_input_device,
       user_bridge_endpoints.input_left_channel AS bridge_input_left_channel,
       user_bridge_endpoints.input_right_channel AS bridge_input_right_channel,
@@ -189,7 +175,6 @@ function getUserById(id) {
       users.last_online_at,
       COALESCE(user_bridge_endpoints.enabled, 0) AS bridge_enabled,
       COALESCE(user_bridge_endpoints.bridge_device, '') AS bridge_device,
-      user_bridge_endpoints.production_id AS bridge_production_id,
       COALESCE(user_bridge_endpoints.input_device, '') AS bridge_input_device,
       user_bridge_endpoints.input_left_channel AS bridge_input_left_channel,
       user_bridge_endpoints.input_right_channel AS bridge_input_right_channel,
@@ -233,7 +218,6 @@ function getBridgeEndpointsForDevice(bridgeDevice) {
       users.id AS user_id,
       users.name AS user_name,
       user_bridge_endpoints.bridge_device,
-      user_bridge_endpoints.production_id,
       user_bridge_endpoints.input_device,
       user_bridge_endpoints.input_left_channel,
       user_bridge_endpoints.input_right_channel,
@@ -264,7 +248,6 @@ function getFeedBridgeEndpointsForDevice(bridgeDevice) {
       feeds.id AS feed_id,
       feeds.name AS feed_name,
       feed_bridge_endpoints.bridge_device,
-      feed_bridge_endpoints.production_id,
       feed_bridge_endpoints.input_device,
       feed_bridge_endpoints.input_left_channel,
       feed_bridge_endpoints.input_right_channel,
@@ -288,7 +271,6 @@ function getAllFeeds() {
       feeds.name,
       COALESCE(feed_bridge_endpoints.enabled, 0) AS bridge_enabled,
       COALESCE(feed_bridge_endpoints.bridge_device, '') AS bridge_device,
-      feed_bridge_endpoints.production_id AS bridge_production_id,
       COALESCE(feed_bridge_endpoints.input_device, '') AS bridge_input_device,
       feed_bridge_endpoints.input_left_channel AS bridge_input_left_channel,
       feed_bridge_endpoints.input_right_channel AS bridge_input_right_channel,
@@ -410,52 +392,6 @@ function getProductionsForFeed(feedId) {
   `).all(Number(feedId));
 }
 
-function resolveUserBridgeProductionId(userId, requestedProductionId, { required = false } = {}) {
-  const availableProductions = getProductionsForUser(userId);
-  const primaryProduction = getPrimaryProduction();
-  const fallbackProduction = availableProductions.find((production) => (
-    Number(production.id) === Number(primaryProduction?.id)
-  )) || availableProductions[0] || null;
-  const productionId = requestedProductionId ?? (fallbackProduction ? Number(fallbackProduction.id) : null);
-  if (required && productionId === null) {
-    throw new Error('Bridge production is required when bridge endpoint is enabled');
-  }
-  if (productionId !== null && !isUserInProduction(userId, productionId)) {
-    throw new Error('Bridge user is not a member of the selected production');
-  }
-  return productionId;
-}
-
-function resolveFeedBridgeProductionId(feedId, requestedProductionId, { required = false } = {}) {
-  const availableProductions = getProductionsForFeed(feedId);
-  const primaryProduction = getPrimaryProduction();
-  const fallbackProduction = availableProductions.find((production) => (
-    Number(production.id) === Number(primaryProduction?.id)
-  )) || availableProductions[0] || null;
-  const productionId = requestedProductionId ?? (fallbackProduction ? Number(fallbackProduction.id) : null);
-  if (required && productionId === null) {
-    throw new Error('Bridge production is required when bridge endpoint is enabled');
-  }
-  if (productionId !== null && !availableProductions.some((production) => Number(production.id) === productionId)) {
-    throw new Error('Bridge feed is not available in the selected production');
-  }
-  return productionId;
-}
-
-function repairBridgeEndpointProductionAssignments() {
-  const updateUser = db.prepare('UPDATE user_bridge_endpoints SET production_id = ? WHERE user_id = ?');
-  db.prepare('SELECT user_id FROM user_bridge_endpoints WHERE production_id IS NULL').all().forEach((row) => {
-    const productionId = resolveUserBridgeProductionId(row.user_id, null);
-    if (productionId !== null) updateUser.run(productionId, row.user_id);
-  });
-
-  const updateFeed = db.prepare('UPDATE feed_bridge_endpoints SET production_id = ? WHERE feed_id = ?');
-  db.prepare('SELECT feed_id FROM feed_bridge_endpoints WHERE production_id IS NULL').all().forEach((row) => {
-    const productionId = resolveFeedBridgeProductionId(row.feed_id, null);
-    if (productionId !== null) updateFeed.run(productionId, row.feed_id);
-  });
-}
-
 function isUserInProduction(userId, productionId) {
   return Boolean(db.prepare(`
     SELECT 1
@@ -520,9 +456,7 @@ function deleteProduction(productionId) {
     }
     return deleted;
   });
-  const deleted = remove();
-  if (deleted) repairBridgeEndpointProductionAssignments();
-  return deleted;
+  return remove();
 }
 
 function getProductionMembers(productionId) {
@@ -795,6 +729,25 @@ function getProductionTargets(userId, productionId) {
     ...target,
     canTalk: Boolean(target.canTalk),
   }));
+}
+
+function getBridgeTargetsForUser(userId) {
+  const targets = getProductionsForUser(userId)
+    .flatMap((production) => getProductionTargets(userId, production.id));
+  const unique = new Map();
+
+  for (const target of targets) {
+    if (!['user', 'conference'].includes(target.targetType)) continue;
+    const key = `${target.targetType}:${target.targetId}`;
+    const existing = unique.get(key);
+    if (!existing || (target.targetType === 'conference' && target.canTalk && !existing.canTalk)) {
+      unique.set(key, target);
+    }
+  }
+
+  return [...unique.values()]
+    .filter((target) => target.targetType !== 'conference' || target.canTalk)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }));
 }
 
 function getPrimaryProductionTargets(userId) {
@@ -1367,7 +1320,7 @@ function importDatabaseSnapshot(snapshot) {
         Number(row.user_id),
         normalized.enabled ? 1 : 0,
         normalized.bridgeDevice,
-        productions.length ? normalized.productionId : null,
+        null,
         normalized.inputDevice,
         normalized.inputLeftChannel,
         normalized.inputRightChannel,
@@ -1395,15 +1348,13 @@ function importDatabaseSnapshot(snapshot) {
         Number(row.feed_id),
         normalized.enabled ? 1 : 0,
         normalized.bridgeDevice,
-        productions.length ? normalized.productionId : null,
+        null,
         normalized.inputDevice,
         normalized.inputLeftChannel,
         normalized.inputRightChannel,
         String(row.updated_at || new Date().toISOString())
       );
     });
-
-    repairBridgeEndpointProductionAssignments();
 
     ensureDefaultAdmin();
   });
@@ -1647,19 +1598,13 @@ function updateUserBridgeEndpoint(userId, config = {}) {
   }
 
   const normalized = normalizeBridgeEndpointConfig(config);
-  const productionId = resolveUserBridgeProductionId(
-    numericUserId,
-    normalized.productionId,
-    { required: normalized.enabled }
-  );
   if (normalized.enabled && normalized.triggerMode === 'audio-level') {
-    const triggerTarget = getProductionTargets(numericUserId, productionId).find((target) => (
+    const triggerTarget = getBridgeTargetsForUser(numericUserId).find((target) => (
       target.targetType === normalized.triggerTargetType
       && Number(target.targetId) === Number(normalized.triggerTargetId)
-      && (target.targetType !== 'conference' || target.canTalk !== false)
     ));
     if (!triggerTarget) {
-      throw new Error('Audio level trigger target is unavailable in the selected production');
+      throw new Error('Audio level trigger target is unavailable to this bridge user');
     }
   }
   const now = new Date().toISOString();
@@ -1703,7 +1648,7 @@ function updateUserBridgeEndpoint(userId, config = {}) {
     numericUserId,
     normalized.enabled ? 1 : 0,
     normalized.bridgeDevice,
-    productionId,
+    null,
     normalized.inputDevice,
     normalized.inputLeftChannel,
     normalized.inputRightChannel,
@@ -1726,11 +1671,6 @@ function updateFeedBridgeEndpoint(feedId, config = {}) {
   }
 
   const normalized = normalizeFeedBridgeEndpointConfig(config);
-  const productionId = resolveFeedBridgeProductionId(
-    numericFeedId,
-    normalized.productionId,
-    { required: normalized.enabled }
-  );
   const now = new Date().toISOString();
   const stmt = db.prepare(`
     INSERT INTO feed_bridge_endpoints (
@@ -1758,7 +1698,7 @@ function updateFeedBridgeEndpoint(feedId, config = {}) {
     numericFeedId,
     normalized.enabled ? 1 : 0,
     normalized.bridgeDevice,
-    productionId,
+    null,
     normalized.inputDevice,
     normalized.inputLeftChannel,
     normalized.inputRightChannel,
@@ -2280,6 +2220,7 @@ module.exports = {
   setProductionConferenceListenOnly,
   removeProductionConferenceMembership,
   getProductionTargets,
+  getBridgeTargetsForUser,
   getPrimaryProductionTargets,
   addProductionTarget,
   removeProductionTarget,

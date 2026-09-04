@@ -416,54 +416,11 @@ ensureColumn("user_bridge_endpoints", "trigger_threshold_db", "REAL NOT NULL DEF
 ensureColumn("user_bridge_endpoints", "production_id", "INTEGER REFERENCES productions(id) ON DELETE SET NULL");
 ensureColumn("feed_bridge_endpoints", "production_id", "INTEGER REFERENCES productions(id) ON DELETE SET NULL");
 
+// Bridge endpoints are global inputs/outputs. Production membership only
+// controls which browser clients can see and use the associated user/feed.
 db.exec(`
-  UPDATE user_bridge_endpoints
-  SET production_id = COALESCE(
-    (
-      SELECT production.id
-      FROM productions production
-      JOIN production_users membership
-        ON membership.production_id = production.id
-       AND membership.user_id = user_bridge_endpoints.user_id
-      WHERE production.is_primary = 1
-      LIMIT 1
-    ),
-    (
-      SELECT production.id
-      FROM productions production
-      JOIN production_users membership
-        ON membership.production_id = production.id
-       AND membership.user_id = user_bridge_endpoints.user_id
-      ORDER BY production.name COLLATE NOCASE, production.id
-      LIMIT 1
-    )
-  )
-  WHERE production_id IS NULL;
-`);
-
-db.exec(`
-  UPDATE feed_bridge_endpoints
-  SET production_id = COALESCE(
-    (
-      SELECT production.id
-      FROM productions production
-      JOIN production_feeds membership
-        ON membership.production_id = production.id
-       AND membership.feed_id = feed_bridge_endpoints.feed_id
-      WHERE production.is_primary = 1
-      LIMIT 1
-    ),
-    (
-      SELECT production.id
-      FROM productions production
-      JOIN production_feeds membership
-        ON membership.production_id = production.id
-       AND membership.feed_id = feed_bridge_endpoints.feed_id
-      ORDER BY production.name COLLATE NOCASE, production.id
-      LIMIT 1
-    )
-  )
-  WHERE production_id IS NULL;
+  UPDATE user_bridge_endpoints SET production_id = NULL WHERE production_id IS NOT NULL;
+  UPDATE feed_bridge_endpoints SET production_id = NULL WHERE production_id IS NOT NULL;
 `);
 
 module.exports = db;

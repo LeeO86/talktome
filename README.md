@@ -196,8 +196,9 @@ second time.
 Enable `Multiple Productions` on that page to add separate Production layouts.
 Each Production explicitly contains users, conferences and feeds and has its own
 conference memberships, target assignments and button order. Users assigned to
-one or more Productions can choose either `Default` or a Production after login
-and can switch from the application menu.
+one or more Productions can choose one of their assigned Productions after login
+and can switch from the application menu. A missing selection falls back to an
+actual membership; users without any Production receive a clear assignment error.
 
 Conference identities remain global and may span Productions. Routing uses each
 connected user's currently loaded Production: speaking to a conference reaches
@@ -208,8 +209,8 @@ one active Talktome session at a time.
 Production admins may manage the contents, memberships and matrix of their own
 Productions without access to global users, server config, backups or other
 Productions. Only global admins may enable the feature, create, rename or delete
-Productions, or assign Production admins. Bridge endpoint configuration and
-personal mute/volume settings remain global.
+Productions, or assign Production admins. Bridge endpoints, Bridge feeds and
+personal mute/volume settings remain global and do not select a Production.
 
 ## Companion and HTTP API
 

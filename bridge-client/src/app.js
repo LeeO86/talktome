@@ -870,7 +870,6 @@ function bridgePortSignature(port) {
     kind: port.kind || "user",
     userId: port.userId ?? null,
     feedId: port.feedId ?? null,
-    productionId: port.productionId ?? null,
     input: bridgeAssignmentSignature(port.input),
     output: bridgePortHasOutput(port) ? bridgeAssignmentSignature(port.output) : null,
   });
@@ -891,7 +890,6 @@ function getManagedPortDraft(port) {
   const trigger = port.trigger || {};
   const triggerTarget = trigger.target || {};
   return {
-    productionId: draft.productionId ?? port.productionId ?? null,
     input: {
       deviceId: draft.input?.deviceId ?? port.input?.deviceId ?? "",
       leftChannel: draft.input?.leftChannel ?? port.input?.leftChannel ?? null,
@@ -909,24 +907,6 @@ function getManagedPortDraft(port) {
       thresholdDb: draft.trigger?.thresholdDb ?? (trigger.thresholdDb ?? MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB),
     } : null,
   };
-}
-
-function buildManagedProductionOptions(port, selectedProductionId) {
-  const productions = Array.isArray(port.productions) ? port.productions : [];
-  const selected = String(selectedProductionId || "");
-  const hasSelected = productions.some((production) => String(production.id) === selected);
-  const options = [];
-  if (!selected) {
-    options.push('<option value="">Select production</option>');
-  } else if (!hasSelected) {
-    options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(`${selected} (saved, unavailable)`)}</option>`);
-  }
-  productions.forEach((production) => {
-    const value = String(production.id);
-    const selectedAttr = value === selected ? " selected" : "";
-    options.push(`<option value="${escapeHtml(value)}"${selectedAttr}>${escapeHtml(production.name || value)}</option>`);
-  });
-  return options.join("");
 }
 
 function buildManagedDeviceOptions(direction, selectedDeviceId) {
@@ -1050,16 +1030,11 @@ function renderManagedAssignmentControls(port, direction, assignment) {
   `;
 }
 
-function buildManagedTriggerTargetOptions(port, triggerDraft, productionId = null, { includeUnavailable = true } = {}) {
+function buildManagedTriggerTargetOptions(port, triggerDraft, { includeUnavailable = true } = {}) {
   const selectedType = String(triggerDraft?.targetType || "").trim().toLowerCase();
   const selectedId = Number(triggerDraft?.targetId);
   const selected = selectedType && Number.isFinite(selectedId) ? `${selectedType}:${selectedId}` : "";
-  const production = (Array.isArray(port.productions) ? port.productions : []).find((entry) => (
-    Number(entry.id) === Number(productionId)
-  ));
-  const targets = Array.isArray(production?.triggerTargets)
-    ? production.triggerTargets
-    : Array.isArray(port.triggerTargets) ? port.triggerTargets : [];
+  const targets = Array.isArray(port.triggerTargets) ? port.triggerTargets : [];
   const options = ['<option value="">Select target</option>'];
   let hasSelected = false;
 
@@ -1103,7 +1078,7 @@ function renderManagedTriggerControls(port, draft) {
       <label class="managed-port-control"${showDetails ? "" : " hidden"}>
         <span>Trigger target</span>
         <select data-managed-port-control data-field="triggerTarget">
-          ${buildManagedTriggerTargetOptions(port, triggerDraft, draft.productionId)}
+          ${buildManagedTriggerTargetOptions(port, triggerDraft)}
         </select>
       </label>
       <label class="managed-port-control managed-port-control--threshold"${showDetails ? "" : " hidden"}>
@@ -1158,7 +1133,6 @@ function updateManagedPortDraftFromElement(card) {
   const port = (managedBridgeConfig?.ports || []).find((entry) => bridgePortKey(entry) === key);
   if (!port) return;
   const draft = {
-    productionId: Number(card.querySelector('[data-field="production"]')?.value) || null,
     input: readManagedPortAssignmentFromElement(card, "input"),
     output: bridgePortHasOutput(port)
       ? readManagedPortAssignmentFromElement(card, "output")
@@ -1182,12 +1156,6 @@ function validateManagedPortAssignment(assignment, label) {
     assignment.rightChannel < 1
   ) {
     throw new Error(`${label} channel is required`);
-  }
-}
-
-function validateManagedProduction(productionId) {
-  if (!Number.isInteger(Number(productionId)) || Number(productionId) < 1) {
-    throw new Error("Production is required");
   }
 }
 
@@ -1217,7 +1185,6 @@ async function saveManagedBridgePort(key) {
   const saveRevision = managedPortDraftRevisions.get(key) || 0;
   const draft = managedPortDrafts.get(key) || getManagedPortDraft(port);
 
-  validateManagedProduction(draft.productionId);
   validateManagedPortAssignment(draft.input, "Input");
   if (bridgePortHasOutput(port)) {
     validateManagedPortAssignment(draft.output, "Output");
@@ -1226,7 +1193,6 @@ async function saveManagedBridgePort(key) {
 
   const payload = {
     enabled: true,
-    productionId: draft.productionId,
     inputDevice: draft.input.deviceId,
     inputLeftChannel: draft.input.leftChannel,
     inputRightChannel: draft.input.rightChannel,
@@ -1312,27 +1278,6 @@ function handleManagedPortControlChange(event) {
   const portKey = card.dataset.managedPortKey || "";
 
   const field = control.dataset.field || "";
-  let deferAutoSave = false;
-  if (field === "production" && portKey) {
-    const port = (managedBridgeConfig?.ports || []).find((entry) => bridgePortKey(entry) === portKey);
-    const targetSelect = card.querySelector('[data-field="triggerTarget"]');
-    if (port?.kind === "user" && targetSelect instanceof HTMLSelectElement) {
-      const triggerDraft = readManagedTriggerFromElement(card);
-      targetSelect.innerHTML = buildManagedTriggerTargetOptions(
-        port,
-        triggerDraft,
-        Number(control.value),
-        { includeUnavailable: false }
-      );
-      const selectedExists = Array.from(targetSelect.options).some((option) => (
-        option.value && option.value === `${triggerDraft.targetType}:${triggerDraft.targetId}`
-      ));
-      if (!selectedExists) {
-        targetSelect.value = "";
-        deferAutoSave = card.querySelector('[data-field="triggerMode"]')?.value === "audio-level";
-      }
-    }
-  }
   if (field === "inputDevice" || field === "outputDevice") {
     const direction = field.startsWith("output") ? "output" : "input";
     const channelSelect = card.querySelector(`[data-field="${direction}Channel"]`);
@@ -1401,7 +1346,7 @@ function handleManagedPortControlChange(event) {
     }
     renderManagedBridgePorts();
   }
-  if (event.type === "change" && !deferAutoSave) {
+  if (event.type === "change") {
     scheduleManagedPortAutoSave(portKey);
   }
 }
@@ -1472,12 +1417,6 @@ function renderManagedBridgePorts() {
           <span class="managed-port-state ${escapeHtml(state.className)}">${escapeHtml(state.label)}</span>
         </div>
       </div>
-      <label class="managed-port-control managed-port-control--production">
-        <span>Production</span>
-        <select data-managed-port-control data-field="production">
-          ${buildManagedProductionOptions(port, draft.productionId)}
-        </select>
-      </label>
       <div class="managed-port-routing-grid">
         ${renderManagedAssignmentControls(port, "input", draft.input)}
         ${hasOutput ? renderManagedAssignmentControls(port, "output", draft.output) : ""}
