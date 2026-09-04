@@ -71,6 +71,7 @@ jobs:
     env:
       TALKTOME_BUILD_VERSION: ${{ needs.version.outputs.app_version }}
       TALKTOME_BUILD_SAFE_VERSION: ${{ needs.version.outputs.safe_version }}
+      CARGO_DEB_VERSION: "3.8.0"
       CARGO_TERM_COLOR: always
       DEBIAN_FRONTEND: noninteractive
     strategy:
@@ -124,10 +125,19 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --target "${{ matrix.target }}"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Install cargo-deb
-        uses: taiki-e/install-action@v2
+      # The prebuilt cargo-deb release needs glibc 2.39; the Bookworm
+      # container has 2.36, so build it from source once and cache the binary.
+      - name: Restore cargo-deb
+        id: cargo-deb-cache
+        uses: actions/cache@v4
         with:
-          tool: cargo-deb
+          path: ~/.cargo/bin/cargo-deb
+          key: cargo-deb-${{ env.CARGO_DEB_VERSION }}-bookworm-${{ runner.arch }}
+
+      - name: Build cargo-deb from source
+        if: steps.cargo-deb-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: cargo install cargo-deb --version "$CARGO_DEB_VERSION" --locked
 
       - name: Configure cross compilation
         if: matrix.cross
