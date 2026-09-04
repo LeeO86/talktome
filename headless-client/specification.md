@@ -748,6 +748,14 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
   via `POST /api/v1/companion/users/:id/talk` and `/target-audio` produce
   the expected `command-result`; `POST /cut-camera` toggles the mock tally
   line; killing A leaves B registered.
+  Test hooks built into the client for this: virtual audio devices
+  (`audio.input_device = "tone[:hz]"`, `audio.output_device = "wav:<path>"`),
+  the file-driven mock surface (`TALKTOME_SURFACE_MOCK_DIR`), the mock GPIO
+  backend (`TALKTOME_MOCK_GPIO=1`) and the mock Stream Deck
+  (`TALKTOME_MOCK_STREAMDECK=<model>`, renders `deck.png`). The full
+  scenario (talk both ways, no cross-talk, Companion commands, tally,
+  `SIGKILL` of one instance while the other stays healthy, restart) was run
+  against the real server during development.
 - **Manual on hardware**: real Stream Deck models, GPIO tally into a camera
   tally input, LTE → Wi-Fi handover with the deployment's TURN server,
   `iceTransportPolicy=relay`, 2 h soak.
