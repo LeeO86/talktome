@@ -658,11 +658,20 @@ RestartSec=2
 User=talktome-headless
 SupplementaryGroups=audio plugdev gpio
 StateDirectory=talktome-headless/%i
+ReadWritePaths=/etc/talktome-headless
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ```
+
+`ProtectSystem=strict` remounts `/etc` read-only. The web UI persists the
+admin password and settings by writing `/etc/talktome-headless/<instance>.toml.tmp`
+and renaming it over the live file, so `ReadWritePaths=/etc/talktome-headless`
+is required. `postinst` creates that directory as `0770 root:talktome-headless`
+so the service user can create the temp file (group `r-x` / `0750` is not
+enough). A drop-in with only `ReadWritePaths=` is enough on an already
+installed unit until the package is upgraded.
 
 - `sd_notify(READY=1)` after the config is loaded and surfaces are open;
   `WATCHDOG=1` from the main loop while signalling and audio tasks are
@@ -691,8 +700,9 @@ because in the field it is opened from a smartphone.
 
 - **Login**: the user is always `admin`; the password is `web.password`
   (or `TALKTOME_WEB_PASSWORD`). The default `admin` is accepted once and then
-  a password change is enforced; the new password is written into the
-  configuration file (`web.password`). Sessions are in-memory cookies
+  a password change is enforced (a separate dialog, not the login overlay);
+  the new password is written into the configuration file (`web.password`).
+  Sessions are in-memory cookies
   (`HttpOnly`, `SameSite=Strict`, 12 h); five failed logins throttle further
   attempts for 30 s.
 - **Status**: connection (state, detail, server, user id, production,
@@ -736,8 +746,9 @@ plus `fonts-dejavu-core`, `adduser`; recommends `alsa-utils`. Assets:
 `/lib/udev/rules.d/60-talktome-streamdeck.rules`,
 `/usr/share/doc/talktome-headless/config.example.{json,toml}`, README.
 `postinst` creates system user `talktome-headless` (groups `audio`,
-`plugdev`, `gpio` when they exist), creates `/etc/talktome-headless/` with
-mode 750, reloads udev rules; `prerm` stops running instances.
+`plugdev`, `gpio` when they exist), creates `/etc/talktome-headless/` as
+`0770 root:talktome-headless` so the service can rewrite instance configs,
+reloads udev rules; `prerm` stops running instances.
 
 ### 14.2 Targets
 
