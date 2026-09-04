@@ -40,7 +40,9 @@ self-signed server certificate) `tls.ca_file`, `tls.fingerprint_sha256` or
 the configuration file; every `TALKTOME_<SECTION>_<KEY>` variable overrides
 the corresponding setting.
 
-Helpers for provisioning:
+Everything else (audio devices, Stream Deck, GPIO lines, volumes, web port)
+can be edited afterwards in the web interface (see below) or in the file.
+Helpers for provisioning on the command line:
 
 ```bash
 talktome-headless list-audio-devices   # ALSA ids for audio.input_device / output_device
@@ -146,5 +148,10 @@ cargo test
 
 The version comes from Git tags through `scripts/resolve-build-version.js`
 (`TALKTOME_BUILD_VERSION`); `Cargo.toml` intentionally stays at `0.0.0`.
-`cargo deb` builds the package locally; CI builds arm64, armhf and amd64
-packages inside Debian Bookworm containers so they run on Bookworm and Trixie.
+`cargo install cargo-deb` once, then `scripts/build-deb.sh` builds the package
+for the host (or `scripts/build-deb.sh aarch64-unknown-linux-gnu` with a
+multiarch cross toolchain, see the comments in the script). The
+`Headless Client Builds` GitHub workflow (`.github/workflows/headless-client-release.yml`)
+builds arm64, armhf and amd64 packages inside Debian Bookworm containers so
+they run on Bookworm and Trixie, and attaches them to the draft release for
+every `v*` tag.

@@ -11,6 +11,7 @@ Local WebRTC intercom app built with Node.js, mediasoup and Socket.IO.
 - Program-audio feeds with volume and mute controls.
 - Camera tally and remote control through Bitfocus Companion, HTTP API, module and keyboard shortcuts.
 - Bridge Desktop Application to integrate NDI, OMT, hardware intercom systems, audio interfaces and mixing consoles.
+- Headless client for Raspberry Pi: a WebRTC intercom panel driven by a Stream Deck and GPIO, with camera tally output and a mobile-friendly web interface, shipped as Debian packages.
 - Optional multiple-production matrices with scoped users, conferences, feeds and production admins.
 
 ## Quick Start
@@ -298,6 +299,20 @@ as outputs. OBS 31 or newer can send and receive them using the official
 [OMT plugin](https://github.com/openmediatransport/omtplugin). Setup and network
 requirements are documented in the Bridge client's
 [OMT Audio documentation](bridge-client/README.md#omt-audio).
+
+## Headless Client (Raspberry Pi)
+
+`talktome-headless` turns a Raspberry Pi (arm64/armhf) or a Debian/Ubuntu PC
+(amd64) into a Talktome intercom panel: it logs in as a normal Talktome user
+over WebRTC (including the server's TURN configuration), uses an attached
+Elgato Stream Deck as the key panel, mirrors camera tally and talk state to
+GPIO lines and serves a local web interface for status, remote talk control
+and configuration. Several instances can run on one device.
+
+The `Headless Client Builds` workflow publishes `.deb` packages for arm64,
+armhf and amd64 with every release. Installation, configuration and the
+design are documented in [headless-client/README.md](headless-client/README.md)
+and [headless-client/specification.md](headless-client/specification.md).
 
 ## Radio Gateway Prototype
 
