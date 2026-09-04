@@ -648,7 +648,7 @@
       }
       node._parts.name.textContent = `${member.name}${member.online ? '' : ' (offline)'}${member.receiving ? ' · speaking' : ''}`;
       node.classList.toggle('is-muted', member.muted);
-      node._parts.mute.classList.toggle('is-active', !member.muted);
+      node._parts.mute.classList.toggle('is-active', member.muted);
       node._parts.mute.textContent = member.muted ? 'Muted' : 'Hear';
       if (document.activeElement !== node._parts.slider) {
         node._parts.slider.value = Math.round(member.volume * 100);
