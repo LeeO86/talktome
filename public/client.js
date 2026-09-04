@@ -11530,12 +11530,12 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     if (!bindingId || pressedHotkeyBindings.has(bindingId)) return;
     const talkTarget = resolveHotkeyAssignmentTarget(assignment);
     if (!talkTarget) return;
-    const liveTalkTarget = resolveLiveTalkTarget(talkTarget);
-    if (!liveTalkTarget) return;
 
     pressedHotkeyBindings.add(bindingId);
     e.preventDefault();
     setHotkeyAssignmentActiveState(assignment, true);
+    const liveTalkTarget = resolveLiveTalkTarget(talkTarget);
+    if (!liveTalkTarget) return;
     handleTalk({
       preventDefault() {},
       talkInputKey: `hotkey:${bindingId}`,

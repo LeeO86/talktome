@@ -5,7 +5,7 @@ const test = require('node:test');
 
 const source = fs.readFileSync(path.join(__dirname, 'public', 'client.js'), 'utf8');
 
-test('offline target hotkeys never enter the pressed talk state', () => {
+test('offline target hotkeys retain their visual pressed state without starting talk', () => {
   const keydownHandler = source.slice(
     source.indexOf("window.addEventListener('keydown', e => {"),
     source.indexOf("window.addEventListener('keyup', e => {")
@@ -14,8 +14,12 @@ test('offline target hotkeys never enter the pressed talk state', () => {
   assert.match(keydownHandler, /const liveTalkTarget = resolveLiveTalkTarget\(talkTarget\);/);
   assert.match(keydownHandler, /if \(!liveTalkTarget\) return;/);
   assert.ok(
+    keydownHandler.indexOf('setHotkeyAssignmentActiveState(assignment, true);')
+      < keydownHandler.indexOf('if (!liveTalkTarget) return;')
+  );
+  assert.ok(
     keydownHandler.indexOf('if (!liveTalkTarget) return;')
-      < keydownHandler.indexOf('pressedHotkeyBindings.add(bindingId);')
+      < keydownHandler.indexOf('handleTalk({')
   );
 });
 
