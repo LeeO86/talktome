@@ -709,7 +709,10 @@ Each instance serves a local administration UI (`web.bind:web.port`,
 default `0.0.0.0:8080`; one port per instance) built with axum and plain
 HTML/CSS/JS embedded in the binary. It follows the Talktome Admin panel's
 look (dark navy, cards, blue primary) and is laid out for phones first,
-because in the field it is opened from a smartphone.
+because in the field it is opened from a smartphone. The favicon and
+header mark keep the Talktome waveform, dot and bracket, white on black
+like the server client, but wrap them in `[ ]` so the panel is not the
+same icon as Admin or the black-on-white Bridge.
 
 - **Login**: the user is always `admin`; the password is `web.password`
   (or `TALKTOME_WEB_PASSWORD`). The default `admin` is accepted once and then
