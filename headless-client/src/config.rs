@@ -611,8 +611,8 @@ pub fn strip_nulls(value: &mut Value) {
 fn config_io_error(op: &str, path: &Path, error: std::io::Error) -> anyhow::Error {
     // EROFS is 30 on Linux; match both the typed kind and the raw code so the
     // hint still appears if the kind is Uncategorized on an older std.
-    let erofs = error.kind() == std::io::ErrorKind::ReadOnlyFilesystem
-        || error.raw_os_error() == Some(30);
+    let erofs =
+        error.kind() == std::io::ErrorKind::ReadOnlyFilesystem || error.raw_os_error() == Some(30);
     let hint = if erofs {
         " — systemd ProtectSystem=strict remounts /etc read-only; the unit needs ReadWritePaths=/etc/talktome-headless"
     } else if error.kind() == std::io::ErrorKind::PermissionDenied {
