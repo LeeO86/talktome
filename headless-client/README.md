@@ -67,6 +67,33 @@ bind each instance with `streamdeck.serial`.
 `GET http://127.0.0.1:<health.port>/healthz` returns `200` while the client
 is registered and both media transports are connected, otherwise `503`.
 
+## Web interface
+
+Every instance serves an administration web interface on
+`http://<device>:<web.port>/` (default port 8080, `web.bind = "0.0.0.0"`; use
+a different port per instance). It is built for phones as much as for
+desktops:
+
+- Login is always the user `admin`; the password comes from `web.password` or
+  `TALKTOME_WEB_PASSWORD`. The default password `admin` works once and then
+  forces a change; the new password is written to the configuration file.
+- **Status**: Talktome connection (state, server, user, production, transports,
+  consumers, ICE servers, reconnects, tally), the talk state with press-and-hold
+  Talk, Lock, volume and mute controls per target, audio devices with an input
+  meter, every configured GPIO output (live state) and input (pressed, event
+  count), Stream Deck and service details.
+- **Stream Deck**: live rendering of the attached deck; keys, dials and touch
+  points can be operated from the browser and behave like the hardware.
+- **Settings**: every configuration value as a form (audio devices are listed
+  from ALSA), plus a raw JSON editor. Saving writes the TOML/JSON file the
+  instance was started with; secrets are never shown and stay unchanged unless
+  replaced. `Save & restart` applies the change immediately.
+- **Restart**: under systemd the service exits cleanly and `Restart=always`
+  brings it back; without systemd the binary re-executes itself.
+
+The interface is plain HTTP on the local network. Keep it on the production
+LAN or a management network, or put a reverse proxy with TLS in front of it.
+
 ## Stream Deck
 
 - Key 0 shows the status (user, connection, `ON AIR` when the camera is

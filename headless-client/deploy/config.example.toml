@@ -100,6 +100,14 @@ line = "GPIO23"
 action = "reply"
 active_low = true
 
+[web]
+# Local administration web interface (status, Stream Deck view, settings).
+# Login is always "admin"; the default password must be changed on first login.
+enabled = true
+bind = "0.0.0.0"
+port = 8080
+password = "admin"        # or TALKTOME_WEB_PASSWORD in the .env file
+
 [health]
 # port = 9911               # GET http://127.0.0.1:9911/healthz
 bind = "127.0.0.1"

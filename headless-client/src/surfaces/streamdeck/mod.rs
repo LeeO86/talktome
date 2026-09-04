@@ -20,13 +20,16 @@ use image::{DynamicImage, RgbImage};
 use tokio::sync::watch;
 
 use crate::config::{StreamDeckConfig, TalkConfig};
-use crate::state::{Bus, Command, InputSource, Snapshot, TargetRef};
+use crate::state::{
+    Bus, Command, DeckInput, DeckKeyView, DeckStatus, InputSource, Snapshot, TargetRef,
+};
 use crate::talk::TargetKey;
 use layout::{
     encoder_targets, page_count, palette, Appearance, DeckState, Geometry, KeySpec, LayoutOptions,
     Role,
 };
 use render::{Renderer, StripSegment};
+use tokio::sync::mpsc;
 
 pub const MOCK_ENV: &str = "TALKTOME_MOCK_STREAMDECK";
 const STATUS_HOLD: Duration = Duration::from_millis(2000);
@@ -80,6 +83,17 @@ impl Device {
             Device::Real(deck) => deck.kind(),
             Device::Mock(mock) => mock.kind,
         }
+    }
+
+    async fn serial(&self) -> Option<String> {
+        match self {
+            Device::Real(deck) => deck.serial_number().await.ok(),
+            Device::Mock(_) => Some("mock".into()),
+        }
+    }
+
+    fn is_mock(&self) -> bool {
+        matches!(self, Device::Mock(_))
     }
 
     async fn set_brightness(&self, percent: u8) -> Result<()> {
@@ -287,6 +301,7 @@ pub async fn run(
     config: StreamDeckConfig,
     talk: TalkConfig,
     bus: Bus,
+    mut deck_input: mpsc::Receiver<DeckInput>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mock_kind = std::env::var(MOCK_ENV)
@@ -294,6 +309,7 @@ pub async fn run(
         .and_then(|name| kind_from_name(&name));
     let renderer = Renderer::load(&config.font_path);
     let mut warned = false;
+    publish_disconnected(&bus, None);
     loop {
         if *shutdown.borrow() {
             return;
@@ -307,18 +323,29 @@ pub async fn run(
                 warned = false;
                 let kind = device.kind();
                 tracing::info!(event = "streamdeck-connected", kind = ?kind, mock = mock_kind.is_some());
-                let outcome =
-                    run_device(device, &config, &talk, &renderer, &bus, &mut shutdown).await;
+                let outcome = run_device(
+                    device,
+                    &config,
+                    &talk,
+                    &renderer,
+                    &bus,
+                    &mut deck_input,
+                    &mut shutdown,
+                )
+                .await;
                 if *shutdown.borrow() {
                     return;
                 }
-                tracing::warn!(event = "streamdeck-disconnected", error = %outcome.err().map(|e| format!("{e:#}")).unwrap_or_default());
+                let error = outcome.err().map(|e| format!("{e:#}")).unwrap_or_default();
+                tracing::warn!(event = "streamdeck-disconnected", error = %error);
+                publish_disconnected(&bus, Some(error));
             }
             Err(error) => {
                 if !warned {
                     tracing::warn!(event = "streamdeck-not-found", error = %format!("{error:#}"));
                     warned = true;
                 }
+                publish_disconnected(&bus, Some(format!("{error:#}")));
             }
         }
         tokio::select! {
@@ -370,16 +397,74 @@ struct PressedKey {
     since: Instant,
 }
 
+fn publish_disconnected(bus: &Bus, error: Option<String>) {
+    if let Ok(mut hardware) = bus.hardware.write() {
+        hardware.deck = DeckStatus {
+            enabled: true,
+            connected: false,
+            error,
+            ..DeckStatus::default()
+        };
+        hardware.deck_images.clear();
+    }
+}
+
+fn role_label(role: Role) -> String {
+    match role {
+        Role::Status => "status".into(),
+        Role::Reply => "reply".into(),
+        Role::Target(key) => key.to_string(),
+        Role::NextPage => "next-page".into(),
+        Role::VolumeToggle => "volume-toggle".into(),
+        Role::VolumeUp => "volume-up".into(),
+        Role::VolumeDown => "volume-down".into(),
+        Role::MuteSelected => "mute-selected".into(),
+        Role::Empty => "empty".into(),
+    }
+}
+
+fn image_hash(image: &RgbImage) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    image.dimensions().hash(&mut hasher);
+    image.as_raw().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn encode_png(image: &RgbImage) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut bytes);
+    image
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .ok()
+        .map(|_| bytes)
+}
+
+/// Converts a web-injected input into the device update type.
+fn injected_update(input: DeckInput) -> DeviceStateUpdate {
+    match input {
+        DeckInput::KeyDown(key) => DeviceStateUpdate::ButtonDown(key),
+        DeckInput::KeyUp(key) => DeviceStateUpdate::ButtonUp(key),
+        DeckInput::EncoderTwist(encoder, delta) => DeviceStateUpdate::EncoderTwist(encoder, delta),
+        DeckInput::EncoderPress(encoder) => DeviceStateUpdate::EncoderDown(encoder),
+        DeckInput::TouchPoint(point) => DeviceStateUpdate::TouchPointDown(point),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_device(
     device: Device,
     config: &StreamDeckConfig,
     talk: &TalkConfig,
     renderer: &Renderer,
     bus: &Bus,
+    deck_input: &mut mpsc::Receiver<DeckInput>,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<()> {
     let kind = device.kind();
     let geometry = geometry_for(kind);
+    let serial = device.serial().await;
+    let is_mock = device.is_mock();
     let key_size = {
         let (w, h) = kind.key_image_format().size;
         (w as u32, h as u32)
@@ -401,6 +486,7 @@ async fn run_device(
     let mut snapshots = bus.snapshots.clone();
     let mut snapshot: Arc<Snapshot> = snapshots.borrow().clone();
     let mut rendered: HashMap<u8, (Appearance, bool)> = HashMap::new();
+    let mut images: HashMap<u8, (u64, Arc<Vec<u8>>)> = HashMap::new();
     let mut lcd_rendered: Option<Vec<StripSegment>> = None;
     let mut pressed: HashMap<u8, PressedKey> = HashMap::new();
     let mut keys: Vec<KeySpec> = layout::layout(&geometry, &snapshot, &state, &options);
@@ -416,6 +502,7 @@ async fn run_device(
         &keys,
         &state,
         &mut rendered,
+        &mut images,
     )
     .await?;
     if let Some(size) = lcd_size {
@@ -431,9 +518,13 @@ async fn run_device(
         )
         .await?;
     }
+    publish_deck_view(
+        bus, kind, &serial, is_mock, &geometry, key_size, &keys, &state, &snapshot, &images,
+    );
 
     loop {
         let mut relayout = false;
+        let mut pending_updates: Vec<DeviceStateUpdate> = Vec::new();
         tokio::select! {
             changed = snapshots.changed() => {
                 if changed.is_err() { return Ok(()); }
@@ -446,126 +537,14 @@ async fn run_device(
                     relayout = true;
                 }
             }
+            injected = deck_input.recv() => {
+                if let Some(input) = injected {
+                    pending_updates.push(injected_update(input));
+                }
+            }
             updates = device.read(&reader) => {
                 let updates = updates.context("reading deck input")?;
-                for update in updates {
-                    let now = Instant::now();
-                    match update {
-                        DeviceStateUpdate::ButtonDown(key) => {
-                            let Some(spec) = keys.get(key as usize) else { continue };
-                            let role = spec.role;
-                            pressed.insert(key, PressedKey { role, since: now });
-                            match role {
-                                Role::Status => {}
-                                Role::Reply => {
-                                    let _ = bus.commands.send(Command::TalkPress { source: source(key), target: TargetRef::Reply }).await;
-                                }
-                                Role::Target(target) => {
-                                    if state.volume_layer {
-                                        state.selected = Some(target);
-                                        state.touch_volume_layer();
-                                        relayout = true;
-                                    } else if target.can_talk() {
-                                        let _ = bus.commands.send(Command::TalkPress { source: source(key), target: TargetRef::Key(target) }).await;
-                                    } else {
-                                        let _ = bus.commands.send(Command::MuteToggle(target)).await;
-                                    }
-                                }
-                                Role::NextPage => {
-                                    let pages = page_count(&geometry, &state, snapshot.targets.len());
-                                    state.page = (state.page + 1) % pages.max(1);
-                                    relayout = true;
-                                }
-                                Role::VolumeToggle => {
-                                    state.volume_layer = !state.volume_layer;
-                                    state.touch_volume_layer();
-                                    if state.volume_layer && state.selected.is_none() {
-                                        state.selected = snapshot.targets.first().map(|t| t.key);
-                                    }
-                                    relayout = true;
-                                }
-                                Role::VolumeUp | Role::VolumeDown => {
-                                    state.touch_volume_layer();
-                                    if let Some(target) = state.selected {
-                                        let delta = if role == Role::VolumeUp { config.volume_step } else { -config.volume_step };
-                                        let _ = bus.commands.send(Command::VolumeStep { target, delta }).await;
-                                    }
-                                }
-                                Role::MuteSelected => {
-                                    state.touch_volume_layer();
-                                    if let Some(target) = state.selected {
-                                        let _ = bus.commands.send(Command::MuteToggle(target)).await;
-                                    }
-                                }
-                                Role::Empty => {}
-                            }
-                        }
-                        DeviceStateUpdate::ButtonUp(key) => {
-                            let Some(press) = pressed.remove(&key) else { continue };
-                            let held = now.duration_since(press.since);
-                            match press.role {
-                                Role::Status => {
-                                    if held >= STATUS_HOLD {
-                                        let pages = page_count(&geometry, &state, snapshot.targets.len());
-                                        state.page = (state.page + 1) % pages.max(1);
-                                        relayout = true;
-                                    } else {
-                                        let _ = bus.commands.send(Command::ClearLocks).await;
-                                    }
-                                }
-                                Role::Reply => {
-                                    let _ = bus.commands.send(Command::TalkRelease { source: source(key), target: TargetRef::Reply }).await;
-                                }
-                                Role::Target(target) => {
-                                    if state.volume_layer {
-                                        if held >= MUTE_HOLD {
-                                            let _ = bus.commands.send(Command::MuteToggle(target)).await;
-                                        }
-                                    } else if target.can_talk() {
-                                        let _ = bus.commands.send(Command::TalkRelease { source: source(key), target: TargetRef::Key(target) }).await;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        DeviceStateUpdate::EncoderTwist(encoder, ticks) => {
-                            let targets = encoder_targets(&geometry, &state, &snapshot);
-                            if let Some(Some(target)) = targets.get(encoder as usize) {
-                                let delta = config.volume_step * ticks as f32;
-                                let _ = bus.commands.send(Command::VolumeStep { target: target.key, delta }).await;
-                            }
-                        }
-                        DeviceStateUpdate::EncoderDown(encoder) => {
-                            let targets = encoder_targets(&geometry, &state, &snapshot);
-                            if let Some(Some(target)) = targets.get(encoder as usize) {
-                                let _ = bus.commands.send(Command::MuteToggle(target.key)).await;
-                            }
-                        }
-                        DeviceStateUpdate::EncoderUp(_) => {}
-                        DeviceStateUpdate::TouchPointDown(point) => {
-                            let pages = page_count(&geometry, &state, snapshot.targets.len()).max(1);
-                            state.page = if point == 0 { (state.page + pages - 1) % pages } else { (state.page + 1) % pages };
-                            relayout = true;
-                        }
-                        DeviceStateUpdate::TouchPointUp(_) => {}
-                        DeviceStateUpdate::TouchScreenSwipe((x0, y0), (x1, y1)) => {
-                            let pages = page_count(&geometry, &state, snapshot.targets.len()).max(1);
-                            let forward = if lcd_size.map(|(w, h)| w >= h).unwrap_or(true) { x1 < x0 } else { y1 < y0 };
-                            state.page = if forward { (state.page + 1) % pages } else { (state.page + pages - 1) % pages };
-                            relayout = true;
-                        }
-                        DeviceStateUpdate::TouchScreenPress(x, y) | DeviceStateUpdate::TouchScreenLongPress(x, y) => {
-                            if let Some((w, h)) = lcd_size {
-                                let encoders = geometry.encoders.max(1) as u32;
-                                let index = if w >= h { x as u32 * encoders / w.max(1) } else { y as u32 * encoders / h.max(1) };
-                                let targets = encoder_targets(&geometry, &state, &snapshot);
-                                if let Some(Some(target)) = targets.get(index as usize) {
-                                    let _ = bus.commands.send(Command::MuteToggle(target.key)).await;
-                                }
-                            }
-                        }
-                    }
-                }
+                pending_updates.extend(updates);
             }
             _ = shutdown.changed() => {
                 if *shutdown.borrow() {
@@ -584,10 +563,187 @@ async fn run_device(
             }
         }
 
+        for update in pending_updates {
+            let now = Instant::now();
+            match update {
+                DeviceStateUpdate::ButtonDown(key) => {
+                    let Some(spec) = keys.get(key as usize) else {
+                        continue;
+                    };
+                    let role = spec.role;
+                    pressed.insert(key, PressedKey { role, since: now });
+                    match role {
+                        Role::Status => {}
+                        Role::Reply => {
+                            let _ = bus
+                                .commands
+                                .send(Command::TalkPress {
+                                    source: source(key),
+                                    target: TargetRef::Reply,
+                                })
+                                .await;
+                        }
+                        Role::Target(target) => {
+                            if state.volume_layer {
+                                state.selected = Some(target);
+                                state.touch_volume_layer();
+                                relayout = true;
+                            } else if target.can_talk() {
+                                let _ = bus
+                                    .commands
+                                    .send(Command::TalkPress {
+                                        source: source(key),
+                                        target: TargetRef::Key(target),
+                                    })
+                                    .await;
+                            } else {
+                                let _ = bus.commands.send(Command::MuteToggle(target)).await;
+                            }
+                        }
+                        Role::NextPage => {
+                            let pages = page_count(&geometry, &state, snapshot.targets.len());
+                            state.page = (state.page + 1) % pages.max(1);
+                            relayout = true;
+                        }
+                        Role::VolumeToggle => {
+                            state.volume_layer = !state.volume_layer;
+                            state.touch_volume_layer();
+                            if state.volume_layer && state.selected.is_none() {
+                                state.selected = snapshot.targets.first().map(|t| t.key);
+                            }
+                            relayout = true;
+                        }
+                        Role::VolumeUp | Role::VolumeDown => {
+                            state.touch_volume_layer();
+                            if let Some(target) = state.selected {
+                                let delta = if role == Role::VolumeUp {
+                                    config.volume_step
+                                } else {
+                                    -config.volume_step
+                                };
+                                let _ = bus
+                                    .commands
+                                    .send(Command::VolumeStep { target, delta })
+                                    .await;
+                            }
+                        }
+                        Role::MuteSelected => {
+                            state.touch_volume_layer();
+                            if let Some(target) = state.selected {
+                                let _ = bus.commands.send(Command::MuteToggle(target)).await;
+                            }
+                        }
+                        Role::Empty => {}
+                    }
+                }
+                DeviceStateUpdate::ButtonUp(key) => {
+                    let Some(press) = pressed.remove(&key) else {
+                        continue;
+                    };
+                    let held = now.duration_since(press.since);
+                    match press.role {
+                        Role::Status => {
+                            if held >= STATUS_HOLD {
+                                let pages = page_count(&geometry, &state, snapshot.targets.len());
+                                state.page = (state.page + 1) % pages.max(1);
+                                relayout = true;
+                            } else {
+                                let _ = bus.commands.send(Command::ClearLocks).await;
+                            }
+                        }
+                        Role::Reply => {
+                            let _ = bus
+                                .commands
+                                .send(Command::TalkRelease {
+                                    source: source(key),
+                                    target: TargetRef::Reply,
+                                })
+                                .await;
+                        }
+                        Role::Target(target) => {
+                            if state.volume_layer {
+                                if held >= MUTE_HOLD {
+                                    let _ = bus.commands.send(Command::MuteToggle(target)).await;
+                                }
+                            } else if target.can_talk() {
+                                let _ = bus
+                                    .commands
+                                    .send(Command::TalkRelease {
+                                        source: source(key),
+                                        target: TargetRef::Key(target),
+                                    })
+                                    .await;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                DeviceStateUpdate::EncoderTwist(encoder, ticks) => {
+                    let targets = encoder_targets(&geometry, &state, &snapshot);
+                    if let Some(Some(target)) = targets.get(encoder as usize) {
+                        let delta = config.volume_step * ticks as f32;
+                        let _ = bus
+                            .commands
+                            .send(Command::VolumeStep {
+                                target: target.key,
+                                delta,
+                            })
+                            .await;
+                    }
+                }
+                DeviceStateUpdate::EncoderDown(encoder) => {
+                    let targets = encoder_targets(&geometry, &state, &snapshot);
+                    if let Some(Some(target)) = targets.get(encoder as usize) {
+                        let _ = bus.commands.send(Command::MuteToggle(target.key)).await;
+                    }
+                }
+                DeviceStateUpdate::EncoderUp(_) => {}
+                DeviceStateUpdate::TouchPointDown(point) => {
+                    let pages = page_count(&geometry, &state, snapshot.targets.len()).max(1);
+                    state.page = if point == 0 {
+                        (state.page + pages - 1) % pages
+                    } else {
+                        (state.page + 1) % pages
+                    };
+                    relayout = true;
+                }
+                DeviceStateUpdate::TouchPointUp(_) => {}
+                DeviceStateUpdate::TouchScreenSwipe((x0, y0), (x1, y1)) => {
+                    let pages = page_count(&geometry, &state, snapshot.targets.len()).max(1);
+                    let forward = if lcd_size.map(|(w, h)| w >= h).unwrap_or(true) {
+                        x1 < x0
+                    } else {
+                        y1 < y0
+                    };
+                    state.page = if forward {
+                        (state.page + 1) % pages
+                    } else {
+                        (state.page + pages - 1) % pages
+                    };
+                    relayout = true;
+                }
+                DeviceStateUpdate::TouchScreenPress(x, y)
+                | DeviceStateUpdate::TouchScreenLongPress(x, y) => {
+                    if let Some((w, h)) = lcd_size {
+                        let encoders = geometry.encoders.max(1) as u32;
+                        let index = if w >= h {
+                            x as u32 * encoders / w.max(1)
+                        } else {
+                            y as u32 * encoders / h.max(1)
+                        };
+                        let targets = encoder_targets(&geometry, &state, &snapshot);
+                        if let Some(Some(target)) = targets.get(index as usize) {
+                            let _ = bus.commands.send(Command::MuteToggle(target.key)).await;
+                        }
+                    }
+                }
+            }
+        }
+
         if relayout {
             keys = layout::layout(&geometry, &snapshot, &state, &options);
         }
-        render_all(
+        let keys_changed = render_all(
             &device,
             &geometry,
             renderer,
@@ -595,8 +751,14 @@ async fn run_device(
             &keys,
             &state,
             &mut rendered,
+            &mut images,
         )
         .await?;
+        if relayout || keys_changed {
+            publish_deck_view(
+                bus, kind, &serial, is_mock, &geometry, key_size, &keys, &state, &snapshot, &images,
+            );
+        }
         if let Some(size) = lcd_size {
             render_lcd(
                 &device,
@@ -613,7 +775,9 @@ async fn run_device(
     }
 }
 
-/// Re-renders keys whose appearance (or blink phase, when blinking) changed.
+/// Re-renders keys whose appearance (or blink phase, when blinking) changed
+/// and keeps PNG copies for the web UI. Returns true when anything changed.
+#[allow(clippy::too_many_arguments)]
 async fn render_all(
     device: &Device,
     geometry: &Geometry,
@@ -622,9 +786,10 @@ async fn render_all(
     keys: &[KeySpec],
     state: &DeckState,
     rendered: &mut HashMap<u8, (Appearance, bool)>,
-) -> Result<()> {
+    images: &mut HashMap<u8, (u64, Arc<Vec<u8>>)>,
+) -> Result<bool> {
     if !geometry.visual {
-        return Ok(());
+        return Ok(false);
     }
     let mut changed = false;
     for (index, spec) in keys.iter().enumerate() {
@@ -640,6 +805,9 @@ async fn render_all(
             continue;
         }
         let image = renderer.key(&spec.appearance, key_size, phase);
+        if let Some(png) = encode_png(&image) {
+            images.insert(key, (image_hash(&image), Arc::new(png)));
+        }
         device
             .set_key(key, image)
             .await
@@ -650,7 +818,57 @@ async fn render_all(
     if changed {
         device.flush().await.context("flushing deck")?;
     }
-    Ok(())
+    Ok(changed)
+}
+
+/// Publishes the deck view (geometry, key roles and image hashes) for the web UI.
+#[allow(clippy::too_many_arguments)]
+fn publish_deck_view(
+    bus: &Bus,
+    kind: Kind,
+    serial: &Option<String>,
+    is_mock: bool,
+    geometry: &Geometry,
+    key_size: (u32, u32),
+    keys: &[KeySpec],
+    state: &DeckState,
+    snapshot: &Snapshot,
+    images: &HashMap<u8, (u64, Arc<Vec<u8>>)>,
+) {
+    let Ok(mut hardware) = bus.hardware.write() else {
+        return;
+    };
+    hardware.deck = DeckStatus {
+        enabled: true,
+        connected: true,
+        mock: is_mock,
+        kind: Some(format!("{kind:?}")),
+        serial: serial.clone(),
+        rows: geometry.rows,
+        cols: geometry.cols,
+        encoders: geometry.encoders,
+        touchpoints: geometry.touchpoints,
+        key_size: key_size.0,
+        page: state.page,
+        pages: page_count(geometry, state, snapshot.targets.len()),
+        volume_layer: state.volume_layer,
+        keys: keys
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| DeckKeyView {
+                index: index as u8,
+                role: role_label(spec.role),
+                title: spec.appearance.title.clone(),
+                subtitle: spec.appearance.subtitle.clone(),
+                hash: images
+                    .get(&(index as u8))
+                    .map(|(hash, _)| *hash)
+                    .unwrap_or(0),
+            })
+            .collect(),
+        error: None,
+    };
+    hardware.deck_images = images.clone();
 }
 
 #[allow(clippy::too_many_arguments)]

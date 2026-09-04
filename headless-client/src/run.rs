@@ -1,5 +1,6 @@
 //! Wires configuration, audio, surfaces, health and the session together.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -7,15 +8,25 @@ use tokio::sync::{mpsc, watch};
 
 use crate::audio::io::AudioIo;
 use crate::audio::mixer::Mixer;
-use crate::config::Config;
+use crate::config::LoadedConfig;
 use crate::signalling::session::{Session, SessionIo};
 use crate::state::{self, Snapshot};
 
-pub async fn run(config: Config) -> Result<()> {
-    let config = Arc::new(config);
+/// How the run ended: a plain shutdown or a restart requested from the web UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunOutcome {
+    Shutdown,
+    Restart,
+}
+
+pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
+    let config_path = loaded.path.clone();
+    let config = Arc::new(loaded.config);
     tracing::info!(event = "client-start", version = crate::VERSION, instance = %config.instance, user = %config.user.name);
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let shutdown_tx = Arc::new(shutdown_tx);
+    let restart_requested = Arc::new(AtomicBool::new(false));
     spawn_signal_handler(shutdown_tx.clone());
 
     let mixer = Arc::new(Mutex::new(Mixer::new(
@@ -36,10 +47,19 @@ pub async fn run(config: Config) -> Result<()> {
         frames_tx,
     );
 
-    let (_cmd_tx, cmd_rx, snapshot_tx, bus) =
-        state::channels(Snapshot::initial(&config.instance, &config.user.name));
+    let state::Channels {
+        commands: cmd_rx,
+        snapshots: snapshot_tx,
+        deck_input: deck_input_rx,
+        bus,
+    } = state::channels(Snapshot::initial(&config.instance, &config.user.name));
 
     let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(mirror_audio_status(
+        audio_io.status.clone(),
+        bus.hardware.clone(),
+        shutdown_rx.clone(),
+    ));
     tasks.spawn(crate::health::run_sd_notify(
         bus.snapshots.clone(),
         shutdown_rx.clone(),
@@ -54,7 +74,29 @@ pub async fn run(config: Config) -> Result<()> {
             }
         });
     }
-    crate::surfaces::spawn_all(&config, &bus, shutdown_rx.clone(), &mut tasks);
+    crate::surfaces::spawn_all(
+        &config,
+        &bus,
+        deck_input_rx,
+        shutdown_rx.clone(),
+        &mut tasks,
+    );
+    if config.web.enabled {
+        let ctx = crate::web::WebContext {
+            config: config.clone(),
+            config_path: config_path.clone(),
+            bus: bus.clone(),
+            shutdown: shutdown_tx.clone(),
+            restart_requested: restart_requested.clone(),
+        };
+        let web = config.web.clone();
+        let shutdown = shutdown_rx.clone();
+        tasks.spawn(async move {
+            if let Err(error) = crate::web::run(ctx, web, shutdown).await {
+                tracing::error!(event = "web-failed", error = %format!("{error:#}"));
+            }
+        });
+    }
 
     let session = Session::new(
         config.clone(),
@@ -72,10 +114,42 @@ pub async fn run(config: Config) -> Result<()> {
     let _ = shutdown_tx.send(true);
     audio_io.stop();
     tasks.shutdown().await;
-    result
+    result.map(|_| {
+        if restart_requested.load(Ordering::Relaxed) {
+            RunOutcome::Restart
+        } else {
+            RunOutcome::Shutdown
+        }
+    })
 }
 
-fn spawn_signal_handler(shutdown: watch::Sender<bool>) {
+/// Copies the audio thread's status into the shared hardware view.
+async fn mirror_audio_status(
+    mut status: watch::Receiver<crate::audio::io::AudioStatus>,
+    hardware: Arc<std::sync::RwLock<state::Hardware>>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    loop {
+        {
+            let current = status.borrow().clone();
+            if let Ok(mut hardware) = hardware.write() {
+                hardware.audio = state::AudioView {
+                    capture_ok: current.capture_ok,
+                    playback_ok: current.playback_ok,
+                    capture_device: current.capture_device.clone(),
+                    playback_device: current.playback_device.clone(),
+                    last_error: current.last_error.clone(),
+                };
+            }
+        }
+        tokio::select! {
+            changed = status.changed() => { if changed.is_err() { break; } }
+            _ = shutdown.changed() => { if *shutdown.borrow() { break; } }
+        }
+    }
+}
+
+fn spawn_signal_handler(shutdown: Arc<watch::Sender<bool>>) {
     tokio::spawn(async move {
         let mut terminate =
             match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {

@@ -9,6 +9,7 @@ mod state;
 mod surfaces;
 mod talk;
 mod tls;
+mod web;
 
 use std::path::PathBuf;
 
@@ -89,6 +90,25 @@ fn load_config(cli: &Cli) -> Result<LoadedConfig> {
     )
 }
 
+/// Restarts after a web-UI request: under systemd a clean exit lets
+/// `Restart=always` start us again; otherwise the binary re-executes itself
+/// with the same arguments.
+fn restart_process() -> Result<()> {
+    if web::running_under_systemd() {
+        tracing::info!(
+            event = "restart-exit",
+            "exiting for systemd to restart the service"
+        );
+        std::process::exit(0);
+    }
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe().context("locating own executable")?;
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    tracing::info!(event = "restart-exec", exe = %exe.display());
+    let error = std::process::Command::new(exe).args(args).exec();
+    Err(anyhow::anyhow!("re-executing failed: {error}"))
+}
+
 fn init_logging(config: Option<&Config>) {
     use std::io::IsTerminal;
     use tracing_subscriber::EnvFilter;
@@ -163,7 +183,12 @@ fn main() -> Result<()> {
         }
         Command::Run => {
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(run::run(loaded.config))
+            let outcome = runtime.block_on(run::run(loaded))?;
+            drop(runtime);
+            if outcome == run::RunOutcome::Restart {
+                restart_process()?;
+            }
+            Ok(())
         }
         Command::Dev(dev) => {
             let runtime = tokio::runtime::Runtime::new()?;

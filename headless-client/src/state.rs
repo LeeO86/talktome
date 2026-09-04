@@ -1,6 +1,7 @@
 //! Shared runtime state published to surfaces and the commands they send back.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
 use tokio::sync::{mpsc, watch};
@@ -68,10 +69,24 @@ pub struct IncomingInfo {
     pub target: Option<TargetKey>,
 }
 
+/// Media transport details for the status page.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct MediaInfo {
+    pub send_state: String,
+    pub recv_state: String,
+    pub consumers: usize,
+    pub producer_id: Option<String>,
+    pub ice_servers: Vec<String>,
+    pub ice_transport_policy: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Snapshot {
     pub instance: String,
     pub user_name: String,
+    pub user_id: Option<i64>,
+    pub server_url: String,
+    pub production: Option<String>,
     pub connection: ConnectionState,
     pub detail: String,
     pub talking: bool,
@@ -84,6 +99,10 @@ pub struct Snapshot {
     pub incoming: Vec<IncomingInfo>,
     /// Peak input level in dBFS for meters / VOX display.
     pub input_level_db: f32,
+    pub media: Option<MediaInfo>,
+    /// Unix seconds when the current registration became active.
+    pub registered_since_unix: Option<u64>,
+    pub reconnects: u32,
 }
 
 impl Snapshot {
@@ -91,6 +110,9 @@ impl Snapshot {
         Self {
             instance: instance.to_string(),
             user_name: user_name.to_string(),
+            user_id: None,
+            server_url: String::new(),
+            production: None,
             connection: ConnectionState::Disconnected,
             detail: String::new(),
             talking: false,
@@ -102,6 +124,9 @@ impl Snapshot {
             reply_name: None,
             incoming: Vec::new(),
             input_level_db: -100.0,
+            media: None,
+            registered_since_unix: None,
+            reconnects: 0,
         }
     }
 
@@ -154,27 +179,126 @@ pub enum Command {
     Shutdown,
 }
 
+/// Live view of a GPIO output line.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct GpioOutputView {
+    pub name: String,
+    pub line: String,
+    pub active_low: bool,
+    /// `None` until the line has been driven.
+    pub active: Option<bool>,
+    pub error: Option<String>,
+}
+
+/// Live view of a GPIO input line.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct GpioInputView {
+    pub line: String,
+    pub action: String,
+    pub target: Option<String>,
+    pub active_low: bool,
+    pub pressed: bool,
+    pub events: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct GpioStatus {
+    /// `disabled`, `gpiocdev`, `mock` or `error`.
+    pub backend: String,
+    pub error: Option<String>,
+    pub outputs: Vec<GpioOutputView>,
+    pub inputs: Vec<GpioInputView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct DeckKeyView {
+    pub index: u8,
+    pub role: String,
+    pub title: String,
+    pub subtitle: String,
+    /// Changes whenever the rendered image changes; used as cache key.
+    pub hash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct DeckStatus {
+    pub enabled: bool,
+    pub connected: bool,
+    pub mock: bool,
+    pub kind: Option<String>,
+    pub serial: Option<String>,
+    pub rows: u8,
+    pub cols: u8,
+    pub encoders: u8,
+    pub touchpoints: u8,
+    pub key_size: u32,
+    pub page: usize,
+    pub pages: usize,
+    pub volume_layer: bool,
+    pub keys: Vec<DeckKeyView>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct AudioView {
+    pub capture_ok: bool,
+    pub playback_ok: bool,
+    pub capture_device: Option<String>,
+    pub playback_device: Option<String>,
+    pub last_error: Option<String>,
+}
+
+/// Hardware state written by the surfaces and read by the web UI.
+#[derive(Debug, Default)]
+pub struct Hardware {
+    pub gpio: GpioStatus,
+    pub deck: DeckStatus,
+    /// Rendered key images (PNG) keyed by key index with their hash.
+    pub deck_images: HashMap<u8, (u64, Arc<Vec<u8>>)>,
+    pub audio: AudioView,
+}
+
+/// Input injected into the Stream Deck surface (from the web UI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeckInput {
+    KeyDown(u8),
+    KeyUp(u8),
+    EncoderTwist(u8, i8),
+    EncoderPress(u8),
+    TouchPoint(u8),
+}
+
 /// Publisher side of the state channel plus the command inlet, handed to
-/// surfaces and audio.
+/// surfaces, the web UI and audio.
 #[derive(Clone)]
 pub struct Bus {
     pub commands: mpsc::Sender<Command>,
     pub snapshots: watch::Receiver<Arc<Snapshot>>,
+    pub hardware: Arc<RwLock<Hardware>>,
+    pub deck_input: mpsc::Sender<DeckInput>,
 }
 
-pub fn channels(
-    initial: Snapshot,
-) -> (
-    mpsc::Sender<Command>,
-    mpsc::Receiver<Command>,
-    watch::Sender<Arc<Snapshot>>,
-    Bus,
-) {
+pub struct Channels {
+    pub commands: mpsc::Receiver<Command>,
+    pub snapshots: watch::Sender<Arc<Snapshot>>,
+    pub deck_input: mpsc::Receiver<DeckInput>,
+    pub bus: Bus,
+}
+
+pub fn channels(initial: Snapshot) -> Channels {
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let (snap_tx, snap_rx) = watch::channel(Arc::new(initial));
+    let (deck_tx, deck_rx) = mpsc::channel(64);
     let bus = Bus {
-        commands: cmd_tx.clone(),
+        commands: cmd_tx,
         snapshots: snap_rx,
+        hardware: Arc::new(RwLock::new(Hardware::default())),
+        deck_input: deck_tx,
     };
-    (cmd_tx, cmd_rx, snap_tx, bus)
+    Channels {
+        commands: cmd_rx,
+        snapshots: snap_tx,
+        deck_input: deck_rx,
+        bus,
+    }
 }

@@ -58,9 +58,9 @@ intercom panel / beltpack** that is a first-class Talktome user. It must:
   `api-talk-command` / `api-target-audio-command` to the user's socket and
   this client executes them (§9.4). This keeps a TX-keying surface off the
   device and needs no extra token.
-- No configuration web UI in the first release. Configuration is a file
-  under `/etc/talktome-headless/` plus environment overrides (§12). A local
-  admin UI can be added later without changing anything below.
+- No cloud/remote management. Configuration is a file under
+  `/etc/talktome-headless/` plus environment overrides (§12); the local web
+  interface (§13.1) edits that file.
 - No video, no data channels, no NDI/OMT.
 - No ICE restart. The server does not expose `transport.restartIce()` and
   the browser client does not use it either; recovery is by recreating the
@@ -133,6 +133,9 @@ headless-client/
       gpio.rs
       mock.rs                      # test backends (PNG keys / in-memory lines)
     health.rs                      # sd_notify + watchdog, /healthz, structured logging
+    web/                           # admin web interface (axum): auth, status, config, deck view
+      mod.rs auth.rs config_api.rs
+      assets/{index.html,style.css,app.js}
   deploy/
     systemd/talktome-headless@.service
     udev/60-talktome-streamdeck.rules
@@ -145,8 +148,8 @@ headless-client/
 Crates: `tokio`, `webrtc` (webrtc-rs), `tokio-tungstenite` + `rustls`,
 `reqwest` (rustls), `serde`/`serde_json`/`toml`, `cpal`, `opus` (static
 libopus via `opusic-sys`), `rubato`, `elgato-streamdeck` (+ `image`,
-`ab_glyph`), `gpiocdev`, `sd-notify`, `tracing`, `clap`. TLS is rustls
-everywhere; the binary has no OpenSSL dependency.
+`ab_glyph`), `gpiocdev`, `axum`, `sd-notify`, `tracing`, `clap`. TLS is
+rustls everywhere; the binary has no OpenSSL dependency.
 
 ---
 
@@ -602,6 +605,7 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
             "inputs": [ { "line": "GPIO22", "action": "talk", "target": "conference:1",
                           "active_low": true, "debounce_ms": 20 },
                         { "line": "GPIO23", "action": "reply", "active_low": true } ] },
+  "web": { "enabled": true, "bind": "0.0.0.0", "port": 8080, "password": "admin" },
   "health": { "port": null },               // optional /healthz listener
   "log": { "level": "info", "format": "auto" } // auto = JSON when under systemd
 }
@@ -656,6 +660,48 @@ PrivateTmp=true
   `audio-device-restored`, `streamdeck-connected`,
   `streamdeck-disconnected`, `gpio-input`, `companion-command`,
   `client-error`.
+
+### 13.1 Web interface
+
+Each instance serves a local administration UI (`web.bind:web.port`,
+default `0.0.0.0:8080`; one port per instance) built with axum and plain
+HTML/CSS/JS embedded in the binary. It follows the Talktome Admin panel's
+look (dark navy, cards, blue primary) and is laid out for phones first,
+because in the field it is opened from a smartphone.
+
+- **Login**: the user is always `admin`; the password is `web.password`
+  (or `TALKTOME_WEB_PASSWORD`). The default `admin` is accepted once and then
+  a password change is enforced; the new password is written into the
+  configuration file (`web.password`). Sessions are in-memory cookies
+  (`HttpOnly`, `SameSite=Strict`, 12 h); five failed logins throttle further
+  attempts for 30 s.
+- **Status**: connection (state, detail, server, user id, production,
+  registration age, reconnects, send/receive transport state, consumers,
+  producer id, ICE servers and policy, tally), talk state with press-and-hold
+  Talk, Lock, volume slider and Mute per target, incoming callers and reply
+  target, audio devices and input level, GPIO backend with every configured
+  output (driven state) and input (pressed, event count), Stream Deck model /
+  serial / page, and service details (version, uptime, config path,
+  supervisor, ports).
+- **Stream Deck**: the rendered key images of the attached deck (PNG per key,
+  cached by content hash), dials and touch points; pressing in the browser
+  injects the same input the hardware would produce.
+- **Settings**: a form over the whole schema (§12), audio devices listed from
+  ALSA, GPIO output/input editors, JSON fields for ICE overrides and key
+  layout, and a raw JSON editor. Saving validates the document with the same
+  rules as startup and rewrites the file in its own format (TOML or JSON);
+  secrets are redacted in the API and kept unless replaced; environment
+  overrides in effect are shown because they win on the next start.
+- **Restart**: `POST /api/restart` shuts the client down cleanly; under
+  systemd the process exits 0 and `Restart=always` starts it again, otherwise
+  the binary re-executes itself with the same arguments. `Save & restart`
+  chains both.
+- The API (`/api/session`, `/api/login`, `/api/status`, `/api/config`,
+  `/api/config/audio-devices`, `/api/streamdeck`, `/api/streamdeck/key/{n}`,
+  `/api/streamdeck/input`, `/api/talk`, `/api/audio`, `/api/password`,
+  `/api/restart`) is JSON and can be scripted with the session cookie.
+- Transport is plain HTTP: keep the port on the production or management
+  network or front it with a TLS reverse proxy.
 
 ---
 
@@ -729,6 +775,8 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
 7. `surfaces::streamdeck` (discovery by serial, layout, rendering, dials,
    touch strip, paging, volume layer) with the PNG mock backend.
 8. `health`, systemd unit, udev rule, example configs, README.
+8a. `web`: login/password, status, Stream Deck view and input, talk/audio
+    control, configuration editor writing back to the file, restart.
 9. Packaging (`cargo-deb`, maintainer scripts, version mapping).
 10. CI job and release workflow.
 11. Two instances on one host: independent users, audio devices and GPIO
@@ -781,7 +829,8 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
   `iceParameters`) to avoid full transport recreation on handover.
 - Server: long-lived device tokens so the password need not live on the
   device; authentication for `POST /cut-camera`; a preview (green) tally.
-- Local admin/config web UI (token-gated, admin network only).
+- HTTPS for the web interface (currently plain HTTP, meant for the LAN or a
+  reverse proxy).
 - Bridge: deliver `cut-camera` to bridge sessions
   (`queueBridgeControlEvent` filter).
 
@@ -798,6 +847,9 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
   GPIO-only instances are the two-per-Pi case.
 - Config: one schema, JSON or TOML by file extension, env overrides.
 - Packages: arm64, armhf, amd64, built on Bookworm.
-- Dropped from the earlier draft: Companion HTTP trigger endpoint, config
-  web UI (deferred), radio TX/RX echo state machine, references to a
-  gateway design document that is not in this repository.
+- Web interface added after review: fixed `admin` login with forced
+  password change, status incl. GPIO, live Stream Deck view, settings saved
+  to the TOML/JSON file, restart.
+- Dropped from the earlier draft: Companion HTTP trigger endpoint, radio
+  TX/RX echo state machine, references to a gateway design document that is
+  not in this repository.

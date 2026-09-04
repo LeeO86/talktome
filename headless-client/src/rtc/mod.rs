@@ -269,6 +269,9 @@ pub struct SendTransport {
     track: Arc<TrackLocalStaticSample>,
     pub transport_id: String,
     pub producer_id: String,
+    /// ICE server URLs actually handed to webrtc-rs (for diagnostics).
+    pub ice_servers: Vec<String>,
+    pub ice_transport_policy: String,
     talking: AtomicBool,
     closed: AtomicBool,
 }
@@ -361,11 +364,18 @@ impl SendTransport {
             .await?;
         tracing::info!(event = "producer-created", producer = %producer_id, transport = %info.id);
 
+        let rtc_config = factory.rtc_configuration(&info);
         Ok(Self {
             pc,
             track,
             transport_id: info.id,
             producer_id,
+            ice_servers: rtc_config
+                .ice_servers
+                .iter()
+                .flat_map(|s| s.urls.clone())
+                .collect(),
+            ice_transport_policy: rtc_config.ice_transport_policy.to_string(),
             talking: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         })

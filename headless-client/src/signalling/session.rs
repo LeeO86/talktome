@@ -123,6 +123,10 @@ pub struct Session {
     healthy_since: Option<Instant>,
     /// Server-side state we cannot send while disconnected; flushed on reconnect.
     pending_talk_change: Option<TalkChange>,
+    registered_since: Option<std::time::SystemTime>,
+    reconnects: u32,
+    /// Details of the current transports for the status page.
+    media_info: Option<crate::state::MediaInfo>,
 }
 
 impl Session {
@@ -171,6 +175,9 @@ impl Session {
             backoff: Duration::from_secs(1),
             healthy_since: None,
             pending_talk_change: None,
+            registered_since: None,
+            reconnects: 0,
+            media_info: None,
         })
     }
 
@@ -193,6 +200,10 @@ impl Session {
                 Ok(connected) => {
                     self.backoff = Duration::from_secs(1);
                     self.healthy_since = Some(Instant::now());
+                    if self.registered_since.is_some() {
+                        self.reconnects += 1;
+                    }
+                    self.registered_since = Some(std::time::SystemTime::now());
                     match self.run_connected(connected).await {
                         Exit::Shutdown => break,
                         Exit::Kicked => {
@@ -509,6 +520,14 @@ impl Session {
         let recv =
             RecvTransport::create(&factory, &connected.socket, rtc_tx, self.rx_tx.clone()).await?;
         tracing::info!(event = "transports-created", send = %send.transport_id, recv = %recv.transport_id);
+        self.media_info = Some(crate::state::MediaInfo {
+            send_state: "new".into(),
+            recv_state: "new".into(),
+            consumers: 0,
+            producer_id: Some(send.producer_id.clone()),
+            ice_servers: send.ice_servers.clone(),
+            ice_transport_policy: send.ice_transport_policy.clone(),
+        });
         connected.media = Some(Media {
             factory,
             send,
@@ -610,6 +629,9 @@ impl Session {
                     mixer.set_level(key, self.audio.level(key));
                 }
                 tracing::info!(event = "incoming-stream", target = %key, producer = %producer_id);
+                if let Some(info) = self.media_info.as_mut() {
+                    info.consumers = media.consumers.len();
+                }
                 self.snapshot_dirty = true;
             }
             Err(error) => {
@@ -819,6 +841,7 @@ impl Session {
             media.send.close().await;
             media.recv.close().await;
         }
+        self.media_info = None;
         if let Ok(mut mixer) = self.io.mixer.lock() {
             mixer.clear_sources();
         }
@@ -951,6 +974,12 @@ impl Session {
                         Direction::Send => media.send_state = state,
                         Direction::Recv => media.recv_state = state,
                     }
+                    if let Some(info) = self.media_info.as_mut() {
+                        info.send_state = media.send_state.to_string();
+                        info.recv_state = media.recv_state.to_string();
+                        info.consumers = media.consumers.len();
+                    }
+                    self.snapshot_dirty = true;
                 }
                 if matches!(state, RTCPeerConnectionState::Failed) {
                     self.recover_media(connected, &format!("{direction:?} transport {state}"))
@@ -1416,6 +1445,7 @@ impl Session {
             self.config.audio.output_device.as_deref(),
             Some("none") | Some("off")
         );
+        let media = self.media_info.clone();
         Snapshot {
             instance: self.config.instance.clone(),
             user_name: self
@@ -1423,6 +1453,9 @@ impl Session {
                 .as_ref()
                 .map(|l| l.user.name.clone())
                 .unwrap_or_else(|| self.config.user.name.clone()),
+            user_id: self.login.as_ref().map(|l| l.user.id),
+            server_url: self.config.server.url.clone(),
+            production: self.config.user.production.clone(),
             connection: self.connection,
             detail: self.detail.clone(),
             talking: self.talk.is_talking(),
@@ -1434,6 +1467,13 @@ impl Session {
             reply_name,
             incoming: self.incoming.clone(),
             input_level_db: self.input_level_db,
+            media,
+            registered_since_unix: self
+                .registered_since
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .filter(|_| self.connection.is_online()),
+            reconnects: self.reconnects,
         }
     }
 

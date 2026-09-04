@@ -14,7 +14,9 @@ use gpiocdev::tokio::AsyncRequest;
 use tokio::sync::{mpsc, watch};
 
 use crate::config::{GpioConfig, GpioInputAction, GpioInputConfig};
-use crate::state::{Bus, Command, InputSource, Snapshot, TargetRef};
+use crate::state::{
+    Bus, Command, GpioInputView, GpioOutputView, GpioStatus, InputSource, Snapshot, TargetRef,
+};
 use crate::talk::TargetKey;
 
 pub const BACKEND_ENV: &str = "TALKTOME_MOCK_GPIO";
@@ -31,6 +33,70 @@ pub fn output_states(snapshot: &Snapshot) -> HashMap<&'static str, bool> {
     states.insert("connected", snapshot.connection.is_online());
     states.insert("locked", snapshot.lock_active);
     states
+}
+
+fn action_name(action: GpioInputAction) -> &'static str {
+    match action {
+        GpioInputAction::Talk => "talk",
+        GpioInputAction::Reply => "reply",
+        GpioInputAction::LockToggle => "lock_toggle",
+        GpioInputAction::ClearLocks => "clear_locks",
+        GpioInputAction::MuteToggle => "mute_toggle",
+        GpioInputAction::VolumeUp => "volume_up",
+        GpioInputAction::VolumeDown => "volume_down",
+    }
+}
+
+/// Initial status view for a configuration (all outputs undriven, no presses).
+pub fn initial_status(config: &GpioConfig, backend: &str) -> GpioStatus {
+    GpioStatus {
+        backend: backend.to_string(),
+        error: None,
+        outputs: OUTPUT_NAMES
+            .iter()
+            .filter_map(|name| {
+                config.outputs.get(*name).map(|output| GpioOutputView {
+                    name: name.to_string(),
+                    line: output.line.clone(),
+                    active_low: output.active_low,
+                    active: None,
+                    error: None,
+                })
+            })
+            .collect(),
+        inputs: config
+            .inputs
+            .iter()
+            .map(|input| GpioInputView {
+                line: input.line.clone(),
+                action: action_name(input.action).to_string(),
+                target: input.target.clone(),
+                active_low: input.active_low,
+                pressed: false,
+                events: 0,
+            })
+            .collect(),
+    }
+}
+
+fn publish_status(bus: &Bus, status: &GpioStatus) {
+    if let Ok(mut hardware) = bus.hardware.write() {
+        hardware.gpio = status.clone();
+    }
+}
+
+fn record_input(status: &mut GpioStatus, index: usize, pressed: bool) {
+    if let Some(view) = status.inputs.get_mut(index) {
+        view.pressed = pressed;
+        view.events += 1;
+    }
+}
+
+fn record_output(status: &mut GpioStatus, name: &str, active: Option<bool>, error: Option<String>) {
+    if let Some(view) = status.outputs.iter_mut().find(|o| o.name == name) {
+        view.active = active;
+        view.error = error;
+    }
 }
 
 /// An input transition after debouncing: `pressed` = line became active.
@@ -124,13 +190,18 @@ pub async fn run(config: GpioConfig, bus: Bus, shutdown: watch::Receiver<bool>) 
     let mock = std::env::var(BACKEND_ENV)
         .map(|v| !v.is_empty() && v != "0" && v != "false")
         .unwrap_or(false);
+    let mut status = initial_status(&config, if mock { "mock" } else { "gpiocdev" });
+    publish_status(&bus, &status);
     let result = if mock {
-        run_mock(config, bus, shutdown).await
+        run_mock(config, &bus, &mut status, shutdown).await
     } else {
-        run_real(config, bus, shutdown).await
+        run_real(config, &bus, &mut status, shutdown).await
     };
     if let Err(error) = result {
         tracing::error!(event = "gpio-failed", error = %format!("{error:#}"));
+        status.backend = "error".into();
+        status.error = Some(format!("{error:#}"));
+        publish_status(&bus, &status);
     }
 }
 
@@ -185,7 +256,12 @@ struct OutputLine {
     current: Option<bool>,
 }
 
-async fn run_real(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+async fn run_real(
+    config: GpioConfig,
+    bus: &Bus,
+    status: &mut GpioStatus,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
     // Outputs: one request per line (lines may live on different chips).
     let mut outputs: HashMap<&'static str, OutputLine> = HashMap::new();
     for (name, output) in &config.outputs {
@@ -321,19 +397,24 @@ async fn run_real(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
             .max()
             .unwrap_or(20),
     );
-    apply_outputs(&mut outputs, &snapshots.borrow());
+    apply_outputs(&mut outputs, &snapshots.borrow(), status);
+    publish_status(bus, status);
 
     loop {
         tokio::select! {
             changed = snapshots.changed() => {
                 if changed.is_err() { break; }
                 let snapshot = snapshots.borrow().clone();
-                apply_outputs(&mut outputs, &snapshot);
+                if apply_outputs(&mut outputs, &snapshot, status) {
+                    publish_status(bus, status);
+                }
             }
             Some(event) = event_rx.recv() => {
                 if let Some(event) = debouncer.filter(event, Instant::now()) {
                     let input = &inputs[event.index];
                     tracing::info!(event = "gpio-input", line = %input.line, pressed = event.pressed);
+                    record_input(status, event.index, event.pressed);
+                    publish_status(bus, status);
                     if let Some(command) = command_for_input(input, event.pressed) {
                         let _ = bus.commands.send(command).await;
                     }
@@ -350,35 +431,50 @@ async fn run_real(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
     Ok(())
 }
 
-fn apply_outputs(outputs: &mut HashMap<&'static str, OutputLine>, snapshot: &Snapshot) {
+/// Drives changed outputs; returns true when any line state changed.
+fn apply_outputs(
+    outputs: &mut HashMap<&'static str, OutputLine>,
+    snapshot: &Snapshot,
+    status: &mut GpioStatus,
+) -> bool {
     let states = output_states(snapshot);
+    let mut changed = false;
     for (name, output) in outputs.iter_mut() {
         let active = states.get(name).copied().unwrap_or(false);
         if output.current == Some(active) {
             continue;
         }
-        match output.request.set_value(
-            output.offset,
-            if active {
-                Value::Active
-            } else {
-                Value::Inactive
-            },
-        ) {
+        let value = if active {
+            Value::Active
+        } else {
+            Value::Inactive
+        };
+        match output.request.set_value(output.offset, value) {
             Ok(()) => {
                 output.current = Some(active);
+                record_output(status, name, Some(active), None);
                 if *name == "tally" {
                     tracing::info!(event = "tally-output", active);
                 }
             }
-            Err(error) => tracing::warn!(event = "gpio-write-failed", name, error = %error),
+            Err(error) => {
+                tracing::warn!(event = "gpio-write-failed", name, error = %error);
+                record_output(status, name, None, Some(error.to_string()));
+            }
         }
+        changed = true;
     }
+    changed
 }
 
 /// Mock backend: outputs to `<dir>/gpio-outputs.json`, inputs from lines
 /// `<line> press|release` appended to `<dir>/gpio-inputs`.
-async fn run_mock(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+async fn run_mock(
+    config: GpioConfig,
+    bus: &Bus,
+    status: &mut GpioStatus,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
     let dir = std::env::var_os(super::MOCK_DIR_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
@@ -393,30 +489,31 @@ async fn run_mock(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
     let mut debouncer = Debouncer::new(0);
     tracing::info!(event = "gpio-mock", dir = %dir.display());
 
-    let write_outputs = |snapshot: &Snapshot| {
+    let write_outputs = |snapshot: &Snapshot, status: &mut GpioStatus| {
         let states = output_states(snapshot);
         let map: serde_json::Map<String, serde_json::Value> = config
             .outputs
             .keys()
             .map(|name| {
-                (
-                    name.clone(),
-                    serde_json::Value::Bool(states.get(name.as_str()).copied().unwrap_or(false)),
-                )
+                let active = states.get(name.as_str()).copied().unwrap_or(false);
+                record_output(status, name, Some(active), None);
+                (name.clone(), serde_json::Value::Bool(active))
             })
             .collect();
         let _ = std::fs::write(
             &outputs_path,
             serde_json::to_string_pretty(&map).unwrap_or_default(),
         );
+        publish_status(bus, status);
     };
-    write_outputs(&snapshots.borrow());
+    write_outputs(&snapshots.borrow(), status);
 
     loop {
         tokio::select! {
             changed = snapshots.changed() => {
                 if changed.is_err() { break; }
-                write_outputs(&snapshots.borrow());
+                let snapshot = snapshots.borrow().clone();
+                write_outputs(&snapshot, status);
             }
             _ = poll.tick() => {
                 let Ok(text) = std::fs::read_to_string(&inputs_path) else { continue };
@@ -433,6 +530,8 @@ async fn run_mock(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
                     let pressed = matches!(state, "press" | "1" | "on" | "active");
                     if debouncer.filter(InputEvent { index, pressed }, Instant::now()).is_some() {
                         tracing::info!(event = "gpio-input", line = name, pressed);
+                        record_input(status, index, pressed);
+                        publish_status(bus, status);
                         if let Some(command) = command_for_input(&config.inputs[index], pressed) {
                             let _ = bus.commands.send(command).await;
                         }

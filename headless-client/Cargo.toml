@@ -49,6 +49,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 ab_glyph = "0.2"
 gpiocdev = { version = "0.8", features = ["async_tokio"] }
 
+# Web interface
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+
 # Supervision / logging / CLI
 sd-notify = "0.5"
 tracing = "0.1"

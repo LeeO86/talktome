@@ -10,6 +10,9 @@ use serde_json::Value;
 
 pub const DEFAULT_CONFIG_DIR: &str = "/etc/talktome-headless";
 pub const ENV_PREFIX: &str = "TALKTOME_";
+/// Placeholder used for secrets in API output; sending it back keeps the
+/// stored value.
+pub const REDACTED: &str = "********";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -29,6 +32,7 @@ pub struct Config {
     pub gpio: GpioConfig,
     pub health: HealthConfig,
     pub log: LogConfig,
+    pub web: WebConfig,
     /// Directory for persisted runtime state (audio levels). Defaults to
     /// `$STATE_DIRECTORY` under systemd or `/var/lib/talktome-headless/<instance>`.
     pub state_dir: Option<PathBuf>,
@@ -253,6 +257,21 @@ pub struct LogConfig {
     pub format: String,
 }
 
+/// Local administration web interface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebConfig {
+    pub enabled: bool,
+    pub bind: String,
+    pub port: u16,
+    /// Password of the fixed `admin` login. The default forces a change on
+    /// first login. Can also come from `TALKTOME_WEB_PASSWORD`.
+    pub password: String,
+}
+
+pub const WEB_DEFAULT_PASSWORD: &str = "admin";
+pub const WEB_ADMIN_USER: &str = "admin";
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -270,6 +289,7 @@ impl Default for Config {
             gpio: GpioConfig::default(),
             health: HealthConfig::default(),
             log: LogConfig::default(),
+            web: WebConfig::default(),
             state_dir: None,
         }
     }
@@ -384,6 +404,17 @@ impl Default for LogConfig {
     }
 }
 
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: "0.0.0.0".into(),
+            port: 8080,
+            password: WEB_DEFAULT_PASSWORD.into(),
+        }
+    }
+}
+
 /// Where a configuration came from, for diagnostics.
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
@@ -457,6 +488,7 @@ where
         "gpio",
         "health",
         "log",
+        "web",
     ];
     let mut applied = Vec::new();
     if !doc.is_object() {
@@ -536,6 +568,70 @@ pub fn load_from_env() -> Result<LoadedConfig> {
 
 pub fn from_document(doc: Value) -> Result<Config> {
     serde_json::from_value(doc).map_err(|e| anyhow!("invalid configuration: {e}"))
+}
+
+/// Serializes a configuration document in the format implied by `path`.
+pub fn render_document(path: &Path, doc: &Value) -> Result<String> {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "json" => Ok(format!("{}\n", serde_json::to_string_pretty(doc)?)),
+        "toml" => {
+            let value: toml::Value =
+                serde_json::from_value(doc.clone()).context("converting configuration to TOML")?;
+            toml::to_string_pretty(&value).context("serializing TOML")
+        }
+        other => bail!("unsupported configuration extension {other:?} (use .json or .toml)"),
+    }
+}
+
+/// Removes `null` members recursively; TOML has no null and JSON files stay
+/// tidy without them (absent keys mean "default").
+pub fn strip_nulls(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.retain(|_, v| !v.is_null());
+            for v in map.values_mut() {
+                strip_nulls(v);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_nulls),
+        _ => {}
+    }
+}
+
+/// Writes the document atomically (temp file + rename), keeping the file mode
+/// restrictive because it contains credentials.
+pub fn write_document(path: &Path, doc: &Value) -> Result<()> {
+    let mut doc = doc.clone();
+    strip_nulls(&mut doc);
+    let text = render_document(path, &doc)?;
+    let tmp = path.with_extension(format!(
+        "{}.tmp",
+        path.extension().and_then(|e| e.to_str()).unwrap_or("cfg")
+    ));
+    std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .map(|m| m.permissions().mode())
+            .unwrap_or(0o640);
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode & 0o777));
+    }
+    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
+    Ok(())
+}
+
+/// Reads the raw configuration document currently stored in `path` (without
+/// environment overrides).
+pub fn read_document(path: &Path) -> Result<Value> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("cannot read configuration {}", path.display()))?;
+    parse_document(path, &text)
 }
 
 impl Config {
@@ -630,6 +726,17 @@ impl Config {
         if !matches!(self.log.format.as_str(), "auto" | "json" | "text") {
             bail!("log.format must be auto, json or text");
         }
+        if self.web.enabled {
+            if self.web.port == 0 {
+                bail!("web.port must be between 1 and 65535");
+            }
+            if self.web.bind.trim().is_empty() {
+                bail!("web.bind is required when web.enabled is true");
+            }
+            if self.web.password.is_empty() {
+                bail!("web.password must not be empty");
+            }
+        }
         Ok(())
     }
 
@@ -637,7 +744,10 @@ impl Config {
     pub fn redacted(&self) -> Config {
         let mut copy = self.clone();
         if !copy.user.password.is_empty() {
-            copy.user.password = "********".into();
+            copy.user.password = REDACTED.into();
+        }
+        if !copy.web.password.is_empty() {
+            copy.web.password = REDACTED.into();
         }
         if let Some(servers) = copy.ice.servers.as_mut() {
             for server in servers {
@@ -789,6 +899,40 @@ mod tests {
     fn redaction_hides_password() {
         let config = from_document(minimal_json()).unwrap();
         assert_eq!(config.redacted().user.password, "********");
+    }
+
+    #[test]
+    fn documents_round_trip_through_both_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut doc = minimal_json();
+        doc["web"] = serde_json::json!({ "port": 9090, "password": "secret" });
+        doc["audio"] = serde_json::json!({ "input_device": null, "profile": "low" });
+        for name in ["cam.toml", "cam.json"] {
+            let path = dir.path().join(name);
+            write_document(&path, &doc).unwrap();
+            let loaded = read_document(&path).unwrap();
+            let config = from_document(loaded.clone()).unwrap();
+            assert_eq!(config.web.port, 9090);
+            assert_eq!(config.audio.profile, AudioProfile::Low);
+            assert!(
+                loaded["audio"].get("input_device").is_none(),
+                "nulls are dropped"
+            );
+        }
+        assert!(render_document(Path::new("x.yaml"), &doc).is_err());
+    }
+
+    #[test]
+    fn web_defaults_and_validation() {
+        let mut config = from_document(minimal_json()).unwrap();
+        assert!(config.web.enabled);
+        assert_eq!(config.web.port, 8080);
+        assert_eq!(config.web.password, WEB_DEFAULT_PASSWORD);
+        assert_eq!(config.redacted().web.password, REDACTED);
+        config.web.password.clear();
+        assert!(config.validate().is_err());
+        config.web.enabled = false;
+        config.validate().unwrap();
     }
 
     #[test]
