@@ -4,10 +4,12 @@ import { Pressable, Platform, ScrollView, StyleSheet, Text, useWindowDimensions,
 import { iosPttEnabled } from '../audio/policy';
 import { visibleProductionName, talkTargetIdentity, type TalkTarget } from '../protocol';
 import { shouldShowPttJoinBanner } from '../ptt/policy';
+import { connectionHealthFromSession } from '../session/connectionHealth';
 import { session, useSessionStore } from '../session/store';
 import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
 import { AudioRouteButton } from './AudioRouteButton';
+import { ConnectionStatusBadge } from './ConnectionStatusBadge';
 import { LockIcon, MicIcon, ReplyArrowIcon } from './icons';
 import { HoldToTalk } from './HoldToTalk';
 import { targetLayerCount, visibleTargets } from './layers';
@@ -40,6 +42,7 @@ export function OperatorScreen() {
     : Boolean(store.talking && reply);
 
   const productionLabel = visibleProductionName(store.productionName);
+  const connection = connectionHealthFromSession(store);
   const replyLocked =
     Boolean(store.replyTarget) && store.lockedTargetKeys.includes(talkTargetIdentity(store.replyTarget!));
   const selectedLocked =
@@ -110,14 +113,17 @@ export function OperatorScreen() {
       <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Session"
+          accessibilityLabel={`Session, ${connection.label}`}
           accessibilityHint="Server, settings, disconnect, and profiles"
           onPress={() => setSessionOpen(true)}
           style={styles.identity}
         >
-          <Text style={styles.name} numberOfLines={1}>
-            {store.identity?.name ?? 'talktome'}
-          </Text>
+          <View style={styles.nameRow}>
+            <Text style={styles.name} numberOfLines={1}>
+              {store.identity?.name ?? 'talktome'}
+            </Text>
+            <ConnectionStatusBadge health={connection} />
+          </View>
           {productionLabel ? (
             <Text style={styles.production} numberOfLines={1}>
               {productionLabel}
@@ -217,10 +223,17 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     marginRight: 12,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+  },
   name: {
     color: colors.text,
     fontSize: 34,
     fontWeight: '700',
+    flexShrink: 1,
   },
   production: {
     color: colors.muted,

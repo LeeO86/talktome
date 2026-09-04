@@ -16,6 +16,7 @@ import { emptyAudioRouteSnapshot, type AudioRoute } from '../audio/routes';
 import type { BleConnectionKind } from '../ble/native';
 import { DEFAULT_BLE_TARGET, type BleTargetSelection } from '../ble/target';
 import type { SavedProfile } from './remembered';
+import type { SignalingHealth } from './connectionHealth';
 
 export type SessionUiState = {
   hydrated: boolean;
@@ -71,6 +72,13 @@ export type SessionUiState = {
   activeRemoteCount: number;
   mediaDebug: string;
   signalingLabel: string;
+  signalingStatus: SignalingHealth;
+  sendTransportState: string;
+  recvTransportState: string;
+  sendIceState: string;
+  recvIceState: string;
+  mediaIceError: string | null;
+  mediaReady: boolean;
   fgsRunning: boolean;
   fgsAvailable: boolean;
   audioSessionAvailable: boolean;
@@ -149,6 +157,13 @@ export const initialState: SessionUiState = {
   activeRemoteCount: 0,
   mediaDebug: '',
   signalingLabel: 'disconnected',
+  signalingStatus: 'disconnected',
+  sendTransportState: 'idle',
+  recvTransportState: 'idle',
+  sendIceState: 'idle',
+  recvIceState: 'idle',
+  mediaIceError: null,
+  mediaReady: false,
   fgsRunning: false,
   fgsAvailable: false,
   audioSessionAvailable: false,

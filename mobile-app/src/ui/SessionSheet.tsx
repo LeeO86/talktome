@@ -1,8 +1,10 @@
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { productionChoices, visibleProductionName } from '../protocol';
+import { connectionHealthFromSession } from '../session/connectionHealth';
 import { session, useSessionStore } from '../session/store';
 import { androidSafeArea } from './androidSafeArea';
+import { ConnectionStatusBadge } from './ConnectionStatusBadge';
 
 type Props = {
   visible: boolean;
@@ -14,6 +16,7 @@ export function SessionSheet({ visible, onClose, onOpenSettings }: Props) {
   const store = useSessionStore();
   const production = visibleProductionName(store.productionName);
   const choices = store.productions.length > 0 ? productionChoices(store.productions) : [];
+  const connection = connectionHealthFromSession(store);
 
   const disconnect = () => {
     Alert.alert(
@@ -47,6 +50,11 @@ export function SessionSheet({ visible, onClose, onOpenSettings }: Props) {
           <View style={styles.card}>
             <Text style={styles.label}>Signed in as</Text>
             <Text style={styles.value}>{store.identity?.name ?? store.username}</Text>
+            <Text style={styles.label}>Connection</Text>
+            <View style={styles.connectionRow}>
+              <ConnectionStatusBadge health={connection} light />
+              <Text style={styles.connectionDetail}>{connection.label}</Text>
+            </View>
             <Text style={styles.label}>Server</Text>
             <Text style={styles.value}>{store.serverAddress}</Text>
             {production && choices.length === 0 ? (
@@ -150,6 +158,18 @@ const styles = StyleSheet.create({
     color: '#111',
     fontSize: 17,
     marginTop: 4,
+  },
+  connectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+    flexWrap: 'wrap',
+  },
+  connectionDetail: {
+    color: '#6D6D72',
+    fontSize: 15,
+    flexShrink: 1,
   },
   section: {
     marginHorizontal: 16,

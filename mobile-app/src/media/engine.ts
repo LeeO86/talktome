@@ -4,6 +4,11 @@ import { mediaDevices, MediaStream } from 'react-native-webrtc';
 
 import type { SignalingClient } from '../signaling/client';
 import {
+  describeIceCandidateError,
+  IDLE_MEDIA_CONNECTION,
+  type MediaConnectionSnapshot,
+} from '../session/connectionHealth';
+import {
   normalizeAudioPreference,
   playbackGain,
   type TargetAudioPreference,
@@ -53,6 +58,12 @@ export class MediaEngine {
   private incomingAddressed = false;
   overBudget = false;
   lastMediaEvent = '';
+  onConnectionChange: (() => void) | null = null;
+  private sendConnectionState = IDLE_MEDIA_CONNECTION.send;
+  private recvConnectionState = IDLE_MEDIA_CONNECTION.receive;
+  private sendIceGatheringState = IDLE_MEDIA_CONNECTION.sendIce;
+  private recvIceGatheringState = IDLE_MEDIA_CONNECTION.receiveIce;
+  private iceError: string | null = null;
   private work: Promise<void> = Promise.resolve();
 
   constructor(private readonly signaling: SignalingClient) {}
@@ -106,6 +117,8 @@ export class MediaEngine {
         .then((id) => callback({ id }))
         .catch(errback);
     });
+    this.bindTransportStatus(this.sendTransport, 'send');
+    this.bindTransportStatus(this.recvTransport, 'receive');
   }
 
   async warmTalkProducer(): Promise<void> {
@@ -242,6 +255,17 @@ export class MediaEngine {
     return `${resumed} live / ${tracked} tracked${routes ? ` — ${routes}` : ''}.${last}`;
   }
 
+  connectionSnapshot(): MediaConnectionSnapshot {
+    return {
+      send: this.sendConnectionState,
+      receive: this.recvConnectionState,
+      sendIce: this.sendIceGatheringState,
+      receiveIce: this.recvIceGatheringState,
+      iceError: this.iceError,
+      mediaReady: Boolean(this.device && this.sendTransport && this.recvTransport),
+    };
+  }
+
   setAudioPreferences(preferences: Record<string, TargetAudioPreference>): void {
     this.audioPreferences = preferences;
     this.applyAllTrackGain();
@@ -340,6 +364,54 @@ export class MediaEngine {
     this.device = null;
     this.overBudget = false;
     this.lastMediaEvent = '';
+    this.resetConnectionState();
+  }
+
+  private bindTransportStatus(transport: Transport, direction: 'send' | 'receive'): void {
+    const apply = (connected = false) => {
+      if (direction === 'send' && transport !== this.sendTransport) {
+        return;
+      }
+      if (direction === 'receive' && transport !== this.recvTransport) {
+        return;
+      }
+      if (connected) {
+        this.iceError = null;
+      }
+      if (direction === 'send') {
+        this.sendConnectionState = transport.connectionState || 'new';
+        this.sendIceGatheringState = transport.iceGatheringState || 'new';
+      } else {
+        this.recvConnectionState = transport.connectionState || 'new';
+        this.recvIceGatheringState = transport.iceGatheringState || 'new';
+      }
+      this.onConnectionChange?.();
+    };
+    apply();
+    transport.on('connectionstatechange', (state) => {
+      apply(state === 'connected');
+    });
+    transport.on('icegatheringstatechange', () => {
+      apply();
+    });
+    transport.on('icecandidateerror', (event) => {
+      if (direction === 'send' && transport !== this.sendTransport) {
+        return;
+      }
+      if (direction === 'receive' && transport !== this.recvTransport) {
+        return;
+      }
+      this.iceError = describeIceCandidateError(event);
+      this.onConnectionChange?.();
+    });
+  }
+
+  private resetConnectionState(): void {
+    this.sendConnectionState = IDLE_MEDIA_CONNECTION.send;
+    this.recvConnectionState = IDLE_MEDIA_CONNECTION.receive;
+    this.sendIceGatheringState = IDLE_MEDIA_CONNECTION.sendIce;
+    this.recvIceGatheringState = IDLE_MEDIA_CONNECTION.receiveIce;
+    this.iceError = null;
   }
 
   private applyAllTrackGain(): void {

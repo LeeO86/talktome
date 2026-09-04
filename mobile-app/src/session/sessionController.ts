@@ -626,13 +626,25 @@ export class SessionController {
     signaling.handlers = {
       onStateChange: (state) => {
         if (state.status === 'connected') {
-          useSessionStore.setState({ signalingLabel: `connected ${state.socketId ?? ''}`.trim() });
+          useSessionStore.setState({
+            signalingStatus: 'connected',
+            signalingLabel: `connected ${state.socketId ?? ''}`.trim(),
+          });
         } else if (state.status === 'connecting') {
-          useSessionStore.setState({ signalingLabel: 'reconnecting' });
+          useSessionStore.setState({
+            signalingStatus: 'connecting',
+            signalingLabel: 'reconnecting',
+          });
         } else if (state.status === 'failed') {
-          useSessionStore.setState({ signalingLabel: `failed: ${state.message}` });
+          useSessionStore.setState({
+            signalingStatus: 'failed',
+            signalingLabel: `failed: ${state.message}`,
+          });
         } else {
-          useSessionStore.setState({ signalingLabel: 'disconnected' });
+          useSessionStore.setState({
+            signalingStatus: 'disconnected',
+            signalingLabel: 'disconnected',
+          });
         }
       },
       onReconnect: () => {
@@ -880,6 +892,7 @@ export class SessionController {
       productionId: null,
       productionName: null,
       operatorReady: false,
+      signalingStatus: 'connected',
       signalingLabel: 'connected',
     });
 

@@ -33,6 +33,7 @@ import {
   type OperatorAudioSettings,
 } from './operatorAudio';
 import { HOLD_HINT, useSessionStore } from './state';
+import { IDLE_MEDIA_CONNECTION } from './connectionHealth';
 import type { SessionController } from './sessionController';
 
 /** Operator media lifecycle: MediaEngine, consumers, audio prep, devices, and preferences. */
@@ -58,6 +59,7 @@ export class MediaCoordinator {
 
     if (!this.c.media) {
       this.c.media = new MediaEngine(signaling);
+      this.c.media.onConnectionChange = () => this.publishMediaSnapshot();
       this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.serverClientDefaults.audioProfile));
       this.c.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
       this.c.media.setConferenceListen(useSessionStore.getState().conferenceListen);
@@ -121,6 +123,7 @@ export class MediaCoordinator {
       // ignore
     }
     this.c.media = new MediaEngine(signaling);
+    this.c.media.onConnectionChange = () => this.publishMediaSnapshot();
     this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.serverClientDefaults.audioProfile));
     this.c.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
     this.c.media.setConferenceListen(useSessionStore.getState().conferenceListen);
@@ -282,11 +285,18 @@ export class MediaCoordinator {
   }
 
   publishMediaSnapshot(): void {
+    const connection = this.c.media?.connectionSnapshot() ?? IDLE_MEDIA_CONNECTION;
     useSessionStore.setState({
       overBudget: this.c.media?.overBudget ?? false,
       activeRemoteCount: this.c.media?.activeRemoteCount ?? 0,
       speakingTargetKeys: this.c.media?.speakingTargetKeys ?? [],
       mediaDebug: this.c.media?.mediaDebugLine() ?? '',
+      sendTransportState: connection.send,
+      recvTransportState: connection.receive,
+      sendIceState: connection.sendIce,
+      recvIceState: connection.receiveIce,
+      mediaIceError: connection.iceError,
+      mediaReady: connection.mediaReady,
     });
   }
 
