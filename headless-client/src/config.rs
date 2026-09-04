@@ -608,6 +608,21 @@ pub fn strip_nulls(value: &mut Value) {
     }
 }
 
+fn config_io_error(op: &str, path: &Path, error: std::io::Error) -> anyhow::Error {
+    // EROFS is 30 on Linux; match both the typed kind and the raw code so the
+    // hint still appears if the kind is Uncategorized on an older std.
+    let erofs =
+        error.kind() == std::io::ErrorKind::ReadOnlyFilesystem || error.raw_os_error() == Some(30);
+    let hint = if erofs {
+        " — systemd ProtectSystem=strict remounts /etc read-only; the unit needs ReadWritePaths=/etc/talktome-headless"
+    } else if error.kind() == std::io::ErrorKind::PermissionDenied {
+        " — the service user talktome-headless needs write access to the configuration directory (mode 0770, group talktome-headless)"
+    } else {
+        ""
+    };
+    anyhow!("{op} {}: {error}{hint}", path.display())
+}
+
 /// Writes the document atomically (temp file + rename), keeping the file mode
 /// restrictive because it contains credentials.
 pub fn write_document(path: &Path, doc: &Value) -> Result<()> {
@@ -618,7 +633,8 @@ pub fn write_document(path: &Path, doc: &Value) -> Result<()> {
         "{}.tmp",
         path.extension().and_then(|e| e.to_str()).unwrap_or("cfg")
     ));
-    std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::write(&tmp, text.as_bytes())
+        .map_err(|error| config_io_error("writing", &tmp, error))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -627,7 +643,7 @@ pub fn write_document(path: &Path, doc: &Value) -> Result<()> {
             .unwrap_or(0o640);
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode & 0o777));
     }
-    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
+    std::fs::rename(&tmp, path).map_err(|error| config_io_error("replacing", path, error))?;
     Ok(())
 }
 
@@ -950,5 +966,58 @@ mod tests {
             .ends_with("cam1.toml"));
         std::fs::write(dir.path().join("cam1.json"), "{}").unwrap();
         assert!(locate_instance_config(dir.path(), "cam1").is_err());
+    }
+
+    #[test]
+    fn write_errors_explain_read_only_and_permission() {
+        let erofs = config_io_error(
+            "writing",
+            Path::new("/etc/talktome-headless/cam1.toml.tmp"),
+            std::io::Error::from_raw_os_error(30),
+        );
+        let erofs_text = format!("{erofs:#}");
+        assert!(erofs_text.contains("ReadWritePaths=/etc/talktome-headless"));
+        assert!(
+            erofs_text.contains("Read-only file system") || erofs_text.contains("read-only"),
+            "{erofs_text}"
+        );
+
+        let denied = config_io_error(
+            "writing",
+            Path::new("/etc/talktome-headless/cam1.toml.tmp"),
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+        assert!(format!("{denied:#}").contains("mode 0770"));
+    }
+
+    #[test]
+    fn write_document_fails_on_unwritable_directory() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if std::fs::metadata("/proc/self")
+                .map(|m| m.uid())
+                .unwrap_or(1)
+                == 0
+            {
+                return;
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cam.toml");
+        write_document(&path, &minimal_json()).unwrap();
+        let original = std::fs::metadata(dir.path()).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        }
+        let result = write_document(&path, &minimal_json());
+        std::fs::set_permissions(dir.path(), original).unwrap();
+        let text = format!("{:#}", result.unwrap_err());
+        assert!(
+            text.contains("mode 0770") || text.contains("Permission denied"),
+            "{text}"
+        );
     }
 }

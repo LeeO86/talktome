@@ -22,7 +22,12 @@ case "$1" in
             fi
         done
 
-        install -d -m 0750 -o root -g "$USER" "$CONF_DIR"
+        # Group-writable so the service can create <instance>.toml.tmp and
+        # rename it over the live file (web UI password / settings save).
+        # 0750 is not enough: ProtectSystem=strict aside, group r-x cannot
+        # create the temp file.
+        install -d -m 0770 -o root -g "$USER" "$CONF_DIR"
+        chmod 0770 "$CONF_DIR"
         install -d -m 0750 -o "$USER" -g "$USER" "$STATE_DIR"
 
         if command -v udevadm >/dev/null 2>&1; then

@@ -19,6 +19,10 @@ SupplementaryGroups=audio plugdev gpio
 StateDirectory=talktome-headless/%i
 StateDirectoryMode=0750
 RuntimeDirectory=talktome-headless/%i
+# ProtectSystem=strict remounts /etc read-only. The web UI writes the instance
+# config atomically (<instance>.toml.tmp then rename) for password changes and
+# settings saves, so this directory must stay writable.
+ReadWritePaths=/etc/talktome-headless
 
 # Hardening. Audio (ALSA), HID (Stream Deck) and GPIO character devices must
 # stay reachable, so the device policy is left open and access is controlled
