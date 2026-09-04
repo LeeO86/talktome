@@ -269,13 +269,30 @@ pub struct AudioLevel {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct AudioStateFile {
     levels: BTreeMap<String, AudioLevel>,
+    #[serde(default)]
+    members: BTreeMap<String, AudioLevel>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AudioState {
     default_volume: f32,
     levels: BTreeMap<TargetKey, AudioLevel>,
+    members: BTreeMap<(i64, i64), AudioLevel>,
     path: Option<PathBuf>,
+}
+
+fn member_state_key(conference_id: i64, user_id: i64) -> String {
+    format!("conference:{conference_id}/user:{user_id}")
+}
+
+fn parse_member_state_key(text: &str) -> Option<(i64, i64)> {
+    let (conference, user) = text.split_once('/')?;
+    match (TargetKey::parse(conference), TargetKey::parse(user)) {
+        (Some(TargetKey::Conference(conference_id)), Some(TargetKey::User(user_id))) => {
+            Some((conference_id, user_id))
+        }
+        _ => None,
+    }
 }
 
 impl AudioState {
@@ -283,6 +300,7 @@ impl AudioState {
         Self {
             default_volume,
             levels: BTreeMap::new(),
+            members: BTreeMap::new(),
             path: None,
         }
     }
@@ -296,6 +314,11 @@ impl AudioState {
                 for (key, level) in file.levels {
                     if let Some(key) = TargetKey::parse(&key) {
                         state.levels.insert(key, level);
+                    }
+                }
+                for (key, level) in file.members {
+                    if let Some(pair) = parse_member_state_key(&key) {
+                        state.members.insert(pair, level);
                     }
                 }
             }
@@ -332,6 +355,43 @@ impl AudioState {
         level
     }
 
+    pub fn member_level(&self, conference_id: i64, user_id: i64) -> AudioLevel {
+        self.members
+            .get(&(conference_id, user_id))
+            .cloned()
+            .unwrap_or(AudioLevel {
+                volume: 1.0,
+                muted: false,
+            })
+    }
+
+    pub fn set_member_volume(
+        &mut self,
+        conference_id: i64,
+        user_id: i64,
+        volume: f32,
+    ) -> AudioLevel {
+        let mut level = self.member_level(conference_id, user_id);
+        level.volume = volume.clamp(0.0, 1.0);
+        self.members.insert((conference_id, user_id), level.clone());
+        level
+    }
+
+    pub fn toggle_member_mute(&mut self, conference_id: i64, user_id: i64) -> AudioLevel {
+        let mut level = self.member_level(conference_id, user_id);
+        level.muted = !level.muted;
+        self.members.insert((conference_id, user_id), level.clone());
+        level
+    }
+
+    pub fn iter_levels(&self) -> impl Iterator<Item = (TargetKey, AudioLevel)> + '_ {
+        self.levels.iter().map(|(k, v)| (*k, v.clone()))
+    }
+
+    pub fn iter_members(&self) -> impl Iterator<Item = ((i64, i64), AudioLevel)> + '_ {
+        self.members.iter().map(|(k, v)| (*k, v.clone()))
+    }
+
     /// Entries for `target-audio-state-snapshot`, restricted to known targets.
     pub fn snapshot_entries<'a, I>(&self, targets: I) -> Vec<Value>
     where
@@ -363,6 +423,13 @@ impl AudioState {
                 .levels
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            members: self
+                .members
+                .iter()
+                .map(|((conference_id, user_id), v)| {
+                    (member_state_key(*conference_id, *user_id), v.clone())
+                })
                 .collect(),
         };
         let text = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
@@ -516,6 +583,18 @@ mod tests {
             }
         );
         assert_eq!(reloaded.level(TargetKey::User(1)).volume, 0.5);
+        let mut members = AudioState::load(dir.path(), 0.9);
+        members.set_member_volume(3, 7, 0.25);
+        members.toggle_member_mute(3, 7);
+        members.save().unwrap();
+        let reloaded_members = AudioState::load(dir.path(), 0.9);
+        assert_eq!(
+            reloaded_members.member_level(3, 7),
+            AudioLevel {
+                volume: 0.25,
+                muted: true
+            }
+        );
         let entries = reloaded.snapshot_entries([key].iter());
         assert_eq!(entries[0]["targetType"], "feed");
         assert_eq!(entries[0]["muted"], true);

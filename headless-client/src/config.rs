@@ -188,6 +188,10 @@ pub struct StreamDeckConfig {
     pub enabled: bool,
     /// Serial number of the deck to use; `null` = first found.
     pub serial: Option<String>,
+    /// Dummy deck when no hardware is attached (`mk2`, `plus`, `xl`, `neo`,
+    /// `pedal`, …). Empty = discover a real Stream Deck. The environment
+    /// variable `TALKTOME_MOCK_STREAMDECK` still wins when set.
+    pub mock: Option<String>,
     pub brightness: u8,
     pub font_path: PathBuf,
     pub volume_step: f32,
@@ -370,6 +374,7 @@ impl Default for StreamDeckConfig {
         Self {
             enabled: true,
             serial: None,
+            mock: None,
             brightness: 60,
             font_path: PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
             volume_step: 0.05,
@@ -694,6 +699,33 @@ impl Config {
                 bail!("ice.transport_policy must be \"all\" or \"relay\"");
             }
         }
+        if let Some(mock) = &self.streamdeck.mock {
+            let name = mock
+                .trim()
+                .to_ascii_lowercase()
+                .replace(['-', '_', ' '], "");
+            if !name.is_empty()
+                && !matches!(
+                    name.as_str(),
+                    "original"
+                        | "originalv2"
+                        | "v2"
+                        | "mini"
+                        | "minimk2"
+                        | "mk2"
+                        | "xl"
+                        | "xlv2"
+                        | "plus"
+                        | "plusxl"
+                        | "neo"
+                        | "pedal"
+                )
+            {
+                bail!(
+                    "streamdeck.mock {mock:?} is not a known model (original, originalv2, mini, minimk2, mk2, xl, xlv2, plus, plusxl, neo, pedal)"
+                );
+            }
+        }
         if self.streamdeck.brightness > 100 {
             bail!("streamdeck.brightness must be between 0 and 100");
         }
@@ -953,6 +985,17 @@ mod tests {
         config.web.password.clear();
         assert!(config.validate().is_err());
         config.web.enabled = false;
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn streamdeck_mock_accepts_known_models() {
+        let mut config = from_document(minimal_json()).unwrap();
+        config.streamdeck.mock = Some("mk2".into());
+        config.validate().unwrap();
+        config.streamdeck.mock = Some("no-such-deck".into());
+        assert!(config.validate().is_err());
+        config.streamdeck.mock = Some("".into());
         config.validate().unwrap();
     }
 

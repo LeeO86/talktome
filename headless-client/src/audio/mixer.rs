@@ -15,12 +15,16 @@ pub fn db_to_gain(db: f32) -> f32 {
 
 struct Source {
     key: TargetKey,
+    /// Speaker inside a conference, when known from producer appData.
+    speaker: Option<i64>,
     buffer: StreamBuffer,
 }
 
 pub struct Mixer {
     sources: HashMap<String, Source>,
     levels: HashMap<TargetKey, AudioLevel>,
+    /// Per-member listen level inside a conference: (conference id, user id).
+    member_levels: HashMap<(i64, i64), AudioLevel>,
     default_volume: f32,
     dim_gain: f32,
     dim_feeds_while_speaking: bool,
@@ -45,6 +49,7 @@ impl Mixer {
         Self {
             sources: HashMap::new(),
             levels: HashMap::new(),
+            member_levels: HashMap::new(),
             default_volume,
             dim_gain: db_to_gain(dim_db),
             dim_feeds_while_speaking,
@@ -57,11 +62,17 @@ impl Mixer {
         }
     }
 
-    pub fn add_source(&mut self, consumer_id: &str, key: TargetKey) -> Result<()> {
+    pub fn add_source_from(
+        &mut self,
+        consumer_id: &str,
+        key: TargetKey,
+        speaker: Option<i64>,
+    ) -> Result<()> {
         self.sources.insert(
             consumer_id.to_string(),
             Source {
                 key,
+                speaker,
                 buffer: StreamBuffer::new(self.jitter_min_ms, self.jitter_max_ms)?,
             },
         );
@@ -95,6 +106,24 @@ impl Mixer {
         }
     }
 
+    pub fn set_member_level(&mut self, conference_id: i64, user_id: i64, level: AudioLevel) {
+        self.member_levels.insert((conference_id, user_id), level);
+    }
+
+    fn gain_for_source(&self, source: &Source) -> f32 {
+        let mut gain = self.gain_for(source.key);
+        if let (TargetKey::Conference(conference_id), Some(user_id)) = (source.key, source.speaker)
+        {
+            if let Some(member) = self.member_levels.get(&(conference_id, user_id)) {
+                if member.muted {
+                    return 0.0;
+                }
+                gain *= member.volume;
+            }
+        }
+        gain
+    }
+
     fn gain_for(&self, key: TargetKey) -> f32 {
         let level = self.levels.get(&key).cloned().unwrap_or(AudioLevel {
             volume: self.default_volume,
@@ -120,7 +149,7 @@ impl Mixer {
         let gains: Vec<(String, f32)> = self
             .sources
             .iter()
-            .map(|(id, source)| (id.clone(), self.gain_for(source.key)))
+            .map(|(id, source)| (id.clone(), self.gain_for_source(source)))
             .collect();
         for (id, gain) in gains {
             if let Some(source) = self.sources.get_mut(&id) {
@@ -153,6 +182,23 @@ impl Mixer {
         keys.dedup();
         keys
     }
+
+    /// Speakers currently delivering audio inside `conference_id`.
+    pub fn receiving_speakers(&self, conference_id: i64) -> Vec<i64> {
+        let mut ids: Vec<i64> = self
+            .sources
+            .values()
+            .filter(|s| {
+                s.key == TargetKey::Conference(conference_id)
+                    && s.buffer.is_active()
+                    && s.buffer.last_packet().elapsed() < Duration::from_millis(500)
+            })
+            .filter_map(|s| s.speaker)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
 }
 
 #[cfg(test)]
@@ -182,8 +228,12 @@ mod tests {
     #[test]
     fn applies_volume_mute_and_feed_dim() {
         let mut mixer = Mixer::new(1.0, -20.0, true, false, 20, 200);
-        mixer.add_source("c1", TargetKey::Conference(1)).unwrap();
-        mixer.add_source("f1", TargetKey::Feed(1)).unwrap();
+        mixer
+            .add_source_from("c1", TargetKey::Conference(1), None)
+            .unwrap();
+        mixer
+            .add_source_from("f1", TargetKey::Feed(1), None)
+            .unwrap();
         let conf = packets(6, 0.5);
         let feed = packets(6, 0.5);
         for (i, p) in conf.iter().enumerate() {
@@ -221,5 +271,39 @@ mod tests {
         );
         mixer.remove_source("f1");
         assert_eq!(mixer.receiving_keys(), vec![TargetKey::Conference(1)]);
+    }
+
+    #[test]
+    fn conference_member_level_scales_one_speaker() {
+        let mut mixer = Mixer::new(1.0, -20.0, false, false, 20, 200);
+        mixer
+            .add_source_from("adi", TargetKey::Conference(1), Some(2))
+            .unwrap();
+        mixer
+            .add_source_from("beni", TargetKey::Conference(1), Some(3))
+            .unwrap();
+        let packets = packets(6, 0.5);
+        for (i, p) in packets.iter().enumerate() {
+            mixer.push_packet("adi", i as u16, p).unwrap();
+            mixer.push_packet("beni", i as u16, p).unwrap();
+        }
+        let mut out = vec![0f32; 960];
+        mixer.render(&mut out);
+        let both = rms(&out);
+        mixer.set_member_level(
+            1,
+            3,
+            AudioLevel {
+                volume: 1.0,
+                muted: true,
+            },
+        );
+        mixer.render(&mut out);
+        let adi_only = rms(&out);
+        assert!(
+            adi_only < both * 0.75 && adi_only > both * 0.3,
+            "muting one conference member: both={both} adi={adi_only}"
+        );
+        assert_eq!(mixer.receiving_speakers(1), vec![2, 3]);
     }
 }

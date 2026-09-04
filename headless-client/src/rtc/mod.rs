@@ -129,6 +129,14 @@ impl MediaFactory {
         &self.router
     }
 
+    pub async fn ice_urls(&self) -> (Vec<String>, Vec<String>) {
+        let slot = self.ice_prep.lock().await;
+        match slot.as_ref() {
+            Some(prep) => (prep.announced.clone(), prep.effective.clone()),
+            None => (Vec::new(), Vec::new()),
+        }
+    }
+
     fn opus_capability(&self) -> RTCRtpCodecCapability {
         RTCRtpCodecCapability {
             mime_type: MIME_TYPE_OPUS.to_owned(),
@@ -313,6 +321,8 @@ pub struct SendTransport {
     pub producer_id: String,
     /// ICE server URLs actually handed to webrtc-rs (for diagnostics).
     pub ice_servers: Vec<String>,
+    /// URLs announced by the Talktome server before any local TURN bridge.
+    pub ice_servers_announced: Vec<String>,
     pub ice_transport_policy: String,
     talking: AtomicBool,
     closed: AtomicBool,
@@ -421,16 +431,22 @@ impl SendTransport {
         tracing::info!(event = "producer-created", producer = %producer_id, transport = %info.id);
 
         let rtc_config = factory.rtc_configuration(&info).await?;
+        let (announced, effective) = factory.ice_urls().await;
         Ok(Self {
             pc,
             track,
             transport_id: info.id,
             producer_id,
-            ice_servers: rtc_config
-                .ice_servers
-                .iter()
-                .flat_map(|s| s.urls.clone())
-                .collect(),
+            ice_servers: if effective.is_empty() {
+                rtc_config
+                    .ice_servers
+                    .iter()
+                    .flat_map(|s| s.urls.clone())
+                    .collect()
+            } else {
+                effective
+            },
+            ice_servers_announced: announced,
             ice_transport_policy: rtc_config.ice_transport_policy.to_string(),
             talking: AtomicBool::new(false),
             closed: AtomicBool::new(false),

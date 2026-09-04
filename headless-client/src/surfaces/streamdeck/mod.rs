@@ -48,7 +48,7 @@ fn geometry_for(kind: Kind) -> Geometry {
     }
 }
 
-fn kind_from_name(name: &str) -> Option<Kind> {
+pub fn kind_from_name(name: &str) -> Option<Kind> {
     Some(
         match name
             .to_ascii_lowercase()
@@ -306,7 +306,14 @@ pub async fn run(
 ) {
     let mock_kind = std::env::var(MOCK_ENV)
         .ok()
-        .and_then(|name| kind_from_name(&name));
+        .and_then(|name| kind_from_name(&name))
+        .or_else(|| {
+            config
+                .mock
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .and_then(kind_from_name)
+        });
     let renderer = Renderer::load(&config.font_path);
     let mut warned = false;
     publish_disconnected(&bus, None);
@@ -935,4 +942,33 @@ async fn render_lcd(
     device.set_lcd(image).await.context("writing LCD")?;
     *rendered = Some(segments);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kind_from_name;
+
+    #[test]
+    fn kind_from_name_accepts_config_models() {
+        for name in [
+            "original",
+            "originalv2",
+            "v2",
+            "mini",
+            "minimk2",
+            "mk2",
+            "xl",
+            "xlv2",
+            "plus",
+            "plusxl",
+            "neo",
+            "pedal",
+            "MK-2",
+            "Plus XL",
+        ] {
+            assert!(kind_from_name(name).is_some(), "{name}");
+        }
+        assert!(kind_from_name("nope").is_none());
+        assert!(kind_from_name("").is_none());
+    }
 }

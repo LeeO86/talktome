@@ -509,6 +509,7 @@ mod tests {
                 receiving: false,
                 volume: 0.9,
                 muted: false,
+                members: Vec::new(),
             })
             .collect();
         snapshot

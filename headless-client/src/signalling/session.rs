@@ -50,7 +50,7 @@ struct Target {
     key: TargetKey,
     name: String,
     can_talk: bool,
-    members: Vec<i64>,
+    members: Vec<(i64, String)>,
 }
 
 struct Media {
@@ -146,6 +146,14 @@ impl Session {
             None
         };
         let audio = AudioState::load(&config.state_dir(), config.audio.default_volume);
+        if let Ok(mut mixer) = io.mixer.lock() {
+            for (key, level) in audio.iter_levels() {
+                mixer.set_level(key, level);
+            }
+            for ((conference_id, user_id), level) in audio.iter_members() {
+                mixer.set_member_level(conference_id, user_id, level);
+            }
+        }
         let (rx_tx, rx_rx) = mpsc::channel(1024);
         Ok(Self {
             frame_duration: Duration::from_millis(profile.frame_ms() as u64),
@@ -293,6 +301,22 @@ impl Session {
                 let level = self.audio.set_volume(target, volume);
                 self.apply_level(target, level);
             }
+            Command::MemberVolumeSet {
+                conference: TargetKey::Conference(conference_id),
+                user_id,
+                volume,
+            } => {
+                let level = self.audio.set_member_volume(conference_id, user_id, volume);
+                self.apply_member_level(conference_id, user_id, level);
+            }
+            Command::MemberMuteToggle {
+                conference: TargetKey::Conference(conference_id),
+                user_id,
+            } => {
+                let level = self.audio.toggle_member_mute(conference_id, user_id);
+                self.apply_member_level(conference_id, user_id, level);
+            }
+            Command::MemberVolumeSet { .. } | Command::MemberMuteToggle { .. } => {}
             Command::Refresh => self.snapshot_dirty = true,
             _ => {}
         }
@@ -527,6 +551,7 @@ impl Session {
             consumers: 0,
             producer_id: Some(send.producer_id.clone()),
             ice_servers: send.ice_servers.clone(),
+            ice_servers_announced: send.ice_servers_announced.clone(),
             ice_transport_policy: send.ice_transport_policy.clone(),
         });
         connected.media = Some(Media {
@@ -613,6 +638,10 @@ impl Session {
             return;
         }
         let key = Self::target_for_announcement(announcement).unwrap_or(TargetKey::User(0));
+        let speaker = announcement
+            .speaker_user_id
+            .as_ref()
+            .and_then(Value::as_i64);
         match media
             .recv
             .consume(&connected.socket, &media.factory, &producer_id)
@@ -624,7 +653,7 @@ impl Session {
                     .producers
                     .insert(producer_id.clone(), consumer_id.clone());
                 if let Ok(mut mixer) = self.io.mixer.lock() {
-                    if let Err(error) = mixer.add_source(&consumer_id, key) {
+                    if let Err(error) = mixer.add_source_from(&consumer_id, key, speaker) {
                         tracing::warn!(event = "mixer-source-failed", error = %error);
                     }
                     mixer.set_level(key, self.audio.level(key));
@@ -1070,6 +1099,22 @@ impl Session {
                 let level = self.audio.set_volume(target, volume);
                 self.apply_level(target, level);
             }
+            Command::MemberVolumeSet {
+                conference: TargetKey::Conference(conference_id),
+                user_id,
+                volume,
+            } => {
+                let level = self.audio.set_member_volume(conference_id, user_id, volume);
+                self.apply_member_level(conference_id, user_id, level);
+            }
+            Command::MemberMuteToggle {
+                conference: TargetKey::Conference(conference_id),
+                user_id,
+            } => {
+                let level = self.audio.toggle_member_mute(conference_id, user_id);
+                self.apply_member_level(conference_id, user_id, level);
+            }
+            Command::MemberVolumeSet { .. } | Command::MemberMuteToggle { .. } => {}
             Command::Refresh => self.snapshot_dirty = true,
             Command::Shutdown => {}
         }
@@ -1078,6 +1123,22 @@ impl Session {
     fn apply_level(&mut self, key: TargetKey, level: crate::talk::AudioLevel) {
         if let Ok(mut mixer) = self.io.mixer.lock() {
             mixer.set_level(key, level);
+        }
+        if let Err(error) = self.audio.save() {
+            tracing::warn!(event = "audio-state-save-failed", error = %error);
+        }
+        self.audio_state_dirty = true;
+        self.snapshot_dirty = true;
+    }
+
+    fn apply_member_level(
+        &mut self,
+        conference_id: i64,
+        user_id: i64,
+        level: crate::talk::AudioLevel,
+    ) {
+        if let Ok(mut mixer) = self.io.mixer.lock() {
+            mixer.set_member_level(conference_id, user_id, level);
         }
         if let Err(error) = self.audio.save() {
             tracing::warn!(event = "audio-state-save-failed", error = %error);
@@ -1366,11 +1427,7 @@ impl Session {
             else {
                 continue;
             };
-            let members = entry
-                .members
-                .iter()
-                .filter_map(|m| m.get("userId").and_then(Value::as_i64))
-                .collect();
+            let members = parse_conference_members(&entry.members);
             targets.push(Target {
                 key,
                 name: entry.name.clone().unwrap_or_else(|| key.to_string()),
@@ -1412,10 +1469,44 @@ impl Session {
                 let level = self.audio.level(target.key);
                 let online = match target.key {
                     TargetKey::User(id) => self.online_users.contains(&id),
-                    TargetKey::Conference(_) => {
-                        target.members.iter().any(|m| self.online_users.contains(m))
-                    }
+                    TargetKey::Conference(_) => target
+                        .members
+                        .iter()
+                        .any(|(id, _)| self.online_users.contains(id)),
                     TargetKey::Feed(_) => receiving.contains(&target.key),
+                };
+                let receiving_speakers = match target.key {
+                    TargetKey::Conference(id) => self
+                        .io
+                        .mixer
+                        .lock()
+                        .map(|m| m.receiving_speakers(id))
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                let self_id = self.login.as_ref().map(|login| login.user.id);
+                let members = match target.key {
+                    TargetKey::Conference(conference_id) => target
+                        .members
+                        .iter()
+                        .filter(|(id, _)| Some(*id) != self_id)
+                        .map(|(user_id, name)| {
+                            let level = self.audio.member_level(conference_id, *user_id);
+                            crate::state::ConferenceMemberInfo {
+                                user_id: *user_id,
+                                name: if name.is_empty() {
+                                    format!("user:{user_id}")
+                                } else {
+                                    name.clone()
+                                },
+                                online: self.online_users.contains(user_id),
+                                receiving: receiving_speakers.contains(user_id),
+                                volume: level.volume,
+                                muted: level.muted,
+                            }
+                        })
+                        .collect(),
+                    _ => Vec::new(),
                 };
                 TargetInfo {
                     key: target.key,
@@ -1428,6 +1519,7 @@ impl Session {
                     receiving: receiving.contains(&target.key),
                     volume: level.volume,
                     muted: level.muted,
+                    members,
                 }
             })
             .collect();
@@ -1514,5 +1606,40 @@ async fn wait_true(rx: &mut watch::Receiver<bool>) {
         if rx.changed().await.is_err() {
             std::future::pending::<()>().await;
         }
+    }
+}
+
+fn parse_conference_members(values: &[Value]) -> Vec<(i64, String)> {
+    values
+        .iter()
+        .filter_map(|member| {
+            if let Some(id) = member.as_i64() {
+                return Some((id, String::new()));
+            }
+            let id = member.get("userId").and_then(Value::as_i64)?;
+            let name = member
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            Some((id, name))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_conference_members;
+    use serde_json::json;
+
+    #[test]
+    fn parse_conference_members_accepts_objects_and_ids() {
+        let members = parse_conference_members(&[
+            json!({ "userId": 7, "name": "ueli" }),
+            json!(8),
+            json!({ "userId": "nope" }),
+            json!({ "name": "anon" }),
+        ]);
+        assert_eq!(members, vec![(7, "ueli".into()), (8, String::new())]);
     }
 }

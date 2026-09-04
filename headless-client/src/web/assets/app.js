@@ -16,6 +16,7 @@
     audioDevices: { inputs: [], outputs: [] },
     rawMode: false,
     pressed: new Set(),
+    memberOpen: new Set(),
     volumeTimers: new Map(),
     restarting: false,
   };
@@ -395,7 +396,8 @@
       ['Receive transport', media.recv_state || '–'],
       ['Consumers', media.consumers != null ? media.consumers : '–'],
       ['Producer', media.producer_id ? code(media.producer_id.slice(0, 8)) : '–'],
-      ['ICE servers', media.ice_servers && media.ice_servers.length ? media.ice_servers.join(', ') : 'none (direct only)'],
+      ['ICE (server)', media.ice_servers_announced && media.ice_servers_announced.length ? media.ice_servers_announced.join(', ') : (media.ice_servers && media.ice_servers.length ? media.ice_servers.join(', ') : 'none (direct only)')],
+      ['ICE (webrtc)', iceEffectiveLabel(media)],
       ['ICE policy', media.ice_transport_policy || '–'],
       ['Camera tally', snap.on_air ? badge('ON AIR', 'bad') : badge('off')],
     ]);
@@ -487,6 +489,14 @@
     ]);
   }
 
+  function iceEffectiveLabel(media) {
+    const urls = media.ice_servers || [];
+    if (!urls.length) return 'none';
+    const bridged = urls.filter((url) => url.includes('127.0.0.1') || url.includes('[::1]'));
+    if (!bridged.length) return urls.join(', ');
+    return `${bridged.join(', ')} — local UDP façade for TURNS/TURN-TCP, not a second TURN hop`;
+  }
+
   function labelForTarget(snap, key) {
     const target = snap.targets.find((t) => targetKey(t.key) === key);
     return target ? target.name : key;
@@ -558,13 +568,22 @@
       );
     });
     muteButton.addEventListener('click', () => api('POST', '/api/audio', { action: 'mute-toggle', target: key }).catch((error) => flash(error.message, 'error')));
-    controls.append(slider, muteButton);
+    controls.append(slider, volume, muteButton);
+    const members = el('div', { class: 'target__members is-hidden' });
+    const membersToggle = el('button', { type: 'button', class: 'btn btn-small target__members-toggle is-hidden', text: 'Members' });
+    membersToggle.addEventListener('click', () => {
+      if (state.memberOpen.has(key)) state.memberOpen.delete(key);
+      else state.memberOpen.add(key);
+      members.classList.toggle('is-hidden', !state.memberOpen.has(key));
+    });
     row.append(
       el('div', { class: 'target__name' }, [el('span', { class: 'kind', text: kind }), el('span', { class: 'name' })]),
       flags,
-      controls
+      controls,
+      membersToggle,
+      members
     );
-    row._parts = { flags, talkButton, lockButton, slider, volume, muteButton };
+    row._parts = { flags, talkButton, lockButton, slider, volume, muteButton, members, membersToggle };
     return row;
   }
 
@@ -586,6 +605,57 @@
     if (document.activeElement !== parts.slider) {
       parts.slider.value = Math.round(target.volume * 100);
       parts.volume.textContent = `${Math.round(target.volume * 100)}%`;
+    }
+    const members = target.members || [];
+    const showMembers = targetKind(targetKey(target.key)) === 'conference' && members.length;
+    parts.membersToggle.classList.toggle('is-hidden', !showMembers);
+    if (showMembers) {
+      parts.membersToggle.textContent = `Members (${members.length})`;
+      parts.members.classList.toggle('is-hidden', !state.memberOpen.has(targetKey(target.key)));
+      if (state.memberOpen.has(targetKey(target.key))) {
+        renderMembers(parts.members, targetKey(target.key), members);
+      }
+    } else {
+      parts.members.replaceChildren();
+      parts.members.classList.add('is-hidden');
+    }
+  }
+
+  function renderMembers(container, conferenceKey, members) {
+    const existing = new Map($$('.member', container).map((node) => [node.dataset.userId, node]));
+    const seen = new Set();
+    for (const member of members) {
+      const id = String(member.user_id);
+      seen.add(id);
+      let node = existing.get(id);
+      if (!node) {
+        node = el('div', { class: 'member', dataset: { userId: id } });
+        const name = el('span', { class: 'member__name' });
+        const slider = el('input', { type: 'range', min: 0, max: 100, step: 5 });
+        const mute = el('button', { type: 'button', class: 'btn btn-small btn-mute', text: 'Hear' });
+        slider.addEventListener('input', () => {
+          const timerKey = `${conferenceKey}/${id}`;
+          clearTimeout(state.volumeTimers.get(timerKey));
+          state.volumeTimers.set(
+            timerKey,
+            setTimeout(() => api('POST', '/api/audio', { action: 'member-volume-set', target: conferenceKey, member: `user:${id}`, value: Number(slider.value) / 100 }).catch((error) => flash(error.message, 'error')), 150)
+          );
+        });
+        mute.addEventListener('click', () => api('POST', '/api/audio', { action: 'member-mute-toggle', target: conferenceKey, member: `user:${id}` }).catch((error) => flash(error.message, 'error')));
+        node.append(name, slider, mute);
+        node._parts = { name, slider, mute };
+        container.append(node);
+      }
+      node._parts.name.textContent = `${member.name}${member.online ? '' : ' (offline)'}${member.receiving ? ' · speaking' : ''}`;
+      node.classList.toggle('is-muted', member.muted);
+      node._parts.mute.classList.toggle('is-active', !member.muted);
+      node._parts.mute.textContent = member.muted ? 'Muted' : 'Hear';
+      if (document.activeElement !== node._parts.slider) {
+        node._parts.slider.value = Math.round(member.volume * 100);
+      }
+    }
+    for (const [id, node] of existing) {
+      if (!seen.has(id)) node.remove();
     }
   }
 
@@ -749,8 +819,8 @@
       title: 'Audio',
       desc: 'devices, codec profile, dimming, jitter buffer',
       fields: [
-        { path: 'audio.input_device', label: 'Input device', type: 'device', direction: 'inputs', nullable: true },
-        { path: 'audio.output_device', label: 'Output device', type: 'device', direction: 'outputs', nullable: true },
+        { path: 'audio.input_device', label: 'Input device', type: 'device', direction: 'inputs', nullable: true, help: 'Use tone or tone:440 on a VM with no microphone' },
+        { path: 'audio.output_device', label: 'Output device', type: 'device', direction: 'outputs', nullable: true, help: 'wav:/tmp/out.wav records the mix when there is no speaker' },
         { path: 'audio.profile', label: 'Codec profile', type: 'select', options: [['standard', 'Standard (20 ms, FEC)'], ['low', 'Low (10 ms)'], ['ultra-low', 'Ultra low (5 ms)']] },
         { path: 'audio.input_gain_db', label: 'Input gain (dB)', type: 'number', step: 0.5 },
         { path: 'audio.default_volume', label: 'Default target volume (0–1)', type: 'number', step: 0.05, min: 0, max: 1 },
@@ -781,6 +851,7 @@
       desc: 'device binding, brightness, volume layer',
       fields: [
         { path: 'streamdeck.enabled', label: 'Use a Stream Deck', type: 'bool' },
+        { path: 'streamdeck.mock', label: 'Dummy deck (no hardware)', type: 'select', nullable: true, options: [['', 'Real hardware'], ['mk2', 'Stream Deck MK.2 (15 keys)'], ['mini', 'Stream Deck Mini'], ['minimk2', 'Stream Deck Mini MK.2'], ['original', 'Stream Deck Original'], ['originalv2', 'Stream Deck Original V2'], ['xl', 'Stream Deck XL'], ['xlv2', 'Stream Deck XL V2'], ['plus', 'Stream Deck +'], ['plusxl', 'Stream Deck + XL'], ['neo', 'Stream Deck Neo'], ['pedal', 'Stream Deck Pedal']], help: 'Pick a model to test the Stream Deck tab without a USB deck. TALKTOME_MOCK_STREAMDECK overrides this.' },
         { path: 'streamdeck.serial', label: 'Serial number', type: 'text', nullable: true, help: 'Empty: first deck found' },
         { path: 'streamdeck.brightness', label: 'Brightness (%)', type: 'number', min: 0, max: 100 },
         { path: 'streamdeck.font_path', label: 'Font file', type: 'text' },
@@ -913,7 +984,7 @@
       for (const device of state.audioDevices[field.direction] || []) {
         list.append(el('option', { value: device.id, text: device.label }));
       }
-      for (const special of field.direction === 'inputs' ? ['none', 'tone', 'tone:1000'] : ['none', 'wav:/tmp/talktome-out.wav']) {
+      for (const special of field.direction === 'inputs' ? ['none', 'tone', 'tone:440', 'tone:1000'] : ['none', 'wav:/tmp/talktome-out.wav']) {
         list.append(el('option', { value: special }));
       }
       wrapper.append(list);
