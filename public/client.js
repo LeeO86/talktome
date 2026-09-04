@@ -11530,6 +11530,8 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     if (!bindingId || pressedHotkeyBindings.has(bindingId)) return;
     const talkTarget = resolveHotkeyAssignmentTarget(assignment);
     if (!talkTarget) return;
+    const liveTalkTarget = resolveLiveTalkTarget(talkTarget);
+    if (!liveTalkTarget) return;
 
     pressedHotkeyBindings.add(bindingId);
     e.preventDefault();
@@ -11537,7 +11539,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     handleTalk({
       preventDefault() {},
       talkInputKey: `hotkey:${bindingId}`,
-    }, talkTarget);
+    }, liveTalkTarget);
   });
 
   window.addEventListener('keyup', e => {
@@ -11548,10 +11550,12 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     pressedHotkeyBindings.delete(bindingId);
     setHotkeyAssignmentActiveState(assignment, false);
     e.preventDefault();
+    const talkInputKey = `hotkey:${bindingId}`;
+    if (!activeTalkPointers.has(talkInputKey)) return;
     handleStopTalking({
       preventDefault() {},
       currentTarget: null,
-      talkInputKey: `hotkey:${bindingId}`,
+      talkInputKey,
     });
   });
 
