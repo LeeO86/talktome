@@ -15,7 +15,12 @@ Restart=always
 RestartSec=2
 User=talktome-headless
 Group=talktome-headless
-SupplementaryGroups=audio plugdev gpio
+# Do not set SupplementaryGroups= here. systemd exits 216/GROUP
+# ("Failed to determine supplementary groups: No such file or directory")
+# if any listed group is missing. `gpio` is absent on Debian/Ubuntu that
+# is not Raspberry Pi OS; `plugdev` can be missing on minimal images.
+# User= already loads groups from the user database; postinst adds this
+# user to audio, plugdev and gpio when those groups exist.
 StateDirectory=talktome-headless/%i
 StateDirectoryMode=0750
 RuntimeDirectory=talktome-headless/%i
@@ -26,7 +31,7 @@ ReadWritePaths=/etc/talktome-headless
 
 # Hardening. Audio (ALSA), HID (Stream Deck) and GPIO character devices must
 # stay reachable, so the device policy is left open and access is controlled
-# through the groups above and the udev rule.
+# through the user's supplementary groups (see postinst) and the udev rule.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

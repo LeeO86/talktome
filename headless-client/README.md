@@ -18,10 +18,11 @@ pulled in automatically):
 sudo apt install ./talktome-headless_<version>_arm64.deb
 ```
 
-The package creates the `talktome-headless` system user (groups `audio`,
-`plugdev`, `gpio`), installs the systemd template
-`talktome-headless@.service`, the udev rule for Stream Decks and example
-configurations under `/usr/share/talktome-headless/`.
+The package creates the `talktome-headless` system user and adds it to
+`audio`, `plugdev` and `gpio` when those groups already exist (Raspberry Pi
+OS has all three; Debian/Ubuntu often has no `gpio`). It installs the
+systemd template `talktome-headless@.service`, the udev rule for Stream
+Decks and example configurations under `/usr/share/talktome-headless/`.
 
 ## Configure
 
@@ -77,6 +78,32 @@ bind each instance with `streamdeck.serial`.
 
 `GET http://127.0.0.1:<health.port>/healthz` returns `200` while the client
 is registered and both media transports are connected, otherwise `503`.
+
+### Service exits 216/GROUP
+
+`Failed to determine supplementary groups` / `status=216/GROUP` happens
+**before** the binary or `default.toml` is read. systemd is looking up a
+group named in `SupplementaryGroups=` that this machine does not have —
+almost always `gpio`. The instance name `default` is fine; this is not a
+bad config. Current packages do not list those groups on the unit.
+
+Until you upgrade, clear the stale list (membership in `/etc/group` still
+applies):
+
+```bash
+sudo mkdir -p /etc/systemd/system/talktome-headless@.service.d
+sudo tee /etc/systemd/system/talktome-headless@.service.d/groups.conf >/dev/null <<'EOF'
+[Service]
+SupplementaryGroups=
+EOF
+sudo systemctl daemon-reload
+sudo systemctl reset-failed talktome-headless@default
+sudo systemctl start talktome-headless@default
+```
+
+`getent group audio plugdev gpio` shows which of those names exist. Do not
+`addgroup gpio` just to silence this unless you actually have GPIO devices
+and udev rules that use that group.
 
 ## Web interface
 

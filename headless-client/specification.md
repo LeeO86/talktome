@@ -568,8 +568,9 @@ Every command is answered with the matching `-result` event carrying the
 
 - **Library**: `gpiocdev` (Linux GPIO character device v2). Lines are
   addressed by **line name** (e.g. `GPIO17`, robust across Pi 4/5 where the
-  chip number differs) or `chip` + `offset`. The service user is in group
-  `gpio` (Raspberry Pi OS grants `/dev/gpiochip*` to it).
+  chip number differs) or `chip` + `offset`. On Raspberry Pi OS the service
+  user is added to group `gpio` (which owns `/dev/gpiochip*`); that group is
+  not created on other Debian images, and the unit must not require it.
 - **Outputs** (`gpio.outputs`): `tally` (camera on air), `talking`,
   `incoming`, `connected`, `locked`; each with `active_low`.
 - **Inputs** (`gpio.inputs`): a list of `{ line, action, target, active_low,
@@ -656,7 +657,6 @@ WatchdogSec=30
 Restart=always
 RestartSec=2
 User=talktome-headless
-SupplementaryGroups=audio plugdev gpio
 StateDirectory=talktome-headless/%i
 ReadWritePaths=/etc/talktome-headless
 NoNewPrivileges=true
@@ -672,6 +672,16 @@ is required. `postinst` creates that directory as `0770 root:talktome-headless`
 so the service user can create the temp file (group `r-x` / `0750` is not
 enough). A drop-in with only `ReadWritePaths=` is enough on an already
 installed unit until the package is upgraded.
+
+Do **not** set `SupplementaryGroups=audio plugdev gpio` on the unit.
+systemd looks those names up at spawn time and exits `216/GROUP`
+(`Failed to determine supplementary groups: No such file or directory`)
+if any of them is missing — usually `gpio` on Debian/Ubuntu that is not
+Raspberry Pi OS. `User=` already applies the groups recorded for
+`talktome-headless` in the user database; `postinst` adds that user to
+`audio`, `plugdev` and `gpio` only when those groups exist. A drop-in
+that assigns `SupplementaryGroups=` (empty) clears a stale vendor list
+until the package is upgraded.
 
 - `sd_notify(READY=1)` after the config is loaded and surfaces are open;
   `WATCHDOG=1` from the main loop while signalling and audio tasks are
