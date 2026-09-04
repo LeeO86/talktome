@@ -41,7 +41,25 @@ jobs:
       - name: Resolve version from Git tags
         id: build-version
         shell: bash
-        run: node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"
+        run: |
+          if node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"; then
+            exit 0
+          fi
+          # No v* tag reachable (e.g. a fresh fork): fall back to a development
+          # version so pushes to main still produce packages. Releases always
+          # come from tags and use the shared resolver above.
+          count="$(git rev-list --count HEAD)"
+          sha="$(git rev-parse --short=8 HEAD)"
+          version="0.0.0-dev.${count}"
+          {
+            echo "version=v${version}"
+            echo "app_version=${version}"
+            echo "safe_version=v${version}-${sha}"
+            echo "base_version=0.0.0"
+            echo "is_release=false"
+            echo "git_sha=${sha}"
+          } >> "$GITHUB_OUTPUT"
+          echo "No release tag found; using development version ${version}"
 
   build:
     name: Build ${{ matrix.deb_arch }} package
