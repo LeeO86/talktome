@@ -11369,8 +11369,10 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     currentTargetPeer = null;
     clearPressedTalkPointers();
     applyFeedDucking();
-    clearHotkeyActiveStyles();
-    pressedHotkeyBindings.clear();
+    if (inputKey === null) {
+      clearHotkeyActiveStyles();
+      pressedHotkeyBindings.clear();
+    }
     emitPttState('talk-stopped', { talking: false, lockActive: false, target: null, targets: [] });
 
     if (shouldRestoreSuspendedLock) {
@@ -11534,10 +11536,12 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     pressedHotkeyBindings.add(bindingId);
     e.preventDefault();
     setHotkeyAssignmentActiveState(assignment, true);
+    const liveTalkTarget = resolveLiveTalkTarget(talkTarget);
+    if (!liveTalkTarget) return;
     handleTalk({
       preventDefault() {},
       talkInputKey: `hotkey:${bindingId}`,
-    }, talkTarget);
+    }, liveTalkTarget);
   });
 
   window.addEventListener('keyup', e => {
@@ -11548,10 +11552,12 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     pressedHotkeyBindings.delete(bindingId);
     setHotkeyAssignmentActiveState(assignment, false);
     e.preventDefault();
+    const talkInputKey = `hotkey:${bindingId}`;
+    if (!activeTalkPointers.has(talkInputKey)) return;
     handleStopTalking({
       preventDefault() {},
       currentTarget: null,
-      talkInputKey: `hotkey:${bindingId}`,
+      talkInputKey,
     });
   });
 

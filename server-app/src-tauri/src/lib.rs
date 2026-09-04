@@ -1350,9 +1350,15 @@ pub fn run() {
             {
                 tray_builder = tray_builder.icon(app.default_window_icon().unwrap().clone());
             }
-            #[cfg(not(target_os = "macos"))]
+
+            #[cfg(target_os = "windows")]
             {
-                tray_builder = tray_builder.icon(app.default_window_icon().unwrap().clone());
+                tray_builder = tray_builder.icon(tauri::include_image!("./icons/tray-windows.png"));
+            }
+
+            #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray_builder = tray_builder.icon(icon);
             }
 
             let _tray = tray_builder.build(app)?;
