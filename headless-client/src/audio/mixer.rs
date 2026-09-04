@@ -2,7 +2,7 @@
 //! mute and dimming.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -76,10 +76,6 @@ impl Mixer {
         self.sources.clear();
     }
 
-    pub fn source_count(&self) -> usize {
-        self.sources.len()
-    }
-
     pub fn set_level(&mut self, key: TargetKey, level: AudioLevel) {
         self.levels.insert(key, level);
     }
@@ -100,20 +96,17 @@ impl Mixer {
     }
 
     fn gain_for(&self, key: TargetKey) -> f32 {
-        let level = self
-            .levels
-            .get(&key)
-            .cloned()
-            .unwrap_or(AudioLevel {
-                volume: self.default_volume,
-                muted: false,
-            });
+        let level = self.levels.get(&key).cloned().unwrap_or(AudioLevel {
+            volume: self.default_volume,
+            muted: false,
+        });
         if level.muted {
             return 0.0;
         }
         let mut gain = level.volume;
         if matches!(key, TargetKey::Feed(_)) {
-            let dim = (self.dim_feeds_while_speaking && self.talking) || (self.dim_when_addressed && self.addressed);
+            let dim = (self.dim_feeds_while_speaking && self.talking)
+                || (self.dim_when_addressed && self.addressed);
             if dim {
                 gain *= self.dim_gain;
             }
@@ -150,21 +143,15 @@ impl Mixer {
         let mut keys: Vec<TargetKey> = self
             .sources
             .values()
-            .filter(|s| s.buffer.is_active() && s.buffer.last_packet().elapsed() < Duration::from_millis(500))
+            .filter(|s| {
+                s.buffer.is_active()
+                    && s.buffer.last_packet().elapsed() < Duration::from_millis(500)
+            })
             .map(|s| s.key)
             .collect();
         keys.sort();
         keys.dedup();
         keys
-    }
-
-    /// Consumers that have not delivered a packet for `idle` (stale streams).
-    pub fn stale_sources(&self, idle: Duration, now: Instant) -> Vec<String> {
-        self.sources
-            .iter()
-            .filter(|(_, s)| now.duration_since(s.buffer.last_packet()) > idle)
-            .map(|(id, _)| id.clone())
-            .collect()
     }
 }
 
@@ -178,7 +165,10 @@ mod tests {
         (0..count)
             .map(|i| {
                 let frame: Vec<f32> = (0..960)
-                    .map(|n| (((i * 960 + n) as f32) * 440.0 * std::f32::consts::TAU / 48_000.0).sin() * amplitude)
+                    .map(|n| {
+                        (((i * 960 + n) as f32) * 440.0 * std::f32::consts::TAU / 48_000.0).sin()
+                            * amplitude
+                    })
                     .collect();
                 encoder.encode(&frame).unwrap()
             })
@@ -209,7 +199,13 @@ mod tests {
         let both = rms(&out);
         assert!(both > 0.3, "two sources summed: {both}");
 
-        mixer.set_level(TargetKey::Conference(1), AudioLevel { volume: 1.0, muted: true });
+        mixer.set_level(
+            TargetKey::Conference(1),
+            AudioLevel {
+                volume: 1.0,
+                muted: true,
+            },
+        );
         mixer.render(&mut out);
         let feed_only = rms(&out);
         assert!((feed_only - 0.35).abs() < 0.1, "feed alone: {feed_only}");
@@ -219,8 +215,11 @@ mod tests {
         let dimmed = rms(&out);
         assert!(dimmed < feed_only * 0.2, "dimmed {dimmed} vs {feed_only}");
 
-        assert_eq!(mixer.receiving_keys(), vec![TargetKey::Conference(1), TargetKey::Feed(1)]);
+        assert_eq!(
+            mixer.receiving_keys(),
+            vec![TargetKey::Conference(1), TargetKey::Feed(1)]
+        );
         mixer.remove_source("f1");
-        assert_eq!(mixer.source_count(), 1);
+        assert_eq!(mixer.receiving_keys(), vec![TargetKey::Conference(1)]);
     }
 }

@@ -13,7 +13,6 @@ pub struct ParsedSdp {
 pub struct ParsedMedia {
     pub kind: String,
     pub port: u16,
-    pub protocol: String,
     pub payload_types: Vec<u8>,
     pub attributes: Vec<(String, Option<String>)>,
 }
@@ -47,12 +46,11 @@ pub fn parse(sdp: &str) -> Result<ParsedSdp> {
                     .and_then(|p| p.split('/').next())
                     .and_then(|p| p.parse().ok())
                     .unwrap_or(0);
-                let protocol = parts.next().unwrap_or_default().to_string();
+                let _protocol = parts.next();
                 let payload_types = parts.filter_map(|p| p.parse().ok()).collect();
                 current = Some(ParsedMedia {
                     kind,
                     port,
-                    protocol,
                     payload_types,
                     attributes: Vec::new(),
                 });
@@ -95,10 +93,6 @@ impl ParsedSdp {
         let (algorithm, value) = raw.split_once(' ')?;
         Some((algorithm.trim().to_string(), value.trim().to_string()))
     }
-
-    pub fn media_by_mid(&self, mid: &str) -> Option<&ParsedMedia> {
-        self.media.iter().find(|m| m.mid() == Some(mid))
-    }
 }
 
 impl ParsedMedia {
@@ -124,12 +118,6 @@ impl ParsedMedia {
         self.attribute("mid")
     }
 
-    pub fn direction(&self) -> Option<&str> {
-        ["sendrecv", "sendonly", "recvonly", "inactive"]
-            .into_iter()
-            .find(|d| self.has_flag(d))
-    }
-
     pub fn ssrcs(&self) -> Vec<u32> {
         let mut out = Vec::new();
         for value in self.attributes_named("ssrc") {
@@ -148,9 +136,8 @@ impl ParsedMedia {
 
     pub fn cname(&self) -> Option<String> {
         self.attributes_named("ssrc").find_map(|value| {
-            let mut parts = value.splitn(2, ' ');
-            let _ssrc = parts.next()?;
-            let rest = parts.next()?;
+            let (_ssrc, rest) = value.split_once(' ')?;
+
             rest.strip_prefix("cname:").map(|c| c.trim().to_string())
         })
     }
@@ -205,14 +192,6 @@ impl ParsedMedia {
             })
             .collect()
     }
-
-    pub fn ice_ufrag(&self) -> Option<&str> {
-        self.attribute("ice-ufrag")
-    }
-
-    pub fn ice_pwd(&self) -> Option<&str> {
-        self.attribute("ice-pwd")
-    }
 }
 
 /// Parses `a=fmtp` parameters (`minptime=10;useinbandfec=1`) into JSON values,
@@ -258,14 +237,17 @@ mod tests {
     #[test]
     fn parses_media_details() {
         let parsed = parse(OFFER).unwrap();
-        assert_eq!(parsed.fingerprint(), Some(("sha-256".into(), "AA:BB".into())));
+        assert_eq!(
+            parsed.fingerprint(),
+            Some(("sha-256".into(), "AA:BB".into()))
+        );
         let media = &parsed.media[0];
         assert_eq!(media.kind, "audio");
         assert_eq!(media.payload_types, vec![100]);
         assert_eq!(media.mid(), Some("0"));
         assert_eq!(media.ssrcs(), vec![12345]);
         assert_eq!(media.cname().as_deref(), Some("talktome"));
-        assert_eq!(media.direction(), Some("sendrecv"));
+        assert_eq!(media.port, 9);
         assert_eq!(
             media.rtpmaps(),
             vec![RtpMap {
@@ -275,10 +257,16 @@ mod tests {
                 channels: Some(2)
             }]
         );
-        assert_eq!(media.fmtp(100).as_deref(), Some("minptime=10;useinbandfec=1"));
-        assert_eq!(media.rtcp_feedback(100), vec![("transport-cc".to_string(), None)]);
+        assert_eq!(
+            media.fmtp(100).as_deref(),
+            Some("minptime=10;useinbandfec=1")
+        );
+        assert_eq!(
+            media.rtcp_feedback(100),
+            vec![("transport-cc".to_string(), None)]
+        );
         assert_eq!(media.extmaps().len(), 2);
-        assert_eq!(media.ice_ufrag(), Some("abc"));
+        assert_eq!(media.attribute("ice-ufrag"), Some("abc"));
         assert!(media.has_flag("rtcp-mux"));
     }
 

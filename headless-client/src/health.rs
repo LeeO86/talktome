@@ -12,7 +12,10 @@ use crate::state::{ConnectionState, Snapshot};
 
 /// Sends READY, periodic WATCHDOG pings and STATUS updates to systemd when
 /// running under it (no-op otherwise).
-pub async fn run_sd_notify(mut snapshots: watch::Receiver<Arc<Snapshot>>, mut shutdown: watch::Receiver<bool>) {
+pub async fn run_sd_notify(
+    mut snapshots: watch::Receiver<Arc<Snapshot>>,
+    mut shutdown: watch::Receiver<bool>,
+) {
     let notify_available = std::env::var_os("NOTIFY_SOCKET").is_some();
     if !notify_available {
         return;
@@ -48,7 +51,11 @@ pub async fn run_sd_notify(mut snapshots: watch::Receiver<Arc<Snapshot>>, mut sh
 }
 
 pub fn status_line(snapshot: &Snapshot) -> String {
-    let mut parts = vec![format!("{} as {}", snapshot.connection.label(), snapshot.user_name)];
+    let mut parts = vec![format!(
+        "{} as {}",
+        snapshot.connection.label(),
+        snapshot.user_name
+    )];
     if snapshot.talking {
         parts.push("talking".into());
     }

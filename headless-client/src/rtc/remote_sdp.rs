@@ -18,14 +18,23 @@ fn preferred_fingerprint(dtls: &DtlsParameters) -> Result<&DtlsFingerprint> {
         .ok_or_else(|| anyhow!("transport has no DTLS fingerprints"))
 }
 
-fn write_session_header(out: &mut String, transport: &TransportInfo, version: u64, mids: &[String]) -> Result<()> {
+fn write_session_header(
+    out: &mut String,
+    transport: &TransportInfo,
+    version: u64,
+    mids: &[String],
+) -> Result<()> {
     let fingerprint = preferred_fingerprint(&transport.dtls_parameters)?;
     let _ = writeln!(out, "v=0\r");
     let _ = writeln!(out, "o=- 2147483648 {version} IN IP4 0.0.0.0\r");
     let _ = writeln!(out, "s=-\r");
     let _ = writeln!(out, "t=0 0\r");
     let _ = writeln!(out, "a=ice-lite\r");
-    let _ = writeln!(out, "a=fingerprint:{} {}\r", fingerprint.algorithm, fingerprint.value);
+    let _ = writeln!(
+        out,
+        "a=fingerprint:{} {}\r",
+        fingerprint.algorithm, fingerprint.value
+    );
     let _ = writeln!(out, "a=msid-semantic: WMS *\r");
     if !mids.is_empty() {
         let _ = writeln!(out, "a=group:BUNDLE {}\r", mids.join(" "));
@@ -34,7 +43,11 @@ fn write_session_header(out: &mut String, transport: &TransportInfo, version: u6
 }
 
 fn write_ice_and_dtls(out: &mut String, transport: &TransportInfo, setup: &str) {
-    let _ = writeln!(out, "a=ice-ufrag:{}\r", transport.ice_parameters.username_fragment);
+    let _ = writeln!(
+        out,
+        "a=ice-ufrag:{}\r",
+        transport.ice_parameters.username_fragment
+    );
     let _ = writeln!(out, "a=ice-pwd:{}\r", transport.ice_parameters.password);
     for candidate in &transport.ice_candidates {
         let mut line = format!(
@@ -59,14 +72,28 @@ fn write_ice_and_dtls(out: &mut String, transport: &TransportInfo, setup: &str) 
 
 /// The answer for the send transport: mirrors the local offer's codec,
 /// payload type and header-extension ids; the client is the DTLS client.
-pub fn build_send_answer(local: &LocalAudioInfo, transport: &TransportInfo, version: u64) -> Result<String> {
+pub fn build_send_answer(
+    local: &LocalAudioInfo,
+    transport: &TransportInfo,
+    version: u64,
+) -> Result<String> {
     let mut out = String::new();
-    write_session_header(&mut out, transport, version, &[local.mid.clone()])?;
+    write_session_header(
+        &mut out,
+        transport,
+        version,
+        std::slice::from_ref(&local.mid),
+    )?;
     let _ = writeln!(out, "m=audio 7 UDP/TLS/RTP/SAVPF {}\r", local.payload_type);
     let _ = writeln!(out, "c=IN IP4 127.0.0.1\r");
     let _ = writeln!(out, "a=rtpmap:{} opus/48000/2\r", local.payload_type);
     if !local.fmtp.is_empty() {
-        let _ = writeln!(out, "a=fmtp:{} {}\r", local.payload_type, format_fmtp(&local.fmtp));
+        let _ = writeln!(
+            out,
+            "a=fmtp:{} {}\r",
+            local.payload_type,
+            format_fmtp(&local.fmtp)
+        );
     }
     for (kind, parameter) in &local.rtcp_feedback {
         match parameter {
@@ -114,16 +141,8 @@ impl RecvRemoteSdp {
         }
     }
 
-    pub fn transport(&self) -> &TransportInfo {
-        &self.transport
-    }
-
     pub fn section_count(&self) -> usize {
         self.sections.len()
-    }
-
-    pub fn active_count(&self) -> usize {
-        self.sections.iter().filter(|s| s.consumer_id.is_some()).count()
     }
 
     /// Adds a consumer and returns the mid assigned to it.
@@ -154,13 +173,6 @@ impl RecvRemoteSdp {
         Some(section.mid.clone())
     }
 
-    pub fn mid_for_consumer(&self, consumer_id: &str) -> Option<&str> {
-        self.sections
-            .iter()
-            .find(|s| s.consumer_id.as_deref() == Some(consumer_id))
-            .map(|s| s.mid.as_str())
-    }
-
     pub fn consumer_for_ssrc(&self, ssrc: u32) -> Option<&str> {
         self.sections.iter().find_map(|s| {
             let rtp = s.rtp.as_ref()?;
@@ -189,7 +201,12 @@ impl RecvRemoteSdp {
     }
 }
 
-fn write_active_section(out: &mut String, transport: &TransportInfo, section: &RecvSection, rtp: &RtpParameters) -> Result<()> {
+fn write_active_section(
+    out: &mut String,
+    transport: &TransportInfo,
+    section: &RecvSection,
+    rtp: &RtpParameters,
+) -> Result<()> {
     let codec = rtp
         .codecs
         .iter()
@@ -216,7 +233,12 @@ fn write_active_section(out: &mut String, transport: &TransportInfo, section: &R
         codec.channels.unwrap_or(2)
     );
     if !codec.parameters.is_empty() {
-        let _ = writeln!(out, "a=fmtp:{} {}\r", codec.payload_type, format_fmtp(&codec.parameters));
+        let _ = writeln!(
+            out,
+            "a=fmtp:{} {}\r",
+            codec.payload_type,
+            format_fmtp(&codec.parameters)
+        );
     }
     for fb in &codec.rtcp_feedback {
         match fb.parameter.as_deref() {
@@ -300,7 +322,8 @@ mod tests {
         assert!(sdp.contains("a=setup:passive\r\n"));
         assert!(sdp.contains("a=recvonly\r\n"));
         assert!(sdp.contains("a=ice-ufrag:ufrag\r\n"));
-        assert!(sdp.contains("a=candidate:udpcandidate 1 udp 1076302079 192.168.1.10 40000 typ host\r\n"));
+        assert!(sdp
+            .contains("a=candidate:udpcandidate 1 udp 1076302079 192.168.1.10 40000 typ host\r\n"));
         assert!(sdp.contains("a=candidate:tcpcandidate 1 tcp 1076302078 192.168.1.10 40001 typ host tcptype passive\r\n"));
         assert!(sdp.contains("a=end-of-candidates\r\n"));
         assert!(!sdp.contains("sha-1"));
@@ -330,7 +353,10 @@ mod tests {
 
         let sdp = remote.offer_sdp().unwrap();
         assert!(sdp.contains("a=group:BUNDLE 0 1\r\n"));
-        assert_eq!(sdp.matches("m=audio 7 UDP/TLS/RTP/SAVPF 100\r\n").count(), 2);
+        assert_eq!(
+            sdp.matches("m=audio 7 UDP/TLS/RTP/SAVPF 100\r\n").count(),
+            2
+        );
         assert!(sdp.contains("a=ssrc:5555 cname:abc\r\n"));
         assert!(sdp.contains("a=setup:actpass\r\n"));
         assert!(sdp.contains("a=sendonly\r\n"));
@@ -338,7 +364,6 @@ mod tests {
         assert_eq!(remote.close_consumer("c-a"), Some("0".to_string()));
         let sdp = remote.offer_sdp().unwrap();
         assert!(sdp.contains("a=inactive\r\n"));
-        assert_eq!(remote.active_count(), 1);
         assert_eq!(remote.section_count(), 2);
         assert_eq!(remote.consumer_for_ssrc(5555), None);
     }

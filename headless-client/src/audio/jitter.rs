@@ -54,6 +54,7 @@ impl StreamBuffer {
         self.last_packet
     }
 
+    #[cfg(test)]
     pub fn buffered_ms(&self) -> u32 {
         (self.pcm.len() * 1000 / SAMPLE_RATE as usize) as u32
     }
@@ -82,7 +83,9 @@ impl StreamBuffer {
                 for index in 0..conceal {
                     let is_last = index + 1 == gap;
                     let pcm = if is_last {
-                        self.decoder.decode_fec(payload, self.frame_samples)?.to_vec()
+                        self.decoder
+                            .decode_fec(payload, self.frame_samples)?
+                            .to_vec()
                     } else {
                         self.decoder.conceal(self.frame_samples)?.to_vec()
                     };

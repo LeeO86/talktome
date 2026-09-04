@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use url::Url;
@@ -13,10 +13,6 @@ use url::Url;
 pub struct LoginUser {
     pub id: i64,
     pub name: String,
-    #[serde(default)]
-    pub is_admin: bool,
-    #[serde(default)]
-    pub is_superadmin: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,7 +80,9 @@ impl ServerApi {
     }
 
     fn url(&self, path: &str) -> Result<Url> {
-        self.base.join(path).with_context(|| format!("building URL for {path}"))
+        self.base
+            .join(path)
+            .with_context(|| format!("building URL for {path}"))
     }
 
     /// `POST /api/v1/companion/auth/login` -> user-scoped token.
@@ -109,7 +107,12 @@ impl ServerApi {
     }
 
     /// `GET /users/:id/targets?includeMemberships=1[&productionId=..]`.
-    pub async fn targets(&self, token: &str, user_id: i64, production_id: Option<&str>) -> Result<Vec<TargetEntry>> {
+    pub async fn targets(
+        &self,
+        token: &str,
+        user_id: i64,
+        production_id: Option<&str>,
+    ) -> Result<Vec<TargetEntry>> {
         let mut url = self.url(&format!("/users/{user_id}/targets"))?;
         {
             let mut query = url.query_pairs_mut();
@@ -128,27 +131,12 @@ impl ServerApi {
         let status = response.status();
         if !status.is_success() {
             let body: Value = response.json().await.unwrap_or(Value::Null);
-            let message = body.get("error").and_then(Value::as_str).unwrap_or("request rejected");
+            let message = body
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("request rejected");
             bail!("loading targets failed ({status}): {message}");
         }
         response.json().await.context("parsing targets response")
-    }
-
-    /// `GET /users/:id/productions`.
-    pub async fn productions(&self, token: &str, user_id: i64) -> Result<Vec<Production>> {
-        let response = self
-            .client
-            .get(self.url(&format!("/users/{user_id}/productions"))?)
-            .bearer_auth(token)
-            .send()
-            .await
-            .context("productions request failed")?;
-        if !response.status().is_success() {
-            return Ok(Vec::new());
-        }
-        response
-            .json()
-            .await
-            .map_err(|e| anyhow!("parsing productions response: {e}"))
     }
 }

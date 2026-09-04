@@ -32,7 +32,14 @@ fn git(args: &[&str]) -> Option<String> {
 }
 
 fn git_describe_version() -> Option<String> {
-    let base_tag = git(&["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0", "HEAD"])?;
+    let base_tag = git(&[
+        "describe",
+        "--tags",
+        "--match",
+        "v[0-9]*",
+        "--abbrev=0",
+        "HEAD",
+    ])?;
     let base = base_tag.trim_start_matches('v').to_string();
     let distance: u64 = git(&["rev-list", "--count", &format!("{base_tag}..HEAD")])?
         .parse()

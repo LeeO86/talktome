@@ -13,8 +13,9 @@ pub struct OpusEncoder {
 
 impl OpusEncoder {
     pub fn new(frame_ms: u32, bitrate: i32, fec: bool) -> Result<Self> {
-        let mut inner = opus::Encoder::new(SAMPLE_RATE, opus::Channels::Mono, opus::Application::Voip)
-            .context("creating opus encoder")?;
+        let mut inner =
+            opus::Encoder::new(SAMPLE_RATE, opus::Channels::Mono, opus::Application::Voip)
+                .context("creating opus encoder")?;
         inner
             .set_bitrate(opus::Bitrate::Bits(bitrate))
             .context("setting opus bitrate")?;
@@ -53,7 +54,8 @@ pub struct OpusDecoder {
 impl OpusDecoder {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            inner: opus::Decoder::new(SAMPLE_RATE, opus::Channels::Mono).context("creating opus decoder")?,
+            inner: opus::Decoder::new(SAMPLE_RATE, opus::Channels::Mono)
+                .context("creating opus decoder")?,
             // 120 ms is the largest Opus frame.
             buffer: vec![0f32; (SAMPLE_RATE as usize * 120) / 1000],
         })

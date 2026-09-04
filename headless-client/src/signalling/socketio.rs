@@ -83,7 +83,8 @@ pub fn websocket_url(base: &Url) -> Result<Url> {
         "http" | "ws" => "ws",
         other => bail!("unsupported URL scheme {other:?}"),
     };
-    url.set_scheme(scheme).map_err(|_| anyhow!("cannot set URL scheme"))?;
+    url.set_scheme(scheme)
+        .map_err(|_| anyhow!("cannot set URL scheme"))?;
     url.set_path("/socket.io/");
     url.set_query(Some("EIO=4&transport=websocket"));
     url.set_fragment(None);
@@ -207,9 +208,8 @@ impl SocketClient {
     }
 }
 
-type WsStream = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn run_connection(
     stream: WsStream,
@@ -478,8 +478,14 @@ mod tests {
     #[test]
     fn websocket_url_maps_schemes() {
         let url = websocket_url(&Url::parse("https://talktome.local:8443/").unwrap()).unwrap();
-        assert_eq!(url.as_str(), "wss://talktome.local:8443/socket.io/?EIO=4&transport=websocket");
+        assert_eq!(
+            url.as_str(),
+            "wss://talktome.local:8443/socket.io/?EIO=4&transport=websocket"
+        );
         let url = websocket_url(&Url::parse("http://127.0.0.1:8080").unwrap()).unwrap();
-        assert_eq!(url.as_str(), "ws://127.0.0.1:8080/socket.io/?EIO=4&transport=websocket");
+        assert_eq!(
+            url.as_str(),
+            "ws://127.0.0.1:8080/socket.io/?EIO=4&transport=websocket"
+        );
     }
 }

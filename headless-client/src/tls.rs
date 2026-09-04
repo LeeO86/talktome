@@ -51,7 +51,10 @@ pub fn build_client_config(tls: &TlsConfig) -> Result<Arc<ClientConfig>> {
         .context("rustls protocol configuration")?;
 
     if tls.insecure {
-        tracing::warn!(event = "tls-insecure", "TLS certificate verification is disabled");
+        tracing::warn!(
+            event = "tls-insecure",
+            "TLS certificate verification is disabled"
+        );
         let config = builder
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(InsecureVerifier { provider }))
@@ -81,7 +84,8 @@ pub fn build_client_config(tls: &TlsConfig) -> Result<Arc<ClientConfig>> {
         for cert in CertificateDer::pem_file_iter(path)
             .with_context(|| format!("cannot read tls.ca_file {}", path.display()))?
         {
-            let cert = cert.with_context(|| format!("invalid certificate in {}", path.display()))?;
+            let cert =
+                cert.with_context(|| format!("invalid certificate in {}", path.display()))?;
             roots
                 .add(cert)
                 .with_context(|| format!("cannot add certificate from {}", path.display()))?;
@@ -118,7 +122,12 @@ impl ServerCertVerifier for InsecureVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -127,11 +136,18 @@ impl ServerCertVerifier for InsecureVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -168,7 +184,12 @@ impl ServerCertVerifier for FingerprintVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -177,11 +198,18 @@ impl ServerCertVerifier for FingerprintVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 

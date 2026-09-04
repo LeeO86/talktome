@@ -22,7 +22,10 @@ use tokio::sync::watch;
 use crate::config::{StreamDeckConfig, TalkConfig};
 use crate::state::{Bus, Command, InputSource, Snapshot, TargetRef};
 use crate::talk::TargetKey;
-use layout::{encoder_targets, page_count, palette, Appearance, DeckState, Geometry, KeySpec, LayoutOptions, Role};
+use layout::{
+    encoder_targets, page_count, palette, Appearance, DeckState, Geometry, KeySpec, LayoutOptions,
+    Role,
+};
 use render::{Renderer, StripSegment};
 
 pub const MOCK_ENV: &str = "TALKTOME_MOCK_STREAMDECK";
@@ -43,20 +46,26 @@ fn geometry_for(kind: Kind) -> Geometry {
 }
 
 fn kind_from_name(name: &str) -> Option<Kind> {
-    Some(match name.to_ascii_lowercase().replace(['-', '_', ' '], "").as_str() {
-        "original" => Kind::Original,
-        "originalv2" | "v2" => Kind::OriginalV2,
-        "mini" => Kind::Mini,
-        "minimk2" => Kind::MiniMk2,
-        "xl" => Kind::Xl,
-        "xlv2" => Kind::XlV2,
-        "mk2" => Kind::Mk2,
-        "neo" => Kind::Neo,
-        "pedal" => Kind::Pedal,
-        "plus" => Kind::Plus,
-        "plusxl" => Kind::PlusXl,
-        _ => return None,
-    })
+    Some(
+        match name
+            .to_ascii_lowercase()
+            .replace(['-', '_', ' '], "")
+            .as_str()
+        {
+            "original" => Kind::Original,
+            "originalv2" | "v2" => Kind::OriginalV2,
+            "mini" => Kind::Mini,
+            "minimk2" => Kind::MiniMk2,
+            "xl" => Kind::Xl,
+            "xlv2" => Kind::XlV2,
+            "mk2" => Kind::Mk2,
+            "neo" => Kind::Neo,
+            "pedal" => Kind::Pedal,
+            "plus" => Kind::Plus,
+            "plusxl" => Kind::PlusXl,
+            _ => return None,
+        },
+    )
 }
 
 /// A connected deck, real or mock.
@@ -75,7 +84,10 @@ impl Device {
 
     async fn set_brightness(&self, percent: u8) -> Result<()> {
         match self {
-            Device::Real(deck) => deck.set_brightness(percent).await.map_err(|e| anyhow!("{e}")),
+            Device::Real(deck) => deck
+                .set_brightness(percent)
+                .await
+                .map_err(|e| anyhow!("{e}")),
             Device::Mock(_) => Ok(()),
         }
     }
@@ -93,8 +105,11 @@ impl Device {
     async fn set_lcd(&self, image: RgbImage) -> Result<()> {
         match self {
             Device::Real(deck) => {
-                let Some(format) = deck.kind().lcd_image_format() else { return Ok(()) };
-                let data = convert_image_with_format(format, DynamicImage::ImageRgb8(image)).map_err(|e| anyhow!("{e}"))?;
+                let Some(format) = deck.kind().lcd_image_format() else {
+                    return Ok(());
+                };
+                let data = convert_image_with_format(format, DynamicImage::ImageRgb8(image))
+                    .map_err(|e| anyhow!("{e}"))?;
                 deck.write_lcd_fill(&data).await.map_err(|e| anyhow!("{e}"))
             }
             Device::Mock(mock) => mock.write_lcd(&image),
@@ -111,14 +126,19 @@ impl Device {
     async fn clear(&self) -> Result<()> {
         match self {
             Device::Real(deck) => {
-                deck.clear_all_button_images().await.map_err(|e| anyhow!("{e}"))?;
+                deck.clear_all_button_images()
+                    .await
+                    .map_err(|e| anyhow!("{e}"))?;
                 deck.flush().await.map_err(|e| anyhow!("{e}"))
             }
             Device::Mock(_) => Ok(()),
         }
     }
 
-    async fn read(&self, reader: &Option<Arc<elgato_streamdeck::asynchronous::AsyncDeviceStateReader>>) -> Result<Vec<DeviceStateUpdate>> {
+    async fn read(
+        &self,
+        reader: &Option<Arc<elgato_streamdeck::asynchronous::AsyncDeviceStateReader>>,
+    ) -> Result<Vec<DeviceStateUpdate>> {
         match self {
             Device::Real(_) => {
                 let reader = reader.as_ref().ok_or_else(|| anyhow!("no reader"))?;
@@ -169,13 +189,22 @@ impl MockDeck {
 
     /// Composes all keys into `deck.png` in the device's row/column layout.
     fn compose(&self) -> Result<()> {
-        let keys = self.keys.lock().map_err(|_| anyhow!("mock keys poisoned"))?;
-        let Some(sample) = keys.iter().flatten().next() else { return Ok(()) };
+        let keys = self
+            .keys
+            .lock()
+            .map_err(|_| anyhow!("mock keys poisoned"))?;
+        let Some(sample) = keys.iter().flatten().next() else {
+            return Ok(());
+        };
         let (kw, kh) = sample.dimensions();
         let gap = 8u32;
         let cols = self.kind.column_count() as u32;
         let rows = self.kind.row_count() as u32;
-        let mut canvas = RgbImage::from_pixel(cols * (kw + gap) + gap, rows * (kh + gap) + gap, image::Rgb([12, 12, 14]));
+        let mut canvas = RgbImage::from_pixel(
+            cols * (kw + gap) + gap,
+            rows * (kh + gap) + gap,
+            image::Rgb([12, 12, 14]),
+        );
         for (index, key) in keys.iter().enumerate() {
             let Some(key) = key else { continue };
             let col = index as u32 % cols;
@@ -203,26 +232,45 @@ impl MockDeck {
 
     async fn read(&self) -> Result<Vec<DeviceStateUpdate>> {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let Ok(text) = std::fs::read_to_string(&self.inputs) else { return Ok(Vec::new()) };
-        let mut offset = self.offset.lock().map_err(|_| anyhow!("mock offset poisoned"))?;
+        let Ok(text) = std::fs::read_to_string(&self.inputs) else {
+            return Ok(Vec::new());
+        };
+        let mut offset = self
+            .offset
+            .lock()
+            .map_err(|_| anyhow!("mock offset poisoned"))?;
         if (text.len() as u64) < *offset {
             *offset = 0;
         }
         let new_text = &text[*offset as usize..];
-        let Some(last_newline) = new_text.rfind('\n') else { return Ok(Vec::new()) };
+        let Some(last_newline) = new_text.rfind('\n') else {
+            return Ok(Vec::new());
+        };
         let mut updates = Vec::new();
         for line in new_text[..last_newline].lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
             let update = match parts.as_slice() {
                 ["down", k] => k.parse().ok().map(DeviceStateUpdate::ButtonDown),
                 ["up", k] => k.parse().ok().map(DeviceStateUpdate::ButtonUp),
-                ["twist", e, d] => e.parse().ok().zip(d.parse().ok()).map(|(e, d)| DeviceStateUpdate::EncoderTwist(e, d)),
+                ["twist", e, d] => e
+                    .parse()
+                    .ok()
+                    .zip(d.parse().ok())
+                    .map(|(e, d)| DeviceStateUpdate::EncoderTwist(e, d)),
                 ["encoder-down", e] => e.parse().ok().map(DeviceStateUpdate::EncoderDown),
                 ["encoder-up", e] => e.parse().ok().map(DeviceStateUpdate::EncoderUp),
                 ["touch", p] => p.parse().ok().map(DeviceStateUpdate::TouchPointDown),
-                ["swipe", "left"] => Some(DeviceStateUpdate::TouchScreenSwipe((600, 50), (100, 50))),
-                ["swipe", "right"] => Some(DeviceStateUpdate::TouchScreenSwipe((100, 50), (600, 50))),
-                ["tap", x, y] => x.parse().ok().zip(y.parse().ok()).map(|(x, y)| DeviceStateUpdate::TouchScreenPress(x, y)),
+                ["swipe", "left"] => {
+                    Some(DeviceStateUpdate::TouchScreenSwipe((600, 50), (100, 50)))
+                }
+                ["swipe", "right"] => {
+                    Some(DeviceStateUpdate::TouchScreenSwipe((100, 50), (600, 50)))
+                }
+                ["tap", x, y] => x
+                    .parse()
+                    .ok()
+                    .zip(y.parse().ok())
+                    .map(|(x, y)| DeviceStateUpdate::TouchScreenPress(x, y)),
                 _ => None,
             };
             match update {
@@ -235,8 +283,15 @@ impl MockDeck {
     }
 }
 
-pub async fn run(config: StreamDeckConfig, talk: TalkConfig, bus: Bus, mut shutdown: watch::Receiver<bool>) {
-    let mock_kind = std::env::var(MOCK_ENV).ok().and_then(|name| kind_from_name(&name));
+pub async fn run(
+    config: StreamDeckConfig,
+    talk: TalkConfig,
+    bus: Bus,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mock_kind = std::env::var(MOCK_ENV)
+        .ok()
+        .and_then(|name| kind_from_name(&name));
     let renderer = Renderer::load(&config.font_path);
     let mut warned = false;
     loop {
@@ -252,7 +307,8 @@ pub async fn run(config: StreamDeckConfig, talk: TalkConfig, bus: Bus, mut shutd
                 warned = false;
                 let kind = device.kind();
                 tracing::info!(event = "streamdeck-connected", kind = ?kind, mock = mock_kind.is_some());
-                let outcome = run_device(device, &config, &talk, &renderer, &bus, &mut shutdown).await;
+                let outcome =
+                    run_device(device, &config, &talk, &renderer, &bus, &mut shutdown).await;
                 if *shutdown.borrow() {
                     return;
                 }
@@ -328,7 +384,9 @@ async fn run_device(
         let (w, h) = kind.key_image_format().size;
         (w as u32, h as u32)
     };
-    let lcd_size = kind.lcd_image_format().map(|f| (f.size.0 as u32, f.size.1 as u32));
+    let lcd_size = kind
+        .lcd_image_format()
+        .map(|f| (f.size.0 as u32, f.size.1 as u32));
     let options = LayoutOptions {
         pedal_target: config.pedal_target.as_deref().and_then(TargetKey::parse),
     };
@@ -350,9 +408,28 @@ async fn run_device(
     let volume_timeout = Duration::from_secs(config.volume_layer_timeout_s.max(1));
     let source = |key: u8| InputSource::StreamDeck(key);
 
-    render_all(&device, &geometry, renderer, key_size, &keys, &state, &mut rendered).await?;
+    render_all(
+        &device,
+        &geometry,
+        renderer,
+        key_size,
+        &keys,
+        &state,
+        &mut rendered,
+    )
+    .await?;
     if let Some(size) = lcd_size {
-        render_lcd(&device, kind, renderer, size, &geometry, &state, &snapshot, &mut lcd_rendered).await?;
+        render_lcd(
+            &device,
+            kind,
+            renderer,
+            size,
+            &geometry,
+            &state,
+            &snapshot,
+            &mut lcd_rendered,
+        )
+        .await?;
     }
 
     loop {
@@ -510,9 +587,28 @@ async fn run_device(
         if relayout {
             keys = layout::layout(&geometry, &snapshot, &state, &options);
         }
-        render_all(&device, &geometry, renderer, key_size, &keys, &state, &mut rendered).await?;
+        render_all(
+            &device,
+            &geometry,
+            renderer,
+            key_size,
+            &keys,
+            &state,
+            &mut rendered,
+        )
+        .await?;
         if let Some(size) = lcd_size {
-            render_lcd(&device, kind, renderer, size, &geometry, &state, &snapshot, &mut lcd_rendered).await?;
+            render_lcd(
+                &device,
+                kind,
+                renderer,
+                size,
+                &geometry,
+                &state,
+                &snapshot,
+                &mut lcd_rendered,
+            )
+            .await?;
         }
     }
 }
@@ -535,14 +631,19 @@ async fn render_all(
         let key = index as u8;
         let phase = spec.appearance.blink.is_some() && state.blink_phase;
         let needs = match rendered.get(&key) {
-            Some((previous, previous_phase)) => *previous != spec.appearance || *previous_phase != phase,
+            Some((previous, previous_phase)) => {
+                *previous != spec.appearance || *previous_phase != phase
+            }
             None => true,
         };
         if !needs {
             continue;
         }
         let image = renderer.key(&spec.appearance, key_size, phase);
-        device.set_key(key, image).await.context("writing key image")?;
+        device
+            .set_key(key, image)
+            .await
+            .context("writing key image")?;
         rendered.insert(key, (spec.appearance.clone(), phase));
         changed = true;
     }
@@ -552,6 +653,7 @@ async fn render_all(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn render_lcd(
     device: &Device,
     kind: Kind,
@@ -589,10 +691,22 @@ async fn render_lcd(
     } else {
         // Neo: a single status segment.
         vec![StripSegment {
-            title: format!("{} · {}", snapshot.user_name, if snapshot.on_air { "ON AIR" } else { snapshot.connection.label() }),
+            title: format!(
+                "{} · {}",
+                snapshot.user_name,
+                if snapshot.on_air {
+                    "ON AIR"
+                } else {
+                    snapshot.connection.label()
+                }
+            ),
             volume: if snapshot.talking { 1.0 } else { 0.0 },
             muted: false,
-            background: if snapshot.on_air { palette::ON_AIR } else { palette::STATUS_OK },
+            background: if snapshot.on_air {
+                palette::ON_AIR
+            } else {
+                palette::STATUS_OK
+            },
         }]
     };
     if rendered.as_ref() == Some(&segments) {

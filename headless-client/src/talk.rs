@@ -64,7 +64,7 @@ impl TargetKey {
     }
 
     /// The `{ type, id }` object used in `talk-targets-updated` / `ptt-state`.
-    pub fn to_talk_target(&self) -> Value {
+    pub fn to_talk_target(self) -> Value {
         json!({ "type": self.kind(), "id": self.id() })
     }
 }
@@ -181,7 +181,12 @@ impl TalkModel {
 
     /// Returns `None` when the target cannot be talked to (unknown reply
     /// target, feed) so the caller can flash an error.
-    pub fn press(&mut self, source: InputSource, target: TargetRef, now: Instant) -> Option<TalkChange> {
+    pub fn press(
+        &mut self,
+        source: InputSource,
+        target: TargetRef,
+        now: Instant,
+    ) -> Option<TalkChange> {
         let key = self.resolve(target)?;
         let unlocked_on_press = self.locked.remove(&key);
         self.held.insert(
@@ -197,10 +202,17 @@ impl TalkModel {
         Some(self.change(unlocked_on_press.then_some((key, false))))
     }
 
-    pub fn release(&mut self, source: InputSource, target: TargetRef, now: Instant) -> Option<TalkChange> {
+    pub fn release(
+        &mut self,
+        source: InputSource,
+        target: TargetRef,
+        now: Instant,
+    ) -> Option<TalkChange> {
         let (key, held) = self.held.remove(&(source, target))?;
         let mut toggled = None;
-        if now.duration_since(held.since) < Duration::from_millis(self.tap_ms) && !held.unlocked_on_press {
+        if now.duration_since(held.since) < Duration::from_millis(self.tap_ms)
+            && !held.unlocked_on_press
+        {
             self.lock(key);
             toggled = Some((key, true));
         }
@@ -244,17 +256,6 @@ impl TalkModel {
         }
         self.vox_active = active;
         Some(self.change(None))
-    }
-
-    /// Releases every key held by a given source kind (e.g. when the deck
-    /// disconnects) and reports the resulting change if anything was held.
-    pub fn release_all_from<F>(&mut self, mut matches: F) -> Option<TalkChange>
-    where
-        F: FnMut(&InputSource) -> bool,
-    {
-        let before = self.held.len();
-        self.held.retain(|(source, _), _| !matches(source));
-        (self.held.len() != before).then(|| self.change(None))
     }
 }
 
@@ -351,7 +352,9 @@ impl AudioState {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let Some(path) = &self.path else { return Ok(()) };
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -388,7 +391,11 @@ mod tests {
 
         // Long hold: release after 600 ms stops talking.
         let change = model
-            .release(deck(1), TargetRef::Key(conf), t0 + Duration::from_millis(600))
+            .release(
+                deck(1),
+                TargetRef::Key(conf),
+                t0 + Duration::from_millis(600),
+            )
             .unwrap();
         assert!(!change.talking);
         assert!(!change.lock_active);
@@ -396,7 +403,11 @@ mod tests {
         // Tap: release within 250 ms locks and keeps talking.
         model.press(deck(1), TargetRef::Key(conf), t0).unwrap();
         let change = model
-            .release(deck(1), TargetRef::Key(conf), t0 + Duration::from_millis(100))
+            .release(
+                deck(1),
+                TargetRef::Key(conf),
+                t0 + Duration::from_millis(100),
+            )
             .unwrap();
         assert!(change.talking);
         assert!(change.lock_active);
@@ -408,7 +419,11 @@ mod tests {
         assert!(change.talking, "still held");
         assert_eq!(change.lock_toggled, Some((conf, false)));
         let change = model
-            .release(deck(1), TargetRef::Key(conf), t0 + Duration::from_millis(50))
+            .release(
+                deck(1),
+                TargetRef::Key(conf),
+                t0 + Duration::from_millis(50),
+            )
             .unwrap();
         assert!(!change.talking);
         assert!(!model.is_locked(conf));
@@ -434,9 +449,13 @@ mod tests {
     #[test]
     fn reply_and_feeds() {
         let mut model = TalkModel::new(250, false);
-        assert!(model.press(deck(0), TargetRef::Reply, Instant::now()).is_none());
+        assert!(model
+            .press(deck(0), TargetRef::Reply, Instant::now())
+            .is_none());
         model.set_reply_target(Some(TargetKey::User(7)));
-        let change = model.press(deck(0), TargetRef::Reply, Instant::now()).unwrap();
+        let change = model
+            .press(deck(0), TargetRef::Reply, Instant::now())
+            .unwrap();
         assert_eq!(change.targets, vec![TargetKey::User(7)]);
         assert!(model
             .press(deck(2), TargetRef::Key(TargetKey::Feed(1)), Instant::now())
@@ -450,13 +469,23 @@ mod tests {
         let now = Instant::now();
         model.press(deck(1), TargetRef::Key(conf), now).unwrap();
         model
-            .press(InputSource::Companion("k".into()), TargetRef::Key(conf), now)
+            .press(
+                InputSource::Companion("k".into()),
+                TargetRef::Key(conf),
+                now,
+            )
             .unwrap();
         let change = model
-            .release(InputSource::Companion("k".into()), TargetRef::Key(conf), now + Duration::from_secs(1))
+            .release(
+                InputSource::Companion("k".into()),
+                TargetRef::Key(conf),
+                now + Duration::from_secs(1),
+            )
             .unwrap();
         assert!(change.talking, "deck still holds the key");
-        let change = model.release_all_from(|s| matches!(s, InputSource::StreamDeck(_))).unwrap();
+        let change = model
+            .release(deck(1), TargetRef::Key(conf), now + Duration::from_secs(2))
+            .unwrap();
         assert!(!change.talking);
 
         model.set_vox_target(Some(TargetKey::User(5)));
@@ -479,7 +508,13 @@ mod tests {
         state.save().unwrap();
 
         let reloaded = AudioState::load(dir.path(), 0.5);
-        assert_eq!(reloaded.level(key), AudioLevel { volume: 1.0, muted: true });
+        assert_eq!(
+            reloaded.level(key),
+            AudioLevel {
+                volume: 1.0,
+                muted: true
+            }
+        );
         assert_eq!(reloaded.level(TargetKey::User(1)).volume, 0.5);
         let entries = reloaded.snapshot_entries([key].iter());
         assert_eq!(entries[0]["targetType"], "feed");

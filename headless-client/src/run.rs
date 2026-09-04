@@ -26,14 +26,24 @@ pub async fn run(config: Config) -> Result<()> {
         config.audio.jitter_min_ms,
         config.audio.jitter_max_ms,
     )));
-    let frame_samples = (crate::audio::codec::SAMPLE_RATE * config.audio.profile.frame_ms() / 1000) as usize;
+    let frame_samples =
+        (crate::audio::codec::SAMPLE_RATE * config.audio.profile.frame_ms() / 1000) as usize;
     let (frames_tx, frames_rx) = mpsc::channel(64);
-    let audio_io = AudioIo::start(config.audio.clone(), frame_samples, mixer.clone(), frames_tx);
+    let audio_io = AudioIo::start(
+        config.audio.clone(),
+        frame_samples,
+        mixer.clone(),
+        frames_tx,
+    );
 
-    let (_cmd_tx, cmd_rx, snapshot_tx, bus) = state::channels(Snapshot::initial(&config.instance, &config.user.name));
+    let (_cmd_tx, cmd_rx, snapshot_tx, bus) =
+        state::channels(Snapshot::initial(&config.instance, &config.user.name));
 
     let mut tasks = tokio::task::JoinSet::new();
-    tasks.spawn(crate::health::run_sd_notify(bus.snapshots.clone(), shutdown_rx.clone()));
+    tasks.spawn(crate::health::run_sd_notify(
+        bus.snapshots.clone(),
+        shutdown_rx.clone(),
+    ));
     if let Some(port) = config.health.port {
         let bind = config.health.bind.clone();
         let snapshots = bus.snapshots.clone();
@@ -67,13 +77,14 @@ pub async fn run(config: Config) -> Result<()> {
 
 fn spawn_signal_handler(shutdown: watch::Sender<bool>) {
     tokio::spawn(async move {
-        let mut terminate = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(signal) => signal,
-            Err(error) => {
-                tracing::warn!(event = "signal-handler-failed", error = %error);
-                return;
-            }
-        };
+        let mut terminate =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(error) => {
+                    tracing::warn!(event = "signal-handler-failed", error = %error);
+                    return;
+                }
+            };
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = terminate.recv() => {}

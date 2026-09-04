@@ -32,11 +32,16 @@ pub struct LocalAudioInfo {
 }
 
 pub fn local_audio_info(media: &ParsedMedia) -> Result<LocalAudioInfo> {
+    if media.port == 0 {
+        return Err(anyhow!("local audio section is rejected (port 0)"));
+    }
     let opus = media
         .rtpmaps()
         .into_iter()
-        .find(|m| m.encoding.eq_ignore_ascii_case("opus"))
-        .ok_or_else(|| anyhow!("local SDP has no opus rtpmap"))?;
+        .find(|m| {
+            m.encoding.eq_ignore_ascii_case("opus") && media.payload_types.contains(&m.payload_type)
+        })
+        .ok_or_else(|| anyhow!("local SDP has no opus payload type in its m= line"))?;
     let ssrc = media
         .ssrcs()
         .first()
@@ -60,7 +65,10 @@ pub fn local_audio_info(media: &ParsedMedia) -> Result<LocalAudioInfo> {
 
 /// Builds the `rtpParameters` for `produce` from the local offer and the
 /// router's capabilities (used to validate URIs and feedback types).
-pub fn sending_rtp_parameters(local: &LocalAudioInfo, router: &RtpCapabilities) -> Result<RtpParameters> {
+pub fn sending_rtp_parameters(
+    local: &LocalAudioInfo,
+    router: &RtpCapabilities,
+) -> Result<RtpParameters> {
     let router_opus = router
         .opus()
         .ok_or_else(|| anyhow!("router does not support audio/opus"))?;
@@ -80,7 +88,8 @@ pub fn sending_rtp_parameters(local: &LocalAudioInfo, router: &RtpCapabilities) 
         .iter()
         .filter(|fb| {
             local.rtcp_feedback.iter().any(|(kind, parameter)| {
-                kind == &fb.kind && parameter.as_deref().unwrap_or("") == fb.parameter.as_deref().unwrap_or("")
+                kind == &fb.kind
+                    && parameter.as_deref().unwrap_or("") == fb.parameter.as_deref().unwrap_or("")
             })
         })
         .cloned()
@@ -90,10 +99,11 @@ pub fn sending_rtp_parameters(local: &LocalAudioInfo, router: &RtpCapabilities) 
         .extensions
         .iter()
         .filter(|(_, uri)| {
-            router
-                .header_extensions
-                .iter()
-                .any(|ext| ext.kind == "audio" && ext.uri == *uri && ext.direction.as_deref() != Some("recvonly"))
+            router.header_extensions.iter().any(|ext| {
+                ext.kind == "audio"
+                    && ext.uri == *uri
+                    && ext.direction.as_deref() != Some("recvonly")
+            })
         })
         .map(|(id, uri)| RtpHeaderExtensionParameters {
             uri: uri.clone(),
@@ -189,7 +199,11 @@ mod tests {
         assert_eq!(params.codecs[0].rtcp_feedback[0].kind, "transport-cc");
         assert_eq!(params.encodings[0].ssrc, Some(777));
         // transport-cc extension is recvonly on the router -> not sent.
-        let uris: Vec<&str> = params.header_extensions.iter().map(|e| e.uri.as_str()).collect();
+        let uris: Vec<&str> = params
+            .header_extensions
+            .iter()
+            .map(|e| e.uri.as_str())
+            .collect();
         assert_eq!(
             uris,
             vec![
@@ -206,7 +220,11 @@ mod tests {
         let caps = receiving_rtp_capabilities(&router_caps()).unwrap();
         assert_eq!(caps.codecs.len(), 1);
         assert_eq!(caps.codecs[0].preferred_payload_type, Some(100));
-        let ids: Vec<u16> = caps.header_extensions.iter().map(|e| e.preferred_id).collect();
+        let ids: Vec<u16> = caps
+            .header_extensions
+            .iter()
+            .map(|e| e.preferred_id)
+            .collect();
         assert_eq!(ids, vec![1, 10, 5]);
     }
 }

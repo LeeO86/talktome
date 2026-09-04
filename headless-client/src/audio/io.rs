@@ -59,7 +59,9 @@ impl AudioIo {
         let thread_stop = stop.clone();
         let thread = thread::Builder::new()
             .name("talktome-audio".into())
-            .spawn(move || run_supervisor(config, frame_samples, mixer, frames, status_tx, thread_stop))
+            .spawn(move || {
+                run_supervisor(config, frame_samples, mixer, frames, status_tx, thread_stop)
+            })
             .expect("spawning audio thread");
         Self {
             stop,
@@ -86,7 +88,8 @@ fn tone_frequency(device: &Option<String>) -> Option<f32> {
     if name == "tone" {
         return Some(440.0);
     }
-    name.strip_prefix("tone:").and_then(|hz| hz.trim().parse().ok())
+    name.strip_prefix("tone:")
+        .and_then(|hz| hz.trim().parse().ok())
 }
 
 /// `wav:<path>` writes the mixed output to a WAV file instead of a device.
@@ -185,7 +188,9 @@ fn run_supervisor(
     if let Some(frequency) = tone_frequency(&config.input_device) {
         tracing::info!(event = "audio-capture-open", device = "tone", frequency);
         let (frames, stop) = (frames.clone(), stop.clone());
-        virtual_threads.push(thread::spawn(move || run_tone_generator(frequency, frame_samples, gain, frames, stop)));
+        virtual_threads.push(thread::spawn(move || {
+            run_tone_generator(frequency, frame_samples, gain, frames, stop)
+        }));
         capture_wanted = false;
     }
     if let Some(path) = wav_sink_path(&config.output_device) {
@@ -198,8 +203,10 @@ fn run_supervisor(
         let _ = status_tx.send(AudioStatus {
             capture_ok: !capture_wanted,
             playback_ok: !playback_wanted,
-            capture_device: (!capture_wanted).then(|| config.input_device.clone().unwrap_or_default()),
-            playback_device: (!playback_wanted).then(|| config.output_device.clone().unwrap_or_default()),
+            capture_device: (!capture_wanted)
+                .then(|| config.input_device.clone().unwrap_or_default()),
+            playback_device: (!playback_wanted)
+                .then(|| config.output_device.clone().unwrap_or_default()),
             last_error: None,
         });
     }
@@ -289,8 +296,16 @@ struct OpenStream {
     _stream: Stream,
 }
 
-fn pick_device(host: &cpal::Host, wanted_name: &Option<String>, input: bool) -> Result<cpal::Device> {
-    match wanted_name.as_deref().map(str::trim).filter(|n| !n.is_empty() && *n != "default") {
+fn pick_device(
+    host: &cpal::Host,
+    wanted_name: &Option<String>,
+    input: bool,
+) -> Result<cpal::Device> {
+    match wanted_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && *n != "default")
+    {
         Some(name) => {
             let devices: Vec<cpal::Device> = if input {
                 host.input_devices()?.collect()
@@ -325,11 +340,14 @@ fn choose_config(device: &cpal::Device, input: bool) -> Result<SupportedStreamCo
         if range.min_sample_rate() <= wanted && wanted <= range.max_sample_rate() {
             let better = match &best {
                 None => true,
-                Some(current) => range.channels() < current.channels()
-                    || (range.channels() == current.channels() && range.sample_format() == SampleFormat::F32),
+                Some(current) => {
+                    range.channels() < current.channels()
+                        || (range.channels() == current.channels()
+                            && range.sample_format() == SampleFormat::F32)
+                }
             };
             if better {
-                best = Some(range.clone());
+                best = Some(*range);
             }
         }
     }
@@ -344,7 +362,12 @@ fn choose_config(device: &cpal::Device, input: bool) -> Result<SupportedStreamCo
     Ok(default)
 }
 
-fn open_capture(config: &AudioConfig, frame_samples: usize, gain: f32, frames: mpsc::Sender<Vec<f32>>) -> Result<OpenStream> {
+fn open_capture(
+    config: &AudioConfig,
+    frame_samples: usize,
+    gain: f32,
+    frames: mpsc::Sender<Vec<f32>>,
+) -> Result<OpenStream> {
     let host = cpal::default_host();
     let device = pick_device(&host, &config.input_device, true)?;
     let name = format!("{} ({})", device_label(&device), device_pcm_id(&device));

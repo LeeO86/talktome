@@ -76,7 +76,10 @@ Stream Deck as an intercom key panel and mirrors camera tally and talk state
 to GPIO lines."""
 section = "sound"
 priority = "optional"
-depends = "$auto, adduser, fonts-dejavu-core"
+# Listed explicitly (instead of $auto) so cross-built packages do not depend on
+# dpkg-shlibdeps being able to inspect foreign binaries. libasound2t64 is the
+# time64 name used by Debian Trixie / Ubuntu 24.04.
+depends = "libc6 (>= 2.34), libasound2t64 (>= 1.2.0) | libasound2 (>= 1.2.0), libudev1 (>= 183), adduser, fonts-dejavu-core"
 recommends = "alsa-utils"
 maintainer-scripts = "debian/"
 assets = [

@@ -72,8 +72,6 @@ pub enum RtcEvent {
 pub struct RxPacket {
     pub consumer_id: String,
     pub sequence: u16,
-    pub timestamp: u32,
-    pub marker: bool,
     pub payload: Bytes,
 }
 
@@ -119,10 +117,6 @@ impl MediaFactory {
 
     pub fn router(&self) -> &RtpCapabilities {
         &self.router
-    }
-
-    pub fn payload_type(&self) -> u8 {
-        self.payload_type
     }
 
     fn opus_capability(&self) -> RTCRtpCodecCapability {
@@ -386,9 +380,17 @@ impl SendTransport {
         if self.talking.swap(talking, Ordering::Relaxed) == talking {
             return Ok(());
         }
-        let event = if talking { "resume-producer" } else { "pause-producer" };
+        let event = if talking {
+            "resume-producer"
+        } else {
+            "pause-producer"
+        };
         signal
-            .request(event, json!({ "producerId": self.producer_id }), SIGNAL_TIMEOUT)
+            .request(
+                event,
+                json!({ "producerId": self.producer_id }),
+                SIGNAL_TIMEOUT,
+            )
             .await?;
         Ok(())
     }
@@ -500,8 +502,6 @@ impl RecvTransport {
                             let out = RxPacket {
                                 consumer_id: consumer_id.clone(),
                                 sequence: packet.header.sequence_number,
-                                timestamp: packet.header.timestamp,
-                                marker: packet.header.marker,
                                 payload: packet.payload,
                             };
                             if rx_packets.send(out).await.is_err() {
@@ -520,10 +520,8 @@ impl RecvTransport {
         Ok(transport)
     }
 
-    pub async fn active_consumers(&self) -> usize {
-        self.consumers.lock().await.len()
-    }
-
+    /// Media sections accumulated on the receive peer connection; closed
+    /// consumers stay as inactive sections until the transport is recreated.
     pub async fn section_count(&self) -> usize {
         self.remote.lock().await.section_count()
     }
@@ -578,7 +576,11 @@ impl RecvTransport {
             self.remote.lock().await.close_consumer(&consumer_id);
             self.consumers.lock().await.remove(&consumer_id);
             let _ = signal
-                .request("close-consumer", json!({ "consumerId": consumer_id }), SIGNAL_TIMEOUT)
+                .request(
+                    "close-consumer",
+                    json!({ "consumerId": consumer_id }),
+                    SIGNAL_TIMEOUT,
+                )
                 .await;
             return Err(error);
         }
@@ -598,7 +600,11 @@ impl RecvTransport {
             .set_remote_description(RTCSessionDescription::offer(offer)?)
             .await
             .context("setting remote offer")?;
-        let answer = self.pc.create_answer(None).await.context("creating answer")?;
+        let answer = self
+            .pc
+            .create_answer(None)
+            .await
+            .context("creating answer")?;
         self.pc
             .set_local_description(answer)
             .await
@@ -623,7 +629,12 @@ impl RecvTransport {
     }
 
     /// Removes a consumer locally (after `consumer-closed`) or on request.
-    pub async fn close_consumer(&self, signal: &SocketClient, consumer_id: &str, notify_server: bool) -> Result<()> {
+    pub async fn close_consumer(
+        &self,
+        signal: &SocketClient,
+        consumer_id: &str,
+        notify_server: bool,
+    ) -> Result<()> {
         let _guard = self.negotiation.lock().await;
         let removed = self.consumers.lock().await.remove(consumer_id).is_some();
         if !removed {
@@ -636,7 +647,11 @@ impl RecvTransport {
         };
         if notify_server {
             let _ = signal
-                .request("close-consumer", json!({ "consumerId": consumer_id }), SIGNAL_TIMEOUT)
+                .request(
+                    "close-consumer",
+                    json!({ "consumerId": consumer_id }),
+                    SIGNAL_TIMEOUT,
+                )
                 .await;
         }
         if !self.closed.load(Ordering::Relaxed) {

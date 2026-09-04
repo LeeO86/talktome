@@ -21,10 +21,6 @@ impl LevelTrigger {
         }
     }
 
-    pub fn is_active(&self) -> bool {
-        self.active
-    }
-
     /// Feeds one level measurement; returns the new state if it changed.
     pub fn update(&mut self, level_db: f32, now: Instant) -> Option<bool> {
         if level_db >= self.threshold_db {
@@ -70,7 +66,10 @@ mod tests {
         assert_eq!(trigger.update(-40.0, t0), None);
         assert_eq!(trigger.update(-20.0, t0), Some(true));
         assert_eq!(trigger.update(-40.0, t0 + Duration::from_millis(200)), None);
-        assert_eq!(trigger.update(-40.0, t0 + Duration::from_millis(600)), Some(false));
+        assert_eq!(
+            trigger.update(-40.0, t0 + Duration::from_millis(600)),
+            Some(false)
+        );
         assert!((peak_db(&[0.5, -0.25]) + 6.02).abs() < 0.1);
         assert_eq!(peak_db(&[0.0; 10]), -120.0);
     }

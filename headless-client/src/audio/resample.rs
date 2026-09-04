@@ -20,8 +20,9 @@ impl ToInternal {
             });
         }
         let chunk = (device_rate / 100) as usize; // 10 ms
-        let inner = FftFixedIn::<f32>::new(device_rate as usize, internal_rate as usize, chunk, 2, 1)
-            .context("creating capture resampler")?;
+        let inner =
+            FftFixedIn::<f32>::new(device_rate as usize, internal_rate as usize, chunk, 2, 1)
+                .context("creating capture resampler")?;
         Ok(Self {
             inner: Some(inner),
             pending: Vec::with_capacity(chunk * 4),
@@ -60,16 +61,13 @@ impl FromInternal {
             });
         }
         let chunk = (device_rate / 100) as usize;
-        let inner = FftFixedOut::<f32>::new(internal_rate as usize, device_rate as usize, chunk, 2, 1)
-            .context("creating playback resampler")?;
+        let inner =
+            FftFixedOut::<f32>::new(internal_rate as usize, device_rate as usize, chunk, 2, 1)
+                .context("creating playback resampler")?;
         Ok(Self {
             inner: Some(inner),
             ready: Default::default(),
         })
-    }
-
-    pub fn needs_resampling(&self) -> bool {
-        self.inner.is_some()
     }
 
     /// Fills `out` with device-rate samples, pulling 48 kHz audio from `render`
@@ -86,7 +84,9 @@ impl FromInternal {
             let needed = inner.input_frames_next();
             let mut source = vec![0f32; needed];
             render(&mut source);
-            let result = inner.process(&[source], None).context("playback resample")?;
+            let result = inner
+                .process(&[source], None)
+                .context("playback resample")?;
             self.ready.extend(result[0].iter().copied());
         }
         for sample in out.iter_mut() {

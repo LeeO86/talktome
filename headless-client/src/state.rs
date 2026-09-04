@@ -124,18 +124,31 @@ pub enum InputSource {
     StreamDeck(u8),
     Gpio(String),
     Companion(String),
-    Vox,
 }
 
 #[derive(Debug, Clone)]
 pub enum Command {
-    TalkPress { source: InputSource, target: TargetRef },
-    TalkRelease { source: InputSource, target: TargetRef },
-    LockToggle { target: TargetRef },
+    TalkPress {
+        source: InputSource,
+        target: TargetRef,
+    },
+    TalkRelease {
+        source: InputSource,
+        target: TargetRef,
+    },
+    LockToggle {
+        target: TargetRef,
+    },
     ClearLocks,
     MuteToggle(TargetKey),
-    VolumeStep { target: TargetKey, delta: f32 },
-    VolumeSet { target: TargetKey, volume: f32 },
+    VolumeStep {
+        target: TargetKey,
+        delta: f32,
+    },
+    VolumeSet {
+        target: TargetKey,
+        volume: f32,
+    },
     /// Request a fresh snapshot broadcast (e.g. after a deck reconnects).
     Refresh,
     Shutdown,
@@ -149,7 +162,14 @@ pub struct Bus {
     pub snapshots: watch::Receiver<Arc<Snapshot>>,
 }
 
-pub fn channels(initial: Snapshot) -> (mpsc::Sender<Command>, mpsc::Receiver<Command>, watch::Sender<Arc<Snapshot>>, Bus) {
+pub fn channels(
+    initial: Snapshot,
+) -> (
+    mpsc::Sender<Command>,
+    mpsc::Receiver<Command>,
+    watch::Sender<Arc<Snapshot>>,
+    Bus,
+) {
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let (snap_tx, snap_rx) = watch::channel(Arc::new(initial));
     let bus = Bus {

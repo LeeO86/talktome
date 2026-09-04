@@ -13,16 +13,14 @@ use tokio::sync::mpsc;
 use crate::audio::codec::{OpusDecoder, OpusEncoder, SAMPLE_RATE};
 use crate::config::Config;
 use crate::rtc::types::{ProducerAnnouncement, RtpCapabilities};
-use crate::rtc::{MediaFactory, RecvTransport, RtcEvent, RtcSettings, RxPacket, SendTransport, SIGNAL_TIMEOUT};
+use crate::rtc::{
+    MediaFactory, RecvTransport, RtcEvent, RtcSettings, RxPacket, SendTransport, SIGNAL_TIMEOUT,
+};
 use crate::signalling::http::ServerApi;
 use crate::signalling::socketio::{ConnectOptions, SocketClient, SocketEvent};
 use crate::talk::TargetKey;
 
 pub struct Connected {
-    pub api: ServerApi,
-    pub token: String,
-    pub user_id: i64,
-    pub user_name: String,
     pub socket: SocketClient,
     pub events: mpsc::Receiver<SocketEvent>,
     pub router: RtpCapabilities,
@@ -81,10 +79,6 @@ pub async fn connect_and_register(config: &Config) -> Result<Connected> {
     .context("parsing router rtp capabilities")?;
 
     Ok(Connected {
-        api,
-        token: login.token,
-        user_id: login.user.id,
-        user_name: login.user.name,
         socket,
         events,
         router,
@@ -101,7 +95,12 @@ fn rtc_settings(config: &Config) -> RtcSettings {
 }
 
 /// Sends a sine tone to `target` for `seconds`.
-pub async fn send_tone(config: &Config, target: TargetKey, seconds: u64, frequency: f32) -> Result<()> {
+pub async fn send_tone(
+    config: &Config,
+    target: TargetKey,
+    seconds: u64,
+    frequency: f32,
+) -> Result<()> {
     let mut connected = connect_and_register(config).await?;
     let factory = MediaFactory::new(connected.router.clone(), rtc_settings(config))?;
     let (rtc_tx, mut rtc_rx) = mpsc::channel(64);
@@ -137,7 +136,11 @@ pub async fn send_tone(config: &Config, target: TargetKey, seconds: u64, frequen
     tracing::info!(event = "talk-start", target = %target, seconds);
 
     let frame_ms = config.audio.profile.frame_ms();
-    let mut encoder = OpusEncoder::new(frame_ms, config.audio.profile.bitrate(), config.audio.profile.fec())?;
+    let mut encoder = OpusEncoder::new(
+        frame_ms,
+        config.audio.profile.bitrate(),
+        config.audio.profile.fec(),
+    )?;
     let frame_samples = encoder.frame_samples();
     let mut phase = 0f32;
     let step = frequency * std::f32::consts::TAU / SAMPLE_RATE as f32;
@@ -215,10 +218,18 @@ pub async fn record(config: &Config, output: &Path, seconds: u64) -> Result<()> 
         .socket
         .request_no_payload("request-active-producers", SIGNAL_TIMEOUT)
         .await?;
-    let announcements: Vec<ProducerAnnouncement> = serde_json::from_value(active).unwrap_or_default();
+    let announcements: Vec<ProducerAnnouncement> =
+        serde_json::from_value(active).unwrap_or_default();
     for announcement in announcements {
         if let Some(producer_id) = announcement.producer_id() {
-            consume_announcement(&recv, &connected.socket, &factory, producer_id, &announcement).await;
+            consume_announcement(
+                &recv,
+                &connected.socket,
+                &factory,
+                producer_id,
+                &announcement,
+            )
+            .await;
         }
     }
 
@@ -339,5 +350,6 @@ fn log_socket_event(event: &SocketEvent) {
 }
 
 pub fn parse_target(text: &str) -> Result<TargetKey> {
-    TargetKey::parse(text).ok_or_else(|| anyhow!("target must look like user:4 or conference:1, got {text:?}"))
+    TargetKey::parse(text)
+        .ok_or_else(|| anyhow!("target must look like user:4 or conference:1, got {text:?}"))
 }

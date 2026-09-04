@@ -17,17 +17,6 @@ pub struct Geometry {
 }
 
 impl Geometry {
-    pub fn pedal() -> Self {
-        Self {
-            keys: 3,
-            rows: 1,
-            cols: 3,
-            encoders: 0,
-            touchpoints: 0,
-            visual: false,
-        }
-    }
-
     pub fn has_encoders(&self) -> bool {
         self.encoders > 0
     }
@@ -183,8 +172,13 @@ fn reserved_roles(geometry: &Geometry, state: &DeckState) -> Vec<(u8, Role)> {
 
 /// Number of target slots per page and the key indices used for them.
 pub fn target_slots(geometry: &Geometry, state: &DeckState, target_count: usize) -> Vec<u8> {
-    let reserved: Vec<u8> = reserved_roles(geometry, state).into_iter().map(|(k, _)| k).collect();
-    let mut free: Vec<u8> = (0..geometry.keys).filter(|k| !reserved.contains(k)).collect();
+    let reserved: Vec<u8> = reserved_roles(geometry, state)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    let mut free: Vec<u8> = (0..geometry.keys)
+        .filter(|k| !reserved.contains(k))
+        .collect();
     if target_count > free.len() && !free.is_empty() {
         // Paging needed: the last free key becomes "next page".
         free.pop();
@@ -198,12 +192,20 @@ pub fn page_count(geometry: &Geometry, state: &DeckState, target_count: usize) -
 }
 
 /// Targets shown on the current page, in slot order.
-pub fn page_targets<'a>(geometry: &Geometry, state: &DeckState, targets: &'a [TargetInfo]) -> Vec<&'a TargetInfo> {
+pub fn page_targets<'a>(
+    geometry: &Geometry,
+    state: &DeckState,
+    targets: &'a [TargetInfo],
+) -> Vec<&'a TargetInfo> {
     let slots = target_slots(geometry, state, targets.len());
     let per_page = slots.len().max(1);
     let pages = page_count(geometry, state, targets.len());
     let page = state.page.min(pages.saturating_sub(1));
-    targets.iter().skip(page * per_page).take(per_page).collect()
+    targets
+        .iter()
+        .skip(page * per_page)
+        .take(per_page)
+        .collect()
 }
 
 fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot) -> Appearance {
@@ -315,7 +317,12 @@ fn reply_appearance(snapshot: &Snapshot) -> Appearance {
 }
 
 /// Builds the full key map for a visual deck.
-pub fn layout(geometry: &Geometry, snapshot: &Snapshot, state: &DeckState, options: &LayoutOptions) -> Vec<KeySpec> {
+pub fn layout(
+    geometry: &Geometry,
+    snapshot: &Snapshot,
+    state: &DeckState,
+    options: &LayoutOptions,
+) -> Vec<KeySpec> {
     if !geometry.visual {
         return pedal_layout(options);
     }
@@ -327,14 +334,27 @@ pub fn layout(geometry: &Geometry, snapshot: &Snapshot, state: &DeckState, optio
         .collect();
     let pages = page_count(geometry, state, snapshot.targets.len());
     for (key, role) in reserved_roles(geometry, state) {
-        let Some(slot) = keys.get_mut(key as usize) else { continue };
+        let Some(slot) = keys.get_mut(key as usize) else {
+            continue;
+        };
         slot.role = role;
         slot.appearance = match role {
             Role::Status => status_appearance(snapshot, state, pages),
             Role::Reply => reply_appearance(snapshot),
             Role::VolumeToggle => {
-                let mut a = Appearance::simple("VOL", if state.volume_layer { palette::SELECTED } else { palette::VOLUME });
-                a.subtitle = if state.volume_layer { "back".into() } else { String::new() };
+                let mut a = Appearance::simple(
+                    "VOL",
+                    if state.volume_layer {
+                        palette::SELECTED
+                    } else {
+                        palette::VOLUME
+                    },
+                );
+                a.subtitle = if state.volume_layer {
+                    "back".into()
+                } else {
+                    String::new()
+                };
                 a
             }
             Role::VolumeUp => Appearance::simple("+", palette::VOLUME),
@@ -363,7 +383,10 @@ pub fn layout(geometry: &Geometry, snapshot: &Snapshot, state: &DeckState, optio
         }
     }
     if pages > 1 {
-        let reserved: Vec<u8> = reserved_roles(geometry, state).into_iter().map(|(k, _)| k).collect();
+        let reserved: Vec<u8> = reserved_roles(geometry, state)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
         if let Some(next_key) = (0..geometry.keys).rev().find(|k| !reserved.contains(k)) {
             if let Some(key) = keys.get_mut(next_key as usize) {
                 key.role = Role::NextPage;
@@ -384,7 +407,10 @@ fn pedal_layout(options: &LayoutOptions) -> Vec<KeySpec> {
             appearance: blank.clone(),
         },
         KeySpec {
-            role: options.pedal_target.map(Role::Target).unwrap_or(Role::Empty),
+            role: options
+                .pedal_target
+                .map(Role::Target)
+                .unwrap_or(Role::Empty),
             appearance: blank.clone(),
         },
         KeySpec {
@@ -395,7 +421,11 @@ fn pedal_layout(options: &LayoutOptions) -> Vec<KeySpec> {
 }
 
 /// Targets bound to the encoders of a Stream Deck + on the current page.
-pub fn encoder_targets<'a>(geometry: &Geometry, state: &DeckState, snapshot: &'a Snapshot) -> Vec<Option<&'a TargetInfo>> {
+pub fn encoder_targets<'a>(
+    geometry: &Geometry,
+    state: &DeckState,
+    snapshot: &'a Snapshot,
+) -> Vec<Option<&'a TargetInfo>> {
     let shown = page_targets(geometry, state, &snapshot.targets);
     (0..geometry.encoders as usize)
         .map(|index| shown.get(index).copied())
@@ -408,12 +438,54 @@ mod tests {
 
     fn geometry(kind: &str) -> Geometry {
         match kind {
-            "mk2" => Geometry { keys: 15, rows: 3, cols: 5, encoders: 0, touchpoints: 0, visual: true },
-            "mini" => Geometry { keys: 6, rows: 2, cols: 3, encoders: 0, touchpoints: 0, visual: true },
-            "xl" => Geometry { keys: 32, rows: 4, cols: 8, encoders: 0, touchpoints: 0, visual: true },
-            "plus" => Geometry { keys: 8, rows: 2, cols: 4, encoders: 4, touchpoints: 0, visual: true },
-            "neo" => Geometry { keys: 8, rows: 2, cols: 4, encoders: 0, touchpoints: 2, visual: true },
-            _ => Geometry::pedal(),
+            "mk2" => Geometry {
+                keys: 15,
+                rows: 3,
+                cols: 5,
+                encoders: 0,
+                touchpoints: 0,
+                visual: true,
+            },
+            "mini" => Geometry {
+                keys: 6,
+                rows: 2,
+                cols: 3,
+                encoders: 0,
+                touchpoints: 0,
+                visual: true,
+            },
+            "xl" => Geometry {
+                keys: 32,
+                rows: 4,
+                cols: 8,
+                encoders: 0,
+                touchpoints: 0,
+                visual: true,
+            },
+            "plus" => Geometry {
+                keys: 8,
+                rows: 2,
+                cols: 4,
+                encoders: 4,
+                touchpoints: 0,
+                visual: true,
+            },
+            "neo" => Geometry {
+                keys: 8,
+                rows: 2,
+                cols: 4,
+                encoders: 0,
+                touchpoints: 2,
+                visual: true,
+            },
+            _ => Geometry {
+                keys: 3,
+                rows: 1,
+                cols: 3,
+                encoders: 0,
+                touchpoints: 0,
+                visual: false,
+            },
         }
     }
 
@@ -423,7 +495,11 @@ mod tests {
         snapshot.audio_ok = true;
         snapshot.targets = (0..count)
             .map(|i| TargetInfo {
-                key: if i % 3 == 2 { TargetKey::Feed(i as i64) } else { TargetKey::User(i as i64) },
+                key: if i % 3 == 2 {
+                    TargetKey::Feed(i as i64)
+                } else {
+                    TargetKey::User(i as i64)
+                },
                 name: format!("T{i}"),
                 can_talk: i % 3 != 2,
                 online: true,
@@ -481,9 +557,11 @@ mod tests {
     #[test]
     fn volume_layer_adds_controls_and_bars() {
         let geometry = geometry("mk2");
-        let mut state = DeckState::default();
-        state.volume_layer = true;
-        state.selected = Some(TargetKey::User(0));
+        let state = DeckState {
+            volume_layer: true,
+            selected: Some(TargetKey::User(0)),
+            ..DeckState::default()
+        };
         let keys = layout(&geometry, &snapshot(4), &state, &options());
         assert_eq!(keys[2].role, Role::MuteSelected);
         assert_eq!(keys[3].role, Role::VolumeDown);
@@ -532,16 +610,23 @@ mod tests {
 
     #[test]
     fn pedal_maps_three_switches() {
-        let keys = layout(&geometry("pedal"), &snapshot(2), &DeckState::default(), &options());
+        let keys = layout(
+            &geometry("pedal"),
+            &snapshot(2),
+            &DeckState::default(),
+            &options(),
+        );
         assert_eq!(keys[0].role, Role::Reply);
         assert_eq!(keys[1].role, Role::Target(TargetKey::Conference(1)));
     }
 
     #[test]
     fn volume_layer_times_out() {
-        let mut state = DeckState::default();
-        state.volume_layer = true;
-        state.volume_layer_touched = Instant::now() - Duration::from_secs(10);
+        let mut state = DeckState {
+            volume_layer: true,
+            volume_layer_touched: Instant::now() - Duration::from_secs(10),
+            ..DeckState::default()
+        };
         assert!(state.expire_volume_layer(Duration::from_secs(8)));
         assert!(!state.volume_layer);
     }

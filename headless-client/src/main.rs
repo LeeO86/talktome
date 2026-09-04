@@ -93,7 +93,9 @@ fn init_logging(config: Option<&Config>) {
     use std::io::IsTerminal;
     use tracing_subscriber::EnvFilter;
 
-    let level = config.map(|c| c.log.level.clone()).unwrap_or_else(|| "info".into());
+    let level = config
+        .map(|c| c.log.level.clone())
+        .unwrap_or_else(|| "info".into());
     let filter = EnvFilter::try_from_env("TALKTOME_LOG")
         .or_else(|_| EnvFilter::try_new(format!("{level},webrtc=warn,webrtc_ice=warn,webrtc_dtls=warn,webrtc_srtp=warn,webrtc_sctp=warn,webrtc_mdns=warn,hyper=warn,reqwest=warn,tungstenite=warn,rustls=warn")))
         .unwrap_or_else(|_| EnvFilter::new("info"));
@@ -108,7 +110,11 @@ fn init_logging(config: Option<&Config>) {
         .with_target(false)
         .with_writer(std::io::stderr);
     if json {
-        builder.json().flatten_event(true).with_current_span(false).init();
+        builder
+            .json()
+            .flatten_event(true)
+            .with_current_span(false)
+            .init();
     } else {
         builder.init();
     }
@@ -163,11 +169,17 @@ fn main() -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async move {
                 match dev {
-                    DevCommand::SendTone { target, seconds, frequency } => {
+                    DevCommand::SendTone {
+                        target,
+                        seconds,
+                        frequency,
+                    } => {
                         let target = devtools::parse_target(target)?;
                         devtools::send_tone(&loaded.config, target, *seconds, *frequency).await
                     }
-                    DevCommand::Record { out, seconds } => devtools::record(&loaded.config, out, *seconds).await,
+                    DevCommand::Record { out, seconds } => {
+                        devtools::record(&loaded.config, out, *seconds).await
+                    }
                 }
             })
         }

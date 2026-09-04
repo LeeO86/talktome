@@ -20,7 +20,9 @@ pub async fn run(dir: PathBuf, bus: Bus, mut shutdown: watch::Receiver<bool>) {
     }
     let commands_path = dir.join("commands");
     let snapshot_path = dir.join("snapshot.json");
-    let mut offset = std::fs::metadata(&commands_path).map(|m| m.len()).unwrap_or(0);
+    let mut offset = std::fs::metadata(&commands_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
     let mut snapshots = bus.snapshots.clone();
     write_snapshot(&snapshot_path, &snapshots.borrow());
     let mut poll = tokio::time::interval(Duration::from_millis(100));
@@ -85,7 +87,9 @@ fn target_key(text: &str) -> Result<TargetKey> {
 
 pub fn parse_command(line: &str) -> Result<Option<Command>> {
     let mut parts = line.split_whitespace();
-    let Some(verb) = parts.next() else { return Ok(None) };
+    let Some(verb) = parts.next() else {
+        return Ok(None);
+    };
     if verb.starts_with('#') {
         return Ok(None);
     }
@@ -93,11 +97,19 @@ pub fn parse_command(line: &str) -> Result<Option<Command>> {
     let command = match verb {
         "press" => Command::TalkPress {
             source,
-            target: target_ref(parts.next().ok_or_else(|| anyhow!("press needs a target"))?)?,
+            target: target_ref(
+                parts
+                    .next()
+                    .ok_or_else(|| anyhow!("press needs a target"))?,
+            )?,
         },
         "release" => Command::TalkRelease {
             source,
-            target: target_ref(parts.next().ok_or_else(|| anyhow!("release needs a target"))?)?,
+            target: target_ref(
+                parts
+                    .next()
+                    .ok_or_else(|| anyhow!("release needs a target"))?,
+            )?,
         },
         "reply" => match parts.next() {
             Some("press") => Command::TalkPress {
@@ -114,7 +126,9 @@ pub fn parse_command(line: &str) -> Result<Option<Command>> {
             target: target_ref(parts.next().ok_or_else(|| anyhow!("lock needs a target"))?)?,
         },
         "clear-locks" => Command::ClearLocks,
-        "mute" => Command::MuteToggle(target_key(parts.next().ok_or_else(|| anyhow!("mute needs a target"))?)?),
+        "mute" => Command::MuteToggle(target_key(
+            parts.next().ok_or_else(|| anyhow!("mute needs a target"))?,
+        )?),
         "vol" => {
             let target = target_key(parts.next().ok_or_else(|| anyhow!("vol needs a target"))?)?;
             let value = parts.next().ok_or_else(|| anyhow!("vol needs a value"))?;
@@ -150,12 +164,28 @@ mod tests {
     fn parses_command_lines() {
         assert!(matches!(
             parse_command("press conference:1").unwrap(),
-            Some(Command::TalkPress { target: TargetRef::Key(TargetKey::Conference(1)), .. })
+            Some(Command::TalkPress {
+                target: TargetRef::Key(TargetKey::Conference(1)),
+                ..
+            })
         ));
-        assert!(matches!(parse_command("reply release").unwrap(), Some(Command::TalkRelease { target: TargetRef::Reply, .. })));
-        assert!(matches!(parse_command("vol feed:2 -0.1").unwrap(), Some(Command::VolumeStep { delta, .. }) if (delta + 0.1).abs() < 1e-6));
-        assert!(matches!(parse_command("vol feed:2 0.5").unwrap(), Some(Command::VolumeSet { volume, .. }) if (volume - 0.5).abs() < 1e-6));
-        assert!(matches!(parse_command("mute user:4").unwrap(), Some(Command::MuteToggle(TargetKey::User(4)))));
+        assert!(matches!(
+            parse_command("reply release").unwrap(),
+            Some(Command::TalkRelease {
+                target: TargetRef::Reply,
+                ..
+            })
+        ));
+        assert!(
+            matches!(parse_command("vol feed:2 -0.1").unwrap(), Some(Command::VolumeStep { delta, .. }) if (delta + 0.1).abs() < 1e-6)
+        );
+        assert!(
+            matches!(parse_command("vol feed:2 0.5").unwrap(), Some(Command::VolumeSet { volume, .. }) if (volume - 0.5).abs() < 1e-6)
+        );
+        assert!(matches!(
+            parse_command("mute user:4").unwrap(),
+            Some(Command::MuteToggle(TargetKey::User(4)))
+        ));
         assert!(parse_command("# comment").unwrap().is_none());
         assert!(parse_command("").unwrap().is_none());
         assert!(parse_command("dance").is_err());

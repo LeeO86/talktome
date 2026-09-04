@@ -5,6 +5,13 @@
 #   scripts/build-deb.sh aarch64-unknown-linux-gnu
 #   scripts/build-deb.sh armv7-unknown-linux-gnueabihf
 #
+# Cross builds expect the Debian multiarch toolchain for the target
+# (crossbuild-essential-<arch>, libasound2-dev:<arch>, libudev-dev:<arch>) and
+# the usual cargo cross environment (CARGO_TARGET_<T>_LINKER, CC_<t>,
+# PKG_CONFIG_ALLOW_CROSS=1, PKG_CONFIG_PATH_<t>); armhf additionally needs
+# CFLAGS_<t>="-mfpu=neon-vfpv4 -mfloat-abi=hard" for libopus' NEON code. See
+# .github/workflows/headless-client-release.yml for the exact settings.
+#
 # The version is resolved like every other Talktome build: TALKTOME_BUILD_VERSION
 # (set by CI from scripts/resolve-build-version.js) or the nearest Git tag.
 # Debian versions use "~" for development builds so they sort before the

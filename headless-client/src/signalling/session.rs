@@ -20,9 +20,12 @@ use crate::audio::vox::{peak_db, LevelTrigger};
 use crate::config::{Config, ConflictPolicy};
 use crate::rtc::types::{ProducerAnnouncement, RtpCapabilities};
 use crate::rtc::{
-    Direction, MediaFactory, RecvTransport, RtcEvent, RtcSettings, RxPacket, SendTransport, SIGNAL_TIMEOUT,
+    Direction, MediaFactory, RecvTransport, RtcEvent, RtcSettings, RxPacket, SendTransport,
+    SIGNAL_TIMEOUT,
 };
-use crate::state::{Command, ConnectionState, IncomingInfo, InputSource, Snapshot, TargetInfo, TargetRef};
+use crate::state::{
+    Command, ConnectionState, IncomingInfo, InputSource, Snapshot, TargetInfo, TargetRef,
+};
 use crate::talk::{AudioState, TalkChange, TalkModel, TargetKey};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
@@ -30,6 +33,7 @@ use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 const ACTIVE_PRODUCER_SYNC: Duration = Duration::from_secs(10);
 const SNAPSHOT_DEBOUNCE: Duration = Duration::from_millis(200);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const MAX_IDLE_RECV_SECTIONS: usize = 32;
 
 /// Inputs shared with the audio thread and surfaces.
 pub struct SessionIo {
@@ -130,7 +134,10 @@ impl Session {
         let mut talk = TalkModel::new(config.talk.tap_ms, config.talk.lock_multiple);
         let vox = if config.vox.enabled {
             talk.set_vox_target(config.vox.target.as_deref().and_then(TargetKey::parse));
-            Some(LevelTrigger::new(config.vox.threshold_db, config.vox.hang_ms))
+            Some(LevelTrigger::new(
+                config.vox.threshold_db,
+                config.vox.hang_ms,
+            ))
         } else {
             None
         };
@@ -191,7 +198,8 @@ impl Session {
                         Exit::Kicked => {
                             self.set_connection(ConnectionState::Kicked, "session taken over");
                             self.publish(true);
-                            let delay = Duration::from_millis(self.config.registration.kicked_retry_ms);
+                            let delay =
+                                Duration::from_millis(self.config.registration.kicked_retry_ms);
                             if self.sleep_or_shutdown(delay).await {
                                 break;
                             }
@@ -315,7 +323,11 @@ impl Session {
         if wanted.is_empty() {
             return None;
         }
-        let productions = self.login.as_ref().map(|l| l.productions.as_slice()).unwrap_or(&[]);
+        let productions = self
+            .login
+            .as_ref()
+            .map(|l| l.productions.as_slice())
+            .unwrap_or(&[]);
         for production in productions {
             let id_text = match &production.id {
                 Value::Number(n) => n.to_string(),
@@ -332,7 +344,10 @@ impl Session {
 
     async fn connect(&mut self) -> Result<Connected> {
         let token = self.ensure_token().await?;
-        let login = self.login.clone().ok_or_else(|| anyhow!("missing login state"))?;
+        let login = self
+            .login
+            .clone()
+            .ok_or_else(|| anyhow!("missing login state"))?;
         self.set_connection(ConnectionState::Connecting, "");
         self.publish(true);
 
@@ -355,7 +370,9 @@ impl Session {
                 self.token = None;
                 bail!("socket connect rejected: {error}");
             }
-            Ok(Some(SocketEvent::Disconnected(reason))) => bail!("socket closed during connect: {reason}"),
+            Ok(Some(SocketEvent::Disconnected(reason))) => {
+                bail!("socket closed during connect: {reason}")
+            }
             Ok(other) => bail!("unexpected event during connect: {other:?}"),
             Err(_) => bail!("timed out waiting for socket connect"),
         }
@@ -393,13 +410,12 @@ impl Session {
                     SIGNAL_TIMEOUT,
                 )
                 .await
-                .map_err(|error| {
+                .inspect_err(|error| {
                     let text = error.to_string();
                     if text.contains("identity") || text.contains("Authenticated") {
                         self.token = None;
                     }
                     tracing::warn!(event = "registration-error", error = %text);
-                    error
                 })?;
             if ack.get("conflict").and_then(Value::as_bool) == Some(true) {
                 let existing = ack
@@ -413,14 +429,23 @@ impl Session {
                         if force {
                             bail!("registration conflict persists even with force");
                         }
-                        self.set_connection(ConnectionState::Conflict, &format!("taking over from {existing}"));
+                        self.set_connection(
+                            ConnectionState::Conflict,
+                            &format!("taking over from {existing}"),
+                        );
                         self.publish(true);
-                        tokio::time::sleep(Duration::from_millis(self.config.registration.takeover_delay_ms)).await;
+                        tokio::time::sleep(Duration::from_millis(
+                            self.config.registration.takeover_delay_ms,
+                        ))
+                        .await;
                         force = true;
                         continue;
                     }
                     ConflictPolicy::Wait => {
-                        self.set_connection(ConnectionState::Conflict, &format!("account in use by {existing}"));
+                        self.set_connection(
+                            ConnectionState::Conflict,
+                            &format!("account in use by {existing}"),
+                        );
                         self.publish(true);
                         let retry = Duration::from_millis(self.config.registration.retry_ms);
                         // Keep the socket alive while waiting; a disconnect ends the wait.
@@ -481,7 +506,9 @@ impl Session {
             &format!("talktome-{}", self.config.instance),
         )
         .await?;
-        let recv = RecvTransport::create(&factory, &connected.socket, rtc_tx, self.rx_tx.clone()).await?;
+        let recv =
+            RecvTransport::create(&factory, &connected.socket, rtc_tx, self.rx_tx.clone()).await?;
+        tracing::info!(event = "transports-created", send = %send.transport_id, recv = %recv.transport_id);
         connected.media = Some(Media {
             factory,
             send,
@@ -496,7 +523,8 @@ impl Session {
         // Restore talk state on the new producer (locks/held keys survive recovery).
         let change = self.talk_change_now();
         if change.talking {
-            self.send_talk_change(connected, &change, "media-recovered").await;
+            self.send_talk_change(connected, &change, "media-recovered")
+                .await;
         }
         Ok(())
     }
@@ -523,7 +551,8 @@ impl Session {
                 return;
             }
         };
-        let announcements: Vec<ProducerAnnouncement> = serde_json::from_value(active).unwrap_or_default();
+        let announcements: Vec<ProducerAnnouncement> =
+            serde_json::from_value(active).unwrap_or_default();
         for announcement in announcements {
             self.consume_announcement(connected, &announcement).await;
         }
@@ -535,7 +564,11 @@ impl Session {
         match kind {
             "user" | "guest" => {
                 // Direct talk: key by the speaking user (falls back to appData id).
-                if let Some(speaker) = announcement.speaker_user_id.as_ref().and_then(Value::as_i64) {
+                if let Some(speaker) = announcement
+                    .speaker_user_id
+                    .as_ref()
+                    .and_then(Value::as_i64)
+                {
                     Some(TargetKey::User(speaker))
                 } else {
                     TargetKey::from_type_and_id("user", id)
@@ -545,17 +578,31 @@ impl Session {
         }
     }
 
-    async fn consume_announcement(&mut self, connected: &mut Connected, announcement: &ProducerAnnouncement) {
-        let Some(producer_id) = announcement.producer_id().map(str::to_string) else { return };
-        let Some(media) = connected.media.as_mut() else { return };
+    async fn consume_announcement(
+        &mut self,
+        connected: &mut Connected,
+        announcement: &ProducerAnnouncement,
+    ) {
+        let Some(producer_id) = announcement.producer_id().map(str::to_string) else {
+            return;
+        };
+        let Some(media) = connected.media.as_mut() else {
+            return;
+        };
         if media.producers.contains_key(&producer_id) {
             return;
         }
         let key = Self::target_for_announcement(announcement).unwrap_or(TargetKey::User(0));
-        match media.recv.consume(&connected.socket, &media.factory, &producer_id).await {
+        match media
+            .recv
+            .consume(&connected.socket, &media.factory, &producer_id)
+            .await
+        {
             Ok(consumer_id) => {
                 media.consumers.insert(consumer_id.clone(), key);
-                media.producers.insert(producer_id.clone(), consumer_id.clone());
+                media
+                    .producers
+                    .insert(producer_id.clone(), consumer_id.clone());
                 if let Ok(mut mixer) = self.io.mixer.lock() {
                     if let Err(error) = mixer.add_source(&consumer_id, key) {
                         tracing::warn!(event = "mixer-source-failed", error = %error);
@@ -571,17 +618,45 @@ impl Session {
         }
     }
 
-    async fn drop_consumer(&mut self, connected: &mut Connected, consumer_id: &str, notify_server: bool) {
-        let Some(media) = connected.media.as_mut() else { return };
+    async fn drop_consumer(
+        &mut self,
+        connected: &mut Connected,
+        consumer_id: &str,
+        notify_server: bool,
+    ) {
+        let Some(media) = connected.media.as_mut() else {
+            return;
+        };
         if media.consumers.remove(consumer_id).is_some() {
             media.producers.retain(|_, c| c != consumer_id);
             if let Ok(mut mixer) = self.io.mixer.lock() {
                 mixer.remove_source(consumer_id);
             }
-            if let Err(error) = media.recv.close_consumer(&connected.socket, consumer_id, notify_server).await {
+            if let Err(error) = media
+                .recv
+                .close_consumer(&connected.socket, consumer_id, notify_server)
+                .await
+            {
                 tracing::debug!(event = "close-consumer-failed", consumer = %consumer_id, error = %error);
             }
             self.snapshot_dirty = true;
+        }
+    }
+
+    /// Closed consumers leave inactive media sections on the receive peer
+    /// connection; once many have accumulated and nothing is being received,
+    /// rebuild the transports to start from a clean SDP.
+    async fn compact_recv_transport(&mut self, connected: &mut Connected) {
+        let rebuild = match connected.media.as_ref() {
+            Some(media) => {
+                media.consumers.is_empty()
+                    && media.recv.section_count().await >= MAX_IDLE_RECV_SECTIONS
+            }
+            None => false,
+        };
+        if rebuild {
+            self.recover_media(connected, "recv transport compaction")
+                .await;
         }
     }
 
@@ -611,7 +686,8 @@ impl Session {
         }
         self.send_audio_snapshot(&connected, "registered").await;
         if let Some(change) = self.pending_talk_change.take() {
-            self.send_talk_change(&mut connected, &change, "reconnected").await;
+            self.send_talk_change(&mut connected, &change, "reconnected")
+                .await;
         }
         self.snapshot_dirty = true;
 
@@ -658,23 +734,34 @@ impl Session {
                             connected.socket.close().await;
                             return Exit::Kicked;
                         }
-                        "user-targets-updated" | "conference-list" | "conference-members-updated"
+                        "user-targets-updated"
+                        | "conference-list"
+                        | "conference-members-updated"
                         | "available-productions-updated" => {
                             targets_reload_due = Some(Instant::now() + Duration::from_millis(300));
                         }
                         "active-production-reset" => {
-                            connected.production_id = payload.get("productionId").cloned().filter(|v| !v.is_null());
+                            connected.production_id = payload
+                                .get("productionId")
+                                .cloned()
+                                .filter(|v| !v.is_null());
                             let change = self.talk.reset();
-                            self.send_talk_change(&mut connected, &change, "production-reset").await;
+                            self.send_talk_change(&mut connected, &change, "production-reset")
+                                .await;
                             targets_reload_due = Some(Instant::now());
                         }
-                        _ => self.handle_socket_event(&mut connected, &name, payload).await,
+                        _ => {
+                            self.handle_socket_event(&mut connected, &name, payload)
+                                .await
+                        }
                     }
                 }
                 Event::Rtc(event) => self.handle_rtc_event(&mut connected, event).await,
                 Event::Rx(packet) => {
                     if let Ok(mut mixer) = self.io.mixer.lock() {
-                        if let Err(error) = mixer.push_packet(&packet.consumer_id, packet.sequence, &packet.payload) {
+                        if let Err(error) =
+                            mixer.push_packet(&packet.consumer_id, packet.sequence, &packet.payload)
+                        {
                             tracing::debug!(event = "rx-decode-failed", error = %error);
                         }
                     }
@@ -701,9 +788,13 @@ impl Session {
                     if last_sync.elapsed() >= ACTIVE_PRODUCER_SYNC {
                         last_sync = Instant::now();
                         self.sync_active_producers(&mut connected).await;
+                        self.compact_recv_transport(&mut connected).await;
                     }
-                    if self.audio_state_dirty && self.last_audio_snapshot.elapsed() >= SNAPSHOT_DEBOUNCE {
-                        self.send_audio_snapshot(&connected, "target-audio-state").await;
+                    if self.audio_state_dirty
+                        && self.last_audio_snapshot.elapsed() >= SNAPSHOT_DEBOUNCE
+                    {
+                        self.send_audio_snapshot(&connected, "target-audio-state")
+                            .await;
                     }
                     // Receiving indicators change without any event; refresh them.
                     self.snapshot_dirty = true;
@@ -760,7 +851,11 @@ impl Session {
                 }
             }
             "consumer-closed" => {
-                if let Some(consumer_id) = payload.get("consumerId").and_then(Value::as_str).map(str::to_string) {
+                if let Some(consumer_id) = payload
+                    .get("consumerId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                {
                     self.drop_consumer(connected, &consumer_id, false).await;
                 }
             }
@@ -832,7 +927,9 @@ impl Session {
                 .get("replyTargetType")
                 .or_else(|| reply.get("targetType"))
                 .and_then(Value::as_str)?;
-            let id = reply.get("replyTargetId").or_else(|| reply.get("targetId"))?;
+            let id = reply
+                .get("replyTargetId")
+                .or_else(|| reply.get("targetId"))?;
             TargetKey::from_type_and_id(kind, id)
         });
         self.talk.set_reply_target(reply);
@@ -856,14 +953,16 @@ impl Session {
                     }
                 }
                 if matches!(state, RTCPeerConnectionState::Failed) {
-                    self.recover_media(connected, &format!("{direction:?} transport {state}")).await;
+                    self.recover_media(connected, &format!("{direction:?} transport {state}"))
+                        .await;
                 }
                 self.update_ready_state(connected);
             }
             RtcEvent::IceState { direction, state } => {
                 tracing::debug!(event = "ice-state", direction = ?direction, state = %state);
                 if matches!(state, RTCIceConnectionState::Failed) {
-                    self.recover_media(connected, &format!("{direction:?} ICE failed")).await;
+                    self.recover_media(connected, &format!("{direction:?} ICE failed"))
+                        .await;
                 }
             }
             RtcEvent::ConsumerTrack { consumer_id, .. } => {
@@ -873,12 +972,16 @@ impl Session {
     }
 
     fn update_ready_state(&mut self, connected: &Connected) {
-        let Some(media) = connected.media.as_ref() else { return };
+        let Some(media) = connected.media.as_ref() else {
+            return;
+        };
         let send_ok = matches!(media.send_state, RTCPeerConnectionState::Connected);
         let recv_ok = media.consumers.is_empty()
             || matches!(
                 media.recv_state,
-                RTCPeerConnectionState::Connected | RTCPeerConnectionState::New | RTCPeerConnectionState::Connecting
+                RTCPeerConnectionState::Connected
+                    | RTCPeerConnectionState::New
+                    | RTCPeerConnectionState::Connecting
             );
         let next = if send_ok && recv_ok {
             ConnectionState::Ready
@@ -916,12 +1019,14 @@ impl Session {
             }
             Command::LockToggle { target } => {
                 if let Some(change) = self.talk.toggle_lock(target) {
-                    self.send_talk_change(connected, &change, "lock-toggle").await;
+                    self.send_talk_change(connected, &change, "lock-toggle")
+                        .await;
                 }
             }
             Command::ClearLocks => {
                 let change = self.talk.clear_locks();
-                self.send_talk_change(connected, &change, "clear-locks").await;
+                self.send_talk_change(connected, &change, "clear-locks")
+                    .await;
             }
             Command::MuteToggle(key) => {
                 let level = self.audio.toggle_mute(key);
@@ -951,8 +1056,13 @@ impl Session {
         self.snapshot_dirty = true;
     }
 
-    async fn send_talk_change(&mut self, connected: &mut Connected, change: &TalkChange, reason: &str) {
-        let targets: Vec<Value> = change.targets.iter().map(TargetKey::to_talk_target).collect();
+    async fn send_talk_change(
+        &mut self,
+        connected: &mut Connected,
+        change: &TalkChange,
+        reason: &str,
+    ) {
+        let targets: Vec<Value> = change.targets.iter().map(|t| t.to_talk_target()).collect();
         if let Some((key, locked)) = change.lock_toggled {
             tracing::info!(event = if locked { "lock-on" } else { "lock-off" }, target = %key);
         }
@@ -967,7 +1077,10 @@ impl Session {
             }
             let _ = connected
                 .socket
-                .emit("talk-targets-updated", vec![json!({ "reason": reason, "targets": targets })])
+                .emit(
+                    "talk-targets-updated",
+                    vec![json!({ "reason": reason, "targets": targets })],
+                )
                 .await;
             if let Some(media) = connected.media.as_ref() {
                 if let Err(error) = media.send.set_talking(&connected.socket, true).await {
@@ -985,10 +1098,13 @@ impl Session {
             }
             let _ = connected
                 .socket
-                .emit("talk-targets-updated", vec![json!({ "reason": reason, "targets": [] })])
+                .emit(
+                    "talk-targets-updated",
+                    vec![json!({ "reason": reason, "targets": [] })],
+                )
                 .await;
         }
-        let first = change.targets.first().map(TargetKey::to_talk_target);
+        let first = change.targets.first().map(|t| t.to_talk_target());
         let _ = connected
             .socket
             .emit(
@@ -1059,7 +1175,11 @@ impl Session {
 
     async fn handle_api_talk_command(&mut self, connected: &mut Connected, payload: Value) {
         let command_id = payload.get("commandId").cloned().unwrap_or(Value::Null);
-        let action = payload.get("action").and_then(Value::as_str).unwrap_or("").to_string();
+        let action = payload
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let target_type = payload
             .get("targetType")
             .and_then(Value::as_str)
@@ -1078,19 +1198,23 @@ impl Session {
         let source = InputSource::Companion(input_key);
         let now = Instant::now();
         let (ok, reason, change) = match (action.as_str(), target) {
-            ("press", Some(target)) if self.known_target(target) => match self.talk.press(source, target, now) {
-                Some(change) => (true, None, Some(change)),
-                None => (false, Some("press-failed"), None),
-            },
+            ("press", Some(target)) if self.known_target(target) => {
+                match self.talk.press(source, target, now) {
+                    Some(change) => (true, None, Some(change)),
+                    None => (false, Some("press-failed"), None),
+                }
+            }
             ("release", Some(target)) => {
                 let change = self.talk.release(source, target, now);
                 (true, None, change)
             }
             ("release", None) => (true, None, None),
-            ("lock-toggle", Some(target)) if self.known_target(target) => match self.talk.toggle_lock(target) {
-                Some(change) => (true, None, Some(change)),
-                None => (false, Some("target-not-available"), None),
-            },
+            ("lock-toggle", Some(target)) if self.known_target(target) => {
+                match self.talk.toggle_lock(target) {
+                    Some(change) => (true, None, Some(change)),
+                    None => (false, Some("target-not-available"), None),
+                }
+            }
             ("press" | "lock-toggle", _) => (false, Some("target-not-available"), None),
             _ => (false, Some("unsupported-action"), None),
         };
@@ -1107,15 +1231,22 @@ impl Session {
             "targetId": target_id,
             "talking": state.talking,
             "lockActive": state.lock_active,
-            "target": state.targets.first().map(TargetKey::to_talk_target),
-            "targets": state.targets.iter().map(TargetKey::to_talk_target).collect::<Vec<_>>(),
+            "target": state.targets.first().map(|t| t.to_talk_target()),
+            "targets": state.targets.iter().map(|t| t.to_talk_target()).collect::<Vec<_>>(),
         });
-        let _ = connected.socket.emit("api-talk-command-result", vec![result]).await;
+        let _ = connected
+            .socket
+            .emit("api-talk-command-result", vec![result])
+            .await;
     }
 
     async fn handle_api_audio_command(&mut self, connected: &mut Connected, payload: Value) {
         let command_id = payload.get("commandId").cloned().unwrap_or(Value::Null);
-        let action = payload.get("action").and_then(Value::as_str).unwrap_or("").to_string();
+        let action = payload
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let target_type = payload
             .get("targetType")
             .and_then(Value::as_str)
@@ -1128,7 +1259,8 @@ impl Session {
             .map(|s| s.clamp(0.01, 1.0) as f32)
             .unwrap_or(0.1);
         tracing::info!(event = "companion-command", action = %action, target_type = %target_type, target_id = %target_id);
-        let key = TargetKey::from_type_and_id(&target_type, &target_id).filter(|k| self.targets.iter().any(|t| t.key == *k));
+        let key = TargetKey::from_type_and_id(&target_type, &target_id)
+            .filter(|k| self.targets.iter().any(|t| t.key == *k));
         let (ok, reason) = match (action.as_str(), key) {
             ("volume-up", Some(key)) => {
                 let level = self.audio.step_volume(key, step);
@@ -1145,7 +1277,9 @@ impl Session {
                 self.apply_level(key, level);
                 (true, None)
             }
-            ("volume-up" | "volume-down" | "mute-toggle", None) => (false, Some("target-not-available")),
+            ("volume-up" | "volume-down" | "mute-toggle", None) => {
+                (false, Some("target-not-available"))
+            }
             _ => (false, Some("unsupported-action")),
         };
         let result = json!({
@@ -1156,7 +1290,10 @@ impl Session {
             "targetType": target_type,
             "targetId": target_id,
         });
-        let _ = connected.socket.emit("api-target-audio-command-result", vec![result]).await;
+        let _ = connected
+            .socket
+            .emit("api-target-audio-command-result", vec![result])
+            .await;
         self.send_audio_snapshot(connected, "companion").await;
     }
 
@@ -1179,7 +1316,11 @@ impl Session {
     // ------------------------------------------------------------------
 
     async fn reload_targets(&mut self, connected: &Connected) -> Result<()> {
-        let token = self.token.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+        let token = self
+            .token
+            .as_ref()
+            .map(|(t, _)| t.clone())
+            .unwrap_or_default();
         let production = connected.production_id.as_ref().map(|p| match p {
             Value::Number(n) => n.to_string(),
             Value::String(s) => s.clone(),
@@ -1191,7 +1332,10 @@ impl Session {
             .await?;
         let mut targets = Vec::new();
         for entry in entries {
-            let Some(key) = TargetKey::from_type_and_id(&entry.target_type, &entry.target_id) else { continue };
+            let Some(key) = TargetKey::from_type_and_id(&entry.target_type, &entry.target_id)
+            else {
+                continue;
+            };
             let members = entry
                 .members
                 .iter()
@@ -1238,7 +1382,9 @@ impl Session {
                 let level = self.audio.level(target.key);
                 let online = match target.key {
                     TargetKey::User(id) => self.online_users.contains(&id),
-                    TargetKey::Conference(_) => target.members.iter().any(|m| self.online_users.contains(m)),
+                    TargetKey::Conference(_) => {
+                        target.members.iter().any(|m| self.online_users.contains(m))
+                    }
                     TargetKey::Feed(_) => receiving.contains(&target.key),
                 };
                 TargetInfo {
@@ -1256,9 +1402,20 @@ impl Session {
             })
             .collect();
         let reply_target = self.talk.reply_target();
-        let reply_name = reply_target.and_then(|key| self.targets.iter().find(|t| t.key == key).map(|t| t.name.clone()));
-        let capture_wanted = !matches!(self.config.audio.input_device.as_deref(), Some("none") | Some("off"));
-        let playback_wanted = !matches!(self.config.audio.output_device.as_deref(), Some("none") | Some("off"));
+        let reply_name = reply_target.and_then(|key| {
+            self.targets
+                .iter()
+                .find(|t| t.key == key)
+                .map(|t| t.name.clone())
+        });
+        let capture_wanted = !matches!(
+            self.config.audio.input_device.as_deref(),
+            Some("none") | Some("off")
+        );
+        let playback_wanted = !matches!(
+            self.config.audio.output_device.as_deref(),
+            Some("none") | Some("off")
+        );
         Snapshot {
             instance: self.config.instance.clone(),
             user_name: self

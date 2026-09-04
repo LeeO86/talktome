@@ -50,22 +50,46 @@ pub fn list_devices() -> Result<()> {
         let configs: Vec<String> = device
             .supported_input_configs()
             .map(|c| {
-                c.map(|cfg| format!("{}ch {}-{} Hz", cfg.channels(), cfg.min_sample_rate(), cfg.max_sample_rate()))
-                    .collect()
+                c.map(|cfg| {
+                    format!(
+                        "{}ch {}-{} Hz",
+                        cfg.channels(),
+                        cfg.min_sample_rate(),
+                        cfg.max_sample_rate()
+                    )
+                })
+                .collect()
             })
             .unwrap_or_default();
-        println!("  {}\n      {}  [{}]", device_pcm_id(&device), device_label(&device), configs.join(", "));
+        println!(
+            "  {}\n      {}  [{}]",
+            device_pcm_id(&device),
+            device_label(&device),
+            configs.join(", ")
+        );
     }
     println!("Output devices (use the id in audio.output_device):");
     for device in host.output_devices()? {
         let configs: Vec<String> = device
             .supported_output_configs()
             .map(|c| {
-                c.map(|cfg| format!("{}ch {}-{} Hz", cfg.channels(), cfg.min_sample_rate(), cfg.max_sample_rate()))
-                    .collect()
+                c.map(|cfg| {
+                    format!(
+                        "{}ch {}-{} Hz",
+                        cfg.channels(),
+                        cfg.min_sample_rate(),
+                        cfg.max_sample_rate()
+                    )
+                })
+                .collect()
             })
             .unwrap_or_default();
-        println!("  {}\n      {}  [{}]", device_pcm_id(&device), device_label(&device), configs.join(", "));
+        println!(
+            "  {}\n      {}  [{}]",
+            device_pcm_id(&device),
+            device_label(&device),
+            configs.join(", ")
+        );
     }
     Ok(())
 }

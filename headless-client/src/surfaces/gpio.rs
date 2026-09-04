@@ -65,7 +65,10 @@ pub fn command_for_input(input: &GpioInputConfig, pressed: bool) -> Option<Comma
             }
         }),
         GpioInputAction::ClearLocks => pressed.then_some(Command::ClearLocks),
-        GpioInputAction::LockToggle | GpioInputAction::MuteToggle | GpioInputAction::VolumeUp | GpioInputAction::VolumeDown => {
+        GpioInputAction::LockToggle
+        | GpioInputAction::MuteToggle
+        | GpioInputAction::VolumeUp
+        | GpioInputAction::VolumeDown => {
             if !pressed {
                 return None;
             }
@@ -139,10 +142,9 @@ struct ResolvedLine {
 fn resolve_line(config: &GpioConfig, line: &str) -> Result<ResolvedLine> {
     let line = line.trim();
     if let Ok(offset) = line.parse::<Offset>() {
-        let chip = config
-            .chip
-            .as_deref()
-            .ok_or_else(|| anyhow!("gpio.chip is required when lines are given as offsets ({line})"))?;
+        let chip = config.chip.as_deref().ok_or_else(|| {
+            anyhow!("gpio.chip is required when lines are given as offsets ({line})")
+        })?;
         let chip = if chip.starts_with('/') {
             PathBuf::from(chip)
         } else {
@@ -156,16 +158,21 @@ fn resolve_line(config: &GpioConfig, line: &str) -> Result<ResolvedLine> {
         } else {
             PathBuf::from("/dev").join(chip)
         };
-        let chip = gpiocdev::Chip::from_path(&path).with_context(|| format!("opening {}", path.display()))?;
+        let chip = gpiocdev::Chip::from_path(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
         for info in chip.line_info_iter()? {
             let info = info?;
             if info.name == line {
-                return Ok(ResolvedLine { chip: path, offset: info.offset });
+                return Ok(ResolvedLine {
+                    chip: path,
+                    offset: info.offset,
+                });
             }
         }
         bail!("line {line:?} not found on {}", path.display());
     }
-    let found = gpiocdev::find_named_line(line).ok_or_else(|| anyhow!("GPIO line {line:?} not found on any chip"))?;
+    let found = gpiocdev::find_named_line(line)
+        .ok_or_else(|| anyhow!("GPIO line {line:?} not found on any chip"))?;
     Ok(ResolvedLine {
         chip: found.chip,
         offset: found.info.offset,
@@ -182,7 +189,9 @@ async fn run_real(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
     // Outputs: one request per line (lines may live on different chips).
     let mut outputs: HashMap<&'static str, OutputLine> = HashMap::new();
     for (name, output) in &config.outputs {
-        let Some(static_name) = OUTPUT_NAMES.iter().find(|n| **n == name.as_str()) else { continue };
+        let Some(static_name) = OUTPUT_NAMES.iter().find(|n| **n == name.as_str()) else {
+            continue;
+        };
         let resolved = resolve_line(&config, &output.line)?;
         let mut builder = Request::builder();
         builder
@@ -229,7 +238,11 @@ async fn run_real(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
                 .with_line(*offset)
                 .as_input()
                 .with_edge_detection(EdgeDetection::BothEdges)
-                .with_bias(if input.active_low { Bias::PullUp } else { Bias::PullDown });
+                .with_bias(if input.active_low {
+                    Bias::PullUp
+                } else {
+                    Bias::PullDown
+                });
             if input.active_low {
                 builder.as_active_low();
             } else {
@@ -261,7 +274,10 @@ async fn run_real(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
                     .with_context(|| format!("requesting inputs on {}", chip.display()))?
             }
         };
-        let offsets: HashMap<Offset, usize> = lines.iter().map(|(index, offset)| (*offset, *index)).collect();
+        let offsets: HashMap<Offset, usize> = lines
+            .iter()
+            .map(|(index, offset)| (*offset, *index))
+            .collect();
         for (index, offset) in &lines {
             tracing::info!(event = "gpio-input", line = %config.inputs[*index].line, chip = %chip.display(), offset, action = ?config.inputs[*index].action);
         }
@@ -271,9 +287,18 @@ async fn run_real(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
             loop {
                 match async_request.read_edge_event().await {
                     Ok(event) => {
-                        let Some(index) = offsets.get(&event.offset) else { continue };
+                        let Some(index) = offsets.get(&event.offset) else {
+                            continue;
+                        };
                         let pressed = matches!(event.kind, EdgeKind::Rising);
-                        if tx.send(InputEvent { index: *index, pressed }).await.is_err() {
+                        if tx
+                            .send(InputEvent {
+                                index: *index,
+                                pressed,
+                            })
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -288,7 +313,14 @@ async fn run_real(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
     drop(event_tx);
 
     let mut snapshots = bus.snapshots.clone();
-    let mut debouncer = Debouncer::new(config.inputs.iter().map(|i| i.debounce_ms).max().unwrap_or(20));
+    let mut debouncer = Debouncer::new(
+        config
+            .inputs
+            .iter()
+            .map(|i| i.debounce_ms)
+            .max()
+            .unwrap_or(20),
+    );
     apply_outputs(&mut outputs, &snapshots.borrow());
 
     loop {
@@ -325,7 +357,14 @@ fn apply_outputs(outputs: &mut HashMap<&'static str, OutputLine>, snapshot: &Sna
         if output.current == Some(active) {
             continue;
         }
-        match output.request.set_value(output.offset, if active { Value::Active } else { Value::Inactive }) {
+        match output.request.set_value(
+            output.offset,
+            if active {
+                Value::Active
+            } else {
+                Value::Inactive
+            },
+        ) {
             Ok(()) => {
                 output.current = Some(active);
                 if *name == "tally" {
@@ -346,7 +385,9 @@ async fn run_mock(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
     std::fs::create_dir_all(&dir)?;
     let outputs_path = dir.join("gpio-outputs.json");
     let inputs_path = dir.join("gpio-inputs");
-    let mut offset = std::fs::metadata(&inputs_path).map(|m| m.len()).unwrap_or(0);
+    let mut offset = std::fs::metadata(&inputs_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
     let mut snapshots = bus.snapshots.clone();
     let mut poll = tokio::time::interval(Duration::from_millis(50));
     let mut debouncer = Debouncer::new(0);
@@ -364,7 +405,10 @@ async fn run_mock(config: GpioConfig, bus: Bus, mut shutdown: watch::Receiver<bo
                 )
             })
             .collect();
-        let _ = std::fs::write(&outputs_path, serde_json::to_string_pretty(&map).unwrap_or_default());
+        let _ = std::fs::write(
+            &outputs_path,
+            serde_json::to_string_pretty(&map).unwrap_or_default(),
+        );
     };
     write_outputs(&snapshots.borrow());
 
@@ -414,11 +458,29 @@ pub fn list() -> Result<()> {
     for path in chips {
         let chip = gpiocdev::Chip::from_path(&path)?;
         let info = chip.info()?;
-        println!("{} ({}, {} lines)", path.display(), info.label, info.num_lines);
+        println!(
+            "{} ({}, {} lines)",
+            path.display(),
+            info.label,
+            info.num_lines
+        );
         for line in chip.line_info_iter()? {
             let line = line?;
-            let used = if line.used { format!(" [used by {}]", line.consumer) } else { String::new() };
-            println!("  {:>3}  {}{}", line.offset, if line.name.is_empty() { "-" } else { &line.name }, used);
+            let used = if line.used {
+                format!(" [used by {}]", line.consumer)
+            } else {
+                String::new()
+            };
+            println!(
+                "  {:>3}  {}{}",
+                line.offset,
+                if line.name.is_empty() {
+                    "-"
+                } else {
+                    &line.name
+                },
+                used
+            );
         }
     }
     Ok(())
@@ -444,16 +506,33 @@ mod tests {
         let talk = input(GpioInputAction::Talk, Some("conference:1"));
         assert!(matches!(
             command_for_input(&talk, true),
-            Some(Command::TalkPress { target: TargetRef::Key(TargetKey::Conference(1)), .. })
+            Some(Command::TalkPress {
+                target: TargetRef::Key(TargetKey::Conference(1)),
+                ..
+            })
         ));
-        assert!(matches!(command_for_input(&talk, false), Some(Command::TalkRelease { .. })));
+        assert!(matches!(
+            command_for_input(&talk, false),
+            Some(Command::TalkRelease { .. })
+        ));
         let lock = input(GpioInputAction::LockToggle, Some("user:2"));
-        assert!(matches!(command_for_input(&lock, true), Some(Command::LockToggle { .. })));
+        assert!(matches!(
+            command_for_input(&lock, true),
+            Some(Command::LockToggle { .. })
+        ));
         assert!(command_for_input(&lock, false).is_none());
         let up = input(GpioInputAction::VolumeUp, Some("feed:1"));
-        assert!(matches!(command_for_input(&up, true), Some(Command::VolumeStep { delta, .. }) if delta > 0.0));
+        assert!(
+            matches!(command_for_input(&up, true), Some(Command::VolumeStep { delta, .. }) if delta > 0.0)
+        );
         let reply = input(GpioInputAction::Reply, None);
-        assert!(matches!(command_for_input(&reply, true), Some(Command::TalkPress { target: TargetRef::Reply, .. })));
+        assert!(matches!(
+            command_for_input(&reply, true),
+            Some(Command::TalkPress {
+                target: TargetRef::Reply,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -471,13 +550,41 @@ mod tests {
     fn debouncer_drops_bounces_and_repeats() {
         let mut debouncer = Debouncer::new(20);
         let t0 = Instant::now();
-        assert!(debouncer.filter(InputEvent { index: 0, pressed: true }, t0).is_some());
-        assert!(debouncer.filter(InputEvent { index: 0, pressed: true }, t0).is_none());
         assert!(debouncer
-            .filter(InputEvent { index: 0, pressed: false }, t0 + Duration::from_millis(5))
+            .filter(
+                InputEvent {
+                    index: 0,
+                    pressed: true
+                },
+                t0
+            )
+            .is_some());
+        assert!(debouncer
+            .filter(
+                InputEvent {
+                    index: 0,
+                    pressed: true
+                },
+                t0
+            )
             .is_none());
         assert!(debouncer
-            .filter(InputEvent { index: 0, pressed: false }, t0 + Duration::from_millis(50))
+            .filter(
+                InputEvent {
+                    index: 0,
+                    pressed: false
+                },
+                t0 + Duration::from_millis(5)
+            )
+            .is_none());
+        assert!(debouncer
+            .filter(
+                InputEvent {
+                    index: 0,
+                    pressed: false
+                },
+                t0 + Duration::from_millis(50)
+            )
             .is_some());
     }
 }

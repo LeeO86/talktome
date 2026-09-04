@@ -43,6 +43,7 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[derive(Default)]
 pub struct TlsConfig {
     /// PEM file with one or more additional trusted CA certificates.
     pub ca_file: Option<PathBuf>,
@@ -54,6 +55,7 @@ pub struct TlsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[derive(Default)]
 pub struct UserConfig {
     pub name: String,
     pub password: String,
@@ -148,6 +150,7 @@ pub struct TalkConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[derive(Default)]
 pub struct IceServerConfig {
     pub urls: Vec<String>,
     pub username: Option<String>,
@@ -156,6 +159,7 @@ pub struct IceServerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[derive(Default)]
 pub struct IceConfig {
     /// Overrides the servers announced by Talktome. Testing only.
     pub servers: Option<Vec<IceServerConfig>>,
@@ -187,6 +191,7 @@ pub struct StreamDeckConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[derive(Default)]
 pub struct GpioOutputConfig {
     pub line: String,
     pub active_low: bool,
@@ -278,26 +283,6 @@ impl Default for ServerConfig {
     }
 }
 
-impl Default for TlsConfig {
-    fn default() -> Self {
-        Self {
-            ca_file: None,
-            fingerprint_sha256: None,
-            insecure: false,
-        }
-    }
-}
-
-impl Default for UserConfig {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            password: String::new(),
-            production: None,
-        }
-    }
-}
-
 impl Default for RegistrationConfig {
     fn default() -> Self {
         Self {
@@ -347,25 +332,6 @@ impl Default for TalkConfig {
     }
 }
 
-impl Default for IceServerConfig {
-    fn default() -> Self {
-        Self {
-            urls: Vec::new(),
-            username: None,
-            credential: None,
-        }
-    }
-}
-
-impl Default for IceConfig {
-    fn default() -> Self {
-        Self {
-            servers: None,
-            transport_policy: None,
-        }
-    }
-}
-
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
@@ -385,15 +351,6 @@ impl Default for StreamDeckConfig {
             volume_layer_timeout_s: 8,
             pedal_target: None,
             layout: BTreeMap::new(),
-        }
-    }
-}
-
-impl Default for GpioOutputConfig {
-    fn default() -> Self {
-        Self {
-            line: String::new(),
-            active_low: false,
         }
     }
 }
@@ -597,12 +554,16 @@ impl Config {
         if self.user.password.is_empty() {
             bail!("user.password is required (can be supplied via TALKTOME_USER_PASSWORD)");
         }
-        if self.tls.insecure && (self.tls.ca_file.is_some() || self.tls.fingerprint_sha256.is_some()) {
+        if self.tls.insecure
+            && (self.tls.ca_file.is_some() || self.tls.fingerprint_sha256.is_some())
+        {
             bail!("tls.insecure cannot be combined with tls.ca_file or tls.fingerprint_sha256");
         }
         if let Some(fp) = &self.tls.fingerprint_sha256 {
             if crate::tls::parse_fingerprint(fp).is_none() {
-                bail!("tls.fingerprint_sha256 must be 32 bytes as hex (optionally colon separated)");
+                bail!(
+                    "tls.fingerprint_sha256 must be 32 bytes as hex (optionally colon separated)"
+                );
             }
         }
         if !(0.0..=1.0).contains(&self.audio.default_volume) {
@@ -623,8 +584,9 @@ impl Config {
             bail!("streamdeck.volume_step must be between 0.01 and 1");
         }
         if let Some(target) = &self.vox.target {
-            crate::talk::TargetKey::parse(target)
-                .ok_or_else(|| anyhow!("vox.target {target:?} must look like conference:1 or user:4"))?;
+            crate::talk::TargetKey::parse(target).ok_or_else(|| {
+                anyhow!("vox.target {target:?} must look like conference:1 or user:4")
+            })?;
         }
         if self.vox.enabled && self.vox.target.is_none() {
             bail!("vox.target is required when vox.enabled is true");
@@ -745,9 +707,14 @@ mod tests {
             target = "conference:1"
             active_low = true
         "#;
-        let json = from_document(parse_document(Path::new("cam1.json"), json_text).unwrap()).unwrap();
-        let toml = from_document(parse_document(Path::new("cam1.toml"), toml_text).unwrap()).unwrap();
-        assert_eq!(serde_json::to_value(&json).unwrap(), serde_json::to_value(&toml).unwrap());
+        let json =
+            from_document(parse_document(Path::new("cam1.json"), json_text).unwrap()).unwrap();
+        let toml =
+            from_document(parse_document(Path::new("cam1.toml"), toml_text).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&json).unwrap(),
+            serde_json::to_value(&toml).unwrap()
+        );
         assert_eq!(json.audio.profile, AudioProfile::Low);
         assert_eq!(json.gpio.inputs[0].debounce_ms, 20);
         json.validate().unwrap();
@@ -760,8 +727,14 @@ mod tests {
             &mut doc,
             vec![
                 ("TALKTOME_USER_PASSWORD".to_string(), "from-env".to_string()),
-                ("TALKTOME_AUDIO_INPUT_DEVICE".to_string(), "hw:1,0".to_string()),
-                ("TALKTOME_STREAMDECK_ENABLED".to_string(), "false".to_string()),
+                (
+                    "TALKTOME_AUDIO_INPUT_DEVICE".to_string(),
+                    "hw:1,0".to_string(),
+                ),
+                (
+                    "TALKTOME_STREAMDECK_ENABLED".to_string(),
+                    "false".to_string(),
+                ),
                 ("TALKTOME_HEALTH_PORT".to_string(), "9911".to_string()),
                 ("TALKTOME_INSTANCE".to_string(), "cam7".to_string()),
                 ("TALKTOME_UNKNOWN_KEY".to_string(), "x".to_string()),
@@ -823,7 +796,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(locate_instance_config(dir.path(), "cam1").is_err());
         std::fs::write(dir.path().join("cam1.toml"), "").unwrap();
-        assert!(locate_instance_config(dir.path(), "cam1").unwrap().ends_with("cam1.toml"));
+        assert!(locate_instance_config(dir.path(), "cam1")
+            .unwrap()
+            .ends_with("cam1.toml"));
         std::fs::write(dir.path().join("cam1.json"), "{}").unwrap();
         assert!(locate_instance_config(dir.path(), "cam1").is_err());
     }

@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
-use anyhow::{Context, Result};
 use image::{Rgb as ImgRgb, RgbImage};
 
 use super::layout::{palette, Appearance, Badge, Rgb};
@@ -30,12 +29,7 @@ impl Renderer {
         Self { font }
     }
 
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
-        Ok(Self {
-            font: Some(FontVec::try_from_vec(bytes).context("invalid font")?),
-        })
-    }
-
+    #[cfg(test)]
     pub fn has_font(&self) -> bool {
         self.font.is_some()
     }
@@ -54,7 +48,14 @@ impl Renderer {
         if let Some(bar) = appearance.bar {
             let bar_h = (h as f32 * 0.09).max(3.0) as u32;
             let y0 = h - margin - bar_h;
-            fill_rect(&mut image, margin, y0, w - 2 * margin, bar_h, Rgb(20, 20, 24));
+            fill_rect(
+                &mut image,
+                margin,
+                y0,
+                w - 2 * margin,
+                bar_h,
+                Rgb(20, 20, 24),
+            );
             let filled = ((w - 2 * margin) as f32 * bar.clamp(0.0, 1.0)) as u32;
             fill_rect(&mut image, margin, y0, filled, bar_h, palette::BAR);
             text_bottom = y0 - margin / 2;
@@ -68,17 +69,40 @@ impl Renderer {
             let title_scale = (h as f32 * 0.24).max(9.0);
             let subtitle_scale = (h as f32 * 0.17).max(8.0);
             let has_subtitle = !appearance.subtitle.trim().is_empty();
-            let lines = wrap_title(font, &appearance.title, title_scale, (w - 2 * margin) as f32);
-            let total = lines.len() as f32 * title_scale * 1.1 + if has_subtitle { subtitle_scale * 1.2 } else { 0.0 };
-            let mut y = ((text_bottom as f32 - margin as f32 - total) / 2.0).max(margin as f32) + margin as f32 * 0.5;
+            let lines = wrap_title(
+                font,
+                &appearance.title,
+                title_scale,
+                (w - 2 * margin) as f32,
+            );
+            let total = lines.len() as f32 * title_scale * 1.1
+                + if has_subtitle {
+                    subtitle_scale * 1.2
+                } else {
+                    0.0
+                };
+            let mut y = ((text_bottom as f32 - margin as f32 - total) / 2.0).max(margin as f32)
+                + margin as f32 * 0.5;
             for line in lines {
                 let scale = fit_scale(font, &line, title_scale, (w - 2 * margin) as f32);
                 draw_text(&mut image, font, &line, scale, y, appearance.foreground);
                 y += scale * 1.1;
             }
             if has_subtitle {
-                let scale = fit_scale(font, &appearance.subtitle, subtitle_scale, (w - 2 * margin) as f32);
-                draw_text(&mut image, font, &appearance.subtitle, scale, y + 2.0, appearance.foreground);
+                let scale = fit_scale(
+                    font,
+                    &appearance.subtitle,
+                    subtitle_scale,
+                    (w - 2 * margin) as f32,
+                );
+                draw_text(
+                    &mut image,
+                    font,
+                    &appearance.subtitle,
+                    scale,
+                    y + 2.0,
+                    appearance.foreground,
+                );
             }
         }
         image
@@ -91,9 +115,30 @@ impl Renderer {
         let y = margin;
         match badge {
             Badge::Lock => {
-                fill_rect(image, x, y + size / 3, size, size * 2 / 3, Rgb(250, 200, 60));
-                fill_rect(image, x + size / 4, y, size / 2, size / 3, Rgb(250, 200, 60));
-                fill_rect(image, x + size / 4 + 2, y + 2, (size / 2).saturating_sub(4), size / 3, palette::LOCKED);
+                fill_rect(
+                    image,
+                    x,
+                    y + size / 3,
+                    size,
+                    size * 2 / 3,
+                    Rgb(250, 200, 60),
+                );
+                fill_rect(
+                    image,
+                    x + size / 4,
+                    y,
+                    size / 2,
+                    size / 3,
+                    Rgb(250, 200, 60),
+                );
+                fill_rect(
+                    image,
+                    x + size / 4 + 2,
+                    y + 2,
+                    (size / 2).saturating_sub(4),
+                    size / 3,
+                    palette::LOCKED,
+                );
             }
             Badge::Muted => {
                 fill_rect(image, x, y, size, size, Rgb(230, 60, 60));
@@ -120,7 +165,11 @@ impl Renderer {
         }
         let horizontal = w >= h;
         let count = segments.len() as u32;
-        let (seg_w, seg_h) = if horizontal { (w / count, h) } else { (w, h / count) };
+        let (seg_w, seg_h) = if horizontal {
+            (w / count, h)
+        } else {
+            (w, h / count)
+        };
         for (index, segment) in segments.iter().enumerate() {
             let (x0, y0) = if horizontal {
                 (index as u32 * seg_w, 0)
@@ -128,23 +177,66 @@ impl Renderer {
                 (0, index as u32 * seg_h)
             };
             let margin = (seg_h.min(seg_w) as f32 * 0.1) as u32;
-            fill_rect(&mut image, x0 + 1, y0 + 1, seg_w.saturating_sub(2), seg_h.saturating_sub(2), segment.background);
+            fill_rect(
+                &mut image,
+                x0 + 1,
+                y0 + 1,
+                seg_w.saturating_sub(2),
+                seg_h.saturating_sub(2),
+                segment.background,
+            );
             let bar_h = (seg_h as f32 * 0.14).max(4.0) as u32;
             let bar_y = y0 + seg_h - margin - bar_h;
-            fill_rect(&mut image, x0 + margin, bar_y, seg_w - 2 * margin, bar_h, Rgb(20, 20, 24));
+            fill_rect(
+                &mut image,
+                x0 + margin,
+                bar_y,
+                seg_w - 2 * margin,
+                bar_h,
+                Rgb(20, 20, 24),
+            );
             let filled = ((seg_w - 2 * margin) as f32 * segment.volume.clamp(0.0, 1.0)) as u32;
-            fill_rect(&mut image, x0 + margin, bar_y, filled, bar_h, if segment.muted { palette::MUTED } else { palette::BAR });
+            fill_rect(
+                &mut image,
+                x0 + margin,
+                bar_y,
+                filled,
+                bar_h,
+                if segment.muted {
+                    palette::MUTED
+                } else {
+                    palette::BAR
+                },
+            );
             if let Some(font) = &self.font {
                 let scale = (seg_h as f32 * 0.3).max(10.0);
                 let scale = fit_scale(font, &segment.title, scale, (seg_w - 2 * margin) as f32);
-                draw_text_at(&mut image, font, &segment.title, scale, x0 as f32, seg_w as f32, y0 as f32 + margin as f32, palette::IDLE_TEXT);
+                draw_text_at(
+                    &mut image,
+                    font,
+                    &segment.title,
+                    scale,
+                    x0 as f32,
+                    seg_w as f32,
+                    y0 as f32 + margin as f32,
+                    palette::IDLE_TEXT,
+                );
                 let subtitle = if segment.muted {
                     "MUTED".to_string()
                 } else {
                     format!("{}%", (segment.volume * 100.0).round() as u32)
                 };
                 let sub_scale = (seg_h as f32 * 0.22).max(9.0);
-                draw_text_at(&mut image, font, &subtitle, sub_scale, x0 as f32, seg_w as f32, y0 as f32 + margin as f32 + scale * 1.1, palette::IDLE_TEXT);
+                draw_text_at(
+                    &mut image,
+                    font,
+                    &subtitle,
+                    sub_scale,
+                    x0 as f32,
+                    seg_w as f32,
+                    y0 as f32 + margin as f32 + scale * 1.1,
+                    palette::IDLE_TEXT,
+                );
             }
         }
         image
@@ -174,7 +266,9 @@ fn fill_rect(image: &mut RgbImage, x: u32, y: u32, w: u32, h: u32, color: Rgb) {
 
 fn text_width(font: &FontVec, text: &str, scale: f32) -> f32 {
     let scaled = font.as_scaled(PxScale::from(scale));
-    text.chars().map(|c| scaled.h_advance(scaled.glyph_id(c))).sum()
+    text.chars()
+        .map(|c| scaled.h_advance(scaled.glyph_id(c)))
+        .sum()
 }
 
 fn fit_scale(font: &FontVec, text: &str, scale: f32, max_width: f32) -> f32 {
@@ -219,7 +313,17 @@ fn draw_text(image: &mut RgbImage, font: &FontVec, text: &str, scale: f32, top: 
     draw_text_at(image, font, text, scale, 0.0, w as f32, top, color);
 }
 
-fn draw_text_at(image: &mut RgbImage, font: &FontVec, text: &str, scale: f32, x0: f32, width: f32, top: f32, color: Rgb) {
+#[allow(clippy::too_many_arguments)]
+fn draw_text_at(
+    image: &mut RgbImage,
+    font: &FontVec,
+    text: &str,
+    scale: f32,
+    x0: f32,
+    width: f32,
+    top: f32,
+    color: Rgb,
+) {
     let scaled = font.as_scaled(PxScale::from(scale));
     let text_w = text_width(font, text, scale);
     let mut x = x0 + (width - text_w).max(0.0) / 2.0;
@@ -237,8 +341,13 @@ fn draw_text_at(image: &mut RgbImage, font: &FontVec, text: &str, scale: f32, x0
                     return;
                 }
                 let pixel = image.get_pixel_mut(px as u32, py as u32);
-                let blend = |dst: u8, src: u8| (dst as f32 + (src as f32 - dst as f32) * coverage) as u8;
-                *pixel = ImgRgb([blend(pixel[0], color.0), blend(pixel[1], color.1), blend(pixel[2], color.2)]);
+                let blend =
+                    |dst: u8, src: u8| (dst as f32 + (src as f32 - dst as f32) * coverage) as u8;
+                *pixel = ImgRgb([
+                    blend(pixel[0], color.0),
+                    blend(pixel[1], color.1),
+                    blend(pixel[2], color.2),
+                ]);
             });
         }
         x += scaled.h_advance(id);
@@ -270,12 +379,21 @@ mod tests {
         assert_eq!(bar_px.0, [palette::BAR.0, palette::BAR.1, palette::BAR.2]);
         // Badge drawn in the top-right corner.
         let badge_px = image.get_pixel(66, 10);
-        assert_ne!(badge_px.0, [palette::IDLE.0, palette::IDLE.1, palette::IDLE.2]);
+        assert_ne!(
+            badge_px.0,
+            [palette::IDLE.0, palette::IDLE.1, palette::IDLE.2]
+        );
         if renderer.has_font() {
             // Some text pixels differ from the background.
             let changed = image
                 .pixels()
-                .filter(|p| p.0 == [palette::IDLE_TEXT.0, palette::IDLE_TEXT.1, palette::IDLE_TEXT.2])
+                .filter(|p| {
+                    p.0 == [
+                        palette::IDLE_TEXT.0,
+                        palette::IDLE_TEXT.1,
+                        palette::IDLE_TEXT.2,
+                    ]
+                })
                 .count();
             assert!(changed > 20, "text rendered: {changed}");
         }
@@ -296,8 +414,18 @@ mod tests {
     fn renders_strip_segments() {
         let renderer = renderer();
         let segments = vec![
-            StripSegment { title: "Crew".into(), volume: 0.9, muted: false, background: palette::VOLUME },
-            StripSegment { title: "Cam 2".into(), volume: 0.3, muted: true, background: palette::VOLUME },
+            StripSegment {
+                title: "Crew".into(),
+                volume: 0.9,
+                muted: false,
+                background: palette::VOLUME,
+            },
+            StripSegment {
+                title: "Cam 2".into(),
+                volume: 0.3,
+                muted: true,
+                background: palette::VOLUME,
+            },
         ];
         let image = renderer.strip((800, 100), &segments);
         assert_eq!(image.dimensions(), (800, 100));
