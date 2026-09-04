@@ -169,6 +169,11 @@ pub struct IceConfig {
     pub servers: Option<Vec<IceServerConfig>>,
     /// `all` or `relay`; overrides the server's policy. Testing only.
     pub transport_policy: Option<String>,
+    /// Gather IPv6 host and server-reflexive candidates. Off by default:
+    /// webrtc-ice cannot bind IPv6 link-local addresses (EINVAL) and IPv6
+    /// STUN lookup fails when the only IPv6 addresses on the box are
+    /// link-local. Remote IPv6 ICE candidates from the server are still used.
+    pub ipv6: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

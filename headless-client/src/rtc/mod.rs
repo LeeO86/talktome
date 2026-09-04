@@ -2,12 +2,15 @@
 //! the Talktome Socket.IO events. One send peer connection carries the single
 //! "talk" producer; one receive peer connection carries all consumers.
 
+pub mod ice_addr;
 pub mod ortc;
 pub mod remote_sdp;
 pub mod sdp;
+pub mod turn_bridge;
 pub mod types;
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,8 +24,8 @@ use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS};
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
 use webrtc::dtls_transport::dtls_role::DTLSRole;
+use webrtc::ice::network_type::NetworkType;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
-use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
@@ -38,7 +41,7 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_remote::TrackRemote;
 
-use crate::config::IceConfig;
+use crate::config::{IceConfig, IceServerConfig, TlsConfig};
 use crate::signalling::socketio::SocketClient;
 use remote_sdp::RecvRemoteSdp;
 use types::*;
@@ -79,6 +82,7 @@ pub struct RxPacket {
 #[derive(Debug, Clone)]
 pub struct RtcSettings {
     pub ice_override: IceConfig,
+    pub tls: TlsConfig,
     pub disconnected_timeout: Duration,
     pub failed_timeout: Duration,
     pub keepalive_interval: Duration,
@@ -88,6 +92,7 @@ impl Default for RtcSettings {
     fn default() -> Self {
         Self {
             ice_override: IceConfig::default(),
+            tls: TlsConfig::default(),
             disconnected_timeout: Duration::from_secs(4),
             failed_timeout: Duration::from_secs(12),
             keepalive_interval: Duration::from_secs(2),
@@ -100,6 +105,8 @@ pub struct MediaFactory {
     router: RtpCapabilities,
     payload_type: u8,
     settings: RtcSettings,
+    tls: Arc<rustls::ClientConfig>,
+    ice_prep: Mutex<Option<turn_bridge::IceServerPrep>>,
 }
 
 impl MediaFactory {
@@ -108,10 +115,13 @@ impl MediaFactory {
             .opus()
             .and_then(|c| c.preferred_payload_type)
             .unwrap_or(100);
+        let tls = crate::tls::build_turn_client_config(&settings.tls)?;
         Ok(Self {
             router,
             payload_type,
             settings,
+            tls,
+            ice_prep: Mutex::new(None),
         })
     }
 
@@ -132,49 +142,49 @@ impl MediaFactory {
         }
     }
 
-    fn rtc_configuration(&self, transport: &TransportInfo) -> RTCConfiguration {
-        let mut servers = Vec::new();
-        match &self.settings.ice_override.servers {
-            Some(overrides) => {
-                for server in overrides {
-                    servers.push(RTCIceServer {
-                        urls: server.urls.clone(),
-                        username: server.username.clone().unwrap_or_default(),
-                        credential: server.credential.clone().unwrap_or_default(),
-                    });
-                }
-            }
-            None => {
-                for server in &transport.ice_servers {
-                    let urls = server.url_list();
-                    if urls.is_empty() {
-                        continue;
-                    }
-                    servers.push(RTCIceServer {
-                        urls,
-                        username: server.username.clone().unwrap_or_default(),
-                        credential: server.credential.clone().unwrap_or_default(),
-                    });
-                }
-            }
-        }
-        let policy = self
-            .settings
+    fn ice_policy<'a>(&'a self, transport: &'a TransportInfo) -> &'a str {
+        self.settings
             .ice_override
             .transport_policy
             .as_deref()
             .or(transport.ice_transport_policy.as_deref())
-            .unwrap_or("all");
+            .unwrap_or("all")
+    }
+
+    async fn rtc_configuration(&self, transport: &TransportInfo) -> Result<RTCConfiguration> {
+        let policy = self.ice_policy(transport);
         let ice_transport_policy = if policy.eq_ignore_ascii_case("relay") {
             RTCIceTransportPolicy::Relay
         } else {
             RTCIceTransportPolicy::All
         };
-        RTCConfiguration {
+        let servers = {
+            let mut slot = self.ice_prep.lock().await;
+            if slot.is_none() {
+                let sources = match &self.settings.ice_override.servers {
+                    Some(overrides) => ice_servers_from_override(overrides),
+                    None => transport.ice_servers.clone(),
+                };
+                let prep =
+                    turn_bridge::IceServerPrep::prepare(&sources, Arc::clone(&self.tls), policy)
+                        .await?;
+                tracing::info!(
+                    event = "ice-servers",
+                    announced = ?prep.announced,
+                    effective = ?prep.effective,
+                    policy
+                );
+                *slot = Some(prep);
+            }
+            slot.as_ref()
+                .map(|prep| prep.servers.clone())
+                .unwrap_or_default()
+        };
+        Ok(RTCConfiguration {
             ice_servers: servers,
             ice_transport_policy,
             ..Default::default()
-        }
+        })
     }
 
     async fn new_peer_connection(
@@ -215,6 +225,12 @@ impl MediaFactory {
             Some(self.settings.failed_timeout),
             Some(self.settings.keepalive_interval),
         );
+        if self.settings.ice_override.ipv6 {
+            setting_engine.set_network_types(vec![NetworkType::Udp4, NetworkType::Udp6]);
+        } else {
+            setting_engine.set_network_types(vec![NetworkType::Udp4]);
+        }
+        setting_engine.set_ip_filter(Box::new(usable_ip_filter));
         // mediasoup is ICE-lite; webrtc-rs would otherwise answer an ice-lite
         // offer with `a=setup:passive`, while we tell mediasoup we are the
         // DTLS client. Both sides would then wait for a ClientHello.
@@ -229,7 +245,7 @@ impl MediaFactory {
             .build();
 
         let pc = Arc::new(
-            api.new_peer_connection(self.rtc_configuration(transport))
+            api.new_peer_connection(self.rtc_configuration(transport).await?)
                 .await
                 .context("creating peer connection")?,
         );
@@ -263,6 +279,32 @@ fn parse_local_fingerprint(sdp_text: &str) -> Result<DtlsParameters> {
     })
 }
 
+fn ice_servers_from_override(overrides: &[IceServerConfig]) -> Vec<IceServer> {
+    overrides
+        .iter()
+        .map(|server| IceServer {
+            urls: Value::Array(
+                server
+                    .urls
+                    .iter()
+                    .map(|url| Value::String(url.clone()))
+                    .collect(),
+            ),
+            username: server.username.clone(),
+            credential: server.credential.clone(),
+        })
+        .collect()
+}
+
+fn usable_ip_filter(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v) => {
+            !v.is_unspecified() && !v.is_link_local() && !v.is_broadcast() && !v.is_multicast()
+        }
+        IpAddr::V6(v) => !v.is_unspecified() && !v.is_multicast() && !v.is_unicast_link_local(),
+    }
+}
+
 /// The send transport with its single warm "talk" producer.
 pub struct SendTransport {
     pc: Arc<RTCPeerConnection>,
@@ -289,6 +331,11 @@ impl SendTransport {
                 .await?,
         )
         .context("parsing create-send-transport response")?;
+        let info = ice_addr::resolve_transport_candidates(info).await?;
+        tracing::info!(
+            event = "send-ice-candidates",
+            candidates = ?ice_addr::describe_candidates(&info.ice_candidates)
+        );
 
         let pc = factory
             .new_peer_connection(&info, Direction::Send, events)
@@ -334,9 +381,18 @@ impl SendTransport {
 
         let answer = remote_sdp::build_send_answer(&local_info, &info, 2)?;
         tracing::debug!(event = "send-remote-answer", sdp = %answer);
-        pc.set_remote_description(RTCSessionDescription::answer(answer)?)
-            .await
-            .context("setting remote answer")?;
+        let desc = RTCSessionDescription::answer(answer).with_context(|| {
+            format!(
+                "parsing remote answer SDP (candidates: {})",
+                ice_addr::describe_candidates(&info.ice_candidates).join(", ")
+            )
+        })?;
+        pc.set_remote_description(desc).await.with_context(|| {
+            format!(
+                "setting remote answer (candidates: {})",
+                ice_addr::describe_candidates(&info.ice_candidates).join(", ")
+            )
+        })?;
 
         let rtp_parameters = ortc::sending_rtp_parameters(&local_info, factory.router())?;
         let produced = signal
@@ -364,7 +420,7 @@ impl SendTransport {
             .await?;
         tracing::info!(event = "producer-created", producer = %producer_id, transport = %info.id);
 
-        let rtc_config = factory.rtc_configuration(&info);
+        let rtc_config = factory.rtc_configuration(&info).await?;
         Ok(Self {
             pc,
             track,
@@ -455,6 +511,11 @@ impl RecvTransport {
                 .await?,
         )
         .context("parsing create-recv-transport response")?;
+        let info = ice_addr::resolve_transport_candidates(info).await?;
+        tracing::info!(
+            event = "recv-ice-candidates",
+            candidates = ?ice_addr::describe_candidates(&info.ice_candidates)
+        );
         let pc = factory
             .new_peer_connection(&info, Direction::Recv, events.clone())
             .await?;

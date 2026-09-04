@@ -44,7 +44,8 @@
   },
   "ice": {
     "servers": null,
-    "transport_policy": null
+    "transport_policy": null,
+    "ipv6": false
   },
   "network": {
     "ice_disconnect_grace_ms": 4000

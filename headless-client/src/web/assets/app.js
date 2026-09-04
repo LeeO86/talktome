@@ -807,6 +807,7 @@
       desc: 'STUN/TURN overrides and recovery',
       fields: [
         { path: 'ice.transport_policy', label: 'ICE transport policy', type: 'select', nullable: true, options: [['', 'From server'], ['all', 'all'], ['relay', 'relay (TURN only)']] },
+        { path: 'ice.ipv6', label: 'Gather IPv6 ICE candidates', type: 'bool', help: 'Off by default. Enable only if this device has a global IPv6 address.' },
         { path: 'network.ice_disconnect_grace_ms', label: 'ICE disconnect grace (ms)', type: 'number' },
         { path: 'ice.servers', label: 'ICE server overrides (JSON array, testing only)', type: 'json', nullable: true, wide: true, help: '[{ "urls": ["turn:host:3478"], "username": "u", "credential": "p" }]' },
       ],
