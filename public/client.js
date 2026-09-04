@@ -11369,8 +11369,10 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     currentTargetPeer = null;
     clearPressedTalkPointers();
     applyFeedDucking();
-    clearHotkeyActiveStyles();
-    pressedHotkeyBindings.clear();
+    if (inputKey === null) {
+      clearHotkeyActiveStyles();
+      pressedHotkeyBindings.clear();
+    }
     emitPttState('talk-stopped', { talking: false, lockActive: false, target: null, targets: [] });
 
     if (shouldRestoreSuspendedLock) {

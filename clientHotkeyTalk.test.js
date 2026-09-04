@@ -30,3 +30,15 @@ test('hotkey release only stops its own active talk input', () => {
   assert.match(keyupHandler, /if \(!activeTalkPointers\.has\(talkInputKey\)\) return;/);
   assert.match(keyupHandler, /talkInputKey,/);
 });
+
+test('a scoped hotkey release preserves other visually pressed hotkeys', () => {
+  const stopHandler = source.slice(
+    source.indexOf('function handleStopTalking(e) {'),
+    source.indexOf("socket.on('force-stop-transmission'")
+  );
+
+  assert.match(
+    stopHandler,
+    /if \(inputKey === null\) \{\s*clearHotkeyActiveStyles\(\);\s*pressedHotkeyBindings\.clear\(\);\s*\}/
+  );
+});
