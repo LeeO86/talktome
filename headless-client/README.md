@@ -33,6 +33,15 @@ sudo editor /etc/talktome-headless/cam1.toml
 sudo talktome-headless --instance cam1 check-config
 ```
 
+`/etc/talktome-headless` is `0770 root:talktome-headless`. Copying the example
+as root is fine; the service needs group-write on that directory so the web UI
+can save the admin password and settings (it writes `<instance>.toml.tmp` then
+renames). The packaged unit also sets `ReadWritePaths=/etc/talktome-headless`
+because `ProtectSystem=strict` would otherwise make `/etc` read-only
+(`saving the password failed: … Read-only file system`). After upgrading, a
+manual drop-in with that path is no longer needed; `systemctl daemon-reload`
+and restart the instance.
+
 Minimum content: the server URL, the user's name and password and (for a
 self-signed server certificate) `tls.ca_file`, `tls.fingerprint_sha256` or
 `tls.insecure = true`. The password can live in
@@ -78,7 +87,8 @@ desktops:
 
 - Login is always the user `admin`; the password comes from `web.password` or
   `TALKTOME_WEB_PASSWORD`. The default password `admin` works once and then
-  forces a change; the new password is written to the configuration file.
+  forces a change (that dialog is not the login overlay). The new password is
+  written to the configuration file; saving Settings does the same rewrite.
 - **Status**: Talktome connection (state, server, user, production, transports,
   consumers, ICE servers, reconnects, tally), the talk state with press-and-hold
   Talk, Lock, volume and mute controls per target, audio devices with an input
