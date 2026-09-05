@@ -125,7 +125,8 @@ desktops:
   points can be operated from the browser and behave like the hardware.
 - **Settings**: every configuration value as a form (audio devices are listed
   from ALSA), plus a raw JSON editor. Saving writes the TOML/JSON file the
-  instance was started with; secrets are never shown and stay unchanged unless
+  instance was started with and keeps other file values even if the process
+  has not restarted yet; secrets are never shown and stay unchanged unless
   replaced. `Save & restart` applies the change immediately.
 - **Restart**: under systemd the service exits cleanly and `Restart=always`
   brings it back; without systemd the binary re-executes itself.
