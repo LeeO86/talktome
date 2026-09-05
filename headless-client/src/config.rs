@@ -188,6 +188,10 @@ pub struct StreamDeckConfig {
     pub enabled: bool,
     /// Serial number of the deck to use; `null` = first found.
     pub serial: Option<String>,
+    /// Dummy deck when no hardware is attached (`mk2`, `plus`, `xl`, `neo`,
+    /// `pedal`, …). Empty = discover a real Stream Deck. The environment
+    /// variable `TALKTOME_MOCK_STREAMDECK` still wins when set.
+    pub mock: Option<String>,
     pub brightness: u8,
     pub font_path: PathBuf,
     pub volume_step: f32,
@@ -370,6 +374,7 @@ impl Default for StreamDeckConfig {
         Self {
             enabled: true,
             serial: None,
+            mock: None,
             brightness: 60,
             font_path: PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
             volume_step: 0.05,
@@ -593,6 +598,42 @@ pub fn render_document(path: &Path, doc: &Value) -> Result<String> {
     }
 }
 
+/// Overlay a configuration **file** on the running (fully defaulted) document.
+/// File values win; keys only present in `running` remain, so the result is
+/// suitable for a settings form after a save that has not been restarted yet.
+pub fn merge_file_over_running(running: &Value, file: &Value) -> Value {
+    match (running, file) {
+        (Value::Object(running_map), Value::Object(file_map)) => {
+            let mut out = running_map.clone();
+            for (key, file_val) in file_map {
+                let merged = match running_map.get(key) {
+                    Some(running_val) if running_val.is_object() && file_val.is_object() => {
+                        merge_file_over_running(running_val, file_val)
+                    }
+                    _ => file_val.clone(),
+                };
+                out.insert(key.clone(), merged);
+            }
+            Value::Object(out)
+        }
+        (_, file) => file.clone(),
+    }
+}
+
+/// Copy top-level keys from `stored` that `incoming` omitted. Nested objects
+/// that **are** present in `incoming` are left as sent, so an empty
+/// `gpio.outputs` object can still clear outputs.
+pub fn merge_missing_top_level(stored: &Value, mut incoming: Value) -> Value {
+    if let (Some(stored_map), Some(incoming_map)) = (stored.as_object(), incoming.as_object_mut()) {
+        for (key, stored_val) in stored_map {
+            incoming_map
+                .entry(key.clone())
+                .or_insert_with(|| stored_val.clone());
+        }
+    }
+    incoming
+}
+
 /// Removes `null` members recursively; TOML has no null and JSON files stay
 /// tidy without them (absent keys mean "default").
 pub fn strip_nulls(value: &mut Value) {
@@ -692,6 +733,33 @@ impl Config {
         if let Some(policy) = &self.ice.transport_policy {
             if !matches!(policy.as_str(), "all" | "relay") {
                 bail!("ice.transport_policy must be \"all\" or \"relay\"");
+            }
+        }
+        if let Some(mock) = &self.streamdeck.mock {
+            let name = mock
+                .trim()
+                .to_ascii_lowercase()
+                .replace(['-', '_', ' '], "");
+            if !name.is_empty()
+                && !matches!(
+                    name.as_str(),
+                    "original"
+                        | "originalv2"
+                        | "v2"
+                        | "mini"
+                        | "minimk2"
+                        | "mk2"
+                        | "xl"
+                        | "xlv2"
+                        | "plus"
+                        | "plusxl"
+                        | "neo"
+                        | "pedal"
+                )
+            {
+                bail!(
+                    "streamdeck.mock {mock:?} is not a known model (original, originalv2, mini, minimk2, mk2, xl, xlv2, plus, plusxl, neo, pedal)"
+                );
             }
         }
         if self.streamdeck.brightness > 100 {
@@ -954,6 +1022,51 @@ mod tests {
         assert!(config.validate().is_err());
         config.web.enabled = false;
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn streamdeck_mock_accepts_known_models() {
+        let mut config = from_document(minimal_json()).unwrap();
+        config.streamdeck.mock = Some("mk2".into());
+        config.validate().unwrap();
+        config.streamdeck.mock = Some("no-such-deck".into());
+        assert!(config.validate().is_err());
+        config.streamdeck.mock = Some("".into());
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn merge_file_over_running_keeps_saved_user_and_running_defaults() {
+        let running = serde_json::json!({
+            "user": { "name": "Cam 1", "password": "********", "production": null },
+            "audio": { "profile": "standard", "input_device": "tone" },
+            "server": { "url": "https://talktome.local:8443" }
+        });
+        let file = serde_json::json!({
+            "user": { "name": "Studio", "password": "********" },
+            "server": { "url": "https://talktome.local:8443" }
+        });
+        let editor = merge_file_over_running(&running, &file);
+        assert_eq!(editor["user"]["name"], "Studio");
+        assert_eq!(editor["audio"]["profile"], "standard");
+        assert_eq!(editor["audio"]["input_device"], "tone");
+    }
+
+    #[test]
+    fn merge_missing_top_level_keeps_omitted_instance() {
+        let stored = serde_json::json!({
+            "instance": "cam1",
+            "user": { "name": "Studio" },
+            "audio": { "profile": "standard", "input_device": "tone" }
+        });
+        let incoming = serde_json::json!({
+            "user": { "name": "Studio" },
+            "audio": { "profile": "low" }
+        });
+        let merged = merge_missing_top_level(&stored, incoming);
+        assert_eq!(merged["instance"], "cam1");
+        assert_eq!(merged["audio"]["profile"], "low");
+        assert!(merged["audio"].get("input_device").is_none());
     }
 
     #[test]

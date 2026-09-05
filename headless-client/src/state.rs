@@ -61,6 +61,20 @@ pub struct TargetInfo {
     pub receiving: bool,
     pub volume: f32,
     pub muted: bool,
+    /// Conference members (empty for users and feeds). Each can be heard
+    /// independently, like the browser client's member mix.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<ConferenceMemberInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ConferenceMemberInfo {
+    pub user_id: i64,
+    pub name: String,
+    pub online: bool,
+    pub receiving: bool,
+    pub volume: f32,
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -77,6 +91,9 @@ pub struct MediaInfo {
     pub consumers: usize,
     pub producer_id: Option<String>,
     pub ice_servers: Vec<String>,
+    /// URLs announced by the Talktome server (often `turns:…?transport=tcp`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ice_servers_announced: Vec<String>,
     pub ice_transport_policy: String,
 }
 
@@ -173,6 +190,15 @@ pub enum Command {
     VolumeSet {
         target: TargetKey,
         volume: f32,
+    },
+    MemberVolumeSet {
+        conference: TargetKey,
+        user_id: i64,
+        volume: f32,
+    },
+    MemberMuteToggle {
+        conference: TargetKey,
+        user_id: i64,
     },
     /// Request a fresh snapshot broadcast (e.g. after a deck reconnects).
     Refresh,

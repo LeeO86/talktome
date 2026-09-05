@@ -53,6 +53,7 @@
   "streamdeck": {
     "enabled": true,
     "serial": null,
+    "mock": null,
     "brightness": 60,
     "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "volume_step": 0.05,

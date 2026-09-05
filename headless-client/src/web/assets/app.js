@@ -13,9 +13,12 @@
     deckTimer: null,
     config: null,
     configDoc: null,
+    runningDoc: null,
+    fileDoc: null,
     audioDevices: { inputs: [], outputs: [] },
     rawMode: false,
     pressed: new Set(),
+    memberOpen: new Set(),
     volumeTimers: new Map(),
     restarting: false,
   };
@@ -395,7 +398,8 @@
       ['Receive transport', media.recv_state || '–'],
       ['Consumers', media.consumers != null ? media.consumers : '–'],
       ['Producer', media.producer_id ? code(media.producer_id.slice(0, 8)) : '–'],
-      ['ICE servers', media.ice_servers && media.ice_servers.length ? media.ice_servers.join(', ') : 'none (direct only)'],
+      ['ICE (server)', media.ice_servers_announced && media.ice_servers_announced.length ? media.ice_servers_announced.join(', ') : (media.ice_servers && media.ice_servers.length ? media.ice_servers.join(', ') : 'none (direct only)')],
+      ['ICE (webrtc)', iceEffectiveLabel(media)],
       ['ICE policy', media.ice_transport_policy || '–'],
       ['Camera tally', snap.on_air ? badge('ON AIR', 'bad') : badge('off')],
     ]);
@@ -487,6 +491,14 @@
     ]);
   }
 
+  function iceEffectiveLabel(media) {
+    const urls = media.ice_servers || [];
+    if (!urls.length) return 'none';
+    const bridged = urls.filter((url) => url.includes('127.0.0.1') || url.includes('[::1]'));
+    if (!bridged.length) return urls.join(', ');
+    return `${bridged.join(', ')} — local UDP façade for TURNS/TURN-TCP, not a second TURN hop`;
+  }
+
   function labelForTarget(snap, key) {
     const target = snap.targets.find((t) => targetKey(t.key) === key);
     return target ? target.name : key;
@@ -558,13 +570,22 @@
       );
     });
     muteButton.addEventListener('click', () => api('POST', '/api/audio', { action: 'mute-toggle', target: key }).catch((error) => flash(error.message, 'error')));
-    controls.append(slider, muteButton);
+    controls.append(slider, volume, muteButton);
+    const members = el('div', { class: 'target__members is-hidden' });
+    const membersToggle = el('button', { type: 'button', class: 'btn btn-small target__members-toggle is-hidden', text: 'Members' });
+    membersToggle.addEventListener('click', () => {
+      if (state.memberOpen.has(key)) state.memberOpen.delete(key);
+      else state.memberOpen.add(key);
+      members.classList.toggle('is-hidden', !state.memberOpen.has(key));
+    });
     row.append(
       el('div', { class: 'target__name' }, [el('span', { class: 'kind', text: kind }), el('span', { class: 'name' })]),
       flags,
-      controls
+      controls,
+      membersToggle,
+      members
     );
-    row._parts = { flags, talkButton, lockButton, slider, volume, muteButton };
+    row._parts = { flags, talkButton, lockButton, slider, volume, muteButton, members, membersToggle };
     return row;
   }
 
@@ -586,6 +607,57 @@
     if (document.activeElement !== parts.slider) {
       parts.slider.value = Math.round(target.volume * 100);
       parts.volume.textContent = `${Math.round(target.volume * 100)}%`;
+    }
+    const members = target.members || [];
+    const showMembers = targetKind(targetKey(target.key)) === 'conference' && members.length;
+    parts.membersToggle.classList.toggle('is-hidden', !showMembers);
+    if (showMembers) {
+      parts.membersToggle.textContent = `Members (${members.length})`;
+      parts.members.classList.toggle('is-hidden', !state.memberOpen.has(targetKey(target.key)));
+      if (state.memberOpen.has(targetKey(target.key))) {
+        renderMembers(parts.members, targetKey(target.key), members);
+      }
+    } else {
+      parts.members.replaceChildren();
+      parts.members.classList.add('is-hidden');
+    }
+  }
+
+  function renderMembers(container, conferenceKey, members) {
+    const existing = new Map($$('.member', container).map((node) => [node.dataset.userId, node]));
+    const seen = new Set();
+    for (const member of members) {
+      const id = String(member.user_id);
+      seen.add(id);
+      let node = existing.get(id);
+      if (!node) {
+        node = el('div', { class: 'member', dataset: { userId: id } });
+        const name = el('span', { class: 'member__name' });
+        const slider = el('input', { type: 'range', min: 0, max: 100, step: 5 });
+        const mute = el('button', { type: 'button', class: 'btn btn-small btn-mute', text: 'Hear' });
+        slider.addEventListener('input', () => {
+          const timerKey = `${conferenceKey}/${id}`;
+          clearTimeout(state.volumeTimers.get(timerKey));
+          state.volumeTimers.set(
+            timerKey,
+            setTimeout(() => api('POST', '/api/audio', { action: 'member-volume-set', target: conferenceKey, member: `user:${id}`, value: Number(slider.value) / 100 }).catch((error) => flash(error.message, 'error')), 150)
+          );
+        });
+        mute.addEventListener('click', () => api('POST', '/api/audio', { action: 'member-mute-toggle', target: conferenceKey, member: `user:${id}` }).catch((error) => flash(error.message, 'error')));
+        node.append(name, slider, mute);
+        node._parts = { name, slider, mute };
+        container.append(node);
+      }
+      node._parts.name.textContent = `${member.name}${member.online ? '' : ' (offline)'}${member.receiving ? ' · speaking' : ''}`;
+      node.classList.toggle('is-muted', member.muted);
+      node._parts.mute.classList.toggle('is-active', member.muted);
+      node._parts.mute.textContent = member.muted ? 'Muted' : 'Hear';
+      if (document.activeElement !== node._parts.slider) {
+        node._parts.slider.value = Math.round(member.volume * 100);
+      }
+    }
+    for (const [id, node] of existing) {
+      if (!seen.has(id)) node.remove();
     }
   }
 
@@ -749,8 +821,8 @@
       title: 'Audio',
       desc: 'devices, codec profile, dimming, jitter buffer',
       fields: [
-        { path: 'audio.input_device', label: 'Input device', type: 'device', direction: 'inputs', nullable: true },
-        { path: 'audio.output_device', label: 'Output device', type: 'device', direction: 'outputs', nullable: true },
+        { path: 'audio.input_device', label: 'Input device', type: 'device', direction: 'inputs', nullable: true, help: 'Use tone or tone:440 on a VM with no microphone' },
+        { path: 'audio.output_device', label: 'Output device', type: 'device', direction: 'outputs', nullable: true, help: 'wav:/tmp/out.wav records the mix when there is no speaker' },
         { path: 'audio.profile', label: 'Codec profile', type: 'select', options: [['standard', 'Standard (20 ms, FEC)'], ['low', 'Low (10 ms)'], ['ultra-low', 'Ultra low (5 ms)']] },
         { path: 'audio.input_gain_db', label: 'Input gain (dB)', type: 'number', step: 0.5 },
         { path: 'audio.default_volume', label: 'Default target volume (0–1)', type: 'number', step: 0.05, min: 0, max: 1 },
@@ -781,6 +853,7 @@
       desc: 'device binding, brightness, volume layer',
       fields: [
         { path: 'streamdeck.enabled', label: 'Use a Stream Deck', type: 'bool' },
+        { path: 'streamdeck.mock', label: 'Dummy deck (no hardware)', type: 'select', nullable: true, options: [['', 'Real hardware'], ['mk2', 'Stream Deck MK.2 (15 keys)'], ['mini', 'Stream Deck Mini'], ['minimk2', 'Stream Deck Mini MK.2'], ['original', 'Stream Deck Original'], ['originalv2', 'Stream Deck Original V2'], ['xl', 'Stream Deck XL'], ['xlv2', 'Stream Deck XL V2'], ['plus', 'Stream Deck +'], ['plusxl', 'Stream Deck + XL'], ['neo', 'Stream Deck Neo'], ['pedal', 'Stream Deck Pedal']], help: 'Pick a model to test the Stream Deck tab without a USB deck. TALKTOME_MOCK_STREAMDECK overrides this.' },
         { path: 'streamdeck.serial', label: 'Serial number', type: 'text', nullable: true, help: 'Empty: first deck found' },
         { path: 'streamdeck.brightness', label: 'Brightness (%)', type: 'number', min: 0, max: 100 },
         { path: 'streamdeck.font_path', label: 'Font file', type: 'text' },
@@ -842,13 +915,67 @@
     cursor[keys[keys.length - 1]] = value;
   }
 
+  function isPlainObject(value) {
+    return value != null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function mergeFileOverRunning(running, file) {
+    if (file == null) return running;
+    if (!isPlainObject(running) || !isPlainObject(file)) return file;
+    const out = { ...running };
+    for (const [key, value] of Object.entries(file)) {
+      out[key] = isPlainObject(value) && isPlainObject(out[key]) ? mergeFileOverRunning(out[key], value) : value;
+    }
+    return out;
+  }
+
+  function hasPath(doc, path) {
+    if (doc == null) return false;
+    let cursor = doc;
+    for (const key of path.split('.')) {
+      if (!isPlainObject(cursor) || !Object.prototype.hasOwnProperty.call(cursor, key)) return false;
+      cursor = cursor[key];
+    }
+    return true;
+  }
+
+  function deepEqual(a, b) {
+    if (Object.is(a, b)) return true;
+    if (a == null || b == null) return a === b;
+    if (typeof a !== typeof b) return false;
+    if (typeof a !== 'object') return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    if (Array.isArray(a)) return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key]));
+  }
+
+  function editorDocument(config) {
+    if (config.editor_document) return config.editor_document;
+    if (config.file_document) return mergeFileOverRunning(config.document, config.file_document);
+    return config.document;
+  }
+
+  function fileDiffersFromRunning(file, running) {
+    if (!file || !running) return false;
+    const walk = (fromFile, fromRunning) => {
+      if (!isPlainObject(fromFile)) return !deepEqual(fromFile, fromRunning);
+      if (!isPlainObject(fromRunning)) return true;
+      return Object.keys(fromFile).some((key) => walk(fromFile[key], fromRunning[key]));
+    };
+    return walk(file, running);
+  }
+
   async function loadConfig() {
     const message = $('#settings-message');
     message.textContent = '';
     try {
       const [config, devices] = await Promise.all([api('GET', '/api/config'), api('GET', '/api/config/audio-devices').catch(() => ({ inputs: [], outputs: [] }))]);
       state.config = config;
-      state.configDoc = JSON.parse(JSON.stringify(config.document));
+      state.runningDoc = JSON.parse(JSON.stringify(config.document));
+      state.fileDoc = config.file_document ? JSON.parse(JSON.stringify(config.file_document)) : null;
+      state.configDoc = JSON.parse(JSON.stringify(editorDocument(config)));
       state.audioDevices = devices;
       $('#settings-path').textContent = config.editable ? `Saved to ${config.path} (${config.format}). Changes apply after a restart.` : 'This instance runs from environment variables only; settings cannot be saved.';
       const env = $('#settings-env');
@@ -858,8 +985,19 @@
       } else {
         env.classList.add('is-hidden');
       }
+      const pending = $('#settings-pending');
+      if (config.editable && fileDiffersFromRunning(state.fileDoc, state.runningDoc)) {
+        pending.textContent = 'This file has saved changes the running client is not using yet (for example the Talktome user). Saving another setting keeps those file values. Restart to apply them.';
+        pending.classList.remove('is-hidden');
+      } else {
+        pending.classList.add('is-hidden');
+      }
       renderSettingsForm();
-      $('#raw-json').value = JSON.stringify(state.configDoc, null, 2);
+      try {
+        $('#raw-json').value = JSON.stringify(collectDocument(), null, 2);
+      } catch {
+        $('#raw-json').value = JSON.stringify(state.configDoc, null, 2);
+      }
       const disabled = !config.editable;
       $('#settings-save').disabled = disabled;
       $('#settings-save-restart').disabled = disabled;
@@ -892,7 +1030,7 @@
     const wrapper = el('label', { class: `field${field.wide ? ' wide' : ''}`, dataset: { path: field.path } });
     if (field.type === 'bool') {
       wrapper.className = `field-check${field.wide ? ' wide' : ''}`;
-      const input = el('input', { type: 'checkbox', dataset: { path: field.path, type: 'bool' } });
+      const input = el('input', { type: 'checkbox', dataset: { path: field.path, type: 'bool' }, autocomplete: 'off' });
       input.checked = Boolean(value);
       wrapper.append(input, el('span', { text: field.label }));
       return wrapper;
@@ -900,20 +1038,20 @@
     wrapper.append(el('span', { text: field.label }));
     let input;
     if (field.type === 'select') {
-      input = el('select', { dataset: { path: field.path, type: 'select', nullable: field.nullable ? '1' : '' } });
+      input = el('select', { dataset: { path: field.path, type: 'select', nullable: field.nullable ? '1' : '' }, autocomplete: 'off' });
       for (const [optionValue, label] of field.options) {
         input.append(el('option', { value: optionValue, text: label }));
       }
       input.value = value == null ? '' : String(value);
     } else if (field.type === 'device') {
       const listId = `devices-${field.path.replace(/\W/g, '-')}`;
-      input = el('input', { type: 'text', list: listId, placeholder: 'default device', dataset: { path: field.path, type: 'text', nullable: '1' } });
+      input = el('input', { type: 'text', list: listId, placeholder: 'default device', dataset: { path: field.path, type: 'text', nullable: '1' }, autocomplete: 'off' });
       input.value = value == null ? '' : value;
       const list = el('datalist', { id: listId });
       for (const device of state.audioDevices[field.direction] || []) {
         list.append(el('option', { value: device.id, text: device.label }));
       }
-      for (const special of field.direction === 'inputs' ? ['none', 'tone', 'tone:1000'] : ['none', 'wav:/tmp/talktome-out.wav']) {
+      for (const special of field.direction === 'inputs' ? ['none', 'tone', 'tone:440', 'tone:1000'] : ['none', 'wav:/tmp/talktome-out.wav']) {
         list.append(el('option', { value: special }));
       }
       wrapper.append(list);
@@ -921,12 +1059,13 @@
       input = el('textarea', { rows: 3, dataset: { path: field.path, type: 'json', nullable: field.nullable ? '1' : '' } });
       input.value = value == null ? '' : JSON.stringify(value, null, 1);
     } else if (field.type === 'password') {
-      input = el('input', { type: 'password', autocomplete: 'off', dataset: { path: field.path, type: 'password' } });
+      input = el('input', { type: 'password', autocomplete: 'new-password', dataset: { path: field.path, type: 'password' } });
       input.value = value == null ? '' : value;
     } else {
       input = el('input', {
         type: field.type === 'number' ? 'number' : field.type === 'url' ? 'url' : 'text',
         dataset: { path: field.path, type: field.type === 'number' ? 'number' : 'text', nullable: field.nullable ? '1' : '' },
+        autocomplete: 'off',
       });
       if (field.step != null) input.step = field.step;
       if (field.min != null) input.min = field.min;
@@ -985,7 +1124,9 @@
     if (state.rawMode) {
       return JSON.parse($('#raw-json').value);
     }
-    const doc = JSON.parse(JSON.stringify(state.configDoc));
+    const fileDoc = state.fileDoc;
+    const runningDoc = state.runningDoc || state.configDoc;
+    const doc = JSON.parse(JSON.stringify(fileDoc || state.configDoc));
     for (const input of $$('#settings-form [data-path]', document)) {
       if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement || input instanceof HTMLTextAreaElement)) continue;
       const path = input.dataset.path;
@@ -1016,6 +1157,9 @@
         const text = input.value;
         value = text.trim() === '' && nullable ? null : text;
       }
+      if (fileDoc && !hasPath(fileDoc, path) && deepEqual(value, getPath(runningDoc, path))) {
+        continue;
+      }
       setPath(doc, path, value);
     }
     const outputs = {};
@@ -1024,7 +1168,6 @@
       if (!line) continue;
       outputs[row.dataset.output] = { line, active_low: $('[data-field="active_low"]', row).checked };
     }
-    setPath(doc, 'gpio.outputs', outputs);
     const inputs = [];
     for (const row of $$('[data-editor="gpio-inputs"] [data-input]')) {
       const line = $('[data-field="line"]', row).value.trim();
@@ -1038,7 +1181,10 @@
         debounce_ms: Number($('[data-field="debounce_ms"]', row).value || 20),
       });
     }
-    setPath(doc, 'gpio.inputs', inputs);
+    if (hasPath(fileDoc || doc, 'gpio') || Object.keys(outputs).length || inputs.length) {
+      setPath(doc, 'gpio.outputs', outputs);
+      setPath(doc, 'gpio.inputs', inputs);
+    }
     return doc;
   }
 
@@ -1079,6 +1225,7 @@
     } else {
       try {
         state.configDoc = JSON.parse($('#raw-json').value);
+        state.fileDoc = JSON.parse(JSON.stringify(state.configDoc));
         renderSettingsForm();
       } catch (error) {
         flash(`Raw JSON is invalid: ${error.message}`, 'error');

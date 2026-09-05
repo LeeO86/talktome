@@ -508,3 +508,29 @@ fn open_playback(config: &AudioConfig, mixer: Arc<Mutex<Mixer>>) -> Result<OpenS
         _stream: stream,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{tone_frequency, wav_sink_path};
+
+    #[test]
+    fn tone_device_defaults_to_440hz() {
+        assert_eq!(tone_frequency(&Some("tone".into())), Some(440.0));
+        assert_eq!(tone_frequency(&Some("tone:1000".into())), Some(1000.0));
+        assert_eq!(tone_frequency(&Some(" tone:440 ".into())), Some(440.0));
+        assert_eq!(
+            tone_frequency(&Some("plughw:CARD=Headset,DEV=0".into())),
+            None
+        );
+        assert_eq!(tone_frequency(&None), None);
+    }
+
+    #[test]
+    fn wav_sink_parses_path() {
+        assert_eq!(
+            wav_sink_path(&Some("wav:/tmp/heard.wav".into())).as_deref(),
+            Some(std::path::Path::new("/tmp/heard.wav"))
+        );
+        assert_eq!(wav_sink_path(&Some("tone".into())), None);
+    }
+}

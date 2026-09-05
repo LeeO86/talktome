@@ -32,6 +32,7 @@ use auth::{AuthState, SESSION_COOKIE};
 const INDEX_HTML: &str = include_str!("assets/index.html");
 const APP_JS: &str = include_str!("assets/app.js");
 const STYLE_CSS: &str = include_str!("assets/style.css");
+const TALKTOME_ICON_PNG: &[u8] = include_bytes!("assets/talktome-icon.png");
 
 /// Everything the web handlers need from the running client.
 pub struct WebContext {
@@ -84,6 +85,8 @@ pub async fn run(
         .route("/index.html", get(index))
         .route("/app.js", get(app_js))
         .route("/style.css", get(style_css))
+        .route("/talktome-icon.png", get(talktome_icon))
+        .route("/favicon.ico", get(talktome_icon))
         .route("/api/login", post(login))
         .route("/api/session", get(session))
         .merge(protected)
@@ -152,6 +155,16 @@ async fn style_css() -> impl IntoResponse {
             (header::CACHE_CONTROL, "no-cache"),
         ],
         STYLE_CSS,
+    )
+}
+
+async fn talktome_icon() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        TALKTOME_ICON_PNG,
     )
 }
 
@@ -532,6 +545,8 @@ struct AudioBody {
     action: String,
     target: String,
     #[serde(default)]
+    member: Option<String>,
+    #[serde(default)]
     value: Option<f32>,
 }
 
@@ -552,6 +567,38 @@ async fn audio(State(state): State<Shared>, Json(body): Json<AudioBody>) -> Resp
             target,
             volume: body.value.unwrap_or(0.9).clamp(0.0, 1.0),
         },
+        "member-volume-set" | "member-mute-toggle" => {
+            if !matches!(target, TargetKey::Conference(_)) {
+                return client_error(
+                    StatusCode::BAD_REQUEST,
+                    "member mix only applies to conference:<id>",
+                );
+            }
+            let Some(user_id) = body
+                .member
+                .as_deref()
+                .and_then(TargetKey::parse)
+                .and_then(|key| match key {
+                    TargetKey::User(id) => Some(id),
+                    _ => None,
+                })
+                .or_else(|| body.member.as_deref().and_then(|s| s.parse().ok()))
+            else {
+                return client_error(StatusCode::BAD_REQUEST, "member must be user:<id>");
+            };
+            if body.action == "member-mute-toggle" {
+                Command::MemberMuteToggle {
+                    conference: target,
+                    user_id,
+                }
+            } else {
+                Command::MemberVolumeSet {
+                    conference: target,
+                    user_id,
+                    volume: body.value.unwrap_or(1.0).clamp(0.0, 1.0),
+                }
+            }
+        }
         other => {
             return client_error(
                 StatusCode::BAD_REQUEST,

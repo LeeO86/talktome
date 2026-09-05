@@ -363,7 +363,10 @@ the server-side pause is in flight.
 `consume` → `resume-consumer`. Each consumer is a `TrackRemote`; RTP is
 read, depacketized and handed to `audio::jitter` keyed by the recipient
 appData (`user:<speakerUserId>`, `conference:<id>`, `feed:<id>`), which is
-also the key for volume/mute (§9.3). `producer-closed`/`consumer-closed`
+also the key for volume/mute (§9.3). Conference consumers additionally
+carry the speaker user id so the local mix can hear/mute and level each
+member independently (same idea as the browser conference-members modal).
+`producer-closed`/`consumer-closed`
 tear the consumer down. `request-active-producers` is re-sent after every
 `incoming-talk-state` with a non-empty `addressedNow` and every
 `user-targets-updated`, as the browser does.
@@ -616,7 +619,7 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
   "talk": { "tap_ms": 250, "lock_multiple": false },
   "ice": { "servers": null, "transport_policy": null },   // null = use the server's
   "network": { "ice_disconnect_grace_ms": 4000 },
-  "streamdeck": { "enabled": true, "serial": null, "brightness": 60,
+  "streamdeck": { "enabled": true, "serial": null, "mock": null, "brightness": 60,
                   "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                   "volume_step": 0.05, "volume_layer_timeout_s": 8,
                   "pedal_target": "conference:1", "layout": {} },
@@ -706,7 +709,10 @@ Each instance serves a local administration UI (`web.bind:web.port`,
 default `0.0.0.0:8080`; one port per instance) built with axum and plain
 HTML/CSS/JS embedded in the binary. It follows the Talktome Admin panel's
 look (dark navy, cards, blue primary) and is laid out for phones first,
-because in the field it is opened from a smartphone.
+because in the field it is opened from a smartphone. The favicon and
+header mark keep the original Talktome waveform, dot and closing bracket,
+white on black like the server client, framed in a rounded box so the
+panel is not the same icon as Admin or the black-on-white Bridge.
 
 - **Login**: the user is always `admin`; the password is `web.password`
   (or `TALKTOME_WEB_PASSWORD`). The default `admin` is accepted once and then
@@ -717,18 +723,23 @@ because in the field it is opened from a smartphone.
   attempts for 30 s.
 - **Status**: connection (state, detail, server, user id, production,
   registration age, reconnects, send/receive transport state, consumers,
-  producer id, ICE servers and policy, tally), talk state with press-and-hold
-  Talk, Lock, volume slider and Mute per target, incoming callers and reply
-  target, audio devices and input level, GPIO backend with every configured
-  output (driven state) and input (pressed, event count), Stream Deck model /
-  serial / page, and service details (version, uptime, config path,
-  supervisor, ports).
+  producer id, ICE URLs announced by the server and the local webrtc-rs
+  façade when TURNS is bridged, tally), talk destinations in a wrapping
+  grid (conference **Members** for per-person hear/mute and level), talk
+  state with press-and-hold Talk, Lock, volume slider and Mute per target,
+  incoming callers and reply target, audio devices and input level, GPIO
+  backend with every configured output (driven state) and input (pressed,
+  event count), Stream Deck model / serial / page, and service details
+  (version, uptime, config path, supervisor, ports).
 - **Stream Deck**: the rendered key images of the attached deck (PNG per key,
   cached by content hash), dials and touch points; pressing in the browser
   injects the same input the hardware would produce.
 - **Settings**: a form over the whole schema (§12), audio devices listed from
   ALSA, GPIO output/input editors, JSON fields for ICE overrides and key
-  layout, and a raw JSON editor. Saving validates the document with the same
+  layout, and a raw JSON editor. The form edits the **configuration file**,
+  not the in-memory process: after Save, values already in the file (the
+  Talktome user, devices, …) stay put when another field is changed, even
+  though they only apply after restart. Saving validates with the same
   rules as startup and rewrites the file in its own format (TOML or JSON);
   secrets are redacted in the API and kept unless replaced; environment
   overrides in effect are shown because they win on the next start.
@@ -872,6 +883,9 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
   device; authentication for `POST /cut-camera`; a preview (green) tally.
 - HTTPS for the web interface (currently plain HTTP, meant for the LAN or a
   reverse proxy).
+- Capture-side echo cancellation / noise suppression / AGC comparable to
+  browser `getUserMedia` (today: raw ALSA/cpal; use PipeWire AEC or a
+  headset that already does AEC).
 - Bridge: deliver `cut-camera` to bridge sessions
   (`queueBridgeControlEvent` filter).
 

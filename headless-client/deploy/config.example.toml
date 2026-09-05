@@ -34,8 +34,11 @@ kicked_retry_ms = 10000
 
 [audio]
 # ALSA ids from `talktome-headless list-audio-devices`; omit for the default
-# device. "none" disables a direction, "tone" / "tone:1000" feeds a test tone,
-# "wav:/path.wav" records the mix instead of playing it.
+# device. "none" disables a direction, "tone" / "tone:440" feeds a 440 Hz
+# sine (or another frequency with tone:1000), "wav:/path.wav" records the
+# mix instead of playing it. On a VM without a headset use:
+#   input_device = "tone"
+#   output_device = "wav:/tmp/talktome-out.wav"
 input_device = "plughw:CARD=Headset,DEV=0"
 output_device = "plughw:CARD=Headset,DEV=0"
 # standard (20 ms + FEC), low (10 ms) or ultra-low (5 ms)
@@ -73,6 +76,10 @@ ice_disconnect_grace_ms = 4000
 
 [streamdeck]
 enabled = true
+# Dummy panel when no USB Stream Deck is attached (OrbStack / CI / a Pi
+# without a deck). Models: mk2, mini, minimk2, original, originalv2, xl,
+# xlv2, plus, plusxl, neo, pedal. The Stream Deck web tab then works.
+# mock = "mk2"
 # serial = "AL12K3456789"   # bind to one deck when several are attached
 brightness = 60
 font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"

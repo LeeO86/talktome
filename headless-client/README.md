@@ -125,13 +125,75 @@ desktops:
   points can be operated from the browser and behave like the hardware.
 - **Settings**: every configuration value as a form (audio devices are listed
   from ALSA), plus a raw JSON editor. Saving writes the TOML/JSON file the
-  instance was started with; secrets are never shown and stay unchanged unless
+  instance was started with and keeps other file values even if the process
+  has not restarted yet; secrets are never shown and stay unchanged unless
   replaced. `Save & restart` applies the change immediately.
 - **Restart**: under systemd the service exits cleanly and `Restart=always`
   brings it back; without systemd the binary re-executes itself.
 
 The interface is plain HTTP on the local network. Keep it on the production
 LAN or a management network, or put a reverse proxy with TLS in front of it.
+
+On a wide screen the Talk destinations fill a wrapping grid so you do not
+have to zoom out; Settings sections sit two-across until one is opened.
+Phones keep a single column.
+
+## Testing without hardware (OrbStack VM, CI, a board with no deck)
+
+A USB Stream Deck does not pass through an OrbStack Linux VM. Use a dummy
+deck of a chosen type, then operate it from the **Stream Deck** tab (or
+write input lines for scripts):
+
+```toml
+# /etc/talktome-headless/default.toml
+[streamdeck]
+enabled = true
+mock = "mk2"          # mini, xl, plus, neo, pedal, …
+```
+
+Or in `/etc/talktome-headless/default.env` (overrides the file):
+
+```bash
+TALKTOME_STREAMDECK_MOCK=mk2
+# older name, still works:
+# TALKTOME_MOCK_STREAMDECK=mk2
+```
+
+Save & restart. The web Stream Deck view renders the keys; taps talk/lock
+like hardware. Optional file input: `TALKTOME_SURFACE_MOCK_DIR=/tmp/tt` and
+append lines such as `down 3` / `up 3` to `$TALKTOME_SURFACE_MOCK_DIR/streamdeck-inputs`.
+
+The VM also has no USB headset. Capture a 440 Hz sine instead of a
+microphone, and optionally write the mix to a WAV file:
+
+```toml
+[audio]
+input_device = "tone"                 # or tone:1000 for 1 kHz
+output_device = "wav:/tmp/heard.wav"  # skip if Pulse/ALSA playback works
+```
+
+`talktome-headless --instance default dev send-tone --target conference:1`
+sends that sine to a target for 10 s using the running account.
+
+GPIO lines from the example config (`GPIO17`, …) do not exist in OrbStack.
+Turn GPIO off (`gpio.enabled = false`) or you will see `GPIO line "GPIO27"
+not found on any chip`.
+
+## Audio processing (AEC / NS / AGC)
+
+The browser client asks `getUserMedia` for `echoCancellation`,
+`noiseSuppression` and `autoGainControl` — those run in Chrome/Safari, not
+on the server. The headless client captures raw PCM through ALSA/cpal and
+does **not** include that stack. On a desktop/VM, enable PipeWire/Pulse
+echo-cancel (`module-echo-cancel` or WirePlumber AEC) in front of the ALSA
+device if you need it. On a Pi with a headset, use a USB adapter that
+already does AEC, or keep the speaker and mic acoustically separate.
+
+## Conference member mix
+
+Like the web client, each conference card has **Members**: hear/mute and a
+level per person. That is a local mix of the conference consumers, not a
+server-side mute. The conference fader still scales the whole conference.
 
 ## Stream Deck
 
@@ -187,9 +249,12 @@ parse the server's ICE candidates or reach the media ports:
 - `Unable to handle URL in gather_candidates_relay turns:…?transport=tcp`
   — webrtc-ice cannot speak TURNS. Current builds bridge those URLs to a
   local UDP TURN façade (`turn-bridge-listen`, `ice-url-rewritten`). The
-  TURN host's certificate is verified with system roots plus
-  `tls.ca_file`; a Talktome `tls.fingerprint_sha256` pin does **not**
-  apply to the TURN server.
+  status page then shows `turn:127.0.0.1:<ephemeral>?transport=udp` as
+  **ICE (webrtc)** — that is not a bundled TURN server and not an extra
+  network hop. webrtc-ice only speaks TURN-over-UDP, so the process
+  listens on localhost and forwards STUN/ChannelData over TCP/TLS to the
+  real `turns:` host. Media still goes to that TURN server; localhost is
+  only the façade. **ICE (server)** lists the original URLs.
 - `could not listen udp fe80::… Invalid argument` and `No available ipv6
   IP address found` — IPv6 link-local gathering. Leave `ice.ipv6` off
   unless this device has a global IPv6 address.
