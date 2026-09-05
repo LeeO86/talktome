@@ -79,9 +79,14 @@ pub async fn get_config(State(state): State<Shared>) -> Response {
             redact(&mut doc);
             doc
         });
+    let editor_document = match &file_document {
+        Some(file) => config::merge_file_over_running(&document, file),
+        None => document.clone(),
+    };
     Json(json!({
         "document": document,
         "file_document": file_document,
+        "editor_document": editor_document,
         "path": path.map(|p| p.display().to_string()),
         "format": path.and_then(format_of),
         "editable": path.is_some(),
@@ -131,6 +136,9 @@ pub fn save_document(
 ) -> Result<()> {
     if !document.is_object() {
         bail!("configuration must be a JSON object");
+    }
+    if let Some(stored) = stored {
+        document = config::merge_missing_top_level(stored, document);
     }
     for pointer in SECRET_POINTERS {
         let placeholder = document
@@ -281,6 +289,66 @@ mod tests {
         assert_eq!(saved["web"]["port"], 9090);
         assert_eq!(saved["audio"]["profile"], "low");
         assert!(saved["audio"].get("input_device").is_none());
+    }
+
+    #[test]
+    fn save_from_editor_keeps_file_user_when_changing_another_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cam1.toml");
+        let stored_doc = json!({
+            "server": { "url": "https://talktome.local:8443" },
+            "user": { "name": "Studio", "password": "real-secret" },
+            "audio": { "profile": "standard", "input_device": "tone" },
+            "web": { "password": "web-secret", "port": 8080 }
+        });
+        config::write_document(&path, &stored_doc).unwrap();
+        let stored = config::read_document(&path).unwrap();
+
+        let running_source = json!({
+            "server": { "url": "https://talktome.local:8443" },
+            "user": { "name": "Cam 1", "password": "real-secret" },
+            "web": { "password": "web-secret", "port": 8080 }
+        });
+        let running = serde_json::to_value(config::from_document(running_source).unwrap()).unwrap();
+
+        let mut editor = config::merge_file_over_running(&running, &stored);
+        editor["user"]["password"] = json!(REDACTED);
+        editor["web"]["password"] = json!(REDACTED);
+        editor["audio"]["profile"] = json!("low");
+        save_document(&path, editor, Some(&stored), &running).unwrap();
+
+        let saved = config::read_document(&path).unwrap();
+        assert_eq!(saved["user"]["name"], "Studio");
+        assert_eq!(saved["user"]["password"], "real-secret");
+        assert_eq!(saved["audio"]["profile"], "low");
+        assert_eq!(saved["audio"]["input_device"], "tone");
+    }
+
+    #[test]
+    fn save_keeps_instance_when_the_form_omits_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cam1.toml");
+        config::write_document(&path, &base_document()).unwrap();
+        let stored = config::read_document(&path).unwrap();
+        assert_eq!(stored.get("instance"), None);
+
+        let mut with_instance = stored.clone();
+        with_instance["instance"] = json!("cam1");
+        config::write_document(&path, &with_instance).unwrap();
+        let stored = config::read_document(&path).unwrap();
+
+        let edited = json!({
+            "server": { "url": "https://talktome.local:8443" },
+            "user": { "name": "Cam 1", "password": REDACTED },
+            "web": { "password": REDACTED, "port": 9090 }
+        });
+        let running =
+            serde_json::to_value(config::from_document(base_document()).unwrap()).unwrap();
+        save_document(&path, edited, Some(&stored), &running).unwrap();
+        let saved = config::read_document(&path).unwrap();
+        assert_eq!(saved["instance"], "cam1");
+        assert_eq!(saved["web"]["port"], 9090);
+        assert_eq!(saved["user"]["name"], "Cam 1");
     }
 
     #[test]

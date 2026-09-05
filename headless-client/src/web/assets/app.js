@@ -13,6 +13,8 @@
     deckTimer: null,
     config: null,
     configDoc: null,
+    runningDoc: null,
+    fileDoc: null,
     audioDevices: { inputs: [], outputs: [] },
     rawMode: false,
     pressed: new Set(),
@@ -913,13 +915,67 @@
     cursor[keys[keys.length - 1]] = value;
   }
 
+  function isPlainObject(value) {
+    return value != null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function mergeFileOverRunning(running, file) {
+    if (file == null) return running;
+    if (!isPlainObject(running) || !isPlainObject(file)) return file;
+    const out = { ...running };
+    for (const [key, value] of Object.entries(file)) {
+      out[key] = isPlainObject(value) && isPlainObject(out[key]) ? mergeFileOverRunning(out[key], value) : value;
+    }
+    return out;
+  }
+
+  function hasPath(doc, path) {
+    if (doc == null) return false;
+    let cursor = doc;
+    for (const key of path.split('.')) {
+      if (!isPlainObject(cursor) || !Object.prototype.hasOwnProperty.call(cursor, key)) return false;
+      cursor = cursor[key];
+    }
+    return true;
+  }
+
+  function deepEqual(a, b) {
+    if (Object.is(a, b)) return true;
+    if (a == null || b == null) return a === b;
+    if (typeof a !== typeof b) return false;
+    if (typeof a !== 'object') return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    if (Array.isArray(a)) return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key]));
+  }
+
+  function editorDocument(config) {
+    if (config.editor_document) return config.editor_document;
+    if (config.file_document) return mergeFileOverRunning(config.document, config.file_document);
+    return config.document;
+  }
+
+  function fileDiffersFromRunning(file, running) {
+    if (!file || !running) return false;
+    const walk = (fromFile, fromRunning) => {
+      if (!isPlainObject(fromFile)) return !deepEqual(fromFile, fromRunning);
+      if (!isPlainObject(fromRunning)) return true;
+      return Object.keys(fromFile).some((key) => walk(fromFile[key], fromRunning[key]));
+    };
+    return walk(file, running);
+  }
+
   async function loadConfig() {
     const message = $('#settings-message');
     message.textContent = '';
     try {
       const [config, devices] = await Promise.all([api('GET', '/api/config'), api('GET', '/api/config/audio-devices').catch(() => ({ inputs: [], outputs: [] }))]);
       state.config = config;
-      state.configDoc = JSON.parse(JSON.stringify(config.document));
+      state.runningDoc = JSON.parse(JSON.stringify(config.document));
+      state.fileDoc = config.file_document ? JSON.parse(JSON.stringify(config.file_document)) : null;
+      state.configDoc = JSON.parse(JSON.stringify(editorDocument(config)));
       state.audioDevices = devices;
       $('#settings-path').textContent = config.editable ? `Saved to ${config.path} (${config.format}). Changes apply after a restart.` : 'This instance runs from environment variables only; settings cannot be saved.';
       const env = $('#settings-env');
@@ -929,8 +985,19 @@
       } else {
         env.classList.add('is-hidden');
       }
+      const pending = $('#settings-pending');
+      if (config.editable && fileDiffersFromRunning(state.fileDoc, state.runningDoc)) {
+        pending.textContent = 'This file has saved changes the running client is not using yet (for example the Talktome user). Saving another setting keeps those file values. Restart to apply them.';
+        pending.classList.remove('is-hidden');
+      } else {
+        pending.classList.add('is-hidden');
+      }
       renderSettingsForm();
-      $('#raw-json').value = JSON.stringify(state.configDoc, null, 2);
+      try {
+        $('#raw-json').value = JSON.stringify(collectDocument(), null, 2);
+      } catch {
+        $('#raw-json').value = JSON.stringify(state.configDoc, null, 2);
+      }
       const disabled = !config.editable;
       $('#settings-save').disabled = disabled;
       $('#settings-save-restart').disabled = disabled;
@@ -963,7 +1030,7 @@
     const wrapper = el('label', { class: `field${field.wide ? ' wide' : ''}`, dataset: { path: field.path } });
     if (field.type === 'bool') {
       wrapper.className = `field-check${field.wide ? ' wide' : ''}`;
-      const input = el('input', { type: 'checkbox', dataset: { path: field.path, type: 'bool' } });
+      const input = el('input', { type: 'checkbox', dataset: { path: field.path, type: 'bool' }, autocomplete: 'off' });
       input.checked = Boolean(value);
       wrapper.append(input, el('span', { text: field.label }));
       return wrapper;
@@ -971,14 +1038,14 @@
     wrapper.append(el('span', { text: field.label }));
     let input;
     if (field.type === 'select') {
-      input = el('select', { dataset: { path: field.path, type: 'select', nullable: field.nullable ? '1' : '' } });
+      input = el('select', { dataset: { path: field.path, type: 'select', nullable: field.nullable ? '1' : '' }, autocomplete: 'off' });
       for (const [optionValue, label] of field.options) {
         input.append(el('option', { value: optionValue, text: label }));
       }
       input.value = value == null ? '' : String(value);
     } else if (field.type === 'device') {
       const listId = `devices-${field.path.replace(/\W/g, '-')}`;
-      input = el('input', { type: 'text', list: listId, placeholder: 'default device', dataset: { path: field.path, type: 'text', nullable: '1' } });
+      input = el('input', { type: 'text', list: listId, placeholder: 'default device', dataset: { path: field.path, type: 'text', nullable: '1' }, autocomplete: 'off' });
       input.value = value == null ? '' : value;
       const list = el('datalist', { id: listId });
       for (const device of state.audioDevices[field.direction] || []) {
@@ -992,12 +1059,13 @@
       input = el('textarea', { rows: 3, dataset: { path: field.path, type: 'json', nullable: field.nullable ? '1' : '' } });
       input.value = value == null ? '' : JSON.stringify(value, null, 1);
     } else if (field.type === 'password') {
-      input = el('input', { type: 'password', autocomplete: 'off', dataset: { path: field.path, type: 'password' } });
+      input = el('input', { type: 'password', autocomplete: 'new-password', dataset: { path: field.path, type: 'password' } });
       input.value = value == null ? '' : value;
     } else {
       input = el('input', {
         type: field.type === 'number' ? 'number' : field.type === 'url' ? 'url' : 'text',
         dataset: { path: field.path, type: field.type === 'number' ? 'number' : 'text', nullable: field.nullable ? '1' : '' },
+        autocomplete: 'off',
       });
       if (field.step != null) input.step = field.step;
       if (field.min != null) input.min = field.min;
@@ -1056,7 +1124,9 @@
     if (state.rawMode) {
       return JSON.parse($('#raw-json').value);
     }
-    const doc = JSON.parse(JSON.stringify(state.configDoc));
+    const fileDoc = state.fileDoc;
+    const runningDoc = state.runningDoc || state.configDoc;
+    const doc = JSON.parse(JSON.stringify(fileDoc || state.configDoc));
     for (const input of $$('#settings-form [data-path]', document)) {
       if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement || input instanceof HTMLTextAreaElement)) continue;
       const path = input.dataset.path;
@@ -1087,6 +1157,9 @@
         const text = input.value;
         value = text.trim() === '' && nullable ? null : text;
       }
+      if (fileDoc && !hasPath(fileDoc, path) && deepEqual(value, getPath(runningDoc, path))) {
+        continue;
+      }
       setPath(doc, path, value);
     }
     const outputs = {};
@@ -1095,7 +1168,6 @@
       if (!line) continue;
       outputs[row.dataset.output] = { line, active_low: $('[data-field="active_low"]', row).checked };
     }
-    setPath(doc, 'gpio.outputs', outputs);
     const inputs = [];
     for (const row of $$('[data-editor="gpio-inputs"] [data-input]')) {
       const line = $('[data-field="line"]', row).value.trim();
@@ -1109,7 +1181,10 @@
         debounce_ms: Number($('[data-field="debounce_ms"]', row).value || 20),
       });
     }
-    setPath(doc, 'gpio.inputs', inputs);
+    if (hasPath(fileDoc || doc, 'gpio') || Object.keys(outputs).length || inputs.length) {
+      setPath(doc, 'gpio.outputs', outputs);
+      setPath(doc, 'gpio.inputs', inputs);
+    }
     return doc;
   }
 
@@ -1150,6 +1225,7 @@
     } else {
       try {
         state.configDoc = JSON.parse($('#raw-json').value);
+        state.fileDoc = JSON.parse(JSON.stringify(state.configDoc));
         renderSettingsForm();
       } catch (error) {
         flash(`Raw JSON is invalid: ${error.message}`, 'error');

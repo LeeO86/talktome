@@ -736,7 +736,10 @@ panel is not the same icon as Admin or the black-on-white Bridge.
   injects the same input the hardware would produce.
 - **Settings**: a form over the whole schema (§12), audio devices listed from
   ALSA, GPIO output/input editors, JSON fields for ICE overrides and key
-  layout, and a raw JSON editor. Saving validates the document with the same
+  layout, and a raw JSON editor. The form edits the **configuration file**,
+  not the in-memory process: after Save, values already in the file (the
+  Talktome user, devices, …) stay put when another field is changed, even
+  though they only apply after restart. Saving validates with the same
   rules as startup and rewrites the file in its own format (TOML or JSON);
   secrets are redacted in the API and kept unless replaced; environment
   overrides in effect are shown because they win on the next start.

@@ -190,7 +190,8 @@
           </header>
           <p id="settings-path" class="muted small"></p>
           <div id="settings-env" class="notice is-hidden"></div>
-          <form id="settings-form" class="settings-form"></form>
+          <div id="settings-pending" class="notice is-hidden"></div>
+          <form id="settings-form" class="settings-form" autocomplete="off"></form>
           <div id="raw-editor" class="is-hidden">
             <p class="muted small">Full configuration document as JSON. It is validated on save and written back in the file's format.</p>
             <textarea id="raw-json" class="raw-json" spellcheck="false"></textarea>
