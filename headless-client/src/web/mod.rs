@@ -162,7 +162,7 @@ async fn talktome_icon() -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, "image/png"),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
+            (header::CACHE_CONTROL, "no-cache"),
         ],
         TALKTOME_ICON_PNG,
     )
