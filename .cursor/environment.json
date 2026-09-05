@@ -1,0 +1,11 @@
+{
+  "name": "Talktome",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "talktome-server",
+      "command": "bash .cursor/start-server.sh"
+    }
+  ],
+  "ports": [8443, 8080]
+}
