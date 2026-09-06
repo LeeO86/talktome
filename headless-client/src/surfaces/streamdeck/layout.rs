@@ -1162,7 +1162,7 @@ mod tests {
         let keys = roles("mk2", 10, &DeckState::default());
         assert_eq!(keys[5], Role::Target(TargetKey::User(0)));
         assert_eq!(keys[9], Role::Target(TargetKey::User(4)));
-        assert_eq!(keys[10], Role::Target(TargetKey::User(5)));
+        assert_eq!(keys[10], Role::Target(TargetKey::Feed(5)));
         assert_eq!(keys[14], Role::Target(TargetKey::User(9)));
     }
 
@@ -1171,7 +1171,7 @@ mod tests {
         let keys = roles("mk2", 6, &DeckState::default());
         assert_eq!(keys[5], Role::Target(TargetKey::User(0)));
         assert_eq!(keys[9], Role::Target(TargetKey::User(4)));
-        assert_eq!(keys[10], Role::Target(TargetKey::User(5)));
+        assert_eq!(keys[10], Role::Target(TargetKey::Feed(5)));
         assert_eq!(keys[11], Role::Empty);
         assert_eq!(keys[14], Role::Empty);
     }

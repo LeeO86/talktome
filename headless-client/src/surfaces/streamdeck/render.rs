@@ -591,6 +591,30 @@ mod tests {
         compose_grid(&renderer, &keys, plusxl.cols, 48)
             .save(dir.join("talktome-layout-plusxl.png"))
             .unwrap();
+
+        let mk2 = Geometry {
+            keys: 15,
+            rows: 3,
+            cols: 5,
+            encoders: 0,
+            touchpoints: 0,
+            visual: true,
+        };
+        let keys = layout(&mk2, &snapshot, &DeckState::default(), &options);
+        assert_eq!(keys[5].role, Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[5].appearance.title, "adi");
+        assert_eq!(keys[10].appearance.title, "kenny");
+        compose_grid(&renderer, &keys, mk2.cols, 72)
+            .save(dir.join("talktome-layout-mk2-eight.png"))
+            .unwrap();
+        let mut five = snapshot.clone();
+        five.targets.truncate(5);
+        let keys = layout(&mk2, &five, &DeckState::default(), &options);
+        assert_eq!(keys[5].role, Role::Empty);
+        assert_eq!(keys[10].appearance.title, "adi");
+        compose_grid(&renderer, &keys, mk2.cols, 72)
+            .save(dir.join("talktome-layout-mk2-five.png"))
+            .unwrap();
         let pedal = Geometry {
             keys: 3,
             rows: 1,
