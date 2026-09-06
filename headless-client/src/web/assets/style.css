@@ -654,6 +654,7 @@ main {
 }
 
 .deck-key {
+  position: relative;
   width: var(--key-size, 72px);
   height: var(--key-size, 72px);
   padding: 0;
@@ -677,9 +678,34 @@ main {
   pointer-events: none;
 }
 
+.deck-key__fallback {
+  display: none;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.15;
+  padding: 0.35rem;
+  white-space: pre-line;
+  color: #e2e8f0;
+  pointer-events: none;
+}
+
+.deck-key__fallback.is-visible {
+  display: flex;
+}
+
 .deck-key.is-pressed {
   transform: scale(0.94);
   box-shadow: 0 0 0 2px var(--primary);
+}
+
+.deck-list {
+  display: grid;
+  gap: 1rem;
 }
 
 .deck-encoders {
@@ -701,6 +727,12 @@ main {
   padding: 0.5rem;
   border: 1px solid var(--border);
   border-radius: 10px;
+  min-width: 7.5rem;
+}
+
+.encoder__name {
+  font-weight: 600;
+  text-align: center;
 }
 
 .encoder__row {

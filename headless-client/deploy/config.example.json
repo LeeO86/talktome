@@ -58,8 +58,8 @@
     "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "volume_step": 0.05,
     "volume_layer_timeout_s": 8,
-    "pedal_target": null,
-    "layout": {}
+    "pedal_left": null,
+    "pedal_target": null
   },
   "gpio": {
     "enabled": true,
