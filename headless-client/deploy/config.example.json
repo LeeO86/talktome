@@ -30,7 +30,7 @@
     "jitter_min_ms": 20,
     "jitter_max_ms": 120,
     "reopen_ms": 2000,
-    "default_volume": 0.9
+    "default_volume_db": 0
   },
   "vox": {
     "enabled": false,
@@ -56,7 +56,7 @@
     "mock": null,
     "brightness": 60,
     "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "volume_step": 0.05,
+    "volume_step_db": 3,
     "volume_layer_timeout_s": 8,
     "pedal_left": null,
     "pedal_target": null
@@ -86,6 +86,14 @@
         "line": "GPIO23",
         "action": "reply",
         "active_low": true
+      }
+    ],
+    "target_outputs": [
+      {
+        "line": "GPIO18",
+        "target": "conference:1",
+        "when": "receiving",
+        "active_low": false
       }
     ]
   },

@@ -117,10 +117,11 @@ desktops:
   forces a change (that dialog is not the login overlay). The new password is
   written to the configuration file; saving Settings does the same rewrite.
 - **Status**: Talktome connection (state, server, user, production, transports,
-  consumers, ICE servers, reconnects, tally), the talk state with press-and-hold
-  Talk, Lock, volume and mute controls per target, audio devices with an input
-  meter, every configured GPIO output (live state) and input (pressed, event
-  count), Stream Deck and service details.
+  consumers, ICE servers, RTT, packet loss, receive concealment, reconnects,
+  tally), the talk state with press-and-hold Talk, Lock, volume (dB) and mute
+  controls per target (Talk/Lock disabled when that user is offline), audio
+  devices with an input meter, every configured GPIO output (live state) and
+  input (pressed, event count), Stream Deck and service details.
 - **Stream Deck**: live rendering of the attached deck; keys, dials and touch
   points can be operated from the browser and behave like the hardware.
 - **Settings**: every configuration value as a form (audio devices are listed
@@ -211,7 +212,8 @@ server-side mute. The conference fader still scales the whole conference.
   badge). Feeds cannot be talked to; pressing a feed toggles its mute.
 - `VOL` opens the volume layer: mute / − / + occupy the command row (on a
   Neo the whole top row becomes VOL, MUTE, −, +) and **targets do not
-  move**. Tap a target to select it. The layer closes after
+  move**. Tap a target to select it. Steps use `streamdeck.volume_step_db`
+  (default 3 dB). The layer closes after
   `streamdeck.volume_layer_timeout_s`.
 - Conference **member mix** uses the same overlay pattern. **MEMBERS** is
   added on decks that still have a free command-row cell (MK.2, Original,
@@ -235,10 +237,16 @@ server-side mute. The conference fader still scales the whole conference.
 ## GPIO
 
 Outputs (`gpio.outputs`): `tally` (camera on air), `talking`, `incoming`,
-`connected`, `locked`. Inputs (`gpio.inputs`): `talk` (hold = talk, tap =
-lock), `reply`, `lock_toggle`, `clear_locks`, `mute_toggle`, `volume_up`,
-`volume_down`. Lines are addressed by kernel name (`GPIO17` on Raspberry Pi
-OS) or by `gpio.chip` plus offset.
+`connected` (only while registered **and** both media transports are up),
+`locked`. Extra `[[gpio.target_outputs]]` rows drive a pin when a chosen
+user, conference or feed is playing audio (`when = "receiving"`) or is
+addressing this client (`when = "incoming"`). Inputs (`gpio.inputs`):
+`talk` (hold = talk, tap = lock), `reply`, `lock_toggle`, `clear_locks`,
+`mute_toggle`, `volume_up`, `volume_down`. After requesting input lines the
+client samples the current level, so an already-held inverted button starts
+talking immediately instead of waiting for the next edge. Lines are
+addressed by kernel name (`GPIO17` on Raspberry Pi OS) or by `gpio.chip`
+plus offset. Volume +/− steps use `streamdeck.volume_step_db`.
 
 ## Diagnostics without hardware
 

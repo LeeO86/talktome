@@ -6,11 +6,45 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use super::jitter::StreamBuffer;
+use super::jitter::{StreamBuffer, StreamStats};
 use crate::talk::{AudioLevel, TargetKey};
+
+/// Linear amplitude 0.0 is treated as this floor in the UI and on keys.
+pub const MUTE_DB: f32 = -60.0;
 
 pub fn db_to_gain(db: f32) -> f32 {
     10f32.powf(db / 20.0)
+}
+
+/// Convert a fader value in dB to the 0–1 linear gain stored per target.
+pub fn db_to_volume(db: f32) -> f32 {
+    if !db.is_finite() || db <= MUTE_DB {
+        0.0
+    } else {
+        db_to_gain(db).clamp(0.0, 1.0)
+    }
+}
+
+/// Convert stored 0–1 linear gain to dB for display and dB-sized steps.
+pub fn volume_to_db(volume: f32) -> f32 {
+    if !volume.is_finite() || volume <= 1e-6 {
+        MUTE_DB
+    } else {
+        20.0 * volume.clamp(1e-6, 1.0).log10()
+    }
+}
+
+pub fn format_volume_db(volume: f32) -> String {
+    let db = volume_to_db(volume);
+    if db <= MUTE_DB {
+        "-inf dB".into()
+    } else {
+        format!("{db:.0} dB")
+    }
+}
+
+pub fn step_volume_db(current: f32, delta_db: f32) -> f32 {
+    db_to_volume(volume_to_db(current) + delta_db)
 }
 
 struct Source {
@@ -183,6 +217,20 @@ impl Mixer {
         keys
     }
 
+    /// Sum of per-stream jitter/PLC counters, for the status page.
+    pub fn receive_stats(&self) -> StreamStats {
+        let mut total = StreamStats::default();
+        for source in self.sources.values() {
+            let stats = source.buffer.stats;
+            total.packets += stats.packets;
+            total.concealed += stats.concealed;
+            total.dropped_late += stats.dropped_late;
+            total.dropped_overflow += stats.dropped_overflow;
+            total.underruns += stats.underruns;
+        }
+        total
+    }
+
     /// Speakers currently delivering audio inside `conference_id`.
     pub fn receiving_speakers(&self, conference_id: i64) -> Vec<i64> {
         let mut ids: Vec<i64> = self
@@ -271,6 +319,18 @@ mod tests {
         );
         mixer.remove_source("f1");
         assert_eq!(mixer.receiving_keys(), vec![TargetKey::Conference(1)]);
+    }
+
+    #[test]
+    fn volume_db_round_trips_and_steps() {
+        assert!((db_to_volume(0.0) - 1.0).abs() < 1e-5);
+        assert_eq!(db_to_volume(-60.0), 0.0);
+        assert!((volume_to_db(1.0) - 0.0).abs() < 1e-5);
+        assert_eq!(volume_to_db(0.0), MUTE_DB);
+        let quieter = step_volume_db(1.0, -6.0);
+        assert!((volume_to_db(quieter) + 6.0).abs() < 0.05);
+        assert_eq!(format_volume_db(1.0), "0 dB");
+        assert_eq!(format_volume_db(0.0), "-inf dB");
     }
 
     #[test]

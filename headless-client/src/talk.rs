@@ -266,6 +266,18 @@ impl TalkModel {
         self.change(None)
     }
 
+    /// Drop held/locked user keys that are no longer available (offline).
+    pub fn drop_unavailable(
+        &mut self,
+        mut available: impl FnMut(TargetKey) -> bool,
+    ) -> Option<TalkChange> {
+        let before = self.change(None);
+        self.held.retain(|_, (key, _)| available(*key));
+        self.locked.retain(|key| available(*key));
+        let after = self.change(None);
+        (before != after).then_some(after)
+    }
+
     pub fn set_vox_active(&mut self, active: bool) -> Option<TalkChange> {
         if self.vox_active == active || self.vox_target.is_none() {
             return None;
@@ -647,5 +659,20 @@ mod tests {
             Some(TargetKey::User(12))
         );
         assert!(!TargetKey::Feed(1).can_talk());
+    }
+
+    #[test]
+    fn drop_unavailable_releases_offline_users() {
+        let mut model = TalkModel::new(250, true);
+        let t0 = Instant::now();
+        let user = TargetKey::User(4);
+        let conf = TargetKey::Conference(1);
+        model.press(deck(1), TargetRef::Key(user), t0).unwrap();
+        model.press(deck(2), TargetRef::Key(conf), t0).unwrap();
+        let change = model
+            .drop_unavailable(|key| !matches!(key, TargetKey::User(_)))
+            .unwrap();
+        assert_eq!(change.targets, vec![conf]);
+        assert!(change.talking);
     }
 }

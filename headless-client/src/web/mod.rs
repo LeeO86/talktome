@@ -557,6 +557,25 @@ fn parse_target_ref(text: Option<&str>) -> Option<TargetRef> {
     TargetKey::parse(text).map(TargetRef::Key)
 }
 
+fn user_target_offline(snapshot: &crate::state::Snapshot, target: TargetRef) -> bool {
+    let key = match target {
+        TargetRef::Key(key) => key,
+        TargetRef::Reply => match snapshot.reply_target {
+            Some(key) => key,
+            None => return false,
+        },
+    };
+    match key {
+        TargetKey::User(_) => snapshot
+            .targets
+            .iter()
+            .find(|t| t.key == key)
+            .map(|t| !t.online)
+            .unwrap_or(true),
+        _ => false,
+    }
+}
+
 async fn talk(State(state): State<Shared>, Json(body): Json<TalkBody>) -> Response {
     let source = InputSource::Companion("web".into());
     let command = match body.action.as_str() {
@@ -567,6 +586,11 @@ async fn talk(State(state): State<Shared>, Json(body): Json<TalkBody>) -> Respon
                     "target must be reply, user:<id> or conference:<id>",
                 );
             };
+            if matches!(body.action.as_str(), "press" | "lock")
+                && user_target_offline(&state.ctx.bus.snapshots.borrow(), target)
+            {
+                return client_error(StatusCode::CONFLICT, "user is offline");
+            }
             match body.action.as_str() {
                 "press" => Command::TalkPress { source, target },
                 "release" => Command::TalkRelease { source, target },

@@ -31,6 +31,11 @@ impl ConnectionState {
         matches!(self, ConnectionState::Registered | ConnectionState::Ready)
     }
 
+    /// Registered and both media transports are up — GPIO `connected`.
+    pub fn is_ready(self) -> bool {
+        matches!(self, ConnectionState::Ready)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             ConnectionState::Disconnected => "offline",
@@ -95,6 +100,19 @@ pub struct MediaInfo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ice_servers_announced: Vec<String>,
     pub ice_transport_policy: String,
+    /// ICE round-trip time in milliseconds, when a nominated pair reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u32>,
+    /// Sender-reported packet loss (RTCP), percent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_loss_pct: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packets_lost: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packets_received: Option<u64>,
+    /// Receive-side concealment as a percent of packets + PLC frames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recv_conceal_pct: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

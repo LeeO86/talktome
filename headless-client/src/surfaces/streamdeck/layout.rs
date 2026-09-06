@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::audio::mixer::format_volume_db;
 use crate::state::{ConferenceMemberInfo, ConnectionState, Snapshot, TargetInfo};
 use crate::talk::TargetKey;
 
@@ -477,9 +478,8 @@ fn command_roles(
 }
 
 fn member_appearance(member: &ConferenceMemberInfo, state: &DeckState) -> Appearance {
-    let volume_pct = format!("{}%", (member.volume * 100.0).round() as u32);
     let mut appearance = Appearance::simple(&member.name, palette::MEMBERS);
-    appearance.subtitle = volume_pct;
+    appearance.subtitle = format_volume_db(member.volume);
     appearance.bar = Some(member.volume);
     if state.member_selected == Some(member.user_id) {
         appearance.background = palette::SELECTED;
@@ -506,7 +506,7 @@ fn member_appearance(member: &ConferenceMemberInfo, state: &DeckState) -> Appear
 }
 
 fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot) -> Appearance {
-    let volume_pct = format!("{}%", (target.volume * 100.0).round() as u32);
+    let volume_label = format_volume_db(target.volume);
     let mut appearance = Appearance::simple(&target.name, palette::IDLE);
     if state.volume_layer {
         appearance.background = if state.selected == Some(target.key) {
@@ -514,7 +514,7 @@ fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot
         } else {
             palette::VOLUME
         };
-        appearance.subtitle = volume_pct;
+        appearance.subtitle = volume_label;
         appearance.bar = Some(target.volume);
         if target.muted {
             appearance.badge = Some(Badge::Muted);
@@ -543,7 +543,7 @@ fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot
         appearance.blink = None;
     }
     if !target.can_talk {
-        appearance.subtitle = volume_pct;
+        appearance.subtitle = volume_label;
         appearance.bar = Some(target.volume);
     }
     if target.muted {

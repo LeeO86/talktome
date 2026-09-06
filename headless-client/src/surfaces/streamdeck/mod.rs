@@ -19,6 +19,7 @@ use elgato_streamdeck::DeviceStateUpdate;
 use image::{DynamicImage, RgbImage};
 use tokio::sync::watch;
 
+use crate::audio::mixer::step_volume_db;
 use crate::config::{StreamDeckConfig, StreamDeckDeviceConfig, TalkConfig};
 use crate::state::{
     Bus, Command, ConferenceMemberInfo, DeckDialView, DeckInput, DeckKeyView, DeckStatus,
@@ -513,10 +514,6 @@ fn cycle_page(page: &mut usize, pages: usize, forward: bool) {
     };
 }
 
-fn step_linear_volume(current: f32, delta: f32) -> f32 {
-    (((current + delta) * 100.0).round() / 100.0).clamp(0.0, 1.0)
-}
-
 #[derive(Clone, Copy)]
 enum BoundEncoder {
     Target(TargetKey),
@@ -718,13 +715,24 @@ async fn run_device(
                                 state.touch_volume_layer();
                                 relayout = true;
                             } else if target.can_talk() {
-                                let _ = bus
-                                    .commands
-                                    .send(Command::TalkPress {
-                                        source: source(key),
-                                        target: TargetRef::Key(target),
-                                    })
-                                    .await;
+                                if matches!(target, TargetKey::User(_))
+                                    && snapshot
+                                        .targets
+                                        .iter()
+                                        .find(|t| t.key == target)
+                                        .is_some_and(|t| !t.online)
+                                {
+                                    // Offline users stay grey; the press is ignored so
+                                    // the operator sees that talk does not engage.
+                                } else {
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::TalkPress {
+                                            source: source(key),
+                                            target: TargetRef::Key(target),
+                                        })
+                                        .await;
+                                }
                             } else {
                                 let _ = bus.commands.send(Command::MuteToggle(target)).await;
                             }
@@ -764,9 +772,9 @@ async fn run_device(
                         }
                         Role::VolumeUp | Role::VolumeDown => {
                             let delta = if role == Role::VolumeUp {
-                                config.volume_step
+                                config.volume_step_db()
                             } else {
-                                -config.volume_step
+                                -config.volume_step_db()
                             };
                             if state.member_layer {
                                 state.touch_member_layer();
@@ -783,16 +791,25 @@ async fn run_device(
                                         .send(Command::MemberVolumeSet {
                                             conference,
                                             user_id,
-                                            volume: step_linear_volume(current, delta),
+                                            volume: step_volume_db(current, delta),
                                         })
                                         .await;
                                 }
                             } else {
                                 state.touch_volume_layer();
                                 if let Some(target) = state.selected {
+                                    let current = snapshot
+                                        .targets
+                                        .iter()
+                                        .find(|t| t.key == target)
+                                        .map(|t| t.volume)
+                                        .unwrap_or(1.0);
                                     let _ = bus
                                         .commands
-                                        .send(Command::VolumeStep { target, delta })
+                                        .send(Command::VolumeSet {
+                                            target,
+                                            volume: step_volume_db(current, delta),
+                                        })
                                         .await;
                                 }
                             }
@@ -893,12 +910,21 @@ async fn run_device(
                     }
                 }
                 DeviceStateUpdate::EncoderTwist(encoder, ticks) => {
-                    let delta = config.volume_step * ticks as f32;
+                    let delta = config.volume_step_db() * ticks as f32;
                     match bound_encoder(&geometry, &state, &snapshot, encoder) {
                         Some(BoundEncoder::Target(target)) => {
+                            let current = snapshot
+                                .targets
+                                .iter()
+                                .find(|t| t.key == target)
+                                .map(|t| t.volume)
+                                .unwrap_or(1.0);
                             let _ = bus
                                 .commands
-                                .send(Command::VolumeStep { target, delta })
+                                .send(Command::VolumeSet {
+                                    target,
+                                    volume: step_volume_db(current, delta),
+                                })
                                 .await;
                         }
                         Some(BoundEncoder::Member {
@@ -914,7 +940,7 @@ async fn run_device(
                                 .send(Command::MemberVolumeSet {
                                     conference,
                                     user_id,
-                                    volume: step_linear_volume(volume, delta),
+                                    volume: step_volume_db(volume, delta),
                                 })
                                 .await;
                         }
@@ -1221,13 +1247,13 @@ fn dial_views(geometry: &Geometry, state: &DeckState, snapshot: &Snapshot) -> Ve
                 index: index as u8,
                 role: target.key.to_string(),
                 title: target.name.clone(),
-                subtitle: format!("{}%", (target.volume * 100.0).round() as u32),
+                subtitle: crate::audio::mixer::format_volume_db(target.volume),
             },
             Some(EncoderBinding::Member { conference, member }) => DeckDialView {
                 index: index as u8,
                 role: format!("{conference}/user:{}", member.user_id),
                 title: member.name.clone(),
-                subtitle: format!("{}%", (member.volume * 100.0).round() as u32),
+                subtitle: crate::audio::mixer::format_volume_db(member.volume),
             },
             None => DeckDialView {
                 index: index as u8,

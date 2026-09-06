@@ -457,6 +457,10 @@ impl SendTransport {
         self.talking.load(Ordering::Relaxed)
     }
 
+    pub async fn stats_report(&self) -> webrtc::stats::StatsReport {
+        self.pc.get_stats().await
+    }
+
     /// Resumes or pauses the producer on the server and locally.
     pub async fn set_talking(&self, signal: &SocketClient, talking: bool) -> Result<()> {
         if self.talking.swap(talking, Ordering::Relaxed) == talking {
@@ -748,9 +752,98 @@ impl RecvTransport {
         Ok(())
     }
 
+    pub async fn stats_report(&self) -> webrtc::stats::StatsReport {
+        self.pc.get_stats().await
+    }
+
     pub async fn close(&self) {
         self.closed.store(true, Ordering::Relaxed);
         self.consumers.lock().await.clear();
         let _ = self.pc.close().await;
+    }
+}
+
+/// ICE/RTP stats flattened for the status page.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LinkStats {
+    pub rtt_ms: Option<u32>,
+    pub packet_loss_pct: Option<f32>,
+    pub packets_lost: u64,
+    pub packets_received: u64,
+}
+
+impl LinkStats {
+    pub fn from_report(report: &webrtc::stats::StatsReport) -> Self {
+        use webrtc::stats::StatsReportType;
+        let mut rtts = Vec::new();
+        let mut lost: i64 = 0;
+        let mut received: u64 = 0;
+        for item in report.reports.values() {
+            match item {
+                StatsReportType::CandidatePair(pair) if pair.nominated => {
+                    if pair.current_round_trip_time.is_finite()
+                        && pair.current_round_trip_time > 0.0
+                    {
+                        rtts.push((pair.current_round_trip_time * 1000.0) as f32);
+                    }
+                }
+                StatsReportType::RemoteInboundRTP(remote) => {
+                    lost += remote.packets_lost.max(0);
+                    received += remote.packets_received;
+                    if let Some(rtt) = remote.round_trip_time {
+                        if rtt.is_finite() && rtt > 0.0 {
+                            rtts.push((rtt * 1000.0) as f32);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let packet_loss_pct = if received + lost.max(0) as u64 > 0 {
+            Some((lost.max(0) as f32) / (received as f32 + lost.max(0) as f32) * 100.0)
+        } else {
+            None
+        };
+        Self {
+            rtt_ms: if rtts.is_empty() {
+                None
+            } else {
+                Some((rtts.iter().sum::<f32>() / rtts.len() as f32).round() as u32)
+            },
+            packet_loss_pct: packet_loss_pct.map(|v| (v * 10.0).round() / 10.0),
+            packets_lost: lost.max(0) as u64,
+            packets_received: received,
+        }
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        let mut rtts = Vec::new();
+        if let Some(ms) = self.rtt_ms {
+            rtts.push(ms as f32);
+        }
+        if let Some(ms) = other.rtt_ms {
+            rtts.push(ms as f32);
+        }
+        let packets_lost = self.packets_lost + other.packets_lost;
+        let packets_received = self.packets_received + other.packets_received;
+        let packet_loss_pct = if packets_received + packets_lost > 0 {
+            Some(
+                ((packets_lost as f32) / (packets_received as f32 + packets_lost as f32) * 1000.0)
+                    .round()
+                    / 10.0,
+            )
+        } else {
+            self.packet_loss_pct.or(other.packet_loss_pct)
+        };
+        Self {
+            rtt_ms: if rtts.is_empty() {
+                None
+            } else {
+                Some((rtts.iter().sum::<f32>() / rtts.len() as f32).round() as u32)
+            },
+            packet_loss_pct,
+            packets_lost,
+            packets_received,
+        }
     }
 }

@@ -130,8 +130,12 @@ pub struct AudioConfig {
     pub jitter_min_ms: u32,
     pub jitter_max_ms: u32,
     pub reopen_ms: u64,
-    /// Default per-target volume for targets without persisted state.
+    /// Default per-target volume for targets without persisted state (0–1).
+    /// Prefer `default_volume_db`; this linear value is kept for older files.
     pub default_volume: f32,
+    /// Default per-target volume in dB (0 = unity). Overrides `default_volume`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_volume_db: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,7 +200,13 @@ pub struct StreamDeckConfig {
     pub mock: Option<String>,
     pub brightness: u8,
     pub font_path: PathBuf,
+    /// Legacy linear volume step (0–1). Ignored when `volume_step_db` is set,
+    /// or when this value is ≤ 1 (treated as the old fraction and replaced by
+    /// a 3 dB tick).
     pub volume_step: f32,
+    /// Volume change per Stream Deck key/dial tick, in dB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_step_db: Option<f32>,
     pub volume_layer_timeout_s: u64,
     /// Target key for the left Stream Deck Pedal switch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -309,7 +319,40 @@ pub struct GpioConfig {
     pub chip: Option<String>,
     /// Named outputs: `tally`, `talking`, `incoming`, `connected`, `locked`.
     pub outputs: BTreeMap<String, GpioOutputConfig>,
+    /// Extra outputs that follow one target's incoming or receiving audio.
+    #[serde(default)]
+    pub target_outputs: Vec<GpioTargetOutputConfig>,
     pub inputs: Vec<GpioInputConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GpioTargetWhen {
+    #[default]
+    Receiving,
+    Incoming,
+}
+
+impl GpioTargetWhen {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GpioTargetWhen::Receiving => "receiving",
+            GpioTargetWhen::Incoming => "incoming",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpioTargetOutputConfig {
+    pub line: String,
+    /// `user:4`, `conference:1` or `feed:2`.
+    pub target: String,
+    #[serde(default)]
+    pub active_low: bool,
+    /// `receiving` (audio from this target) or `incoming` (this target is addressing us).
+    #[serde(default)]
+    pub when: GpioTargetWhen,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -399,7 +442,16 @@ impl Default for AudioConfig {
             jitter_max_ms: 120,
             reopen_ms: 2000,
             default_volume: 0.9,
+            default_volume_db: None,
         }
+    }
+}
+
+impl AudioConfig {
+    pub fn default_volume_linear(&self) -> f32 {
+        self.default_volume_db
+            .map(crate::audio::mixer::db_to_volume)
+            .unwrap_or(self.default_volume.clamp(0.0, 1.0))
     }
 }
 
@@ -440,11 +492,27 @@ impl Default for StreamDeckConfig {
             brightness: 60,
             font_path: PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
             volume_step: 0.05,
+            volume_step_db: None,
             volume_layer_timeout_s: 8,
             pedal_left: None,
             pedal_target: None,
             layout: BTreeMap::new(),
             devices: Vec::new(),
+        }
+    }
+}
+
+impl StreamDeckConfig {
+    /// dB change per key/dial tick. Legacy `volume_step` values in 0–1 are
+    /// the old linear fraction and become a 3 dB tick.
+    pub fn volume_step_db(&self) -> f32 {
+        if let Some(db) = self.volume_step_db {
+            return db;
+        }
+        if self.volume_step > 1.0 {
+            self.volume_step
+        } else {
+            3.0
         }
     }
 }
@@ -455,6 +523,7 @@ impl Default for GpioConfig {
             enabled: true,
             chip: None,
             outputs: BTreeMap::new(),
+            target_outputs: Vec::new(),
             inputs: Vec::new(),
         }
     }
@@ -807,7 +876,11 @@ impl Config {
                 );
             }
         }
-        if !(0.0..=1.0).contains(&self.audio.default_volume) {
+        if let Some(db) = self.audio.default_volume_db {
+            if !(-60.0..=6.0).contains(&db) {
+                bail!("audio.default_volume_db must be between -60 and 6");
+            }
+        } else if !(0.0..=1.0).contains(&self.audio.default_volume) {
             bail!("audio.default_volume must be between 0 and 1");
         }
         if self.audio.jitter_min_ms > self.audio.jitter_max_ms {
@@ -837,8 +910,14 @@ impl Config {
         if self.streamdeck.brightness > 100 {
             bail!("streamdeck.brightness must be between 0 and 100");
         }
-        if !(0.01..=1.0).contains(&self.streamdeck.volume_step) {
-            bail!("streamdeck.volume_step must be between 0.01 and 1");
+        if let Some(db) = self.streamdeck.volume_step_db {
+            if !(0.25..=12.0).contains(&db) {
+                bail!("streamdeck.volume_step_db must be between 0.25 and 12");
+            }
+        } else if !(0.01..=1.0).contains(&self.streamdeck.volume_step)
+            && !(0.25..=12.0).contains(&self.streamdeck.volume_step)
+        {
+            bail!("streamdeck.volume_step must be a legacy 0.01–1 linear step or 0.25–12 dB");
         }
         if let Some(target) = &self.vox.target {
             crate::talk::TargetKey::parse(target).ok_or_else(|| {
@@ -858,6 +937,17 @@ impl Config {
             if output.line.trim().is_empty() {
                 bail!("gpio.outputs.{name}.line is required");
             }
+        }
+        for (index, output) in self.gpio.target_outputs.iter().enumerate() {
+            if output.line.trim().is_empty() {
+                bail!("gpio.target_outputs[{index}].line is required");
+            }
+            crate::talk::TargetKey::parse(&output.target).ok_or_else(|| {
+                anyhow!(
+                    "gpio.target_outputs[{index}].target {:?} must look like conference:1 or user:4",
+                    output.target
+                )
+            })?;
         }
         for (index, input) in self.gpio.inputs.iter().enumerate() {
             if input.line.trim().is_empty() {
@@ -989,6 +1079,39 @@ mod tests {
         assert_eq!(json.audio.profile, AudioProfile::Low);
         assert_eq!(json.gpio.inputs[0].debounce_ms, 20);
         json.validate().unwrap();
+    }
+
+    #[test]
+    fn volume_db_and_target_gpio_outputs_parse() {
+        let toml_text = r#"
+            instance = "cam1"
+            [server]
+            url = "https://talktome.local:8443"
+            [user]
+            name = "Cam 1"
+            password = "secret"
+            [audio]
+            default_volume_db = -6
+            [streamdeck]
+            volume_step_db = 3
+            [[gpio.target_outputs]]
+            line = "GPIO18"
+            target = "conference:1"
+            when = "receiving"
+        "#;
+        let config =
+            from_document(parse_document(Path::new("cam1.toml"), toml_text).unwrap()).unwrap();
+        config.validate().unwrap();
+        assert!((config.audio.default_volume_linear() - 0.5).abs() < 0.02);
+        assert_eq!(config.streamdeck.volume_step_db(), 3.0);
+        assert_eq!(config.gpio.target_outputs.len(), 1);
+        assert_eq!(config.gpio.target_outputs[0].target, "conference:1");
+        assert_eq!(
+            config.gpio.target_outputs[0].when,
+            GpioTargetWhen::Receiving
+        );
+        let legacy = StreamDeckConfig::default();
+        assert_eq!(legacy.volume_step_db(), 3.0);
     }
 
     #[test]

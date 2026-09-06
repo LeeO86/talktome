@@ -50,7 +50,8 @@ dim_when_addressed = true
 jitter_min_ms = 20
 jitter_max_ms = 120
 reopen_ms = 2000
-default_volume = 0.9
+default_volume_db = 0
+# default_volume = 0.9   # legacy 0–1; ignored when default_volume_db is set
 
 [vox]
 enabled = false
@@ -83,7 +84,8 @@ enabled = true
 # serial = "AL12K3456789"   # bind to one deck when several are attached
 brightness = 60
 font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-volume_step = 0.05
+# dB change per VOL +/− key and encoder tick. Legacy volume_step 0–1 becomes 3 dB.
+volume_step_db = 3
 volume_layer_timeout_s = 8
 # Pedal: right switch is always Reply; left and middle are assignable.
 # pedal_left = "user:4"
@@ -103,11 +105,20 @@ volume_layer_timeout_s = 8
 enabled = true
 # chip = "gpiochip0"        # only needed when lines are given as offsets
 
+# Named outputs are optional. Omit a name (or the whole [gpio.outputs] table) to skip that pin.
+# `connected` follows ICE/media Ready (not merely registered). It goes off if the network drops.
 [gpio.outputs]
 tally = { line = "GPIO17", active_low = false }
 talking = { line = "GPIO27" }
 # incoming = { line = "GPIO18" }
 # connected = { line = "GPIO25" }
+
+# Drive a pin when a specific conference, user, or feed is playing audio (`receiving`)
+# or is currently addressing this client (`incoming`). Add more tables as needed.
+# [[gpio.target_outputs]]
+# line = "GPIO18"
+# target = "conference:1"
+# when = "receiving"
 
 [[gpio.inputs]]
 line = "GPIO22"

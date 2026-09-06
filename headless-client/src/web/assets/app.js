@@ -101,6 +101,32 @@
     return `${sec}s`;
   }
 
+  const MUTE_DB = -60;
+  function linearToDb(linear) {
+    const value = Number(linear);
+    if (!Number.isFinite(value) || value <= 1e-6) return MUTE_DB;
+    return 20 * Math.log10(Math.min(1, Math.max(value, 1e-6)));
+  }
+  function dbToLinear(db) {
+    const value = Number(db);
+    if (!Number.isFinite(value) || value <= MUTE_DB) return 0;
+    return Math.min(1, Math.pow(10, value / 20));
+  }
+  function formatDb(linear) {
+    const db = linearToDb(linear);
+    if (db <= MUTE_DB) return '-inf dB';
+    const rounded = Math.round(db * 10) / 10;
+    return `${rounded.toFixed(1)} dB`;
+  }
+  function volumeStepDb() {
+    const deck = state.configDoc && state.configDoc.streamdeck;
+    const configured = Number(deck && deck.volume_step_db);
+    if (Number.isFinite(configured) && configured > 0) return configured;
+    const legacy = Number(deck && deck.volume_step);
+    if (Number.isFinite(legacy) && legacy > 1) return legacy;
+    return 3;
+  }
+
   function kv(container, rows) {
     container.replaceChildren();
     for (const [label, value] of rows) {
@@ -406,6 +432,9 @@
       ['ICE (server)', media.ice_servers_announced && media.ice_servers_announced.length ? media.ice_servers_announced.join(', ') : (media.ice_servers && media.ice_servers.length ? media.ice_servers.join(', ') : 'none (direct only)')],
       ['ICE (webrtc)', iceEffectiveLabel(media)],
       ['ICE policy', media.ice_transport_policy || '–'],
+      ['RTT', media.rtt_ms != null ? `${media.rtt_ms} ms` : '–'],
+      ['Packet loss', media.packet_loss_pct != null ? `${media.packet_loss_pct}%${media.packets_lost != null ? ` (${media.packets_lost} lost / ${media.packets_received || 0} recv)` : ''}` : '–'],
+      ['Receive concealment', media.recv_conceal_pct != null ? `${media.recv_conceal_pct}%` : '–'],
       ['Camera tally', snap.on_air ? badge('ON AIR', 'bad') : badge('off')],
     ]);
 
@@ -566,17 +595,21 @@
     const controls = el('div', { class: 'target__controls' });
     const talkButton = el('button', { type: 'button', class: 'btn btn-small btn-talk', text: 'Talk' });
     const lockButton = el('button', { type: 'button', class: 'btn btn-small btn-lock', text: 'Lock' });
-    const slider = el('input', { type: 'range', min: 0, max: 100, step: 5 });
+    const slider = el('input', { type: 'range', min: String(MUTE_DB), max: '0', step: String(volumeStepDb()) });
     const volume = el('span', { class: 'target__volume' });
     const muteButton = el('button', { type: 'button', class: 'btn btn-small btn-mute', text: 'Mute' });
 
     if (target.can_talk && kind !== 'feed') {
       const press = (event) => {
         event.preventDefault();
-        if (state.pressed.has(key)) return;
+        if (talkButton.disabled || state.pressed.has(key)) return;
         state.pressed.add(key);
         talkButton.classList.add('is-active');
-        api('POST', '/api/talk', { action: 'press', target: key }).catch((error) => flash(error.message, 'error'));
+        api('POST', '/api/talk', { action: 'press', target: key }).catch((error) => {
+          flash(error.message, 'error');
+          state.pressed.delete(key);
+          talkButton.classList.remove('is-active');
+        });
       };
       const release = () => {
         if (!state.pressed.has(key)) return;
@@ -589,17 +622,20 @@
       talkButton.addEventListener('pointercancel', release);
       talkButton.addEventListener('pointerleave', release);
       talkButton.addEventListener('contextmenu', (event) => event.preventDefault());
-      lockButton.addEventListener('click', () => api('POST', '/api/talk', { action: 'lock', target: key }).catch((error) => flash(error.message, 'error')));
+      lockButton.addEventListener('click', () => {
+        if (lockButton.disabled) return;
+        api('POST', '/api/talk', { action: 'lock', target: key }).catch((error) => flash(error.message, 'error'));
+      });
       controls.append(talkButton, lockButton);
     } else {
       controls.append(el('span', { class: 'muted small', text: 'listen only' }), el('span'));
     }
     slider.addEventListener('input', () => {
-      volume.textContent = `${slider.value}%`;
+      volume.textContent = `${Number(slider.value).toFixed(1)} dB`;
       clearTimeout(state.volumeTimers.get(key));
       state.volumeTimers.set(
         key,
-        setTimeout(() => api('POST', '/api/audio', { action: 'volume-set', target: key, value: Number(slider.value) / 100 }).catch((error) => flash(error.message, 'error')), 150)
+        setTimeout(() => api('POST', '/api/audio', { action: 'volume-set', target: key, value: dbToLinear(Number(slider.value)) }).catch((error) => flash(error.message, 'error')), 150)
       );
     });
     muteButton.addEventListener('click', () => api('POST', '/api/audio', { action: 'mute-toggle', target: key }).catch((error) => flash(error.message, 'error')));
@@ -627,6 +663,16 @@
     $('.name', node).textContent = target.name;
     node.classList.toggle('is-incoming', target.incoming);
     node.classList.toggle('is-talking', target.held || target.locked);
+    const userOffline = targetKind(targetKey(target.key)) === 'user' && !target.online;
+    node.classList.toggle('is-offline', userOffline);
+    if (parts.talkButton) {
+      parts.talkButton.disabled = userOffline;
+      parts.talkButton.title = userOffline ? 'User is offline' : '';
+    }
+    if (parts.lockButton) {
+      parts.lockButton.disabled = userOffline;
+      parts.lockButton.title = userOffline ? 'User is offline' : '';
+    }
     const flags = [];
     flags.push(badge(target.online ? 'online' : 'offline', target.online ? 'ok' : ''));
     if (target.incoming) flags.push(badge('calling', 'warn'));
@@ -638,8 +684,9 @@
     parts.lockButton.classList.toggle('is-active', target.locked);
     parts.muteButton.classList.toggle('is-active', target.muted);
     if (document.activeElement !== parts.slider) {
-      parts.slider.value = Math.round(target.volume * 100);
-      parts.volume.textContent = `${Math.round(target.volume * 100)}%`;
+      parts.slider.step = String(volumeStepDb());
+      parts.slider.value = linearToDb(target.volume).toFixed(1);
+      parts.volume.textContent = formatDb(target.volume);
     }
     const members = target.members || [];
     const showMembers = targetKind(targetKey(target.key)) === 'conference' && members.length;
@@ -666,19 +713,21 @@
       if (!node) {
         node = el('div', { class: 'member', dataset: { userId: id } });
         const name = el('span', { class: 'member__name' });
-        const slider = el('input', { type: 'range', min: 0, max: 100, step: 5 });
+        const slider = el('input', { type: 'range', min: String(MUTE_DB), max: '0', step: String(volumeStepDb()) });
+        const volume = el('span', { class: 'target__volume' });
         const mute = el('button', { type: 'button', class: 'btn btn-small btn-mute', text: 'Hear' });
         slider.addEventListener('input', () => {
+          volume.textContent = `${Number(slider.value).toFixed(1)} dB`;
           const timerKey = `${conferenceKey}/${id}`;
           clearTimeout(state.volumeTimers.get(timerKey));
           state.volumeTimers.set(
             timerKey,
-            setTimeout(() => api('POST', '/api/audio', { action: 'member-volume-set', target: conferenceKey, member: `user:${id}`, value: Number(slider.value) / 100 }).catch((error) => flash(error.message, 'error')), 150)
+            setTimeout(() => api('POST', '/api/audio', { action: 'member-volume-set', target: conferenceKey, member: `user:${id}`, value: dbToLinear(Number(slider.value)) }).catch((error) => flash(error.message, 'error')), 150)
           );
         });
         mute.addEventListener('click', () => api('POST', '/api/audio', { action: 'member-mute-toggle', target: conferenceKey, member: `user:${id}` }).catch((error) => flash(error.message, 'error')));
-        node.append(name, slider, mute);
-        node._parts = { name, slider, mute };
+        node.append(name, slider, volume, mute);
+        node._parts = { name, slider, volume, mute };
         container.append(node);
       }
       node._parts.name.textContent = `${member.name}${member.online ? '' : ' (offline)'}${member.receiving ? ' · speaking' : ''}`;
@@ -686,7 +735,9 @@
       node._parts.mute.classList.toggle('is-active', member.muted);
       node._parts.mute.textContent = member.muted ? 'Muted' : 'Hear';
       if (document.activeElement !== node._parts.slider) {
-        node._parts.slider.value = Math.round(member.volume * 100);
+        node._parts.slider.step = String(volumeStepDb());
+        node._parts.slider.value = linearToDb(member.volume).toFixed(1);
+        if (node._parts.volume) node._parts.volume.textContent = formatDb(member.volume);
       }
     }
     for (const [id, node] of existing) {
@@ -1039,7 +1090,7 @@
         { path: 'audio.output_device', label: 'Output device', type: 'device', direction: 'outputs', nullable: true, help: 'wav:/tmp/out.wav records the mix when there is no speaker' },
         { path: 'audio.profile', label: 'Codec profile', type: 'select', options: [['standard', 'Standard (20 ms, FEC)'], ['low', 'Low (10 ms)'], ['ultra-low', 'Ultra low (5 ms)']] },
         { path: 'audio.input_gain_db', label: 'Input gain (dB)', type: 'number', step: 0.5 },
-        { path: 'audio.default_volume', label: 'Default target volume (0–1)', type: 'number', step: 0.05, min: 0, max: 1 },
+        { path: 'audio.default_volume_db', label: 'Default target volume (dB)', type: 'number', step: 0.5, min: -60, max: 0, nullable: true, help: '0 dB is unity. Overrides the legacy 0–1 default_volume value.' },
         { path: 'audio.dim_db', label: 'Dim amount (dB)', type: 'number', step: 1 },
         { path: 'audio.dim_feeds_while_speaking', label: 'Dim feeds while speaking', type: 'bool' },
         { path: 'audio.dim_when_addressed', label: 'Dim feeds when addressed', type: 'bool' },
@@ -1056,7 +1107,7 @@
         { path: 'talk.tap_ms', label: 'Tap threshold (ms)', type: 'number', help: 'A shorter press toggles the talk lock' },
         { path: 'talk.lock_multiple', label: 'Allow several locks at once', type: 'bool' },
         { path: 'vox.enabled', label: 'Voice trigger (VOX)', type: 'bool' },
-        { path: 'vox.target', label: 'VOX target', type: 'text', nullable: true, help: 'e.g. conference:1' },
+        { path: 'vox.target', label: 'VOX target', type: 'target', nullable: true, help: 'Conference or user the VOX talks to' },
         { path: 'vox.threshold_db', label: 'VOX threshold (dBFS)', type: 'number' },
         { path: 'vox.hang_ms', label: 'VOX hang time (ms)', type: 'number' },
       ],
@@ -1071,10 +1122,10 @@
         { path: 'streamdeck.serial', label: 'Serial number', type: 'text', nullable: true, help: 'Empty: first unused deck found. Used when the device list below is empty.' },
         { path: 'streamdeck.brightness', label: 'Brightness (%)', type: 'number', min: 0, max: 100 },
         { path: 'streamdeck.font_path', label: 'Font file', type: 'text' },
-        { path: 'streamdeck.volume_step', label: 'Volume step per key/dial tick', type: 'number', step: 0.01, min: 0.01, max: 1 },
+        { path: 'streamdeck.volume_step_db', label: 'Volume step per key/dial tick (dB)', type: 'number', step: 0.5, min: 0.25, max: 12, nullable: true, help: 'Legacy volume_step values between 0 and 1 become 3 dB.' },
         { path: 'streamdeck.volume_layer_timeout_s', label: 'Volume layer timeout (s)', type: 'number' },
-        { path: 'streamdeck.pedal_left', label: 'Pedal left switch target', type: 'text', nullable: true, help: 'e.g. user:4. Reply is always the right pedal.' },
-        { path: 'streamdeck.pedal_target', label: 'Pedal middle switch target', type: 'text', nullable: true },
+        { path: 'streamdeck.pedal_left', label: 'Pedal left switch target', type: 'target', nullable: true, help: 'Reply is always the right pedal.' },
+        { path: 'streamdeck.pedal_target', label: 'Pedal middle switch target', type: 'target', nullable: true },
         { path: 'streamdeck.layout', label: 'Key layout overrides (JSON object)', type: 'json', wide: true, help: 'Pedal: {"0":"user:1","1":"conference:2"} for left and middle.' },
         { type: 'streamdeck-devices' },
       ],
@@ -1087,6 +1138,7 @@
         { path: 'gpio.enabled', label: 'Use GPIO', type: 'bool' },
         { path: 'gpio.chip', label: 'GPIO chip', type: 'text', nullable: true, help: 'Only needed when lines are given as offsets (e.g. gpiochip0)' },
         { type: 'gpio-outputs' },
+        { type: 'gpio-target-outputs' },
         { type: 'gpio-inputs' },
       ],
     },
@@ -1241,9 +1293,17 @@
 
   function renderField(field, doc) {
     if (field.type === 'gpio-outputs') return renderGpioOutputs(doc);
+    if (field.type === 'gpio-target-outputs') return renderGpioTargetOutputs(doc);
     if (field.type === 'gpio-inputs') return renderGpioInputs(doc);
     if (field.type === 'streamdeck-devices') return renderStreamdeckDevices(doc);
-    const value = getPath(doc, field.path);
+    let value = getPath(doc, field.path);
+    if (field.path === 'audio.default_volume_db' && (value == null || value === '')) {
+      value = Math.round(linearToDb(getPath(doc, 'audio.default_volume') ?? 0.9) * 10) / 10;
+    }
+    if (field.path === 'streamdeck.volume_step_db' && (value == null || value === '')) {
+      const legacy = Number(getPath(doc, 'streamdeck.volume_step'));
+      value = Number.isFinite(legacy) && legacy > 1 ? legacy : 3;
+    }
     const wrapper = el('label', { class: `field${field.wide ? ' wide' : ''}`, dataset: { path: field.path } });
     if (field.type === 'bool') {
       wrapper.className = `field-check${field.wide ? ' wide' : ''}`;
@@ -1254,9 +1314,10 @@
     }
     wrapper.append(el('span', { text: field.label }));
     let input;
-    if (field.type === 'select') {
+    if (field.type === 'select' || field.type === 'target') {
       input = el('select', { dataset: { path: field.path, type: 'select', nullable: field.nullable ? '1' : '' }, autocomplete: 'off' });
-      for (const [optionValue, label] of field.options) {
+      const options = field.type === 'target' ? targetSelectOptions(value, { allowEmpty: field.nullable }) : field.options;
+      for (const [optionValue, label] of options) {
         input.append(el('option', { value: optionValue, text: label }));
       }
       input.value = value == null ? '' : String(value);
@@ -1295,6 +1356,30 @@
     return wrapper;
   }
 
+  function targetSelectOptions(current, { allowEmpty = true, kinds = null } = {}) {
+    const options = [];
+    const seen = new Set();
+    if (allowEmpty) options.push(['', '—']);
+    const targets = (state.status && state.status.snapshot && state.status.snapshot.targets) || [];
+    for (const target of targets) {
+      const key = targetKey(target.key);
+      if (kinds && !kinds.includes(targetKind(key))) continue;
+      seen.add(key);
+      options.push([key, `${target.name} (${key})`]);
+    }
+    if (current && !seen.has(current)) options.push([current, current]);
+    return options;
+  }
+
+  function fillTargetSelect(select, current, extra = {}) {
+    const value = current || '';
+    select.replaceChildren();
+    for (const [optionValue, label] of targetSelectOptions(value, extra)) {
+      select.append(el('option', { value: optionValue, text: label }));
+    }
+    select.value = value;
+  }
+
   function renderGpioOutputs(doc) {
     const outputs = getPath(doc, 'gpio.outputs') || {};
     const editor = el('div', { class: 'list-editor', dataset: { editor: 'gpio-outputs' } });
@@ -1309,6 +1394,38 @@
       );
     }
     return editor;
+  }
+
+  function renderGpioTargetOutputs(doc) {
+    const outputs = getPath(doc, 'gpio.target_outputs') || [];
+    const editor = el('div', { class: 'list-editor', dataset: { editor: 'gpio-target-outputs' } });
+    const rows = el('div', { class: 'list-editor' });
+    const addRow = (output) => rows.append(gpioTargetOutputRow(output));
+    editor.append(
+      el('h3', { class: 'subheading', text: 'Target outputs (line goes active when that destination has audio)' }),
+      rows,
+      el('div', {}, el('button', { type: 'button', class: 'btn btn-small', text: '+ Add target output', onclick: () => addRow({ line: '', target: '', when: 'receiving', active_low: false }) }))
+    );
+    for (const output of outputs) addRow(output);
+    return editor;
+  }
+
+  function gpioTargetOutputRow(output) {
+    const row = el('div', { class: 'list-row', dataset: { targetOutput: '1' } });
+    const when = el('select', { dataset: { field: 'when' } });
+    when.append(el('option', { value: 'receiving', text: 'receiving audio' }));
+    when.append(el('option', { value: 'incoming', text: 'incoming / calling' }));
+    when.value = output.when || 'receiving';
+    const target = el('select', { dataset: { field: 'target' } });
+    fillTargetSelect(target, output.target || '');
+    row.append(
+      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'GPIO18', dataset: { field: 'line' }, value: output.line || '' })]),
+      el('label', { class: 'field' }, [el('span', { text: 'Target' }), target]),
+      el('label', { class: 'field' }, [el('span', { text: 'When' }), when]),
+      el('label', { class: 'field-check' }, [el('input', { type: 'checkbox', dataset: { field: 'active_low' }, ...(output.active_low ? { checked: '' } : {}) }), el('span', { text: 'active low' })]),
+      el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Remove', onclick: () => row.remove() })
+    );
+    return row;
   }
 
   function renderGpioInputs(doc) {
@@ -1326,10 +1443,12 @@
     const action = el('select', { dataset: { field: 'action' } });
     for (const name of ACTIONS) action.append(el('option', { value: name, text: name.replace('_', ' ') }));
     action.value = input.action || 'talk';
+    const target = el('select', { dataset: { field: 'target' } });
+    fillTargetSelect(target, input.target || '');
     row.append(
       el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'GPIO22', dataset: { field: 'line' }, value: input.line || '' })]),
       el('label', { class: 'field' }, [el('span', { text: 'Action' }), action]),
-      el('label', { class: 'field' }, [el('span', { text: 'Target' }), el('input', { type: 'text', placeholder: 'conference:1', dataset: { field: 'target' }, value: input.target || '' })]),
+      el('label', { class: 'field' }, [el('span', { text: 'Target' }), target]),
       el('label', { class: 'field' }, [el('span', { text: 'Debounce (ms)' }), el('input', { type: 'number', min: 0, dataset: { field: 'debounce_ms' }, value: input.debounce_ms != null ? input.debounce_ms : 20 })]),
       el('label', { class: 'field-check' }, [el('input', { type: 'checkbox', dataset: { field: 'active_low' }, ...(input.active_low ? { checked: '' } : {}) }), el('span', { text: 'active low' })]),
       el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Remove', onclick: () => row.remove() })
@@ -1418,6 +1537,18 @@
       if (!line) continue;
       outputs[row.dataset.output] = { line, active_low: $('[data-field="active_low"]', row).checked };
     }
+    const targetOutputs = [];
+    for (const row of $$('[data-editor="gpio-target-outputs"] [data-target-output]')) {
+      const line = $('[data-field="line"]', row).value.trim();
+      const target = $('[data-field="target"]', row).value.trim();
+      if (!line || !target) continue;
+      targetOutputs.push({
+        line,
+        target,
+        when: $('[data-field="when"]', row).value || 'receiving',
+        active_low: $('[data-field="active_low"]', row).checked,
+      });
+    }
     const inputs = [];
     for (const row of $$('[data-editor="gpio-inputs"] [data-input]')) {
       const line = $('[data-field="line"]', row).value.trim();
@@ -1431,9 +1562,14 @@
         debounce_ms: Number($('[data-field="debounce_ms"]', row).value || 20),
       });
     }
-    if (hasPath(fileDoc || doc, 'gpio') || Object.keys(outputs).length || inputs.length) {
+    if (hasPath(fileDoc || doc, 'gpio') || Object.keys(outputs).length || targetOutputs.length || inputs.length) {
       setPath(doc, 'gpio.outputs', outputs);
+      setPath(doc, 'gpio.target_outputs', targetOutputs);
       setPath(doc, 'gpio.inputs', inputs);
+    }
+    const defaultDb = getPath(doc, 'audio.default_volume_db');
+    if (typeof defaultDb === 'number' && Number.isFinite(defaultDb)) {
+      setPath(doc, 'audio.default_volume', dbToLinear(defaultDb));
     }
     const devices = [];
     for (const row of $$('[data-editor="streamdeck-devices"] [data-device]')) {
