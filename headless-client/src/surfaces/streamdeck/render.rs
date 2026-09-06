@@ -152,7 +152,7 @@ impl Renderer {
                 }
             }
             Badge::OnAir => fill_rect(image, x, y, size, size, palette::WHITE),
-            Badge::Incoming => fill_rect(image, x, y, size, size, Rgb(255, 235, 150)),
+            Badge::Incoming => fill_rect(image, x, y, size, size, palette::WHITE),
         }
     }
 
@@ -396,6 +396,38 @@ mod tests {
                 })
                 .count();
             assert!(changed > 20, "text rendered: {changed}");
+        }
+    }
+
+    #[test]
+    fn talk_and_incoming_keys_use_web_client_colours() {
+        let renderer = renderer();
+        let mut talking = Appearance::blank();
+        talking.background = palette::TALKING;
+        talking.title = "Talk".into();
+        talking.subtitle = "we speak".into();
+        let mut incoming = Appearance::blank();
+        incoming.background = palette::INCOMING;
+        incoming.title = "News".into();
+        incoming.subtitle = "incoming".into();
+        incoming.badge = Some(Badge::Incoming);
+        incoming.blink = Some(palette::IDLE);
+        let talk = renderer.key(&talking, (96, 96), false);
+        let listen = renderer.key(&incoming, (96, 96), false);
+        assert_eq!(talk.get_pixel(8, 8).0, [139, 92, 246]);
+        assert_eq!(listen.get_pixel(8, 8).0, [34, 197, 94]);
+        if let Ok(dir) = std::env::var("TALKTOME_COLOUR_SWATCH_DIR") {
+            let dir = std::path::PathBuf::from(dir);
+            let _ = std::fs::create_dir_all(&dir);
+            talk.save(dir.join("streamdeck_key_talking.png"))
+                .expect("write talking swatch");
+            listen
+                .save(dir.join("streamdeck_key_incoming.png"))
+                .expect("write incoming swatch");
+            let listen_blink = renderer.key(&incoming, (96, 96), true);
+            listen_blink
+                .save(dir.join("streamdeck_key_incoming_blink.png"))
+                .expect("write incoming blink swatch");
         }
     }
 

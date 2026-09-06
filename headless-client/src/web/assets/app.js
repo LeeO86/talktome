@@ -440,10 +440,10 @@
 
     // Talk card
     const talking = snap.talking;
-    setBadge($('#talk-state'), talking ? (snap.lock_active ? 'talking · locked' : 'talking') : snap.lock_active ? 'locked' : 'idle', talking ? 'ok' : snap.lock_active ? 'info' : '');
+    setBadge($('#talk-state'), talking ? (snap.lock_active ? 'talking · locked' : 'talking') : snap.lock_active ? 'locked' : 'idle', talking || snap.lock_active ? 'talk' : '');
     const incoming = $('#incoming');
     incoming.replaceChildren(
-      ...snap.incoming.map((entry) => badge(`${entry.from_name} → ${entry.target ? labelForTarget(snap, targetKey(entry.target)) : 'you'}`, 'warn'))
+      ...snap.incoming.map((entry) => badge(`${entry.from_name} → ${entry.target ? labelForTarget(snap, targetKey(entry.target)) : 'you'}`, 'ok'))
     );
     if (snap.reply_target) {
       incoming.append(badge(`Reply → ${snap.reply_name || targetKey(snap.reply_target)}`, 'info'));
@@ -664,6 +664,7 @@
     const parts = node._parts;
     $('.name', node).textContent = target.name;
     node.classList.toggle('is-incoming', target.incoming);
+    node.classList.toggle('is-receiving', target.receiving);
     node.classList.toggle('is-talking', target.held || target.locked);
     const userOffline = targetKind(targetKey(target.key)) === 'user' && !target.online;
     node.classList.toggle('is-offline', userOffline);
@@ -677,10 +678,10 @@
     }
     const flags = [];
     flags.push(badge(target.online ? 'online' : 'offline', target.online ? 'ok' : ''));
-    if (target.incoming) flags.push(badge('calling', 'warn'));
-    if (target.receiving) flags.push(badge('receiving', 'info'));
-    if (target.locked) flags.push(badge('locked', 'ok'));
-    if (target.held) flags.push(badge('talking', 'ok'));
+    if (target.incoming) flags.push(badge('calling', 'ok'));
+    if (target.receiving) flags.push(badge('receiving', 'ok'));
+    if (target.locked) flags.push(badge('locked', 'talk'));
+    if (target.held) flags.push(badge('talking', 'talk'));
     if (target.muted) flags.push(badge('muted', 'bad'));
     parts.flags.replaceChildren(...flags);
     parts.lockButton.classList.toggle('is-active', target.locked);
@@ -734,6 +735,7 @@
       }
       node._parts.name.textContent = `${member.name}${member.online ? '' : ' (offline)'}${member.receiving ? ' · speaking' : ''}`;
       node.classList.toggle('is-muted', member.muted);
+      node.classList.toggle('is-speaking', member.receiving);
       node._parts.mute.classList.toggle('is-active', member.muted);
       node._parts.mute.textContent = member.muted ? 'Muted' : 'Hear';
       if (document.activeElement !== node._parts.slider) {

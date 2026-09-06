@@ -554,10 +554,12 @@ Every command is answered with the matching `-result` event carrying the
   user is in `plugdev`.
 - **Rendering**: `image` + `ab_glyph`; font from `streamdeck.font_path`
   (default `/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf`, package
-  dependency `fonts-dejavu-core`). Keys: dark grey idle, green while
-  talking, green with lock glyph when locked, amber pulsing while that
-  target addresses us, grey-dim when the target is offline, red speaker
-  glyph when muted, volume shown as a bar. Brightness from
+  dependency `fonts-dejavu-core`). Keys use the web client's colours: dark
+  grey idle, purple (`#8b5cf6`) while talking, darker purple with a lock
+  glyph when locked, green (`#22c55e`) pulsing while that target addresses
+  us or we hear them (blinks purple/green when both), grey-dim when the
+  target is offline, red speaker glyph when muted, volume shown as a bar.
+  Brightness from
   `streamdeck.brightness` (default 60) with `streamdeck.idle_dim_s`.
 - **Layout** (auto, from the target order; pedal switches overridable in
   `streamdeck.layout` / `pedal_left` / `pedal_target`):
