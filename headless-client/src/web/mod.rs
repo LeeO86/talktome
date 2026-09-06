@@ -33,6 +33,7 @@ const INDEX_HTML: &str = include_str!("assets/index.html");
 const APP_JS: &str = include_str!("assets/app.js");
 const STYLE_CSS: &str = include_str!("assets/style.css");
 const TALKTOME_ICON_PNG: &[u8] = include_bytes!("assets/talktome-icon.png");
+const APPLE_TOUCH_ICON_PNG: &[u8] = include_bytes!("assets/apple-touch-icon.png");
 
 /// Everything the web handlers need from the running client.
 pub struct WebContext {
@@ -86,6 +87,7 @@ pub async fn run(
         .route("/app.js", get(app_js))
         .route("/style.css", get(style_css))
         .route("/talktome-icon.png", get(talktome_icon))
+        .route("/apple-touch-icon.png", get(apple_touch_icon))
         .route("/favicon.ico", get(talktome_icon))
         .route("/api/login", post(login))
         .route("/api/session", get(session))
@@ -159,12 +161,20 @@ async fn style_css() -> impl IntoResponse {
 }
 
 async fn talktome_icon() -> impl IntoResponse {
+    png_asset(TALKTOME_ICON_PNG)
+}
+
+async fn apple_touch_icon() -> impl IntoResponse {
+    png_asset(APPLE_TOUCH_ICON_PNG)
+}
+
+fn png_asset(bytes: &'static [u8]) -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, "image/png"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        TALKTOME_ICON_PNG,
+        bytes,
     )
 }
 
