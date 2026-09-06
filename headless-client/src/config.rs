@@ -186,20 +186,82 @@ pub struct NetworkConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct StreamDeckConfig {
     pub enabled: bool,
-    /// Serial number of the deck to use; `null` = first found.
+    /// Serial number of the deck to use; `null` = first found. Used when
+    /// `devices` is empty.
     pub serial: Option<String>,
     /// Dummy deck when no hardware is attached (`mk2`, `plus`, `xl`, `neo`,
     /// `pedal`, …). Empty = discover a real Stream Deck. The environment
-    /// variable `TALKTOME_MOCK_STREAMDECK` still wins when set.
+    /// variable `TALKTOME_MOCK_STREAMDECK` still wins when set on the first
+    /// device. Used when `devices` is empty.
     pub mock: Option<String>,
     pub brightness: u8,
     pub font_path: PathBuf,
     pub volume_step: f32,
     pub volume_layer_timeout_s: u64,
+    /// Target key for the left Stream Deck Pedal switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pedal_left: Option<String>,
     /// Target key for the middle Stream Deck Pedal switch.
     pub pedal_target: Option<String>,
-    /// Explicit key assignments: key index -> target key or action name.
+    /// Explicit key assignments: key index -> target key (`"0"` / `"1"` on a Pedal).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub layout: BTreeMap<String, String>,
+    /// Extra (or all) decks. When empty, `serial` / `mock` / pedal fields
+    /// describe a single device.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<StreamDeckDeviceConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct StreamDeckDeviceConfig {
+    pub serial: Option<String>,
+    pub mock: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pedal_left: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pedal_target: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub layout: BTreeMap<String, String>,
+}
+
+impl StreamDeckConfig {
+    /// Devices this instance should open: the `devices` list, or one device
+    /// built from the legacy top-level serial/mock/pedal fields.
+    pub fn resolved_devices(&self) -> Vec<StreamDeckDeviceConfig> {
+        if !self.devices.is_empty() {
+            return self.devices.clone();
+        }
+        vec![StreamDeckDeviceConfig {
+            serial: self.serial.clone(),
+            mock: self.mock.clone(),
+            pedal_left: self.pedal_left.clone(),
+            pedal_target: self.pedal_target.clone(),
+            layout: self.layout.clone(),
+        }]
+    }
+}
+
+pub fn known_streamdeck_mock(name: &str) -> bool {
+    matches!(
+        name.trim()
+            .to_ascii_lowercase()
+            .replace(['-', '_', ' '], "")
+            .as_str(),
+        "original"
+            | "originalv2"
+            | "v2"
+            | "mini"
+            | "minimk2"
+            | "mk2"
+            | "xl"
+            | "xlv2"
+            | "plus"
+            | "plusxl"
+            | "neo"
+            | "pedal"
+            | ""
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,8 +441,10 @@ impl Default for StreamDeckConfig {
             font_path: PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
             volume_step: 0.05,
             volume_layer_timeout_s: 8,
+            pedal_left: None,
             pedal_target: None,
             layout: BTreeMap::new(),
+            devices: Vec::new(),
         }
     }
 }
@@ -620,6 +684,25 @@ pub fn merge_file_over_running(running: &Value, file: &Value) -> Value {
     }
 }
 
+/// Whether the on-disk document, once parsed into a full `Config`, differs
+/// from the running process. Compares through `Config` so TOML f64 vs `f32`
+/// JSON and omitted-vs-default keys do not look like unsaved restarts.
+pub fn file_differs_from_running(file: &Value, running: &Config) -> bool {
+    let Ok(mut parsed) = from_document(file.clone()) else {
+        return true;
+    };
+    if file.get("instance").is_none() {
+        parsed.instance = running.instance.clone();
+    }
+    let Ok(file_json) = serde_json::to_value(parsed.redacted()) else {
+        return true;
+    };
+    let Ok(running_json) = serde_json::to_value(running.redacted()) else {
+        return true;
+    };
+    file_json != running_json
+}
+
 /// Copy top-level keys from `stored` that `incoming` omitted. Nested objects
 /// that **are** present in `incoming` are left as sent, so an empty
 /// `gpio.outputs` object can still clear outputs.
@@ -735,30 +818,19 @@ impl Config {
                 bail!("ice.transport_policy must be \"all\" or \"relay\"");
             }
         }
+        let mut mocks: Vec<(String, String)> = Vec::new();
         if let Some(mock) = &self.streamdeck.mock {
-            let name = mock
-                .trim()
-                .to_ascii_lowercase()
-                .replace(['-', '_', ' '], "");
-            if !name.is_empty()
-                && !matches!(
-                    name.as_str(),
-                    "original"
-                        | "originalv2"
-                        | "v2"
-                        | "mini"
-                        | "minimk2"
-                        | "mk2"
-                        | "xl"
-                        | "xlv2"
-                        | "plus"
-                        | "plusxl"
-                        | "neo"
-                        | "pedal"
-                )
-            {
+            mocks.push(("streamdeck.mock".into(), mock.clone()));
+        }
+        for (index, device) in self.streamdeck.devices.iter().enumerate() {
+            if let Some(mock) = &device.mock {
+                mocks.push((format!("streamdeck.devices[{index}].mock"), mock.clone()));
+            }
+        }
+        for (path, mock) in mocks {
+            if !known_streamdeck_mock(&mock) {
                 bail!(
-                    "streamdeck.mock {mock:?} is not a known model (original, originalv2, mini, minimk2, mk2, xl, xlv2, plus, plusxl, neo, pedal)"
+                    "{path} {mock:?} is not a known model (original, originalv2, mini, minimk2, mk2, xl, xlv2, plus, plusxl, neo, pedal)"
                 );
             }
         }
@@ -1033,6 +1105,26 @@ mod tests {
         assert!(config.validate().is_err());
         config.streamdeck.mock = Some("".into());
         config.validate().unwrap();
+        config.streamdeck.devices = vec![StreamDeckDeviceConfig {
+            mock: Some("neo".into()),
+            ..StreamDeckDeviceConfig::default()
+        }];
+        config.validate().unwrap();
+        config.streamdeck.devices[0].mock = Some("nope".into());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn file_differs_from_running_ignores_float_json_shape() {
+        let running = from_document(minimal_json()).unwrap();
+        let mut file = serde_json::to_value(&running).unwrap();
+        file["streamdeck"]["volume_step"] = serde_json::json!(0.05);
+        assert!(
+            !file_differs_from_running(&file, &running),
+            "0.05 in the file must match the running f32 volume_step"
+        );
+        file["user"]["name"] = serde_json::json!("Studio");
+        assert!(file_differs_from_running(&file, &running));
     }
 
     #[test]

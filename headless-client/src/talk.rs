@@ -124,6 +124,22 @@ impl TalkModel {
         self.reply_target = target;
     }
 
+    /// Prefer a conference when someone is addressing us in one, matching the
+    /// web client (Reply talks to the conference, not the caller).
+    pub fn resolve_reply_target(
+        parsed: Option<TargetKey>,
+        incoming: impl IntoIterator<Item = Option<TargetKey>>,
+    ) -> Option<TargetKey> {
+        let conference = incoming
+            .into_iter()
+            .flatten()
+            .find(|key| matches!(key, TargetKey::Conference(_)));
+        match parsed {
+            Some(TargetKey::Conference(_)) => parsed,
+            _ => conference.or(parsed),
+        }
+    }
+
     pub fn reply_target(&self) -> Option<TargetKey> {
         self.reply_target
     }
@@ -444,7 +460,7 @@ mod tests {
     use super::*;
 
     fn deck(n: u8) -> InputSource {
-        InputSource::StreamDeck(n)
+        InputSource::StreamDeck { device: 0, key: n }
     }
 
     #[test]
@@ -527,6 +543,25 @@ mod tests {
         assert!(model
             .press(deck(2), TargetRef::Key(TargetKey::Feed(1)), Instant::now())
             .is_none());
+    }
+
+    #[test]
+    fn resolve_reply_prefers_conference_over_caller() {
+        let conference = Some(TargetKey::Conference(1));
+        let caller = Some(TargetKey::User(7));
+        assert_eq!(
+            TalkModel::resolve_reply_target(caller, [conference]),
+            conference
+        );
+        assert_eq!(
+            TalkModel::resolve_reply_target(conference, [caller]),
+            conference
+        );
+        assert_eq!(TalkModel::resolve_reply_target(caller, [caller]), caller);
+        assert_eq!(
+            TalkModel::resolve_reply_target(None, [conference]),
+            conference
+        );
     }
 
     #[test]

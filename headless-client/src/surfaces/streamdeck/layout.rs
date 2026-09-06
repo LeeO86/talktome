@@ -17,8 +17,9 @@ pub struct Geometry {
 }
 
 impl Geometry {
-    pub fn has_encoders(&self) -> bool {
-        self.encoders > 0
+    /// Stream Deck +: dials sit under the bottom row of keys, one per column.
+    pub fn encoders_follow_bottom_row(&self) -> bool {
+        self.encoders > 0 && self.encoders == self.cols && self.rows >= 2
     }
 }
 
@@ -91,6 +92,7 @@ pub enum Role {
     Reply,
     Target(TargetKey),
     NextPage,
+    NextEncoderPage,
     VolumeToggle,
     VolumeUp,
     VolumeDown,
@@ -108,6 +110,7 @@ pub struct KeySpec {
 #[derive(Debug, Clone)]
 pub struct DeckState {
     pub page: usize,
+    pub encoder_page: usize,
     pub volume_layer: bool,
     pub volume_layer_touched: Instant,
     pub selected: Option<TargetKey>,
@@ -118,6 +121,7 @@ impl Default for DeckState {
     fn default() -> Self {
         Self {
             page: 0,
+            encoder_page: 0,
             volume_layer: false,
             volume_layer_touched: Instant::now(),
             selected: None,
@@ -138,73 +142,135 @@ impl DeckState {
         }
         false
     }
+
+    pub fn clamp_pages(&mut self, geometry: &Geometry, target_count: usize) {
+        let pages = page_count(geometry, target_count);
+        self.page = self.page.min(pages.saturating_sub(1));
+        let encoder_pages = encoder_page_count(geometry, target_count);
+        self.encoder_page = self.encoder_page.min(encoder_pages.saturating_sub(1));
+    }
 }
 
 /// Everything the layout needs from configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LayoutOptions {
-    pub pedal_target: Option<TargetKey>,
+    pub pedal_left: Option<TargetKey>,
+    pub pedal_middle: Option<TargetKey>,
 }
 
-/// Keys reserved for fixed roles in the current layer, in key order.
-fn reserved_roles(geometry: &Geometry, state: &DeckState) -> Vec<(u8, Role)> {
-    let mut roles = vec![(0u8, Role::Status), (1u8, Role::Reply)];
-    if geometry.has_encoders() {
-        return roles;
+/// Target keys, bottom row left-to-right then the row above, never the command row.
+pub fn target_slots(geometry: &Geometry) -> Vec<u8> {
+    if !geometry.visual || geometry.rows <= 1 || geometry.cols == 0 {
+        return Vec::new();
     }
-    // The VOL toggle sits at the right end of the first row.
-    let vol_key = geometry.cols.saturating_sub(1);
-    if state.volume_layer {
-        let mut next = 2u8;
-        for role in [Role::MuteSelected, Role::VolumeDown, Role::VolumeUp] {
-            if next == vol_key {
-                next += 1;
+    let cols = geometry.cols as usize;
+    let rows = geometry.rows as usize;
+    let mut slots = Vec::with_capacity((rows - 1) * cols);
+    for row in (1..rows).rev() {
+        for col in 0..cols {
+            let index = row * cols + col;
+            if index < geometry.keys as usize {
+                slots.push(index as u8);
             }
-            roles.push((next, role));
-            next += 1;
         }
     }
-    if vol_key >= 2 && geometry.keys > 3 {
-        roles.push((vol_key, Role::VolumeToggle));
-    }
-    roles
+    slots
 }
 
-/// Number of target slots per page and the key indices used for them.
-pub fn target_slots(geometry: &Geometry, state: &DeckState, target_count: usize) -> Vec<u8> {
-    let reserved: Vec<u8> = reserved_roles(geometry, state)
-        .into_iter()
-        .map(|(k, _)| k)
-        .collect();
-    let mut free: Vec<u8> = (0..geometry.keys)
-        .filter(|k| !reserved.contains(k))
-        .collect();
-    if target_count > free.len() && !free.is_empty() {
-        // Paging needed: the last free key becomes "next page".
-        free.pop();
+pub fn page_count(geometry: &Geometry, target_count: usize) -> usize {
+    let slots = target_slots(geometry).len();
+    if slots == 0 {
+        return 1;
     }
-    free
-}
-
-pub fn page_count(geometry: &Geometry, state: &DeckState, target_count: usize) -> usize {
-    let slots = target_slots(geometry, state, target_count).len().max(1);
     target_count.div_ceil(slots).max(1)
 }
 
-/// Targets shown on the current page, in slot order.
+/// Separate dial pages on models whose encoders are not in line with a key row.
+pub fn encoder_page_count(geometry: &Geometry, target_count: usize) -> usize {
+    if geometry.encoders == 0 || geometry.encoders_follow_bottom_row() {
+        return 1;
+    }
+    target_count.div_ceil(geometry.encoders as usize).max(1)
+}
+
+/// Targets shown on the current key page, in slot order (bottom row first).
 pub fn page_targets<'a>(
     geometry: &Geometry,
     state: &DeckState,
     targets: &'a [TargetInfo],
 ) -> Vec<&'a TargetInfo> {
-    let slots = target_slots(geometry, state, targets.len());
+    let slots = target_slots(geometry);
     let per_page = slots.len().max(1);
-    let pages = page_count(geometry, state, targets.len());
+    let pages = page_count(geometry, targets.len());
     let page = state.page.min(pages.saturating_sub(1));
     targets
         .iter()
         .skip(page * per_page)
         .take(per_page)
+        .collect()
+}
+
+/// Command-row roles for the current layer. Targets never appear here.
+fn command_roles(
+    geometry: &Geometry,
+    state: &DeckState,
+    key_pages: usize,
+    encoder_pages: usize,
+) -> Vec<(u8, Role)> {
+    if !geometry.visual || geometry.cols == 0 {
+        return Vec::new();
+    }
+    let cols = geometry.cols as usize;
+    let mut row: Vec<Option<Role>> = vec![None; cols];
+
+    let idle_pagers = |row: &mut [Option<Role>]| {
+        row[0] = Some(Role::Status);
+        row[cols - 1] = Some(Role::Reply);
+        if cols > 1 {
+            row[1] = Some(Role::VolumeToggle);
+        }
+        let mut cursor = cols.saturating_sub(2);
+        if key_pages > 1 && cursor > 1 {
+            row[cursor] = Some(Role::NextPage);
+            cursor = cursor.saturating_sub(1);
+        } else if key_pages > 1 && cursor == 1 {
+            row[1] = Some(Role::NextPage);
+        }
+        if encoder_pages > 1 && cursor > 1 {
+            row[cursor] = Some(Role::NextEncoderPage);
+        } else if encoder_pages > 1 && cursor == 1 && row[1] != Some(Role::NextPage) {
+            row[1] = Some(Role::NextEncoderPage);
+        }
+    };
+
+    if state.volume_layer {
+        let controls = [
+            Role::VolumeToggle,
+            Role::MuteSelected,
+            Role::VolumeDown,
+            Role::VolumeUp,
+        ];
+        for (index, role) in controls.iter().enumerate() {
+            if index < cols {
+                row[index] = Some(*role);
+            }
+        }
+        if cols > 4 {
+            let mut idle = vec![None; cols];
+            idle_pagers(&mut idle);
+            for (index, role) in idle.into_iter().enumerate().skip(4) {
+                if row[index].is_none() {
+                    row[index] = role;
+                }
+            }
+        }
+    } else {
+        idle_pagers(&mut row);
+    }
+
+    row.into_iter()
+        .enumerate()
+        .filter_map(|(index, role)| role.map(|role| (index as u8, role)))
         .collect()
 }
 
@@ -259,7 +325,7 @@ fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot
     appearance
 }
 
-fn status_appearance(snapshot: &Snapshot, state: &DeckState, pages: usize) -> Appearance {
+fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
     let mut appearance = Appearance::simple(
         &snapshot.user_name,
         if snapshot.connection == ConnectionState::Ready && snapshot.audio_ok {
@@ -274,8 +340,13 @@ fn status_appearance(snapshot: &Snapshot, state: &DeckState, pages: usize) -> Ap
         snapshot.connection.label().to_string()
     } else if !snapshot.audio_ok {
         "no audio".to_string()
-    } else if pages > 1 {
-        format!("page {}/{}", state.page.min(pages - 1) + 1, pages)
+    } else if let Some(production) = snapshot
+        .production
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        production.to_string()
     } else {
         "ready".to_string()
     };
@@ -290,20 +361,19 @@ fn status_appearance(snapshot: &Snapshot, state: &DeckState, pages: usize) -> Ap
     appearance
 }
 
+fn reply_conference_name(snapshot: &Snapshot) -> Option<String> {
+    snapshot.reply_label()
+}
+
 fn reply_appearance(snapshot: &Snapshot) -> Appearance {
     let mut appearance = Appearance::simple("REPLY", palette::REPLY);
-    match (&snapshot.reply_name, snapshot.incoming.first()) {
-        (_, Some(incoming)) => {
-            appearance.subtitle = incoming.from_name.clone();
-            appearance.background = palette::INCOMING;
-            appearance.blink = Some(palette::REPLY);
-        }
-        (Some(name), None) => {
-            appearance.subtitle = name.clone();
-        }
-        (None, None) => {
-            appearance.foreground = palette::OFFLINE_TEXT;
-        }
+    match reply_conference_name(snapshot) {
+        Some(name) => appearance.subtitle = name,
+        None => appearance.foreground = palette::OFFLINE_TEXT,
+    }
+    if !snapshot.incoming.is_empty() {
+        appearance.background = palette::INCOMING;
+        appearance.blink = Some(palette::REPLY);
     }
     if snapshot
         .reply_target
@@ -316,6 +386,72 @@ fn reply_appearance(snapshot: &Snapshot) -> Appearance {
     appearance
 }
 
+fn appearance_for_role(
+    role: Role,
+    snapshot: &Snapshot,
+    state: &DeckState,
+    key_pages: usize,
+    encoder_pages: usize,
+) -> Appearance {
+    match role {
+        Role::Status => status_appearance(snapshot, state),
+        Role::Reply => reply_appearance(snapshot),
+        Role::VolumeToggle => {
+            let mut a = Appearance::simple(
+                "VOL",
+                if state.volume_layer {
+                    palette::SELECTED
+                } else {
+                    palette::VOLUME
+                },
+            );
+            a.subtitle = if state.volume_layer {
+                "back".into()
+            } else {
+                String::new()
+            };
+            a
+        }
+        Role::VolumeUp => Appearance::simple("+", palette::VOLUME),
+        Role::VolumeDown => Appearance::simple("−", palette::VOLUME),
+        Role::MuteSelected => {
+            let selected = state.selected.and_then(|key| snapshot.target(key));
+            let mut a = Appearance::simple("MUTE", palette::VOLUME);
+            if let Some(target) = selected {
+                a.subtitle = target.name.clone();
+                if target.muted {
+                    a.background = palette::MUTED;
+                    a.badge = Some(Badge::Muted);
+                }
+            }
+            a
+        }
+        Role::NextPage => {
+            let mut a = Appearance::simple("NEXT", palette::REPLY);
+            a.subtitle = format!(
+                "{}/{}",
+                state.page.min(key_pages.saturating_sub(1)) + 1,
+                key_pages
+            );
+            a
+        }
+        Role::NextEncoderPage => {
+            let mut a = Appearance::simple("DIALS", palette::VOLUME);
+            a.subtitle = format!(
+                "{}/{}",
+                state.encoder_page.min(encoder_pages.saturating_sub(1)) + 1,
+                encoder_pages
+            );
+            a
+        }
+        Role::Target(key) => snapshot
+            .target(key)
+            .map(|target| target_appearance(target, state, snapshot))
+            .unwrap_or_else(Appearance::blank),
+        Role::Empty => Appearance::blank(),
+    }
+}
+
 /// Builds the full key map for a visual deck.
 pub fn layout(
     geometry: &Geometry,
@@ -324,7 +460,7 @@ pub fn layout(
     options: &LayoutOptions,
 ) -> Vec<KeySpec> {
     if !geometry.visual {
-        return pedal_layout(options);
+        return pedal_layout(snapshot, options);
     }
     let mut keys: Vec<KeySpec> = (0..geometry.keys)
         .map(|_| KeySpec {
@@ -332,49 +468,16 @@ pub fn layout(
             appearance: Appearance::blank(),
         })
         .collect();
-    let pages = page_count(geometry, state, snapshot.targets.len());
-    for (key, role) in reserved_roles(geometry, state) {
+    let key_pages = page_count(geometry, snapshot.targets.len());
+    let encoder_pages = encoder_page_count(geometry, snapshot.targets.len());
+    for (key, role) in command_roles(geometry, state, key_pages, encoder_pages) {
         let Some(slot) = keys.get_mut(key as usize) else {
             continue;
         };
         slot.role = role;
-        slot.appearance = match role {
-            Role::Status => status_appearance(snapshot, state, pages),
-            Role::Reply => reply_appearance(snapshot),
-            Role::VolumeToggle => {
-                let mut a = Appearance::simple(
-                    "VOL",
-                    if state.volume_layer {
-                        palette::SELECTED
-                    } else {
-                        palette::VOLUME
-                    },
-                );
-                a.subtitle = if state.volume_layer {
-                    "back".into()
-                } else {
-                    String::new()
-                };
-                a
-            }
-            Role::VolumeUp => Appearance::simple("+", palette::VOLUME),
-            Role::VolumeDown => Appearance::simple("−", palette::VOLUME),
-            Role::MuteSelected => {
-                let selected = state.selected.and_then(|key| snapshot.target(key));
-                let mut a = Appearance::simple("MUTE", palette::VOLUME);
-                if let Some(target) = selected {
-                    a.subtitle = target.name.clone();
-                    if target.muted {
-                        a.background = palette::MUTED;
-                        a.badge = Some(Badge::Muted);
-                    }
-                }
-                a
-            }
-            _ => Appearance::blank(),
-        };
+        slot.appearance = appearance_for_role(role, snapshot, state, key_pages, encoder_pages);
     }
-    let slots = target_slots(geometry, state, snapshot.targets.len());
+    let slots = target_slots(geometry);
     let shown = page_targets(geometry, state, &snapshot.targets);
     for (slot, target) in slots.iter().zip(shown.iter()) {
         if let Some(key) = keys.get_mut(*slot as usize) {
@@ -382,53 +485,58 @@ pub fn layout(
             key.appearance = target_appearance(target, state, snapshot);
         }
     }
-    if pages > 1 {
-        let reserved: Vec<u8> = reserved_roles(geometry, state)
-            .into_iter()
-            .map(|(k, _)| k)
-            .collect();
-        if let Some(next_key) = (0..geometry.keys).rev().find(|k| !reserved.contains(k)) {
-            if let Some(key) = keys.get_mut(next_key as usize) {
-                key.role = Role::NextPage;
-                let mut a = Appearance::simple("NEXT", palette::REPLY);
-                a.subtitle = format!("{}/{}", state.page.min(pages - 1) + 1, pages);
-                key.appearance = a;
-            }
-        }
-    }
     keys
 }
 
-fn pedal_layout(options: &LayoutOptions) -> Vec<KeySpec> {
-    let blank = Appearance::blank();
+fn pedal_layout(snapshot: &Snapshot, options: &LayoutOptions) -> Vec<KeySpec> {
+    let assign = |target: Option<TargetKey>| match target {
+        Some(key) => KeySpec {
+            role: Role::Target(key),
+            appearance: snapshot
+                .target(key)
+                .map(|target| target_appearance(target, &DeckState::default(), snapshot))
+                .unwrap_or_else(|| {
+                    let mut a = Appearance::simple(&key.to_string(), palette::IDLE);
+                    a.foreground = palette::OFFLINE_TEXT;
+                    a
+                }),
+        },
+        None => KeySpec {
+            role: Role::Empty,
+            appearance: {
+                let mut a = Appearance::simple("—", palette::OFFLINE);
+                a.foreground = palette::OFFLINE_TEXT;
+                a
+            },
+        },
+    };
     vec![
+        assign(options.pedal_left),
+        assign(options.pedal_middle),
         KeySpec {
             role: Role::Reply,
-            appearance: blank.clone(),
-        },
-        KeySpec {
-            role: options
-                .pedal_target
-                .map(Role::Target)
-                .unwrap_or(Role::Empty),
-            appearance: blank.clone(),
-        },
-        KeySpec {
-            role: Role::Empty,
-            appearance: blank,
+            appearance: reply_appearance(snapshot),
         },
     ]
 }
 
-/// Targets bound to the encoders of a Stream Deck + on the current page.
+/// Targets bound to the encoders of a Stream Deck + / + XL.
 pub fn encoder_targets<'a>(
     geometry: &Geometry,
     state: &DeckState,
     snapshot: &'a Snapshot,
 ) -> Vec<Option<&'a TargetInfo>> {
-    let shown = page_targets(geometry, state, &snapshot.targets);
+    if geometry.encoders_follow_bottom_row() {
+        let shown = page_targets(geometry, state, &snapshot.targets);
+        return (0..geometry.encoders as usize)
+            .map(|index| shown.get(index).copied())
+            .collect();
+    }
+    let per_page = geometry.encoders.max(1) as usize;
+    let pages = encoder_page_count(geometry, snapshot.targets.len());
+    let page = state.encoder_page.min(pages.saturating_sub(1));
     (0..geometry.encoders as usize)
-        .map(|index| shown.get(index).copied())
+        .map(|index| snapshot.targets.get(page * per_page + index))
         .collect()
 }
 
@@ -467,6 +575,14 @@ mod tests {
                 rows: 2,
                 cols: 4,
                 encoders: 4,
+                touchpoints: 0,
+                visual: true,
+            },
+            "plusxl" => Geometry {
+                keys: 36,
+                rows: 4,
+                cols: 9,
+                encoders: 6,
                 touchpoints: 0,
                 visual: true,
             },
@@ -517,76 +633,193 @@ mod tests {
 
     fn options() -> LayoutOptions {
         LayoutOptions {
-            pedal_target: Some(TargetKey::Conference(1)),
+            pedal_left: Some(TargetKey::User(9)),
+            pedal_middle: Some(TargetKey::Conference(1)),
         }
     }
 
+    fn roles(kind: &str, count: usize, state: &DeckState) -> Vec<Role> {
+        layout(&geometry(kind), &snapshot(count), state, &options())
+            .into_iter()
+            .map(|key| key.role)
+            .collect()
+    }
+
     #[test]
-    fn mk2_layout_reserves_status_reply_and_vol() {
-        let geometry = geometry("mk2");
-        let state = DeckState::default();
-        let keys = layout(&geometry, &snapshot(5), &state, &options());
-        assert_eq!(keys.len(), 15);
+    fn neo_command_row_and_bottom_targets() {
+        let keys = layout(
+            &geometry("neo"),
+            &snapshot(3),
+            &DeckState::default(),
+            &options(),
+        );
         assert_eq!(keys[0].role, Role::Status);
-        assert_eq!(keys[1].role, Role::Reply);
-        assert_eq!(keys[4].role, Role::VolumeToggle);
-        assert_eq!(keys[2].role, Role::Target(TargetKey::User(0)));
-        assert_eq!(keys[3].role, Role::Target(TargetKey::User(1)));
-        assert_eq!(keys[5].role, Role::Target(TargetKey::Feed(2)));
-        assert_eq!(keys[8].role, Role::Empty);
+        assert_eq!(keys[1].role, Role::VolumeToggle);
+        assert_eq!(keys[2].role, Role::Empty);
+        assert_eq!(keys[3].role, Role::Reply);
+        assert_eq!(keys[4].role, Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[5].role, Role::Target(TargetKey::User(1)));
+        assert_eq!(keys[6].role, Role::Target(TargetKey::Feed(2)));
+        assert_eq!(keys[7].role, Role::Empty);
         assert_eq!(keys[0].appearance.subtitle, "ready");
     }
 
     #[test]
-    fn paging_appears_when_targets_overflow() {
-        let geometry = geometry("mini");
-        let mut state = DeckState::default();
-        let snapshot = snapshot(7);
-        // Mini: keys 0,1 reserved, key 2 = VOL, three free keys -> 2 targets + NEXT.
-        let keys = layout(&geometry, &snapshot, &state, &options());
-        assert_eq!(keys[2].role, Role::VolumeToggle);
-        assert_eq!(keys[5].role, Role::NextPage);
-        assert_eq!(keys[3].role, Role::Target(TargetKey::User(0)));
-        assert_eq!(page_count(&geometry, &state, 7), 4);
-        state.page = 3;
-        let keys = layout(&geometry, &snapshot, &state, &options());
-        assert_eq!(keys[3].role, Role::Target(TargetKey::User(6)));
-        assert_eq!(keys[4].role, Role::Empty);
-        assert_eq!(keys[0].appearance.subtitle, "page 4/4");
+    fn status_shows_production_when_ready() {
+        let mut snapshot = snapshot(1);
+        snapshot.production = Some("SRF News".into());
+        let keys = layout(
+            &geometry("neo"),
+            &snapshot,
+            &DeckState::default(),
+            &options(),
+        );
+        assert_eq!(keys[0].appearance.title, "Cam 1");
+        assert_eq!(keys[0].appearance.subtitle, "SRF News");
     }
 
     #[test]
-    fn volume_layer_adds_controls_and_bars() {
-        let geometry = geometry("mk2");
+    fn paging_sits_left_of_reply() {
+        let geometry = geometry("mini");
+        let mut state = DeckState::default();
+        let snapshot = snapshot(7);
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(keys[0].role, Role::Status);
+        assert_eq!(keys[1].role, Role::NextPage);
+        assert_eq!(keys[2].role, Role::Reply);
+        assert_eq!(keys[3].role, Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[4].role, Role::Target(TargetKey::User(1)));
+        assert_eq!(keys[5].role, Role::Target(TargetKey::Feed(2)));
+        assert_eq!(page_count(&geometry, 7), 3);
+        state.page = 2;
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(keys[3].role, Role::Target(TargetKey::User(6)));
+        assert_eq!(keys[4].role, Role::Empty);
+        assert_eq!(keys[1].appearance.subtitle, "3/3");
+    }
+
+    #[test]
+    fn volume_layer_overlays_command_row_not_targets() {
+        let geometry = geometry("neo");
         let state = DeckState {
             volume_layer: true,
             selected: Some(TargetKey::User(0)),
             ..DeckState::default()
         };
         let keys = layout(&geometry, &snapshot(4), &state, &options());
-        assert_eq!(keys[2].role, Role::MuteSelected);
-        assert_eq!(keys[3].role, Role::VolumeDown);
-        assert_eq!(keys[4].role, Role::VolumeToggle);
-        assert_eq!(keys[5].role, Role::VolumeUp);
-        assert_eq!(keys[6].role, Role::Target(TargetKey::User(0)));
-        assert_eq!(keys[6].appearance.bar, Some(0.9));
-        assert_eq!(keys[6].appearance.background, palette::SELECTED);
-        assert_eq!(keys[2].appearance.subtitle, "T0");
-        assert_eq!(keys[0].appearance.subtitle, "VOLUME");
+        assert_eq!(keys[0].role, Role::VolumeToggle);
+        assert_eq!(keys[1].role, Role::MuteSelected);
+        assert_eq!(keys[2].role, Role::VolumeDown);
+        assert_eq!(keys[3].role, Role::VolumeUp);
+        assert_eq!(keys[4].role, Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[5].role, Role::Target(TargetKey::User(1)));
+        assert_eq!(keys[6].role, Role::Target(TargetKey::Feed(2)));
+        assert_eq!(keys[7].role, Role::Target(TargetKey::User(3)));
+        assert_eq!(keys[4].appearance.bar, Some(0.9));
+        assert_eq!(keys[4].appearance.background, palette::SELECTED);
+        assert_eq!(keys[1].appearance.subtitle, "T0");
     }
 
     #[test]
-    fn plus_uses_encoders_instead_of_vol_key() {
+    fn mk2_fills_targets_from_the_bottom() {
+        let keys = roles("mk2", 5, &DeckState::default());
+        assert_eq!(keys[0], Role::Status);
+        assert_eq!(keys[1], Role::VolumeToggle);
+        assert_eq!(keys[4], Role::Reply);
+        assert_eq!(keys[2], Role::Empty);
+        assert_eq!(keys[5], Role::Empty);
+        assert_eq!(keys[10], Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[11], Role::Target(TargetKey::User(1)));
+        assert_eq!(keys[12], Role::Target(TargetKey::Feed(2)));
+        assert_eq!(keys[13], Role::Target(TargetKey::User(3)));
+        assert_eq!(keys[14], Role::Target(TargetKey::User(4)));
+    }
+
+    #[test]
+    fn mk2_volume_keeps_reply_when_there_is_room() {
+        let state = DeckState {
+            volume_layer: true,
+            selected: Some(TargetKey::User(0)),
+            ..DeckState::default()
+        };
+        let keys = roles("mk2", 4, &state);
+        assert_eq!(keys[0], Role::VolumeToggle);
+        assert_eq!(keys[1], Role::MuteSelected);
+        assert_eq!(keys[2], Role::VolumeDown);
+        assert_eq!(keys[3], Role::VolumeUp);
+        assert_eq!(keys[4], Role::Reply);
+        assert_eq!(keys[10], Role::Target(TargetKey::User(0)));
+    }
+
+    #[test]
+    fn plus_bottom_row_matches_dials() {
         let geometry = geometry("plus");
         let state = DeckState::default();
         let snapshot = snapshot(3);
         let keys = layout(&geometry, &snapshot, &state, &options());
-        assert!(!keys.iter().any(|k| k.role == Role::VolumeToggle));
-        assert_eq!(keys[2].role, Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[0].role, Role::Status);
+        assert_eq!(keys[1].role, Role::VolumeToggle);
+        assert_eq!(keys[3].role, Role::Reply);
+        assert_eq!(keys[4].role, Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[5].role, Role::Target(TargetKey::User(1)));
+        assert_eq!(keys[6].role, Role::Target(TargetKey::Feed(2)));
+        assert_eq!(keys[7].role, Role::Empty);
         let encoders = encoder_targets(&geometry, &state, &snapshot);
         assert_eq!(encoders.len(), 4);
         assert_eq!(encoders[0].map(|t| t.key), Some(TargetKey::User(0)));
+        assert_eq!(encoders[1].map(|t| t.key), Some(TargetKey::User(1)));
+        assert_eq!(encoders[2].map(|t| t.key), Some(TargetKey::Feed(2)));
         assert_eq!(encoders[3], None);
+        assert_eq!(encoder_page_count(&geometry, 12), 1);
+    }
+
+    #[test]
+    fn plusxl_pages_dials_independently_of_keys() {
+        let geometry = geometry("plusxl");
+        let mut state = DeckState::default();
+        let snapshot = snapshot(20);
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(keys[0].role, Role::Status);
+        assert_eq!(keys[1].role, Role::VolumeToggle);
+        assert_eq!(keys[8].role, Role::Reply);
+        assert!(keys.iter().any(|key| key.role == Role::NextEncoderPage));
+        assert!(!keys.iter().any(|key| key.role == Role::NextPage));
+        let bottom = 3 * 9;
+        assert_eq!(keys[bottom].role, Role::Target(TargetKey::User(0)));
+        let encoders = encoder_targets(&geometry, &state, &snapshot);
+        assert_eq!(encoders.len(), 6);
+        assert_eq!(encoders[0].map(|t| t.key), Some(TargetKey::User(0)));
+        assert_eq!(encoders[5].map(|t| t.key), Some(TargetKey::Feed(5)));
+        state.encoder_page = 3;
+        let encoders = encoder_targets(&geometry, &state, &snapshot);
+        assert_eq!(encoders[0].map(|t| t.key), Some(TargetKey::User(18)));
+        assert_eq!(encoders[1].map(|t| t.key), Some(TargetKey::User(19)));
+        assert_eq!(encoders[2], None);
+        assert_eq!(encoder_page_count(&geometry, 20), 4);
+    }
+
+    #[test]
+    fn reply_shows_conference_not_caller() {
+        let mut snapshot = snapshot(2);
+        snapshot.targets[1].key = TargetKey::Conference(1);
+        snapshot.targets[1].name = "News".into();
+        snapshot.reply_target = Some(TargetKey::User(0));
+        snapshot.reply_name = Some("jan".into());
+        snapshot.targets[0].name = "jan".into();
+        snapshot.incoming = vec![crate::state::IncomingInfo {
+            from_name: "jan".into(),
+            target: Some(TargetKey::Conference(1)),
+        }];
+        let keys = layout(
+            &geometry("neo"),
+            &snapshot,
+            &DeckState::default(),
+            &options(),
+        );
+        assert_eq!(keys[3].role, Role::Reply);
+        assert_eq!(keys[3].appearance.subtitle, "News");
+        assert_ne!(keys[3].appearance.subtitle, "jan");
+        assert_eq!(keys[3].appearance.background, palette::INCOMING);
     }
 
     #[test]
@@ -602,23 +835,26 @@ mod tests {
         let keys = layout(&geometry, &snapshot, &state, &options());
         assert_eq!(keys[0].appearance.subtitle, "ON AIR");
         assert_eq!(keys[0].appearance.background, palette::ON_AIR);
-        assert_eq!(keys[2].appearance.badge, Some(Badge::Incoming));
-        assert!(keys[2].appearance.blink.is_some());
-        assert_eq!(keys[3].appearance.background, palette::LOCKED);
-        assert_eq!(keys[4].appearance.background, palette::MUTED);
-        assert_eq!(keys[4].appearance.badge, Some(Badge::Muted));
+        let bottom = 3 * 8;
+        assert_eq!(keys[bottom].appearance.badge, Some(Badge::Incoming));
+        assert!(keys[bottom].appearance.blink.is_some());
+        assert_eq!(keys[bottom + 1].appearance.background, palette::LOCKED);
+        assert_eq!(keys[bottom + 2].appearance.background, palette::MUTED);
+        assert_eq!(keys[bottom + 2].appearance.badge, Some(Badge::Muted));
     }
 
     #[test]
-    fn pedal_maps_three_switches() {
+    fn pedal_maps_assignable_left_middle_and_reply_right() {
         let keys = layout(
             &geometry("pedal"),
             &snapshot(2),
             &DeckState::default(),
             &options(),
         );
-        assert_eq!(keys[0].role, Role::Reply);
+        assert_eq!(keys[0].role, Role::Target(TargetKey::User(9)));
         assert_eq!(keys[1].role, Role::Target(TargetKey::Conference(1)));
+        assert_eq!(keys[2].role, Role::Reply);
+        assert_eq!(keys[2].appearance.title, "REPLY");
     }
 
     #[test]

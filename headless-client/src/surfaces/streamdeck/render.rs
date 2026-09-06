@@ -432,4 +432,180 @@ mod tests {
         let vertical = renderer.strip((100, 1200), &segments);
         assert_eq!(vertical.dimensions(), (100, 1200));
     }
+
+    fn demo_snapshot() -> crate::state::Snapshot {
+        use crate::state::{ConnectionState, IncomingInfo, Snapshot, TargetInfo};
+        use crate::talk::TargetKey;
+        let mut snapshot = Snapshot::initial("ui", "ueli");
+        snapshot.connection = ConnectionState::Ready;
+        snapshot.audio_ok = true;
+        snapshot.production = Some("SRF News".into());
+        snapshot.targets = ["adi", "beni", "oli", "andy", "jan", "kenny"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| TargetInfo {
+                key: TargetKey::User(i as i64),
+                name: name.into(),
+                can_talk: true,
+                online: true,
+                held: false,
+                locked: false,
+                incoming: false,
+                receiving: false,
+                volume: 0.65,
+                muted: false,
+                members: Vec::new(),
+            })
+            .collect();
+        snapshot.targets.push(TargetInfo {
+            key: TargetKey::Conference(1),
+            name: "News".into(),
+            can_talk: true,
+            online: true,
+            held: false,
+            locked: false,
+            incoming: true,
+            receiving: false,
+            volume: 0.8,
+            muted: false,
+            members: Vec::new(),
+        });
+        snapshot.targets.push(TargetInfo {
+            key: TargetKey::Feed(1),
+            name: "Virus".into(),
+            can_talk: false,
+            online: true,
+            held: false,
+            locked: false,
+            incoming: false,
+            receiving: true,
+            volume: 0.65,
+            muted: false,
+            members: Vec::new(),
+        });
+        snapshot.reply_target = Some(TargetKey::Conference(1));
+        snapshot.reply_name = Some("News".into());
+        snapshot.incoming = vec![IncomingInfo {
+            from_name: "jan".into(),
+            target: Some(TargetKey::Conference(1)),
+        }];
+        snapshot
+    }
+
+    fn compose_grid(
+        renderer: &Renderer,
+        keys: &[crate::surfaces::streamdeck::layout::KeySpec],
+        cols: u8,
+        size: u32,
+    ) -> RgbImage {
+        let cols = cols.max(1) as u32;
+        let rows = (keys.len() as u32).div_ceil(cols);
+        let gap = 6;
+        let mut canvas = RgbImage::from_pixel(
+            cols * (size + gap) + gap,
+            rows * (size + gap) + gap,
+            ImgRgb([12, 14, 20]),
+        );
+        for (index, spec) in keys.iter().enumerate() {
+            let key = renderer.key(&spec.appearance, (size, size), false);
+            let col = index as u32 % cols;
+            let row = index as u32 / cols;
+            let x0 = gap + col * (size + gap);
+            let y0 = gap + row * (size + gap);
+            for y in 0..size {
+                for x in 0..size {
+                    canvas.put_pixel(x0 + x, y0 + y, *key.get_pixel(x, y));
+                }
+            }
+        }
+        canvas
+    }
+
+    #[test]
+    fn composes_neo_and_plus_layouts() {
+        use crate::surfaces::streamdeck::layout::{
+            layout, DeckState, Geometry, LayoutOptions, Role,
+        };
+        use crate::talk::TargetKey;
+        let renderer = renderer();
+        let snapshot = demo_snapshot();
+        let options = LayoutOptions::default();
+        let neo = Geometry {
+            keys: 8,
+            rows: 2,
+            cols: 4,
+            encoders: 0,
+            touchpoints: 2,
+            visual: true,
+        };
+        let keys = layout(&neo, &snapshot, &DeckState::default(), &options);
+        assert_eq!(keys[0].appearance.title, "ueli");
+        assert_eq!(keys[0].appearance.subtitle, "SRF News");
+        assert_eq!(keys[1].role, Role::VolumeToggle);
+        assert_eq!(keys[3].role, Role::Reply);
+        assert_eq!(keys[3].appearance.subtitle, "News");
+        assert_eq!(keys[4].role, Role::Target(TargetKey::User(0)));
+        let idle = compose_grid(&renderer, &keys, neo.cols, 72);
+        let dir = std::env::temp_dir();
+        idle.save(dir.join("talktome-layout-neo.png")).unwrap();
+
+        let volume = DeckState {
+            volume_layer: true,
+            selected: Some(TargetKey::User(0)),
+            ..DeckState::default()
+        };
+        let keys = layout(&neo, &snapshot, &volume, &options);
+        assert_eq!(keys[0].role, Role::VolumeToggle);
+        assert_eq!(keys[1].role, Role::MuteSelected);
+        assert_eq!(keys[2].role, Role::VolumeDown);
+        assert_eq!(keys[3].role, Role::VolumeUp);
+        assert_eq!(keys[4].role, Role::Target(TargetKey::User(0)));
+        compose_grid(&renderer, &keys, neo.cols, 72)
+            .save(dir.join("talktome-layout-neo-volume.png"))
+            .unwrap();
+
+        let plus = Geometry {
+            keys: 8,
+            rows: 2,
+            cols: 4,
+            encoders: 4,
+            touchpoints: 0,
+            visual: true,
+        };
+        let keys = layout(&plus, &snapshot, &DeckState::default(), &options);
+        compose_grid(&renderer, &keys, plus.cols, 72)
+            .save(dir.join("talktome-layout-plus.png"))
+            .unwrap();
+        let plusxl = Geometry {
+            keys: 36,
+            rows: 4,
+            cols: 9,
+            encoders: 6,
+            touchpoints: 0,
+            visual: true,
+        };
+        let keys = layout(&plusxl, &snapshot, &DeckState::default(), &options);
+        assert!(keys.iter().any(|key| key.role == Role::NextEncoderPage));
+        assert_eq!(keys[8].role, Role::Reply);
+        compose_grid(&renderer, &keys, plusxl.cols, 48)
+            .save(dir.join("talktome-layout-plusxl.png"))
+            .unwrap();
+        let pedal = Geometry {
+            keys: 3,
+            rows: 1,
+            cols: 3,
+            encoders: 0,
+            touchpoints: 0,
+            visual: false,
+        };
+        let options = LayoutOptions {
+            pedal_left: Some(TargetKey::User(0)),
+            pedal_middle: Some(TargetKey::Conference(1)),
+        };
+        let keys = layout(&pedal, &snapshot, &DeckState::default(), &options);
+        assert_eq!(keys[2].role, Role::Reply);
+        compose_grid(&renderer, &keys, 3, 96)
+            .save(dir.join("talktome-layout-pedal.png"))
+            .unwrap();
+    }
 }

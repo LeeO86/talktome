@@ -163,6 +163,11 @@ Save & restart. The web Stream Deck view renders the keys; taps talk/lock
 like hardware. Optional file input: `TALKTOME_SURFACE_MOCK_DIR=/tmp/tt` and
 append lines such as `down 3` / `up 3` to `$TALKTOME_SURFACE_MOCK_DIR/streamdeck-inputs`.
 
+With no Talktome server (so no live targets), mock decks can still show a
+layout using `TALKTOME_DEMO_TARGETS=adi,beni,conference:News,feed:Virus`
+and `TALKTOME_DEMO_REPLY=News`. Those names are paint-only and disappear as
+soon as the client receives real targets.
+
 The VM also has no USB headset. Capture a 440 Hz sine instead of a
 microphone, and optionally write the mix to a WAV file:
 
@@ -197,23 +202,28 @@ server-side mute. The conference fader still scales the whole conference.
 
 ## Stream Deck
 
-- Key 0 shows the status (user, connection, `ON AIR` when the camera is
-  live). Tap it to clear all talk locks, hold it for two seconds to switch
-  page.
-- Key 1 is Reply: it shows who is calling and talks back to them.
-- The remaining keys are the targets. Hold to talk, tap to toggle a talk
-  lock (green with a lock badge). Feeds cannot be talked to; pressing a feed
-  toggles its mute.
-- `VOL` (right end of the first row) opens the volume layer: tap a target
-  to select it, `+` / `−` change its volume, `MUTE` toggles it; holding a
-  target key toggles its mute directly. The layer closes after
+- The top row is the command row: **status** (user name and production) at
+  the left, **VOL** next to it, **NEXT** (when there are more targets than
+  keys) one left of **Reply**, and **Reply** at the far right. Reply shows
+  the conference (or target) being talked to, not the caller name.
+- Remaining keys are targets, filled from the **bottom row upward** like the
+  web client. Hold to talk, tap to toggle a talk lock (green with a lock
+  badge). Feeds cannot be talked to; pressing a feed toggles its mute.
+- `VOL` opens the volume layer: mute / − / + occupy the command row (on a
+  Neo the whole top row becomes VOL, MUTE, −, +) and **targets do not
+  move**. Tap a target to select it. The layer closes after
   `streamdeck.volume_layer_timeout_s`.
-- Stream Deck + / + XL: the dials control the targets of the current page
-  (turn = volume, press = mute); the touch strip shows the levels and swiping
-  it changes page.
-- Neo: the two touch points switch pages.
-- Pedal: left = reply, middle = `streamdeck.pedal_target`, right = lock
-  toggle of that target.
+- Stream Deck +: the four dials control the same targets as the four keys
+  above them (the bottom row of the current page). No separate dial paging.
+- Stream Deck + XL: six dials can be paged independently (**DIALS** on the
+  command row, or swipe the strip) so every target's volume can be adjusted.
+  The web UI shows which target each dial currently controls.
+- Neo: the two touch points switch key pages.
+- Pedal: right = reply, left and middle are assignable
+  (`streamdeck.pedal_left` / `streamdeck.pedal_target`, or `layout` keys
+  `"0"` / `"1"`).
+- Several decks can run in one instance via `[[streamdeck.devices]]`
+  (mixed models are allowed). Bind real hardware with `serial`.
 
 ## GPIO
 
