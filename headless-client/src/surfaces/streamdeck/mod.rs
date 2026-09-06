@@ -1396,9 +1396,11 @@ async fn render_lcd(
                     title: target.name.clone(),
                     volume: target.volume,
                     muted: target.muted,
-                    background: if target.held || target.locked {
+                    background: if target.held {
+                        palette::TALKING
+                    } else if target.locked {
                         palette::LOCKED
-                    } else if target.incoming {
+                    } else if target.incoming || target.receiving {
                         palette::INCOMING
                     } else {
                         palette::VOLUME

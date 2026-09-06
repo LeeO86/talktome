@@ -33,10 +33,13 @@ pub mod palette {
     pub const IDLE_TEXT: Rgb = Rgb(225, 228, 232);
     pub const OFFLINE: Rgb = Rgb(28, 30, 34);
     pub const OFFLINE_TEXT: Rgb = Rgb(110, 115, 122);
-    pub const TALKING: Rgb = Rgb(30, 150, 70);
-    pub const LOCKED: Rgb = Rgb(20, 110, 55);
-    pub const INCOMING: Rgb = Rgb(220, 140, 20);
-    pub const RECEIVING: Rgb = Rgb(45, 90, 160);
+    /// Web client `.talking-to` (`#8b5cf6`).
+    pub const TALKING: Rgb = Rgb(139, 92, 246);
+    /// Darker purple for a talk lock.
+    pub const LOCKED: Rgb = Rgb(109, 40, 217);
+    /// Web client `.speaking` / incoming audio (`#22c55e`).
+    pub const INCOMING: Rgb = Rgb(34, 197, 94);
+    pub const RECEIVING: Rgb = INCOMING;
     pub const MUTED: Rgb = Rgb(150, 40, 40);
     pub const ON_AIR: Rgb = Rgb(200, 30, 30);
     pub const STATUS_OK: Rgb = Rgb(40, 60, 80);
@@ -525,23 +528,15 @@ fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot
         appearance.background = palette::OFFLINE;
         appearance.foreground = palette::OFFLINE_TEXT;
     }
-    if target.receiving {
-        appearance.background = palette::RECEIVING;
-    }
-    if target.incoming {
-        appearance.background = palette::INCOMING;
-        appearance.blink = Some(palette::IDLE);
-        appearance.badge = Some(Badge::Incoming);
-    }
-    if target.locked {
-        appearance.background = palette::LOCKED;
-        appearance.badge = Some(Badge::Lock);
-        appearance.blink = None;
-    }
-    if target.held {
-        appearance.background = palette::TALKING;
-        appearance.blink = None;
-    }
+    apply_talk_and_listen(
+        &mut appearance,
+        target.held,
+        target.locked,
+        target.incoming,
+        target.receiving,
+        palette::IDLE,
+        true,
+    );
     if !target.can_talk {
         appearance.subtitle = volume_label;
         appearance.bar = Some(target.volume);
@@ -604,19 +599,53 @@ fn reply_appearance(snapshot: &Snapshot) -> Appearance {
         Some(name) => appearance.subtitle = name,
         None => appearance.foreground = palette::OFFLINE_TEXT,
     }
-    if !snapshot.incoming.is_empty() {
-        appearance.background = palette::INCOMING;
-        appearance.blink = Some(palette::REPLY);
-    }
-    if snapshot
+    let reply_held = snapshot
         .reply_target
         .map(|key| snapshot.target(key).map(|t| t.held).unwrap_or(false))
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    apply_talk_and_listen(
+        &mut appearance,
+        reply_held,
+        false,
+        !snapshot.incoming.is_empty(),
+        false,
+        palette::REPLY,
+        false,
+    );
+    appearance
+}
+
+/// Web client colours: purple while we talk, green for incoming audio.
+/// When both apply, the key blinks between them (`talkingSpeakingSwap`).
+fn apply_talk_and_listen(
+    appearance: &mut Appearance,
+    held: bool,
+    locked: bool,
+    incoming: bool,
+    receiving: bool,
+    listen_rest: Rgb,
+    incoming_badge: bool,
+) {
+    let listen = incoming || receiving;
+    if listen {
+        appearance.background = palette::INCOMING;
+        appearance.blink = if incoming { Some(listen_rest) } else { None };
+        if incoming && incoming_badge {
+            appearance.badge = Some(Badge::Incoming);
+        }
+    }
+    if locked {
+        appearance.background = palette::LOCKED;
+        appearance.badge = Some(Badge::Lock);
+        appearance.blink = None;
+    }
+    if held {
         appearance.background = palette::TALKING;
         appearance.blink = None;
     }
-    appearance
+    if (held || locked) && listen {
+        appearance.blink = Some(palette::INCOMING);
+    }
 }
 
 fn appearance_for_role(
@@ -1201,10 +1230,40 @@ mod tests {
         assert_eq!(keys[0].appearance.background, palette::ON_AIR);
         let bottom = 3 * 8;
         assert_eq!(keys[bottom].appearance.badge, Some(Badge::Incoming));
+        assert_eq!(keys[bottom].appearance.background, palette::INCOMING);
         assert!(keys[bottom].appearance.blink.is_some());
         assert_eq!(keys[bottom + 1].appearance.background, palette::LOCKED);
         assert_eq!(keys[bottom + 2].appearance.background, palette::MUTED);
         assert_eq!(keys[bottom + 2].appearance.badge, Some(Badge::Muted));
+    }
+
+    #[test]
+    fn talk_is_purple_and_incoming_audio_is_green() {
+        assert_eq!(palette::TALKING, Rgb(139, 92, 246));
+        assert_eq!(palette::INCOMING, Rgb(34, 197, 94));
+        assert_eq!(palette::RECEIVING, palette::INCOMING);
+
+        let geometry = geometry("xl");
+        let state = DeckState::default();
+        let mut snapshot = snapshot(3);
+        snapshot.targets[0].held = true;
+        snapshot.targets[1].incoming = true;
+        snapshot.targets[1].receiving = true;
+        snapshot.targets[2].held = true;
+        snapshot.targets[2].incoming = true;
+        snapshot.targets[2].receiving = true;
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        let bottom = 3 * 8;
+        assert_eq!(keys[bottom].appearance.background, palette::TALKING);
+        assert!(keys[bottom].appearance.blink.is_none());
+        assert_eq!(keys[bottom + 1].appearance.background, palette::INCOMING);
+        assert_eq!(keys[bottom + 1].appearance.badge, Some(Badge::Incoming));
+        assert_eq!(keys[bottom + 2].appearance.background, palette::TALKING);
+        assert_eq!(
+            keys[bottom + 2].appearance.blink,
+            Some(palette::INCOMING),
+            "talking while hearing that target blinks purple/green like the web client"
+        );
     }
 
     #[test]
