@@ -232,11 +232,67 @@ server-side mute. The conference fader still scales the whole conference.
   command row, or swipe the strip) so every target's volume can be adjusted.
   The web UI shows which target each dial currently controls.
 - Neo: the two touch points switch key pages.
-- Pedal: right = reply, left and middle are assignable
-  (`streamdeck.pedal_left` / `streamdeck.pedal_target`, or `layout` keys
-  `"0"` / `"1"`).
+- Pedal: right = reply; left and middle are assignable (see **Pedal layout
+  JSON** below).
 - Several decks can run in one instance via `[[streamdeck.devices]]`
   (mixed models are allowed). Bind real hardware with `serial`.
+
+### Pedal layout JSON
+
+Visual decks (MK.2, Mini, XL, Plus, Neo, …) always place targets from the
+production list. `streamdeck.layout` does **not** move those keys, command
+keys, or dials.
+
+On a **Stream Deck Pedal** the object pins the left and middle foot
+switches to a specific user, conference, or feed:
+
+```json
+{
+  "streamdeck": {
+    "layout": {
+      "0": "user:4",
+      "1": "conference:1"
+    }
+  }
+}
+```
+
+```toml
+[streamdeck.layout]
+"0" = "user:4"
+"1" = "conference:1"
+```
+
+| Key | Switch | Dedicated field (used if that key is missing or invalid) |
+| --- | --- | --- |
+| `"0"` | Left | `streamdeck.pedal_left` |
+| `"1"` | Middle | `streamdeck.pedal_target` |
+| (not settable) | Right | Always **Reply** |
+
+Values are the same target strings as GPIO / VOX: `user:<id>`,
+`conference:<id>` (or `conf:<id>`), `feed:<id>`. IDs are the Talktome
+server numeric ids. Layout JSON wins over the dedicated pedal fields.
+
+**What this is for:** keep a camera pedal on one IFB or conference even
+when the web-client target order changes; put two destinations on left and
+middle; assign a listen-only feed (press mutes/unmutes). An unknown or
+offline target still occupies the switch (the web mock shows the id in
+dim text). Clear both the JSON key and the dedicated field to leave a
+switch empty.
+
+**What it cannot do:** rearrange MK.2 / XL / Neo keys, override Status /
+VOL / MEMBERS / NEXT / Reply, or change the Pedal right switch. Extra
+indexes in the object (`"5"`, `"10"`, …) are stored but ignored.
+
+**With several decks**, put the map on that device. A non-empty
+`streamdeck.devices` list does **not** inherit top-level `layout` /
+`pedal_left` / `pedal_target`:
+
+```toml
+[[streamdeck.devices]]
+mock = "pedal"
+layout = { "0" = "user:4", "1" = "conference:1" }
+```
 
 ## GPIO
 

@@ -1128,9 +1128,9 @@
         { path: 'streamdeck.font_path', label: 'Font file', type: 'text' },
         { path: 'streamdeck.volume_step_db', label: 'Volume step per key/dial tick (dB)', type: 'number', step: 0.5, min: 0.25, max: 12, nullable: true, help: 'Legacy volume_step values between 0 and 1 become 3 dB.' },
         { path: 'streamdeck.volume_layer_timeout_s', label: 'Volume layer timeout (s)', type: 'number' },
-        { path: 'streamdeck.pedal_left', label: 'Pedal left switch target', type: 'target', nullable: true, help: 'Reply is always the right pedal.' },
-        { path: 'streamdeck.pedal_target', label: 'Pedal middle switch target', type: 'target', nullable: true },
-        { path: 'streamdeck.layout', label: 'Key layout overrides (JSON object)', type: 'json', wide: true, help: 'Pedal: {"0":"user:1","1":"conference:2"} for left and middle.' },
+        { path: 'streamdeck.pedal_left', label: 'Pedal left switch target', type: 'target', nullable: true, help: 'Reply is always the right pedal. Equivalent to layout JSON key "0".' },
+        { path: 'streamdeck.pedal_target', label: 'Pedal middle switch target', type: 'target', nullable: true, help: 'Equivalent to layout JSON key "1".' },
+        { path: 'streamdeck.layout', label: 'Pedal layout overrides (JSON object)', type: 'json', wide: true, help: 'Pedal only. {"0":"user:4","1":"conference:1"} pins left and middle. Right is always Reply. Other indexes are ignored; MK.2 / XL / Neo keep automatic target order.' },
         { type: 'streamdeck-devices' },
       ],
     },
@@ -1487,7 +1487,7 @@
       el('label', { class: 'field' }, [el('span', { text: 'Serial' }), el('input', { type: 'text', placeholder: 'first unused', dataset: { field: 'serial' }, value: device.serial || '' })]),
       el('label', { class: 'field' }, [el('span', { text: 'Pedal left' }), el('input', { type: 'text', placeholder: 'user:4', dataset: { field: 'pedal_left' }, value: device.pedal_left || '' })]),
       el('label', { class: 'field' }, [el('span', { text: 'Pedal middle' }), el('input', { type: 'text', placeholder: 'conference:1', dataset: { field: 'pedal_target' }, value: device.pedal_target || '' })]),
-      el('label', { class: 'field wide' }, [el('span', { text: 'Layout JSON' }), layout]),
+      el('label', { class: 'field wide' }, [el('span', { text: 'Pedal layout JSON' }), layout, el('span', { class: 'help', text: '{"0":"user:4","1":"conference:1"} pins left/middle. Other keys are ignored.' })]),
       el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Remove', onclick: () => row.remove() })
     );
     return row;

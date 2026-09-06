@@ -1110,6 +1110,8 @@ fn effective_key_size(kind: Kind) -> (u32, u32) {
     }
 }
 
+/// Resolves Pedal left/middle targets. `layout["0"]` / `layout["1"]` win over
+/// `pedal_left` / `pedal_target`. Other layout keys are ignored.
 fn layout_options(device: &StreamDeckDeviceConfig) -> LayoutOptions {
     let from_layout = |index: &str| {
         device
@@ -1497,5 +1499,35 @@ mod tests {
         assert_eq!(targets[1].members.len(), 3);
         assert_eq!(targets[1].members[0].name, "Adi");
         assert!(targets[0].members.is_empty());
+    }
+
+    #[test]
+    fn layout_json_pins_pedal_switches_and_ignores_other_indexes() {
+        use crate::config::StreamDeckDeviceConfig;
+        use crate::talk::TargetKey;
+        use std::collections::BTreeMap;
+
+        let mut device = StreamDeckDeviceConfig {
+            pedal_left: Some("user:9".into()),
+            pedal_target: Some("feed:2".into()),
+            layout: BTreeMap::from([
+                ("0".into(), "user:4".into()),
+                ("1".into(), "conference:1".into()),
+                ("5".into(), "user:1".into()),
+            ]),
+            ..StreamDeckDeviceConfig::default()
+        };
+        let options = super::layout_options(&device);
+        assert_eq!(options.pedal_left, Some(TargetKey::User(4)));
+        assert_eq!(options.pedal_middle, Some(TargetKey::Conference(1)));
+
+        device.layout.clear();
+        let options = super::layout_options(&device);
+        assert_eq!(options.pedal_left, Some(TargetKey::User(9)));
+        assert_eq!(options.pedal_middle, Some(TargetKey::Feed(2)));
+
+        device.layout.insert("0".into(), "not-a-target".into());
+        let options = super::layout_options(&device);
+        assert_eq!(options.pedal_left, Some(TargetKey::User(9)));
     }
 }
