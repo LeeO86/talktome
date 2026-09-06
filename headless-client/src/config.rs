@@ -124,6 +124,13 @@ pub struct AudioConfig {
     pub output_device: Option<String>,
     pub profile: AudioProfile,
     pub input_gain_db: f32,
+    /// Echo cancellation, noise suppression and AGC (same as the browser
+    /// `audioAutoProcessing` toggle). Ignored for `input_gain_db` while on.
+    pub auto_processing: bool,
+    /// Override AEC render/capture delay in milliseconds. `null` estimates
+    /// from the observed capture and playback callback periods.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_delay_ms: Option<u32>,
     pub dim_db: f32,
     pub dim_feeds_while_speaking: bool,
     pub dim_when_addressed: bool,
@@ -435,6 +442,8 @@ impl Default for AudioConfig {
             output_device: None,
             profile: AudioProfile::Standard,
             input_gain_db: 0.0,
+            auto_processing: false,
+            stream_delay_ms: None,
             dim_db: -14.0,
             dim_feeds_while_speaking: false,
             dim_when_addressed: true,
@@ -876,6 +885,14 @@ impl Config {
                 );
             }
         }
+        if !(-30.0..=40.0).contains(&self.audio.input_gain_db) {
+            bail!("audio.input_gain_db must be between -30 and 40");
+        }
+        if let Some(ms) = self.audio.stream_delay_ms {
+            if ms > 500 {
+                bail!("audio.stream_delay_ms must be between 0 and 500");
+            }
+        }
         if let Some(db) = self.audio.default_volume_db {
             if !(-60.0..=6.0).contains(&db) {
                 bail!("audio.default_volume_db must be between -60 and 6");
@@ -1092,6 +1109,9 @@ mod tests {
             password = "secret"
             [audio]
             default_volume_db = -6
+            auto_processing = true
+            stream_delay_ms = 40
+            input_gain_db = -6
             [streamdeck]
             volume_step_db = 3
             [[gpio.target_outputs]]
@@ -1103,6 +1123,9 @@ mod tests {
             from_document(parse_document(Path::new("cam1.toml"), toml_text).unwrap()).unwrap();
         config.validate().unwrap();
         assert!((config.audio.default_volume_linear() - 0.5).abs() < 0.02);
+        assert!(config.audio.auto_processing);
+        assert_eq!(config.audio.stream_delay_ms, Some(40));
+        assert!((config.audio.input_gain_db + 6.0).abs() < 1e-6);
         assert_eq!(config.streamdeck.volume_step_db(), 3.0);
         assert_eq!(config.gpio.target_outputs.len(), 1);
         assert_eq!(config.gpio.target_outputs[0].target, "conference:1");

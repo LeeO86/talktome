@@ -4,6 +4,7 @@ pub mod codec;
 pub mod io;
 pub mod jitter;
 pub mod mixer;
+pub mod processing;
 pub mod resample;
 pub mod vox;
 

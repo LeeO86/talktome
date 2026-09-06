@@ -13,17 +13,21 @@ use tokio::sync::{mpsc, watch};
 
 use super::codec::SAMPLE_RATE;
 use super::mixer::Mixer;
+use super::processing::{ProcessingControl, Processor};
 use super::resample::{FromInternal, ToInternal};
 use super::{device_label, device_pcm_id, find_device};
 use crate::config::AudioConfig;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AudioStatus {
     pub capture_ok: bool,
     pub playback_ok: bool,
     pub capture_device: Option<String>,
     pub playback_device: Option<String>,
     pub last_error: Option<String>,
+    pub auto_processing: bool,
+    pub aec: bool,
+    pub delay_ms: i32,
 }
 
 impl AudioStatus {
@@ -47,20 +51,33 @@ impl AudioIo {
         frame_samples: usize,
         mixer: Arc<Mutex<Mixer>>,
         frames: mpsc::Sender<Vec<f32>>,
+        processing: Arc<ProcessingControl>,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
+        let snapshot = processing.snapshot();
         let (status_tx, status_rx) = watch::channel(AudioStatus {
             capture_ok: false,
             playback_ok: false,
             capture_device: None,
             playback_device: None,
             last_error: None,
+            auto_processing: snapshot.auto_processing,
+            aec: snapshot.aec,
+            delay_ms: snapshot.delay_ms,
         });
         let thread_stop = stop.clone();
         let thread = thread::Builder::new()
             .name("talktome-audio".into())
             .spawn(move || {
-                run_supervisor(config, frame_samples, mixer, frames, status_tx, thread_stop)
+                run_supervisor(
+                    config,
+                    frame_samples,
+                    mixer,
+                    frames,
+                    processing,
+                    status_tx,
+                    thread_stop,
+                )
             })
             .expect("spawning audio thread");
         Self {
@@ -104,7 +121,7 @@ fn wav_sink_path(device: &Option<String>) -> Option<std::path::PathBuf> {
 fn run_tone_generator(
     frequency: f32,
     frame_samples: usize,
-    gain: f32,
+    processor: Arc<Mutex<Processor>>,
     frames: mpsc::Sender<Vec<f32>>,
     stop: Arc<AtomicBool>,
 ) {
@@ -112,17 +129,28 @@ fn run_tone_generator(
     let step = frequency * std::f32::consts::TAU / SAMPLE_RATE as f32;
     let frame_duration = Duration::from_secs_f64(frame_samples as f64 / SAMPLE_RATE as f64);
     let mut next = Instant::now();
+    let mut pending = Vec::with_capacity(frame_samples * 4);
     while !stop.load(Ordering::Relaxed) {
-        let frame: Vec<f32> = (0..frame_samples)
+        let raw: Vec<f32> = (0..frame_samples)
             .map(|_| {
                 phase += step;
                 if phase > std::f32::consts::TAU {
                     phase -= std::f32::consts::TAU;
                 }
-                phase.sin() * 0.4 * gain
+                phase.sin() * 0.4
             })
             .collect();
-        let _ = frames.try_send(frame);
+        let mut processed = Vec::with_capacity(frame_samples);
+        if let Ok(mut processor) = processor.lock() {
+            processor.process_capture(&raw, &mut processed);
+        } else {
+            processed = raw;
+        }
+        pending.extend_from_slice(&processed);
+        while pending.len() >= frame_samples {
+            let frame: Vec<f32> = pending.drain(..frame_samples).collect();
+            let _ = frames.try_send(frame);
+        }
         next += frame_duration;
         let now = Instant::now();
         if next > now {
@@ -173,6 +201,7 @@ fn run_supervisor(
     frame_samples: usize,
     mixer: Arc<Mutex<Mixer>>,
     frames: mpsc::Sender<Vec<f32>>,
+    processing: Arc<ProcessingControl>,
     status_tx: watch::Sender<AudioStatus>,
     stop: Arc<AtomicBool>,
 ) {
@@ -182,14 +211,15 @@ fn run_supervisor(
     let mut playback: Option<OpenStream> = None;
     let mut next_attempt = Instant::now();
     let reopen = Duration::from_millis(config.reopen_ms.max(250));
-    let gain = super::mixer::db_to_gain(config.input_gain_db);
+    let processor = Arc::new(Mutex::new(Processor::new(processing.clone())));
     let mut virtual_threads = Vec::new();
+    let mut last_error = None;
 
     if let Some(frequency) = tone_frequency(&config.input_device) {
         tracing::info!(event = "audio-capture-open", device = "tone", frequency);
-        let (frames, stop) = (frames.clone(), stop.clone());
+        let (frames, stop, processor) = (frames.clone(), stop.clone(), processor.clone());
         virtual_threads.push(thread::spawn(move || {
-            run_tone_generator(frequency, frame_samples, gain, frames, stop)
+            run_tone_generator(frequency, frame_samples, processor, frames, stop)
         }));
         capture_wanted = false;
     }
@@ -199,27 +229,14 @@ fn run_supervisor(
         virtual_threads.push(thread::spawn(move || run_wav_sink(path, mixer, stop)));
         playback_wanted = false;
     }
-    if !capture_wanted || !playback_wanted {
-        let _ = status_tx.send(AudioStatus {
-            capture_ok: !capture_wanted,
-            playback_ok: !playback_wanted,
-            capture_device: (!capture_wanted)
-                .then(|| config.input_device.clone().unwrap_or_default()),
-            playback_device: (!playback_wanted)
-                .then(|| config.output_device.clone().unwrap_or_default()),
-            last_error: None,
-        });
-    }
 
     while !stop.load(Ordering::Relaxed) {
         let now = Instant::now();
-        let mut changed = false;
 
         if let Some(open) = capture.as_ref() {
             if open.failed.load(Ordering::Relaxed) {
                 tracing::warn!(event = "audio-device-lost", direction = "capture", device = %open.name);
                 capture = None;
-                changed = true;
                 next_attempt = now + reopen;
             }
         }
@@ -227,19 +244,23 @@ fn run_supervisor(
             if open.failed.load(Ordering::Relaxed) {
                 tracing::warn!(event = "audio-device-lost", direction = "playback", device = %open.name);
                 playback = None;
-                changed = true;
                 next_attempt = now + reopen;
             }
         }
 
-        let mut last_error = None;
         if now >= next_attempt {
+            last_error = None;
             if capture_wanted && capture.is_none() {
-                match open_capture(&config, frame_samples, gain, frames.clone()) {
+                match open_capture(
+                    &config,
+                    frame_samples,
+                    processor.clone(),
+                    processing.clone(),
+                    frames.clone(),
+                ) {
                     Ok(open) => {
                         tracing::info!(event = "audio-device-restored", direction = "capture", device = %open.name);
                         capture = Some(open);
-                        changed = true;
                     }
                     Err(error) => {
                         tracing::debug!(event = "audio-open-failed", direction = "capture", error = %error);
@@ -248,11 +269,15 @@ fn run_supervisor(
                 }
             }
             if playback_wanted && playback.is_none() {
-                match open_playback(&config, mixer.clone()) {
+                match open_playback(
+                    &config,
+                    mixer.clone(),
+                    processor.clone(),
+                    processing.clone(),
+                ) {
                     Ok(open) => {
                         tracing::info!(event = "audio-device-restored", direction = "playback", device = %open.name);
                         playback = Some(open);
-                        changed = true;
                     }
                     Err(error) => {
                         tracing::debug!(event = "audio-open-failed", direction = "playback", error = %error);
@@ -264,22 +289,32 @@ fn run_supervisor(
                 }
             }
             next_attempt = now + reopen;
-            if last_error.is_some() {
-                changed = true;
-            }
         }
 
-        if changed {
-            let status = AudioStatus {
-                capture_ok: !capture_wanted || capture.is_some(),
-                playback_ok: !playback_wanted || playback.is_some(),
-                capture_device: capture.as_ref().map(|c| c.name.clone()),
-                playback_device: playback.as_ref().map(|p| p.name.clone()),
-                last_error,
-            };
-            if *status_tx.borrow() != status {
-                let _ = status_tx.send(status);
-            }
+        processing.set_aec_possible(capture.is_some() && playback.is_some());
+        let snapshot = processing.snapshot();
+        let capture_device = if capture_wanted {
+            capture.as_ref().map(|c| c.name.clone())
+        } else {
+            config.input_device.clone()
+        };
+        let playback_device = if playback_wanted {
+            playback.as_ref().map(|p| p.name.clone())
+        } else {
+            config.output_device.clone()
+        };
+        let status = AudioStatus {
+            capture_ok: !capture_wanted || capture.is_some(),
+            playback_ok: !playback_wanted || playback.is_some(),
+            capture_device,
+            playback_device,
+            last_error: last_error.clone(),
+            auto_processing: snapshot.auto_processing,
+            aec: snapshot.aec,
+            delay_ms: snapshot.delay_ms,
+        };
+        if *status_tx.borrow() != status {
+            let _ = status_tx.send(status);
         }
         thread::sleep(Duration::from_millis(250));
     }
@@ -362,10 +397,19 @@ fn choose_config(device: &cpal::Device, input: bool) -> Result<SupportedStreamCo
     Ok(default)
 }
 
+fn callback_period_ms(frames: usize, rate: u32) -> u32 {
+    if rate == 0 {
+        0
+    } else {
+        ((frames as u64 * 1000) / u64::from(rate)) as u32
+    }
+}
+
 fn open_capture(
     config: &AudioConfig,
     frame_samples: usize,
-    gain: f32,
+    processor: Arc<Mutex<Processor>>,
+    control: Arc<ProcessingControl>,
     frames: mpsc::Sender<Vec<f32>>,
 ) -> Result<OpenStream> {
     let host = cpal::default_host();
@@ -386,19 +430,28 @@ fn open_capture(
     let mut resampler = ToInternal::new(rate, SAMPLE_RATE)?;
     let mut mono: Vec<f32> = Vec::with_capacity(4096);
     let mut converted: Vec<f32> = Vec::with_capacity(4096);
+    let mut processed: Vec<f32> = Vec::with_capacity(4096);
     let mut pending: Vec<f32> = Vec::with_capacity(frame_samples * 4);
 
     let mut handle_samples = move |samples: &[f32]| {
+        control
+            .observe_capture_period_ms(callback_period_ms(samples.len() / channels.max(1), rate));
         mono.clear();
         for frame in samples.chunks(channels) {
             let sum: f32 = frame.iter().sum();
-            mono.push(sum / channels as f32 * gain);
+            mono.push(sum / channels as f32);
         }
         converted.clear();
         if resampler.process(&mono, &mut converted).is_err() {
             return;
         }
-        pending.extend_from_slice(&converted);
+        processed.clear();
+        if let Ok(mut processor) = processor.lock() {
+            processor.process_capture(&converted, &mut processed);
+        } else {
+            processed.extend_from_slice(&converted);
+        }
+        pending.extend_from_slice(&processed);
         while pending.len() >= frame_samples {
             let frame: Vec<f32> = pending.drain(..frame_samples).collect();
             // Never block the audio thread; drop frames if the encoder lags.
@@ -437,7 +490,12 @@ fn open_capture(
     })
 }
 
-fn open_playback(config: &AudioConfig, mixer: Arc<Mutex<Mixer>>) -> Result<OpenStream> {
+fn open_playback(
+    config: &AudioConfig,
+    mixer: Arc<Mutex<Mixer>>,
+    processor: Arc<Mutex<Processor>>,
+    control: Arc<ProcessingControl>,
+) -> Result<OpenStream> {
     let host = cpal::default_host();
     let device = pick_device(&host, &config.output_device, false)?;
     let name = format!("{} ({})", device_label(&device), device_pcm_id(&device));
@@ -455,18 +513,28 @@ fn open_playback(config: &AudioConfig, mixer: Arc<Mutex<Mixer>>) -> Result<OpenS
 
     let mut resampler = FromInternal::new(SAMPLE_RATE, rate)?;
     let mut mono: Vec<f32> = Vec::new();
+    let mut far_end: Vec<f32> = Vec::new();
     let mut render_mono = move |out: &mut [f32]| {
         let frames = out.len() / channels.max(1);
+        control.observe_playback_period_ms(callback_period_ms(frames, rate));
         mono.resize(frames, 0.0);
+        far_end.clear();
         let render_result = resampler.fill(&mut mono, |buf| {
             if let Ok(mut mixer) = mixer.lock() {
                 mixer.render(buf);
             } else {
                 buf.fill(0.0);
             }
+            far_end.extend_from_slice(buf);
         });
         if render_result.is_err() {
             mono.fill(0.0);
+            far_end.clear();
+        }
+        if !far_end.is_empty() {
+            if let Ok(mut processor) = processor.lock() {
+                processor.analyze_render(&far_end);
+            }
         }
         for (index, frame) in out.chunks_mut(channels.max(1)).enumerate() {
             let sample = mono.get(index).copied().unwrap_or(0.0);

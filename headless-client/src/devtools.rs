@@ -249,7 +249,7 @@ pub async fn record(config: &Config, output: &Path, seconds: u64) -> Result<()> 
                 }
                 written_samples += pcm.len() as u64;
                 packets += 1;
-                if packets % 250 == 0 {
+                if packets.is_multiple_of(250) {
                     tracing::info!(event = "recording", packets, seconds_recorded = written_samples as f64 / SAMPLE_RATE as f64);
                 }
             }

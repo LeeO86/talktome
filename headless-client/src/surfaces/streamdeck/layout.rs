@@ -1249,7 +1249,7 @@ mod tests {
                 .map(|i| crate::state::ConferenceMemberInfo {
                     user_id: i as i64,
                     name: format!("M{i}"),
-                    online: i % 2 == 0,
+                    online: i.is_multiple_of(2),
                     receiving: i == 0,
                     volume: 0.8,
                     muted: i == 1,

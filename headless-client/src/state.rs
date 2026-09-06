@@ -352,6 +352,12 @@ pub struct AudioView {
     pub capture_device: Option<String>,
     pub playback_device: Option<String>,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub auto_processing: bool,
+    #[serde(default)]
+    pub aec: bool,
+    #[serde(default)]
+    pub delay_ms: i32,
 }
 
 pub type DeckImage = (u64, Arc<Vec<u8>>);

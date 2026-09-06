@@ -23,6 +23,7 @@
     "input_device": "plughw:CARD=Headset,DEV=0",
     "output_device": "plughw:CARD=Headset,DEV=0",
     "profile": "standard",
+    "auto_processing": false,
     "input_gain_db": 0,
     "dim_db": -14,
     "dim_feeds_while_speaking": false,
