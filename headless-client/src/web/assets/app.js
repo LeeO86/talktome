@@ -825,10 +825,12 @@
   function buildDeckKey(device, key) {
     const button = el('button', { type: 'button', class: 'deck-key', 'aria-label': key.title || key.role }, el('img', { alt: '' }));
     let down = false;
+    let handledByPointer = false;
     const press = (event) => {
       event.preventDefault();
       if (down) return;
       down = true;
+      handledByPointer = true;
       button.classList.add('is-pressed');
       deckInput(device, { kind: 'key', index: key.index, action: 'down' });
     };
@@ -840,9 +842,22 @@
       setTimeout(refreshDeck, 150);
     };
     button.addEventListener('pointerdown', press);
+    button.addEventListener('mousedown', press);
     button.addEventListener('pointerup', release);
+    button.addEventListener('mouseup', release);
     button.addEventListener('pointercancel', release);
     button.addEventListener('pointerleave', release);
+    button.addEventListener('mouseleave', release);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (handledByPointer || down) {
+        handledByPointer = false;
+        return;
+      }
+      deckInput(device, { kind: 'key', index: key.index, action: 'down' });
+      deckInput(device, { kind: 'key', index: key.index, action: 'up' });
+      setTimeout(refreshDeck, 200);
+    });
     button.addEventListener('contextmenu', (event) => event.preventDefault());
     return button;
   }
