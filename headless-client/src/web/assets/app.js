@@ -782,11 +782,19 @@
     for (const key of deck.keys || []) {
       const button = grid.children[key.index];
       if (!button) continue;
+      button.dataset.device = String(device);
+      button.dataset.index = String(key.index);
+      button.dataset.role = key.role || '';
       button.title = key.subtitle ? `${key.title} · ${key.subtitle}` : key.title || key.role;
+      button.setAttribute('aria-label', button.title);
       const img = $('img', button);
+      const fallback = $('.deck-key__fallback', button);
+      const label = [key.title, key.subtitle].filter(Boolean).join('\n');
+      if (fallback) fallback.textContent = label || ' ';
       const src = `/api/streamdeck/${device}/key/${key.index}?h=${key.hash}`;
       if (img.dataset.src !== src) {
         img.dataset.src = src;
+        img.alt = label.replace(/\n/g, ' ');
         img.src = src;
       }
     }
@@ -823,43 +831,79 @@
   }
 
   function buildDeckKey(device, key) {
-    const button = el('button', { type: 'button', class: 'deck-key', 'aria-label': key.title || key.role }, el('img', { alt: '' }));
-    let down = false;
-    let handledByPointer = false;
-    const press = (event) => {
-      event.preventDefault();
-      if (down) return;
-      down = true;
-      handledByPointer = true;
-      button.classList.add('is-pressed');
-      deckInput(device, { kind: 'key', index: key.index, action: 'down' });
-    };
-    const release = () => {
-      if (!down) return;
-      down = false;
-      button.classList.remove('is-pressed');
-      deckInput(device, { kind: 'key', index: key.index, action: 'up' });
-      setTimeout(refreshDeck, 150);
-    };
-    button.addEventListener('pointerdown', press);
-    button.addEventListener('mousedown', press);
-    button.addEventListener('pointerup', release);
-    button.addEventListener('mouseup', release);
-    button.addEventListener('pointercancel', release);
-    button.addEventListener('pointerleave', release);
-    button.addEventListener('mouseleave', release);
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      if (handledByPointer || down) {
-        handledByPointer = false;
-        return;
-      }
-      deckInput(device, { kind: 'key', index: key.index, action: 'down' });
-      deckInput(device, { kind: 'key', index: key.index, action: 'up' });
-      setTimeout(refreshDeck, 200);
-    });
-    button.addEventListener('contextmenu', (event) => event.preventDefault());
+    const fallback = el('span', { class: 'deck-key__fallback' });
+    const img = el('img', { alt: key.title || key.role || '' });
+    img.addEventListener('error', () => fallback.classList.add('is-visible'));
+    img.addEventListener('load', () => fallback.classList.remove('is-visible'));
+    const button = el('button', {
+      type: 'button',
+      class: 'deck-key',
+      'aria-label': key.title || key.role,
+      dataset: { device: String(device), index: String(key.index), role: key.role || '' },
+    }, [img, fallback]);
     return button;
+  }
+
+  const deckHeld = new Map();
+
+  function bindDeckKeys() {
+    const list = $('#deck-list');
+    if (!list || list.dataset.bound === '1') return;
+    list.dataset.bound = '1';
+
+    const fromEvent = (event) => {
+      const button = event.target.closest && event.target.closest('.deck-key');
+      if (!button || !list.contains(button)) return null;
+      const device = Number(button.dataset.device);
+      const index = Number(button.dataset.index);
+      if (!Number.isFinite(device) || !Number.isFinite(index)) return null;
+      return { button, device, index, id: `${device}:${index}` };
+    };
+
+    const press = (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      const key = fromEvent(event);
+      if (!key) return;
+      event.preventDefault();
+      if (deckHeld.has(key.id)) return;
+      deckHeld.set(key.id, true);
+      key.button.dataset.pointerAt = String(Date.now());
+      key.button.classList.add('is-pressed');
+      if (typeof key.button.setPointerCapture === 'function' && event.pointerId != null) {
+        try {
+          key.button.setPointerCapture(event.pointerId);
+        } catch {
+          /* capture is best-effort */
+        }
+      }
+      deckInput(key.device, { kind: 'key', index: key.index, action: 'down' });
+    };
+
+    const release = (event) => {
+      const key = fromEvent(event);
+      if (!key || !deckHeld.has(key.id)) return;
+      deckHeld.delete(key.id);
+      key.button.classList.remove('is-pressed');
+      deckInput(key.device, { kind: 'key', index: key.index, action: 'up' });
+    };
+
+    list.addEventListener('pointerdown', press);
+    list.addEventListener('pointerup', release);
+    list.addEventListener('pointercancel', release);
+    list.addEventListener('lostpointercapture', release);
+    list.addEventListener('click', (event) => {
+      const key = fromEvent(event);
+      if (!key) return;
+      event.preventDefault();
+      const handledAt = Number(key.button.dataset.pointerAt || 0);
+      if (handledAt && Date.now() - handledAt < 1000) return;
+      if (deckHeld.has(key.id)) return;
+      deckInput(key.device, { kind: 'key', index: key.index, action: 'down' });
+      deckInput(key.device, { kind: 'key', index: key.index, action: 'up' });
+    });
+    list.addEventListener('contextmenu', (event) => {
+      if (event.target.closest('.deck-key')) event.preventDefault();
+    });
   }
 
   function deckInput(device, body) {
@@ -1396,5 +1440,6 @@
     $('#toggle-raw').textContent = state.rawMode ? 'Form editor' : 'Raw editor';
   });
 
+  bindDeckKeys();
   boot();
 })();

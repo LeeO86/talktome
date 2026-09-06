@@ -654,6 +654,7 @@ main {
 }
 
 .deck-key {
+  position: relative;
   width: var(--key-size, 72px);
   height: var(--key-size, 72px);
   padding: 0;
@@ -675,6 +676,26 @@ main {
   height: 100%;
   image-rendering: auto;
   pointer-events: none;
+}
+
+.deck-key__fallback {
+  display: none;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.15;
+  padding: 0.35rem;
+  white-space: pre-line;
+  color: #e2e8f0;
+  pointer-events: none;
+}
+
+.deck-key__fallback.is-visible {
+  display: flex;
 }
 
 .deck-key.is-pressed {
