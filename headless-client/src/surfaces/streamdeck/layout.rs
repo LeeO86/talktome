@@ -312,7 +312,8 @@ pub fn conference_members(snapshot: &Snapshot, conference: TargetKey) -> &[Confe
         .unwrap_or(&[])
 }
 
-/// Everything the layout needs from configuration.
+/// Pedal assignments from configuration (`layout` JSON `"0"` / `"1"`, or the
+/// `pedal_left` / `pedal_target` fields). Visual decks ignore this.
 #[derive(Debug, Clone, Default)]
 pub struct LayoutOptions {
     pub pedal_left: Option<TargetKey>,

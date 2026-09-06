@@ -561,8 +561,9 @@ Every command is answered with the matching `-result` event carrying the
   target is offline, red speaker glyph when muted, volume shown as a bar.
   Brightness from
   `streamdeck.brightness` (default 60) with `streamdeck.idle_dim_s`.
-- **Layout** (auto, from the target order; pedal switches overridable in
-  `streamdeck.layout` / `pedal_left` / `pedal_target`):
+- **Layout** (auto from the production target order on visual decks; Pedal
+  left/middle overridable in `streamdeck.layout` / `pedal_left` /
+  `pedal_target`):
   - The **top row** is the command row: status (connection, user name,
     production, "ON AIR" when tally is on) at the left, **VOL** next to it,
     a **NEXT** key immediately left of Reply when paging is needed, and
@@ -600,9 +601,22 @@ Every command is answered with the matching `-result` event carrying the
     (**DIALS** on the command row, or swipe the strip) so every target can
     be mixed. The web UI labels each dial with its current target.
   - **Neo** touch points act as previous/next **key** page.
-  - **Pedal**: right = reply, left and middle assignable
-    (`pedal_left` / `pedal_target`, or layout `"0"` / `"1"`). The web view
-    still renders key images.
+  - **Pedal**: three foot switches. Right is always **Reply** and cannot be
+    remapped. Left and middle are pinned with `streamdeck.layout` (JSON
+    object, also the Settings "Pedal layout overrides" field) or the
+    dedicated strings `pedal_left` / `pedal_target`:
+    - Values are `user:<id>`, `conference:<id>` (alias `conf:<id>`), or
+      `feed:<id>` — the same ids as GPIO / VOX.
+    - `"0"` is the left switch, `"1"` the middle. Layout JSON wins over the
+      dedicated fields when both are set. Missing or unparsable values leave
+      that switch empty.
+    - Extra indexes (`"2"`, `"5"`, …) are stored but ignored. Visual decks
+      (MK.2, XL, Neo, Plus, Mini, …) never apply this map: their keys stay
+      in automatic target order.
+    - Typical use: keep a camera pedal on one IFB/conference when the web
+      client reorders cards, or put two destinations on left and middle.
+    The web view still renders key images for the three switches.
+    Per-device maps live on `streamdeck.devices[].layout`.
   - **Several devices**: `[[streamdeck.devices]]` (serial and/or mock per
     deck). An empty list uses the top-level `serial` / `mock` fields as a
     single deck. Multiple instances on one machine can still each bind one
@@ -679,6 +693,7 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
                   "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                   "volume_step_db": 3, "volume_layer_timeout_s": 8,
                   "pedal_left": null, "pedal_target": "conference:1",
+                  "layout": { "0": "user:4", "1": "conference:1" },
                   "devices": [] },
   "gpio": { "enabled": true, "chip": null,
             "outputs": { "tally": { "line": "GPIO17", "active_low": false },
@@ -798,8 +813,9 @@ home-screen bookmarks.
   hardware would produce. Several decks (mixed models) can be shown at once.
 - **Settings**: a form over the whole schema (§12), audio devices listed from
   ALSA, GPIO named outputs plus dynamically added per-target outputs,
-  target dropdowns for VOX/GPIO/pedal, JSON fields for ICE overrides and key
-  layout, and a raw JSON editor. The form edits the **configuration file**,
+  target dropdowns for VOX/GPIO/pedal, JSON fields for ICE overrides and
+  Pedal layout (`{"0":"user:4","1":"conference:1"}`; visual decks ignore
+  extra indexes), and a raw JSON editor. The form edits the **configuration file**,
   not the in-memory process: after Save, values already in the file (the
   Talktome user, devices, …) stay put when another field is changed, even
   though they only apply after restart. Saving validates with the same

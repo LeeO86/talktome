@@ -215,12 +215,16 @@ pub struct StreamDeckConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume_step_db: Option<f32>,
     pub volume_layer_timeout_s: u64,
-    /// Target key for the left Stream Deck Pedal switch.
+    /// Target key for the left Stream Deck Pedal switch (`user:4`, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pedal_left: Option<String>,
     /// Target key for the middle Stream Deck Pedal switch.
     pub pedal_target: Option<String>,
-    /// Explicit key assignments: key index -> target key (`"0"` / `"1"` on a Pedal).
+    /// Pedal key overrides: hardware index as a string → target.
+    ///
+    /// Only `"0"` (left) and `"1"` (middle) are applied. They win over
+    /// `pedal_left` / `pedal_target`. The right switch is always Reply.
+    /// Other indexes are stored but ignored; visual decks never read this map.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub layout: BTreeMap<String, String>,
     /// Extra (or all) decks. When empty, `serial` / `mock` / pedal fields
@@ -238,6 +242,7 @@ pub struct StreamDeckDeviceConfig {
     pub pedal_left: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pedal_target: Option<String>,
+    /// Same map as [`StreamDeckConfig::layout`], scoped to this device.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub layout: BTreeMap<String, String>,
 }
@@ -1369,6 +1374,79 @@ mod tests {
         assert!(
             text.contains("mode 0770") || text.contains("Permission denied"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn streamdeck_layout_map_parses_from_json_and_toml() {
+        let json_text = r#"{
+            "server": { "url": "https://talktome.local:8443" },
+            "user": { "name": "Cam 1", "password": "secret" },
+            "streamdeck": {
+                "layout": { "0": "user:4", "1": "conference:1", "5": "feed:2" },
+                "devices": [
+                    { "mock": "pedal", "layout": { "0": "conf:8" } }
+                ]
+            }
+        }"#;
+        let toml_text = r#"
+            instance = "cam1"
+            [server]
+            url = "https://talktome.local:8443"
+            [user]
+            name = "Cam 1"
+            password = "secret"
+            [streamdeck.layout]
+            "0" = "user:4"
+            "1" = "conference:1"
+            [[streamdeck.devices]]
+            mock = "pedal"
+            layout = { "0" = "conf:8" }
+        "#;
+        let json =
+            from_document(parse_document(Path::new("cam1.json"), json_text).unwrap()).unwrap();
+        json.validate().unwrap();
+        assert_eq!(
+            json.streamdeck.layout.get("0").map(String::as_str),
+            Some("user:4")
+        );
+        assert_eq!(
+            json.streamdeck.layout.get("1").map(String::as_str),
+            Some("conference:1")
+        );
+        assert_eq!(
+            json.streamdeck.layout.get("5").map(String::as_str),
+            Some("feed:2")
+        );
+        assert_eq!(
+            json.streamdeck.devices[0]
+                .layout
+                .get("0")
+                .map(String::as_str),
+            Some("conf:8")
+        );
+        // A devices list does not inherit the top-level layout map.
+        let resolved = json.streamdeck.resolved_devices();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[0].layout.get("0").map(String::as_str),
+            Some("conf:8")
+        );
+        assert!(!resolved[0].layout.contains_key("1"));
+
+        let toml =
+            from_document(parse_document(Path::new("cam1.toml"), toml_text).unwrap()).unwrap();
+        toml.validate().unwrap();
+        assert_eq!(
+            toml.streamdeck.layout.get("0").map(String::as_str),
+            Some("user:4")
+        );
+        assert_eq!(
+            toml.streamdeck.devices[0]
+                .layout
+                .get("0")
+                .map(String::as_str),
+            Some("conf:8")
         );
     }
 }
