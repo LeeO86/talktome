@@ -985,7 +985,11 @@ impl Session {
                 .or_else(|| reply.get("targetId"))?;
             TargetKey::from_type_and_id(kind, id)
         });
-        self.talk.set_reply_target(reply);
+        self.talk
+            .set_reply_target(crate::talk::TalkModel::resolve_reply_target(
+                reply,
+                self.incoming.iter().map(|incoming| incoming.target),
+            ));
         if let Ok(mut mixer) = self.io.mixer.lock() {
             mixer.set_dim_state(self.talk.is_talking(), !self.incoming.is_empty());
         }

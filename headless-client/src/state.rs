@@ -150,6 +150,54 @@ impl Snapshot {
     pub fn target(&self, key: TargetKey) -> Option<&TargetInfo> {
         self.targets.iter().find(|t| t.key == key)
     }
+
+    /// Label for the Reply key: the conference (or target) being talked to,
+    /// never the caller’s display name. Matches the web client’s reply button.
+    pub fn reply_label(&self) -> Option<String> {
+        let name_of = |key: TargetKey| self.target(key).map(|target| target.name.clone());
+        let conference_name = |key: TargetKey| match key {
+            TargetKey::Conference(_) => name_of(key),
+            _ => None,
+        };
+        if let Some(key) = self.reply_target {
+            if let Some(name) = conference_name(key) {
+                return Some(name);
+            }
+        }
+        if let Some(name) = self
+            .incoming
+            .iter()
+            .find_map(|incoming| incoming.target.and_then(conference_name))
+        {
+            return Some(name);
+        }
+        if let Some(name) = self
+            .reply_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let is_caller = self
+                .incoming
+                .iter()
+                .any(|incoming| incoming.from_name.eq_ignore_ascii_case(name));
+            let has_conference = self
+                .incoming
+                .iter()
+                .any(|incoming| matches!(incoming.target, Some(TargetKey::Conference(_))));
+            if !(is_caller && has_conference) {
+                return Some(name.to_string());
+            }
+        }
+        if let Some(key) = self.reply_target {
+            if let Some(name) = name_of(key) {
+                return Some(name);
+            }
+        }
+        self.incoming
+            .iter()
+            .find_map(|incoming| incoming.target.and_then(name_of))
+    }
 }
 
 /// What a talk action refers to.
@@ -163,7 +211,7 @@ pub enum TargetRef {
 /// physically held key for the same target.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InputSource {
-    StreamDeck(u8),
+    StreamDeck { device: u8, key: u8 },
     Gpio(String),
     Companion(String),
 }
@@ -243,11 +291,21 @@ pub struct DeckKeyView {
     pub title: String,
     pub subtitle: String,
     /// Changes whenever the rendered image changes; used as cache key.
-    pub hash: u64,
+    /// String so the browser does not round a u64 past 2^53.
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct DeckDialView {
+    pub index: u8,
+    pub role: String,
+    pub title: String,
+    pub subtitle: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct DeckStatus {
+    pub id: usize,
     pub enabled: bool,
     pub connected: bool,
     pub mock: bool,
@@ -260,8 +318,11 @@ pub struct DeckStatus {
     pub key_size: u32,
     pub page: usize,
     pub pages: usize,
+    pub encoder_page: usize,
+    pub encoder_pages: usize,
     pub volume_layer: bool,
     pub keys: Vec<DeckKeyView>,
+    pub dials: Vec<DeckDialView>,
     pub error: Option<String>,
 }
 
@@ -274,14 +335,19 @@ pub struct AudioView {
     pub last_error: Option<String>,
 }
 
+pub type DeckImage = (u64, Arc<Vec<u8>>);
+pub type DeckImages = HashMap<(usize, u8), DeckImage>;
+
 /// Hardware state written by the surfaces and read by the web UI.
 #[derive(Debug, Default)]
 pub struct Hardware {
     pub gpio: GpioStatus,
-    pub deck: DeckStatus,
-    /// Rendered key images (PNG) keyed by key index with their hash.
-    pub deck_images: HashMap<u8, (u64, Arc<Vec<u8>>)>,
+    pub decks: Vec<DeckStatus>,
+    /// Rendered key images (PNG) keyed by (device, key) with their hash.
+    pub deck_images: DeckImages,
     pub audio: AudioView,
+    /// Per-device input inlets filled by the Stream Deck tasks.
+    pub deck_inputs: Vec<mpsc::Sender<DeckInput>>,
 }
 
 /// Input injected into the Stream Deck surface (from the web UI).
@@ -301,30 +367,25 @@ pub struct Bus {
     pub commands: mpsc::Sender<Command>,
     pub snapshots: watch::Receiver<Arc<Snapshot>>,
     pub hardware: Arc<RwLock<Hardware>>,
-    pub deck_input: mpsc::Sender<DeckInput>,
 }
 
 pub struct Channels {
     pub commands: mpsc::Receiver<Command>,
     pub snapshots: watch::Sender<Arc<Snapshot>>,
-    pub deck_input: mpsc::Receiver<DeckInput>,
     pub bus: Bus,
 }
 
 pub fn channels(initial: Snapshot) -> Channels {
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let (snap_tx, snap_rx) = watch::channel(Arc::new(initial));
-    let (deck_tx, deck_rx) = mpsc::channel(64);
     let bus = Bus {
         commands: cmd_tx,
         snapshots: snap_rx,
         hardware: Arc::new(RwLock::new(Hardware::default())),
-        deck_input: deck_tx,
     };
     Channels {
         commands: cmd_rx,
         snapshots: snap_tx,
-        deck_input: deck_rx,
         bus,
     }
 }
