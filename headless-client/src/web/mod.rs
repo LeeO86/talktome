@@ -91,6 +91,7 @@ pub async fn run(
         .route("/api/login", post(login))
         .route("/api/session", get(session))
         .merge(protected)
+        .layer(middleware::from_fn(no_store_api))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind((web.bind.as_str(), web.port))
@@ -194,6 +195,18 @@ fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
         .lock()
         .map(|mut auth| auth.validate(&token))
         .unwrap_or(false)
+}
+
+async fn no_store_api(request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_string();
+    let mut response = next.run(request).await;
+    if path.contains("/key/") {
+        return response;
+    }
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn require_auth(State(state): State<Shared>, request: Request, next: Next) -> Response {
@@ -469,6 +482,13 @@ async fn streamdeck_input(
     State(state): State<Shared>,
     Json(body): Json<DeckInputBody>,
 ) -> Response {
+    tracing::info!(
+        event = "streamdeck-web-input",
+        device = body.device,
+        kind = %body.kind,
+        index = body.index,
+        action = ?body.action
+    );
     let input = match body.kind.as_str() {
         "key" => match body.action.as_deref() {
             Some("down") => DeckInput::KeyDown(body.index),

@@ -891,6 +891,14 @@
     list.addEventListener('pointerup', release);
     list.addEventListener('pointercancel', release);
     list.addEventListener('lostpointercapture', release);
+    list.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      const key = fromEvent(event);
+      if (!key) return;
+      if (key.button.dataset.pointerAt) return;
+      press(event);
+    });
+    list.addEventListener('mouseup', release);
     list.addEventListener('click', (event) => {
       const key = fromEvent(event);
       if (!key) return;
