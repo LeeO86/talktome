@@ -22,7 +22,7 @@ use tokio::sync::watch;
 use crate::config::{StreamDeckConfig, StreamDeckDeviceConfig, TalkConfig};
 use crate::state::{
     Bus, Command, DeckDialView, DeckInput, DeckKeyView, DeckStatus, InputSource, Snapshot,
-    TargetRef,
+    TargetInfo, TargetRef,
 };
 use crate::talk::TargetKey;
 use layout::{
@@ -33,6 +33,11 @@ use render::{Renderer, StripSegment};
 use tokio::sync::mpsc;
 
 pub const MOCK_ENV: &str = "TALKTOME_MOCK_STREAMDECK";
+/// Comma-separated names painted onto mock decks when the client has no
+/// live targets yet (`adi,conference:News,feed:Virus`). Optional
+/// `TALKTOME_DEMO_REPLY` sets the Reply subtitle.
+pub const DEMO_TARGETS_ENV: &str = "TALKTOME_DEMO_TARGETS";
+pub const DEMO_REPLY_ENV: &str = "TALKTOME_DEMO_REPLY";
 const STATUS_HOLD: Duration = Duration::from_millis(2000);
 const MUTE_HOLD: Duration = Duration::from_millis(600);
 const BLINK_PERIOD: Duration = Duration::from_millis(500);
@@ -540,7 +545,7 @@ async fn run_device(
     device.set_brightness(config.brightness).await?;
     let mut state = DeckState::default();
     let mut snapshots = bus.snapshots.clone();
-    let mut snapshot: Arc<Snapshot> = snapshots.borrow().clone();
+    let mut snapshot: Arc<Snapshot> = with_demo_targets(snapshots.borrow().clone(), is_mock);
     let mut rendered: HashMap<u8, (Appearance, bool)> = HashMap::new();
     let mut images: HashMap<u8, (u64, Arc<Vec<u8>>)> = HashMap::new();
     let mut lcd_rendered: Option<Vec<StripSegment>> = None;
@@ -587,7 +592,7 @@ async fn run_device(
         tokio::select! {
             changed = snapshots.changed() => {
                 if changed.is_err() { return Ok(()); }
-                snapshot = snapshots.borrow().clone();
+                snapshot = with_demo_targets(snapshots.borrow().clone(), is_mock);
                 relayout = true;
             }
             _ = blink.tick() => {
@@ -876,6 +881,86 @@ fn layout_options(device: &StreamDeckDeviceConfig) -> LayoutOptions {
     }
 }
 
+fn with_demo_targets(snapshot: Arc<Snapshot>, is_mock: bool) -> Arc<Snapshot> {
+    if !is_mock || !snapshot.targets.is_empty() {
+        return snapshot;
+    }
+    let Ok(raw) = std::env::var(DEMO_TARGETS_ENV) else {
+        return snapshot;
+    };
+    let targets = parse_demo_targets(&raw);
+    if targets.is_empty() {
+        return snapshot;
+    }
+    let mut snap = (*snapshot).clone();
+    snap.targets = targets;
+    if let Ok(reply) = std::env::var(DEMO_REPLY_ENV) {
+        let reply = reply.trim();
+        if !reply.is_empty() {
+            snap.reply_name = Some(reply.to_string());
+            if let Some(target) = snap
+                .targets
+                .iter()
+                .find(|target| target.name.eq_ignore_ascii_case(reply))
+            {
+                snap.reply_target = Some(target.key);
+            }
+        }
+    }
+    Arc::new(snap)
+}
+
+fn parse_demo_targets(raw: &str) -> Vec<TargetInfo> {
+    let mut users = 0i64;
+    let mut conferences = 0i64;
+    let mut feeds = 0i64;
+    raw.split(',')
+        .filter_map(|part| {
+            let part = part.trim();
+            if part.is_empty() {
+                return None;
+            }
+            let (kind, name) = if let Some((kind, name)) = part.split_once(':') {
+                let kind = kind.trim().to_ascii_lowercase();
+                if matches!(kind.as_str(), "user" | "conference" | "conf" | "feed") {
+                    (kind, name.trim().to_string())
+                } else {
+                    ("user".into(), part.to_string())
+                }
+            } else {
+                ("user".into(), part.to_string())
+            };
+            let (key, can_talk) = match kind.as_str() {
+                "conference" | "conf" => {
+                    conferences += 1;
+                    (TargetKey::Conference(conferences), true)
+                }
+                "feed" => {
+                    feeds += 1;
+                    (TargetKey::Feed(feeds), false)
+                }
+                _ => {
+                    users += 1;
+                    (TargetKey::User(users), true)
+                }
+            };
+            Some(TargetInfo {
+                key,
+                name,
+                can_talk,
+                online: true,
+                held: false,
+                locked: false,
+                incoming: false,
+                receiving: false,
+                volume: 0.8,
+                muted: false,
+                members: Vec::new(),
+            })
+        })
+        .collect()
+}
+
 fn dial_views(geometry: &Geometry, state: &DeckState, snapshot: &Snapshot) -> Vec<DeckDialView> {
     encoder_targets(geometry, state, snapshot)
         .into_iter()
@@ -1096,5 +1181,18 @@ mod tests {
         }
         assert!(kind_from_name("nope").is_none());
         assert!(kind_from_name("").is_none());
+    }
+
+    #[test]
+    fn parse_demo_targets_names_kinds() {
+        let targets = super::parse_demo_targets("adi,conference:News,feed:Virus,beni");
+        assert_eq!(targets.len(), 4);
+        assert_eq!(targets[0].key, crate::talk::TargetKey::User(1));
+        assert_eq!(targets[0].name, "adi");
+        assert_eq!(targets[1].key, crate::talk::TargetKey::Conference(1));
+        assert_eq!(targets[1].name, "News");
+        assert_eq!(targets[2].key, crate::talk::TargetKey::Feed(1));
+        assert!(!targets[2].can_talk);
+        assert_eq!(targets[3].name, "beni");
     }
 }

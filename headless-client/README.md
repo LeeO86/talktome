@@ -163,6 +163,11 @@ Save & restart. The web Stream Deck view renders the keys; taps talk/lock
 like hardware. Optional file input: `TALKTOME_SURFACE_MOCK_DIR=/tmp/tt` and
 append lines such as `down 3` / `up 3` to `$TALKTOME_SURFACE_MOCK_DIR/streamdeck-inputs`.
 
+With no Talktome server (so no live targets), mock decks can still show a
+layout using `TALKTOME_DEMO_TARGETS=adi,beni,conference:News,feed:Virus`
+and `TALKTOME_DEMO_REPLY=News`. Those names are paint-only and disappear as
+soon as the client receives real targets.
+
 The VM also has no USB headset. Capture a 440 Hz sine instead of a
 microphone, and optionally write the mix to a WAV file:
 
