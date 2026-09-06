@@ -213,6 +213,13 @@ server-side mute. The conference fader still scales the whole conference.
   Neo the whole top row becomes VOL, MUTE, −, +) and **targets do not
   move**. Tap a target to select it. The layer closes after
   `streamdeck.volume_layer_timeout_s`.
+- Conference **member mix** uses the same overlay pattern. **MEMBERS** is
+  added on decks that still have a free command-row cell (MK.2, Original,
+  XL, Plus XL). Neo / Mini / Plus open the layer with a **long-press on
+  VOL**; Stream Deck + / + XL also open it with a **long-press on a
+  conference dial**. Target keys then show that conference's members
+  (select, MUTE/HEAR, − / +). The layer is exclusive with volume and uses
+  the same timeout.
 - Stream Deck +: the four dials control the same targets as the four keys
   above them (the bottom row of the current page). No separate dial paging.
 - Stream Deck + XL: six dials can be paged independently (**DIALS** on the

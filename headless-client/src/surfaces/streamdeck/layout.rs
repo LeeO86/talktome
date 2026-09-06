@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::state::{ConnectionState, Snapshot, TargetInfo};
+use crate::state::{ConferenceMemberInfo, ConnectionState, Snapshot, TargetInfo};
 use crate::talk::TargetKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +41,7 @@ pub mod palette {
     pub const STATUS_OK: Rgb = Rgb(40, 60, 80);
     pub const STATUS_BAD: Rgb = Rgb(120, 60, 20);
     pub const VOLUME: Rgb = Rgb(70, 60, 120);
+    pub const MEMBERS: Rgb = Rgb(40, 95, 90);
     pub const SELECTED: Rgb = Rgb(120, 100, 200);
     pub const REPLY: Rgb = Rgb(60, 70, 90);
     pub const WHITE: Rgb = Rgb(255, 255, 255);
@@ -91,13 +92,36 @@ pub enum Role {
     Status,
     Reply,
     Target(TargetKey),
+    Member { conference: TargetKey, user_id: i64 },
     NextPage,
     NextEncoderPage,
     VolumeToggle,
+    MembersToggle,
     VolumeUp,
     VolumeDown,
     MuteSelected,
     Empty,
+}
+
+/// What a Stream Deck + / + XL encoder currently controls.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EncoderBinding<'a> {
+    Target(&'a TargetInfo),
+    Member {
+        conference: TargetKey,
+        member: &'a ConferenceMemberInfo,
+    },
+}
+
+/// Decks whose command row still has a spare cell after Status, VOL, Reply
+/// and any paging keys (MK.2 / Original / XL / Plus XL).
+pub fn has_members_command_key(geometry: &Geometry) -> bool {
+    geometry.visual && geometry.cols >= 5
+}
+
+/// Neo / Mini / Plus have no MEMBERS key; VOL long-press opens the member layer.
+pub fn volume_toggle_defers_to_release(geometry: &Geometry) -> bool {
+    geometry.visual && !has_members_command_key(geometry)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -113,6 +137,11 @@ pub struct DeckState {
     pub encoder_page: usize,
     pub volume_layer: bool,
     pub volume_layer_touched: Instant,
+    pub member_layer: bool,
+    pub member_layer_touched: Instant,
+    pub member_conference: Option<TargetKey>,
+    pub member_selected: Option<i64>,
+    pub member_page: usize,
     pub selected: Option<TargetKey>,
     pub blink_phase: bool,
 }
@@ -124,6 +153,11 @@ impl Default for DeckState {
             encoder_page: 0,
             volume_layer: false,
             volume_layer_touched: Instant::now(),
+            member_layer: false,
+            member_layer_touched: Instant::now(),
+            member_conference: None,
+            member_selected: None,
+            member_page: 0,
             selected: None,
             blink_phase: false,
         }
@@ -135,20 +169,143 @@ impl DeckState {
         self.volume_layer_touched = Instant::now();
     }
 
+    pub fn touch_member_layer(&mut self) {
+        self.member_layer_touched = Instant::now();
+    }
+
+    pub fn close_volume_layer(&mut self) {
+        self.volume_layer = false;
+    }
+
+    pub fn close_member_layer(&mut self) {
+        self.member_layer = false;
+    }
+
     pub fn expire_volume_layer(&mut self, timeout: Duration) -> bool {
         if self.volume_layer && self.volume_layer_touched.elapsed() >= timeout {
-            self.volume_layer = false;
+            self.close_volume_layer();
             return true;
         }
         false
     }
 
-    pub fn clamp_pages(&mut self, geometry: &Geometry, target_count: usize) {
+    pub fn expire_member_layer(&mut self, timeout: Duration) -> bool {
+        if self.member_layer && self.member_layer_touched.elapsed() >= timeout {
+            self.close_member_layer();
+            return true;
+        }
+        false
+    }
+
+    pub fn toggle_volume_layer(&mut self, snapshot: &Snapshot) {
+        if self.volume_layer {
+            self.close_volume_layer();
+            return;
+        }
+        self.close_member_layer();
+        self.volume_layer = true;
+        self.touch_volume_layer();
+        if self.selected.is_none() {
+            self.selected = snapshot.targets.first().map(|t| t.key);
+        }
+    }
+
+    /// Opens or closes the member layer. Returns whether the layout changed.
+    pub fn toggle_member_layer(
+        &mut self,
+        snapshot: &Snapshot,
+        preferred: Option<TargetKey>,
+    ) -> bool {
+        if self.member_layer {
+            self.close_member_layer();
+            return true;
+        }
+        self.open_member_layer(snapshot, preferred)
+    }
+
+    /// Enters the member layer for `preferred` or a default conference.
+    pub fn open_member_layer(&mut self, snapshot: &Snapshot, preferred: Option<TargetKey>) -> bool {
+        let Some(conference) =
+            default_member_conference(snapshot, preferred.or(self.member_conference))
+        else {
+            return false;
+        };
+        let members = conference_members(snapshot, conference);
+        let keep_selection = self.member_conference == Some(conference)
+            && self
+                .member_selected
+                .is_some_and(|id| members.iter().any(|member| member.user_id == id));
+        self.close_volume_layer();
+        self.member_layer = true;
+        self.member_conference = Some(conference);
+        if !keep_selection {
+            self.member_selected = members.first().map(|member| member.user_id);
+            self.member_page = 0;
+        }
+        self.encoder_page = 0;
+        self.touch_member_layer();
+        true
+    }
+
+    pub fn clamp_pages(&mut self, geometry: &Geometry, snapshot: &Snapshot) {
+        let target_count = snapshot.targets.len();
         let pages = page_count(geometry, target_count);
         self.page = self.page.min(pages.saturating_sub(1));
-        let encoder_pages = encoder_page_count(geometry, target_count);
+        let member_count = self
+            .member_conference
+            .and_then(|key| snapshot.target(key))
+            .map(|target| target.members.len())
+            .unwrap_or(0);
+        let member_pages = page_count(geometry, member_count);
+        self.member_page = self.member_page.min(member_pages.saturating_sub(1));
+        let encoder_count = if self.member_layer {
+            member_count
+        } else {
+            target_count
+        };
+        let encoder_pages = encoder_page_count(geometry, encoder_count);
         self.encoder_page = self.encoder_page.min(encoder_pages.saturating_sub(1));
     }
+}
+
+/// Conference whose members the layer should show when none is named.
+pub fn default_member_conference(
+    snapshot: &Snapshot,
+    preferred: Option<TargetKey>,
+) -> Option<TargetKey> {
+    let is_conference = |key: TargetKey| matches!(key, TargetKey::Conference(_));
+    if let Some(key) = preferred.filter(|key| is_conference(*key)) {
+        if snapshot.target(key).is_some() {
+            return Some(key);
+        }
+    }
+    snapshot
+        .targets
+        .iter()
+        .find(|target| is_conference(target.key) && (target.held || target.locked))
+        .map(|target| target.key)
+        .or_else(|| snapshot.reply_target.filter(|key| is_conference(*key)))
+        .or_else(|| {
+            snapshot
+                .targets
+                .iter()
+                .find(|target| is_conference(target.key) && !target.members.is_empty())
+                .map(|target| target.key)
+        })
+        .or_else(|| {
+            snapshot
+                .targets
+                .iter()
+                .find(|target| is_conference(target.key))
+                .map(|target| target.key)
+        })
+}
+
+pub fn conference_members(snapshot: &Snapshot, conference: TargetKey) -> &[ConferenceMemberInfo] {
+    snapshot
+        .target(conference)
+        .map(|target| target.members.as_slice())
+        .unwrap_or(&[])
 }
 
 /// Everything the layout needs from configuration.
@@ -210,6 +367,45 @@ pub fn page_targets<'a>(
         .collect()
 }
 
+/// Conference members shown on the current member page, in slot order.
+pub fn page_members<'a>(
+    geometry: &Geometry,
+    state: &DeckState,
+    members: &'a [ConferenceMemberInfo],
+) -> Vec<&'a ConferenceMemberInfo> {
+    let slots = target_slots(geometry);
+    let per_page = slots.len().max(1);
+    let pages = page_count(geometry, members.len());
+    let page = state.member_page.min(pages.saturating_sub(1));
+    members
+        .iter()
+        .skip(page * per_page)
+        .take(per_page)
+        .collect()
+}
+
+fn layer_page_counts(
+    geometry: &Geometry,
+    snapshot: &Snapshot,
+    state: &DeckState,
+) -> (usize, usize) {
+    if state.member_layer {
+        let count = state
+            .member_conference
+            .map(|key| conference_members(snapshot, key).len())
+            .unwrap_or(0);
+        (
+            page_count(geometry, count),
+            encoder_page_count(geometry, count),
+        )
+    } else {
+        (
+            page_count(geometry, snapshot.targets.len()),
+            encoder_page_count(geometry, snapshot.targets.len()),
+        )
+    }
+}
+
 /// Command-row roles for the current layer. Targets never appear here.
 fn command_roles(
     geometry: &Geometry,
@@ -241,15 +437,15 @@ fn command_roles(
         } else if encoder_pages > 1 && cursor == 1 && row[1] != Some(Role::NextPage) {
             row[1] = Some(Role::NextEncoderPage);
         }
+        if has_members_command_key(geometry) {
+            if let Some(index) = row.iter().position(|cell| cell.is_none()) {
+                row[index] = Some(Role::MembersToggle);
+            }
+        }
     };
 
-    if state.volume_layer {
-        let controls = [
-            Role::VolumeToggle,
-            Role::MuteSelected,
-            Role::VolumeDown,
-            Role::VolumeUp,
-        ];
+    let overlay = |row: &mut [Option<Role>], toggle: Role| {
+        let controls = [toggle, Role::MuteSelected, Role::VolumeDown, Role::VolumeUp];
         for (index, role) in controls.iter().enumerate() {
             if index < cols {
                 row[index] = Some(*role);
@@ -264,6 +460,12 @@ fn command_roles(
                 }
             }
         }
+    };
+
+    if state.member_layer {
+        overlay(&mut row, Role::MembersToggle);
+    } else if state.volume_layer {
+        overlay(&mut row, Role::VolumeToggle);
     } else {
         idle_pagers(&mut row);
     }
@@ -272,6 +474,35 @@ fn command_roles(
         .enumerate()
         .filter_map(|(index, role)| role.map(|role| (index as u8, role)))
         .collect()
+}
+
+fn member_appearance(member: &ConferenceMemberInfo, state: &DeckState) -> Appearance {
+    let volume_pct = format!("{}%", (member.volume * 100.0).round() as u32);
+    let mut appearance = Appearance::simple(&member.name, palette::MEMBERS);
+    appearance.subtitle = volume_pct;
+    appearance.bar = Some(member.volume);
+    if state.member_selected == Some(member.user_id) {
+        appearance.background = palette::SELECTED;
+    }
+    if !member.online {
+        appearance.foreground = palette::OFFLINE_TEXT;
+        if state.member_selected != Some(member.user_id) {
+            appearance.background = palette::OFFLINE;
+        }
+    }
+    if member.receiving {
+        appearance.background = palette::RECEIVING;
+        if state.member_selected == Some(member.user_id) {
+            appearance.background = palette::SELECTED;
+        }
+    }
+    if member.muted {
+        appearance.badge = Some(Badge::Muted);
+        if state.member_selected != Some(member.user_id) {
+            appearance.background = palette::MUTED;
+        }
+    }
+    appearance
 }
 
 fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot) -> Appearance {
@@ -334,7 +565,9 @@ fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
             palette::STATUS_BAD
         },
     );
-    appearance.subtitle = if state.volume_layer {
+    appearance.subtitle = if state.member_layer {
+        "MEMBERS".to_string()
+    } else if state.volume_layer {
         "VOLUME".to_string()
     } else if snapshot.connection != ConnectionState::Ready {
         snapshot.connection.label().to_string()
@@ -412,19 +645,81 @@ fn appearance_for_role(
             };
             a
         }
-        Role::VolumeUp => Appearance::simple("+", palette::VOLUME),
-        Role::VolumeDown => Appearance::simple("−", palette::VOLUME),
-        Role::MuteSelected => {
-            let selected = state.selected.and_then(|key| snapshot.target(key));
-            let mut a = Appearance::simple("MUTE", palette::VOLUME);
-            if let Some(target) = selected {
-                a.subtitle = target.name.clone();
-                if target.muted {
-                    a.background = palette::MUTED;
-                    a.badge = Some(Badge::Muted);
-                }
-            }
+        Role::MembersToggle => {
+            let mut a = Appearance::simple(
+                "MEMBERS",
+                if state.member_layer {
+                    palette::SELECTED
+                } else {
+                    palette::MEMBERS
+                },
+            );
+            a.subtitle = if state.member_layer {
+                "back".into()
+            } else {
+                state
+                    .member_conference
+                    .and_then(|key| snapshot.target(key))
+                    .or_else(|| {
+                        default_member_conference(snapshot, None)
+                            .and_then(|key| snapshot.target(key))
+                    })
+                    .map(|target| target.name.clone())
+                    .unwrap_or_default()
+            };
             a
+        }
+        Role::VolumeUp => Appearance::simple(
+            "+",
+            if state.member_layer {
+                palette::MEMBERS
+            } else {
+                palette::VOLUME
+            },
+        ),
+        Role::VolumeDown => Appearance::simple(
+            "−",
+            if state.member_layer {
+                palette::MEMBERS
+            } else {
+                palette::VOLUME
+            },
+        ),
+        Role::MuteSelected => {
+            if state.member_layer {
+                let member = state.member_conference.and_then(|conference| {
+                    conference_members(snapshot, conference)
+                        .iter()
+                        .find(|member| Some(member.user_id) == state.member_selected)
+                });
+                let mut a = Appearance::simple(
+                    if member.map(|m| m.muted).unwrap_or(false) {
+                        "HEAR"
+                    } else {
+                        "MUTE"
+                    },
+                    palette::MEMBERS,
+                );
+                if let Some(member) = member {
+                    a.subtitle = member.name.clone();
+                    if member.muted {
+                        a.background = palette::MUTED;
+                        a.badge = Some(Badge::Muted);
+                    }
+                }
+                a
+            } else {
+                let selected = state.selected.and_then(|key| snapshot.target(key));
+                let mut a = Appearance::simple("MUTE", palette::VOLUME);
+                if let Some(target) = selected {
+                    a.subtitle = target.name.clone();
+                    if target.muted {
+                        a.background = palette::MUTED;
+                        a.badge = Some(Badge::Muted);
+                    }
+                }
+                a
+            }
         }
         Role::NextPage => {
             let mut a = Appearance::simple("NEXT", palette::REPLY);
@@ -448,6 +743,19 @@ fn appearance_for_role(
             .target(key)
             .map(|target| target_appearance(target, state, snapshot))
             .unwrap_or_else(Appearance::blank),
+        Role::Member {
+            conference,
+            user_id,
+        } => snapshot
+            .target(conference)
+            .and_then(|target| {
+                target
+                    .members
+                    .iter()
+                    .find(|member| member.user_id == user_id)
+            })
+            .map(|member| member_appearance(member, state))
+            .unwrap_or_else(Appearance::blank),
         Role::Empty => Appearance::blank(),
     }
 }
@@ -468,8 +776,7 @@ pub fn layout(
             appearance: Appearance::blank(),
         })
         .collect();
-    let key_pages = page_count(geometry, snapshot.targets.len());
-    let encoder_pages = encoder_page_count(geometry, snapshot.targets.len());
+    let (key_pages, encoder_pages) = layer_page_counts(geometry, snapshot, state);
     for (key, role) in command_roles(geometry, state, key_pages, encoder_pages) {
         let Some(slot) = keys.get_mut(key as usize) else {
             continue;
@@ -478,11 +785,26 @@ pub fn layout(
         slot.appearance = appearance_for_role(role, snapshot, state, key_pages, encoder_pages);
     }
     let slots = target_slots(geometry);
-    let shown = page_targets(geometry, state, &snapshot.targets);
-    for (slot, target) in slots.iter().zip(shown.iter()) {
-        if let Some(key) = keys.get_mut(*slot as usize) {
-            key.role = Role::Target(target.key);
-            key.appearance = target_appearance(target, state, snapshot);
+    if state.member_layer {
+        if let Some(conference) = state.member_conference {
+            let shown = page_members(geometry, state, conference_members(snapshot, conference));
+            for (slot, member) in slots.iter().zip(shown.iter()) {
+                if let Some(key) = keys.get_mut(*slot as usize) {
+                    key.role = Role::Member {
+                        conference,
+                        user_id: member.user_id,
+                    };
+                    key.appearance = member_appearance(member, state);
+                }
+            }
+        }
+    } else {
+        let shown = page_targets(geometry, state, &snapshot.targets);
+        for (slot, target) in slots.iter().zip(shown.iter()) {
+            if let Some(key) = keys.get_mut(*slot as usize) {
+                key.role = Role::Target(target.key);
+                key.appearance = target_appearance(target, state, snapshot);
+            }
         }
     }
     keys
@@ -520,23 +842,58 @@ fn pedal_layout(snapshot: &Snapshot, options: &LayoutOptions) -> Vec<KeySpec> {
     ]
 }
 
-/// Targets bound to the encoders of a Stream Deck + / + XL.
-pub fn encoder_targets<'a>(
+/// Targets or members bound to the encoders of a Stream Deck + / + XL.
+pub fn encoder_bindings<'a>(
     geometry: &Geometry,
     state: &DeckState,
     snapshot: &'a Snapshot,
-) -> Vec<Option<&'a TargetInfo>> {
+) -> Vec<Option<EncoderBinding<'a>>> {
+    if geometry.encoders == 0 {
+        return Vec::new();
+    }
+    if state.member_layer {
+        let Some(conference) = state.member_conference else {
+            return vec![None; geometry.encoders as usize];
+        };
+        let members = conference_members(snapshot, conference);
+        if geometry.encoders_follow_bottom_row() {
+            let shown = page_members(geometry, state, members);
+            return (0..geometry.encoders as usize)
+                .map(|index| {
+                    shown
+                        .get(index)
+                        .copied()
+                        .map(|member| EncoderBinding::Member { conference, member })
+                })
+                .collect();
+        }
+        let per_page = geometry.encoders.max(1) as usize;
+        let pages = encoder_page_count(geometry, members.len());
+        let page = state.encoder_page.min(pages.saturating_sub(1));
+        return (0..geometry.encoders as usize)
+            .map(|index| {
+                members
+                    .get(page * per_page + index)
+                    .map(|member| EncoderBinding::Member { conference, member })
+            })
+            .collect();
+    }
     if geometry.encoders_follow_bottom_row() {
         let shown = page_targets(geometry, state, &snapshot.targets);
         return (0..geometry.encoders as usize)
-            .map(|index| shown.get(index).copied())
+            .map(|index| shown.get(index).copied().map(EncoderBinding::Target))
             .collect();
     }
     let per_page = geometry.encoders.max(1) as usize;
     let pages = encoder_page_count(geometry, snapshot.targets.len());
     let page = state.encoder_page.min(pages.saturating_sub(1));
     (0..geometry.encoders as usize)
-        .map(|index| snapshot.targets.get(page * per_page + index))
+        .map(|index| {
+            snapshot
+                .targets
+                .get(page * per_page + index)
+                .map(EncoderBinding::Target)
+        })
         .collect()
 }
 
@@ -638,6 +995,13 @@ mod tests {
         }
     }
 
+    fn binding_target(binding: Option<EncoderBinding<'_>>) -> Option<TargetKey> {
+        match binding {
+            Some(EncoderBinding::Target(target)) => Some(target.key),
+            _ => None,
+        }
+    }
+
     fn roles(kind: &str, count: usize, state: &DeckState) -> Vec<Role> {
         layout(&geometry(kind), &snapshot(count), state, &options())
             .into_iter()
@@ -726,7 +1090,7 @@ mod tests {
         assert_eq!(keys[0], Role::Status);
         assert_eq!(keys[1], Role::VolumeToggle);
         assert_eq!(keys[4], Role::Reply);
-        assert_eq!(keys[2], Role::Empty);
+        assert_eq!(keys[2], Role::MembersToggle);
         assert_eq!(keys[5], Role::Empty);
         assert_eq!(keys[10], Role::Target(TargetKey::User(0)));
         assert_eq!(keys[11], Role::Target(TargetKey::User(1)));
@@ -764,11 +1128,11 @@ mod tests {
         assert_eq!(keys[5].role, Role::Target(TargetKey::User(1)));
         assert_eq!(keys[6].role, Role::Target(TargetKey::Feed(2)));
         assert_eq!(keys[7].role, Role::Empty);
-        let encoders = encoder_targets(&geometry, &state, &snapshot);
+        let encoders = encoder_bindings(&geometry, &state, &snapshot);
         assert_eq!(encoders.len(), 4);
-        assert_eq!(encoders[0].map(|t| t.key), Some(TargetKey::User(0)));
-        assert_eq!(encoders[1].map(|t| t.key), Some(TargetKey::User(1)));
-        assert_eq!(encoders[2].map(|t| t.key), Some(TargetKey::Feed(2)));
+        assert_eq!(binding_target(encoders[0]), Some(TargetKey::User(0)));
+        assert_eq!(binding_target(encoders[1]), Some(TargetKey::User(1)));
+        assert_eq!(binding_target(encoders[2]), Some(TargetKey::Feed(2)));
         assert_eq!(encoders[3], None);
         assert_eq!(encoder_page_count(&geometry, 12), 1);
     }
@@ -786,14 +1150,14 @@ mod tests {
         assert!(!keys.iter().any(|key| key.role == Role::NextPage));
         let bottom = 3 * 9;
         assert_eq!(keys[bottom].role, Role::Target(TargetKey::User(0)));
-        let encoders = encoder_targets(&geometry, &state, &snapshot);
+        let encoders = encoder_bindings(&geometry, &state, &snapshot);
         assert_eq!(encoders.len(), 6);
-        assert_eq!(encoders[0].map(|t| t.key), Some(TargetKey::User(0)));
-        assert_eq!(encoders[5].map(|t| t.key), Some(TargetKey::Feed(5)));
+        assert_eq!(binding_target(encoders[0]), Some(TargetKey::User(0)));
+        assert_eq!(binding_target(encoders[5]), Some(TargetKey::Feed(5)));
         state.encoder_page = 3;
-        let encoders = encoder_targets(&geometry, &state, &snapshot);
-        assert_eq!(encoders[0].map(|t| t.key), Some(TargetKey::User(18)));
-        assert_eq!(encoders[1].map(|t| t.key), Some(TargetKey::User(19)));
+        let encoders = encoder_bindings(&geometry, &state, &snapshot);
+        assert_eq!(binding_target(encoders[0]), Some(TargetKey::User(18)));
+        assert_eq!(binding_target(encoders[1]), Some(TargetKey::User(19)));
         assert_eq!(encoders[2], None);
         assert_eq!(encoder_page_count(&geometry, 20), 4);
     }
@@ -866,5 +1230,243 @@ mod tests {
         };
         assert!(state.expire_volume_layer(Duration::from_secs(8)));
         assert!(!state.volume_layer);
+    }
+
+    fn conference_snapshot(member_count: usize) -> Snapshot {
+        let mut snapshot = snapshot(2);
+        snapshot.targets.push(TargetInfo {
+            key: TargetKey::Conference(1),
+            name: "News".into(),
+            can_talk: true,
+            online: true,
+            held: false,
+            locked: false,
+            incoming: false,
+            receiving: false,
+            volume: 0.8,
+            muted: false,
+            members: (0..member_count)
+                .map(|i| crate::state::ConferenceMemberInfo {
+                    user_id: i as i64,
+                    name: format!("M{i}"),
+                    online: i % 2 == 0,
+                    receiving: i == 0,
+                    volume: 0.8,
+                    muted: i == 1,
+                })
+                .collect(),
+        });
+        snapshot
+    }
+
+    fn member_state(selected: Option<i64>) -> DeckState {
+        DeckState {
+            member_layer: true,
+            member_conference: Some(TargetKey::Conference(1)),
+            member_selected: selected,
+            ..DeckState::default()
+        }
+    }
+
+    #[test]
+    fn members_key_only_on_wide_command_rows() {
+        assert!(has_members_command_key(&geometry("mk2")));
+        assert!(has_members_command_key(&geometry("xl")));
+        assert!(has_members_command_key(&geometry("plusxl")));
+        assert!(!has_members_command_key(&geometry("neo")));
+        assert!(!has_members_command_key(&geometry("plus")));
+        assert!(!has_members_command_key(&geometry("mini")));
+        assert!(!volume_toggle_defers_to_release(&geometry("mk2")));
+        assert!(volume_toggle_defers_to_release(&geometry("neo")));
+        assert!(volume_toggle_defers_to_release(&geometry("plus")));
+        let neo = roles("neo", 3, &DeckState::default());
+        assert_eq!(neo[2], Role::Empty);
+        assert!(!neo.contains(&Role::MembersToggle));
+        let plus = roles("plus", 3, &DeckState::default());
+        assert!(!plus.contains(&Role::MembersToggle));
+        let xl = roles("xl", 3, &DeckState::default());
+        assert_eq!(xl[2], Role::MembersToggle);
+        let plusxl = layout(
+            &geometry("plusxl"),
+            &snapshot(20),
+            &DeckState::default(),
+            &options(),
+        );
+        assert_eq!(plusxl[2].role, Role::MembersToggle);
+        assert!(plusxl.iter().any(|key| key.role == Role::NextEncoderPage));
+    }
+
+    #[test]
+    fn member_layer_overlays_command_row_with_members() {
+        let snapshot = conference_snapshot(3);
+        let state = member_state(Some(0));
+        let keys = layout(&geometry("neo"), &snapshot, &state, &options());
+        assert_eq!(keys[0].role, Role::MembersToggle);
+        assert_eq!(keys[1].role, Role::MuteSelected);
+        assert_eq!(keys[2].role, Role::VolumeDown);
+        assert_eq!(keys[3].role, Role::VolumeUp);
+        assert_eq!(
+            keys[4].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 0
+            }
+        );
+        assert_eq!(
+            keys[5].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 1
+            }
+        );
+        assert_eq!(
+            keys[6].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 2
+            }
+        );
+        assert_eq!(keys[7].role, Role::Empty);
+        assert_eq!(keys[4].appearance.background, palette::SELECTED);
+        assert_eq!(keys[4].appearance.bar, Some(0.8));
+        assert_eq!(keys[5].appearance.badge, Some(Badge::Muted));
+        assert_eq!(keys[1].appearance.title, "MUTE");
+        assert_eq!(keys[1].appearance.subtitle, "M0");
+        assert_eq!(keys[0].appearance.subtitle, "back");
+    }
+
+    #[test]
+    fn mk2_member_layer_keeps_reply() {
+        let snapshot = conference_snapshot(2);
+        let keys = layout(
+            &geometry("mk2"),
+            &snapshot,
+            &member_state(Some(1)),
+            &options(),
+        );
+        assert_eq!(keys[0].role, Role::MembersToggle);
+        assert_eq!(keys[1].role, Role::MuteSelected);
+        assert_eq!(keys[2].role, Role::VolumeDown);
+        assert_eq!(keys[3].role, Role::VolumeUp);
+        assert_eq!(keys[4].role, Role::Reply);
+        assert_eq!(keys[1].appearance.title, "HEAR");
+        assert_eq!(keys[1].appearance.subtitle, "M1");
+        let bottom = 2 * 5;
+        assert_eq!(
+            keys[bottom].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 0
+            }
+        );
+    }
+
+    #[test]
+    fn member_layer_pages_members_not_destinations() {
+        let geometry = geometry("neo");
+        let snapshot = conference_snapshot(5);
+        let mut state = member_state(Some(0));
+        assert_eq!(page_count(&geometry, snapshot.targets[2].members.len()), 2);
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(
+            keys[7].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 3
+            }
+        );
+        state.member_page = 1;
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(
+            keys[4].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 4
+            }
+        );
+        assert_eq!(keys[5].role, Role::Empty);
+    }
+
+    #[test]
+    fn member_and_volume_layers_are_exclusive() {
+        let snapshot = conference_snapshot(2);
+        let mut state = DeckState {
+            volume_layer: true,
+            selected: Some(TargetKey::User(0)),
+            ..DeckState::default()
+        };
+        assert!(state.open_member_layer(&snapshot, Some(TargetKey::Conference(1))));
+        assert!(state.member_layer);
+        assert!(!state.volume_layer);
+        assert_eq!(state.member_selected, Some(0));
+        state.toggle_volume_layer(&snapshot);
+        assert!(state.volume_layer);
+        assert!(!state.member_layer);
+        let mut expired = DeckState {
+            member_layer: true,
+            member_layer_touched: Instant::now() - Duration::from_secs(10),
+            ..DeckState::default()
+        };
+        assert!(expired.expire_member_layer(Duration::from_secs(8)));
+        assert!(!expired.member_layer);
+    }
+
+    #[test]
+    fn default_conference_prefers_held_then_populated() {
+        let mut snapshot = conference_snapshot(0);
+        snapshot.targets.push(TargetInfo {
+            key: TargetKey::Conference(2),
+            name: "Sport".into(),
+            can_talk: true,
+            online: true,
+            held: false,
+            locked: false,
+            incoming: false,
+            receiving: false,
+            volume: 0.5,
+            muted: false,
+            members: vec![crate::state::ConferenceMemberInfo {
+                user_id: 9,
+                name: "Jan".into(),
+                online: true,
+                receiving: false,
+                volume: 1.0,
+                muted: false,
+            }],
+        });
+        assert_eq!(
+            default_member_conference(&snapshot, None),
+            Some(TargetKey::Conference(2))
+        );
+        snapshot.targets[2].held = true;
+        assert_eq!(
+            default_member_conference(&snapshot, None),
+            Some(TargetKey::Conference(1))
+        );
+        assert_eq!(
+            default_member_conference(&snapshot, Some(TargetKey::Conference(2))),
+            Some(TargetKey::Conference(2))
+        );
+    }
+
+    #[test]
+    fn plus_member_layer_binds_dials_to_members() {
+        let geometry = geometry("plus");
+        let snapshot = conference_snapshot(3);
+        let state = member_state(Some(0));
+        let bindings = encoder_bindings(&geometry, &state, &snapshot);
+        assert_eq!(bindings.len(), 4);
+        match bindings[0] {
+            Some(EncoderBinding::Member { conference, member }) => {
+                assert_eq!(conference, TargetKey::Conference(1));
+                assert_eq!(member.user_id, 0);
+            }
+            other => panic!("expected member binding, got {other:?}"),
+        }
+        assert!(matches!(
+            bindings[2],
+            Some(EncoderBinding::Member { member, .. }) if member.user_id == 2
+        ));
+        assert_eq!(bindings[3], None);
     }
 }

@@ -21,13 +21,14 @@ use tokio::sync::watch;
 
 use crate::config::{StreamDeckConfig, StreamDeckDeviceConfig, TalkConfig};
 use crate::state::{
-    Bus, Command, DeckDialView, DeckInput, DeckKeyView, DeckStatus, InputSource, Snapshot,
-    TargetInfo, TargetRef,
+    Bus, Command, ConferenceMemberInfo, DeckDialView, DeckInput, DeckKeyView, DeckStatus,
+    InputSource, Snapshot, TargetInfo, TargetRef,
 };
 use crate::talk::TargetKey;
 use layout::{
-    encoder_page_count, encoder_targets, page_count, palette, Appearance, DeckState, Geometry,
-    KeySpec, LayoutOptions, Role,
+    conference_members, encoder_bindings, encoder_page_count, page_count, palette,
+    volume_toggle_defers_to_release, Appearance, DeckState, EncoderBinding, Geometry, KeySpec,
+    LayoutOptions, Role,
 };
 use render::{Renderer, StripSegment};
 use tokio::sync::mpsc;
@@ -477,13 +478,73 @@ fn role_label(role: Role) -> String {
         Role::Status => "status".into(),
         Role::Reply => "reply".into(),
         Role::Target(key) => key.to_string(),
+        Role::Member {
+            conference,
+            user_id,
+        } => format!("{conference}/user:{user_id}"),
         Role::NextPage => "next-page".into(),
         Role::NextEncoderPage => "next-dials".into(),
         Role::VolumeToggle => "volume-toggle".into(),
+        Role::MembersToggle => "members-toggle".into(),
         Role::VolumeUp => "volume-up".into(),
         Role::VolumeDown => "volume-down".into(),
         Role::MuteSelected => "mute-selected".into(),
         Role::Empty => "empty".into(),
+    }
+}
+
+fn key_item_count(snapshot: &Snapshot, state: &DeckState) -> usize {
+    if state.member_layer {
+        state
+            .member_conference
+            .map(|key| conference_members(snapshot, key).len())
+            .unwrap_or(0)
+    } else {
+        snapshot.targets.len()
+    }
+}
+
+fn cycle_page(page: &mut usize, pages: usize, forward: bool) {
+    let pages = pages.max(1);
+    *page = if forward {
+        (*page + 1) % pages
+    } else {
+        (*page + pages - 1) % pages
+    };
+}
+
+fn step_linear_volume(current: f32, delta: f32) -> f32 {
+    (((current + delta) * 100.0).round() / 100.0).clamp(0.0, 1.0)
+}
+
+#[derive(Clone, Copy)]
+enum BoundEncoder {
+    Target(TargetKey),
+    Member {
+        conference: TargetKey,
+        user_id: i64,
+        volume: f32,
+    },
+}
+
+fn bound_encoder(
+    geometry: &Geometry,
+    state: &DeckState,
+    snapshot: &Snapshot,
+    encoder: u8,
+) -> Option<BoundEncoder> {
+    match encoder_bindings(geometry, state, snapshot)
+        .get(encoder as usize)
+        .copied()
+        .flatten()
+    {
+        Some(EncoderBinding::Target(target)) => Some(BoundEncoder::Target(target.key)),
+        Some(EncoderBinding::Member { conference, member }) => Some(BoundEncoder::Member {
+            conference,
+            user_id: member.user_id,
+            volume: member.volume,
+        }),
+        None => None,
     }
 }
 
@@ -511,6 +572,7 @@ fn injected_update(input: DeckInput) -> DeviceStateUpdate {
         DeckInput::KeyUp(key) => DeviceStateUpdate::ButtonUp(key),
         DeckInput::EncoderTwist(encoder, delta) => DeviceStateUpdate::EncoderTwist(encoder, delta),
         DeckInput::EncoderPress(encoder) => DeviceStateUpdate::EncoderDown(encoder),
+        DeckInput::EncoderRelease(encoder) => DeviceStateUpdate::EncoderUp(encoder),
         DeckInput::TouchPoint(point) => DeviceStateUpdate::TouchPointDown(point),
     }
 }
@@ -550,6 +612,7 @@ async fn run_device(
     let mut images: HashMap<u8, (u64, Arc<Vec<u8>>)> = HashMap::new();
     let mut lcd_rendered: Option<Vec<StripSegment>> = None;
     let mut pressed: HashMap<u8, PressedKey> = HashMap::new();
+    let mut pressed_encoders: HashMap<u8, Instant> = HashMap::new();
     let mut keys: Vec<KeySpec> = layout::layout(&geometry, &snapshot, &state, &options);
     let mut blink = tokio::time::interval(BLINK_PERIOD);
     let volume_timeout = Duration::from_secs(config.volume_layer_timeout_s.max(1));
@@ -597,7 +660,9 @@ async fn run_device(
             }
             _ = blink.tick() => {
                 state.blink_phase = !state.blink_phase;
-                if state.expire_volume_layer(volume_timeout) {
+                if state.expire_volume_layer(volume_timeout)
+                    || state.expire_member_layer(volume_timeout)
+                {
                     relayout = true;
                 }
             }
@@ -664,42 +729,93 @@ async fn run_device(
                                 let _ = bus.commands.send(Command::MuteToggle(target)).await;
                             }
                         }
+                        Role::Member { user_id, .. } => {
+                            state.member_selected = Some(user_id);
+                            state.touch_member_layer();
+                            relayout = true;
+                        }
                         Role::NextPage => {
-                            let pages = page_count(&geometry, snapshot.targets.len());
-                            state.page = (state.page + 1) % pages.max(1);
+                            let pages = page_count(&geometry, key_item_count(&snapshot, &state));
+                            if state.member_layer {
+                                cycle_page(&mut state.member_page, pages, true);
+                                state.touch_member_layer();
+                            } else {
+                                cycle_page(&mut state.page, pages, true);
+                            }
                             relayout = true;
                         }
                         Role::NextEncoderPage => {
-                            let pages = encoder_page_count(&geometry, snapshot.targets.len());
-                            state.encoder_page = (state.encoder_page + 1) % pages.max(1);
+                            let pages =
+                                encoder_page_count(&geometry, key_item_count(&snapshot, &state));
+                            cycle_page(&mut state.encoder_page, pages, true);
+                            if state.member_layer {
+                                state.touch_member_layer();
+                            }
                             relayout = true;
                         }
                         Role::VolumeToggle => {
-                            state.volume_layer = !state.volume_layer;
-                            state.touch_volume_layer();
-                            if state.volume_layer && state.selected.is_none() {
-                                state.selected = snapshot.targets.first().map(|t| t.key);
+                            if !volume_toggle_defers_to_release(&geometry) {
+                                state.toggle_volume_layer(&snapshot);
+                                relayout = true;
                             }
-                            relayout = true;
+                        }
+                        Role::MembersToggle => {
+                            relayout = state.toggle_member_layer(&snapshot, None);
                         }
                         Role::VolumeUp | Role::VolumeDown => {
-                            state.touch_volume_layer();
-                            if let Some(target) = state.selected {
-                                let delta = if role == Role::VolumeUp {
-                                    config.volume_step
-                                } else {
-                                    -config.volume_step
-                                };
-                                let _ = bus
-                                    .commands
-                                    .send(Command::VolumeStep { target, delta })
-                                    .await;
+                            let delta = if role == Role::VolumeUp {
+                                config.volume_step
+                            } else {
+                                -config.volume_step
+                            };
+                            if state.member_layer {
+                                state.touch_member_layer();
+                                if let (Some(conference), Some(user_id)) =
+                                    (state.member_conference, state.member_selected)
+                                {
+                                    let current = conference_members(&snapshot, conference)
+                                        .iter()
+                                        .find(|member| member.user_id == user_id)
+                                        .map(|member| member.volume)
+                                        .unwrap_or(1.0);
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::MemberVolumeSet {
+                                            conference,
+                                            user_id,
+                                            volume: step_linear_volume(current, delta),
+                                        })
+                                        .await;
+                                }
+                            } else {
+                                state.touch_volume_layer();
+                                if let Some(target) = state.selected {
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::VolumeStep { target, delta })
+                                        .await;
+                                }
                             }
                         }
                         Role::MuteSelected => {
-                            state.touch_volume_layer();
-                            if let Some(target) = state.selected {
-                                let _ = bus.commands.send(Command::MuteToggle(target)).await;
+                            if state.member_layer {
+                                state.touch_member_layer();
+                                if let (Some(conference), Some(user_id)) =
+                                    (state.member_conference, state.member_selected)
+                                {
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::MemberMuteToggle {
+                                            conference,
+                                            user_id,
+                                        })
+                                        .await;
+                                }
+                            } else {
+                                state.touch_volume_layer();
+                                if let Some(target) = state.selected {
+                                    let _ = bus.commands.send(Command::MuteToggle(target)).await;
+                                }
                             }
                         }
                         Role::Empty => {}
@@ -713,8 +829,14 @@ async fn run_device(
                     match press.role {
                         Role::Status => {
                             if held >= STATUS_HOLD {
-                                let pages = page_count(&geometry, snapshot.targets.len());
-                                state.page = (state.page + 1) % pages.max(1);
+                                let pages =
+                                    page_count(&geometry, key_item_count(&snapshot, &state));
+                                if state.member_layer {
+                                    cycle_page(&mut state.member_page, pages, true);
+                                    state.touch_member_layer();
+                                } else {
+                                    cycle_page(&mut state.page, pages, true);
+                                }
                                 relayout = true;
                             } else {
                                 let _ = bus.commands.send(Command::ClearLocks).await;
@@ -744,36 +866,102 @@ async fn run_device(
                                     .await;
                             }
                         }
+                        Role::Member {
+                            conference,
+                            user_id,
+                        } => {
+                            if held >= MUTE_HOLD {
+                                let _ = bus
+                                    .commands
+                                    .send(Command::MemberMuteToggle {
+                                        conference,
+                                        user_id,
+                                    })
+                                    .await;
+                                state.touch_member_layer();
+                            }
+                        }
+                        Role::VolumeToggle if volume_toggle_defers_to_release(&geometry) => {
+                            if held >= MUTE_HOLD {
+                                relayout = state.open_member_layer(&snapshot, None);
+                            } else {
+                                state.toggle_volume_layer(&snapshot);
+                                relayout = true;
+                            }
+                        }
                         _ => {}
                     }
                 }
                 DeviceStateUpdate::EncoderTwist(encoder, ticks) => {
-                    let targets = encoder_targets(&geometry, &state, &snapshot);
-                    if let Some(Some(target)) = targets.get(encoder as usize) {
-                        let delta = config.volume_step * ticks as f32;
-                        let _ = bus
-                            .commands
-                            .send(Command::VolumeStep {
-                                target: target.key,
-                                delta,
-                            })
-                            .await;
+                    let delta = config.volume_step * ticks as f32;
+                    match bound_encoder(&geometry, &state, &snapshot, encoder) {
+                        Some(BoundEncoder::Target(target)) => {
+                            let _ = bus
+                                .commands
+                                .send(Command::VolumeStep { target, delta })
+                                .await;
+                        }
+                        Some(BoundEncoder::Member {
+                            conference,
+                            user_id,
+                            volume,
+                        }) => {
+                            if state.member_layer {
+                                state.touch_member_layer();
+                            }
+                            let _ = bus
+                                .commands
+                                .send(Command::MemberVolumeSet {
+                                    conference,
+                                    user_id,
+                                    volume: step_linear_volume(volume, delta),
+                                })
+                                .await;
+                        }
+                        None => {}
                     }
                 }
                 DeviceStateUpdate::EncoderDown(encoder) => {
-                    let targets = encoder_targets(&geometry, &state, &snapshot);
-                    if let Some(Some(target)) = targets.get(encoder as usize) {
-                        let _ = bus.commands.send(Command::MuteToggle(target.key)).await;
+                    pressed_encoders.insert(encoder, now);
+                }
+                DeviceStateUpdate::EncoderUp(encoder) => {
+                    let Some(since) = pressed_encoders.remove(&encoder) else {
+                        continue;
+                    };
+                    let held = now.duration_since(since);
+                    match bound_encoder(&geometry, &state, &snapshot, encoder) {
+                        Some(BoundEncoder::Member {
+                            conference,
+                            user_id,
+                            ..
+                        }) => {
+                            let _ = bus
+                                .commands
+                                .send(Command::MemberMuteToggle {
+                                    conference,
+                                    user_id,
+                                })
+                                .await;
+                            state.touch_member_layer();
+                        }
+                        Some(BoundEncoder::Target(target)) => {
+                            if held >= MUTE_HOLD && matches!(target, TargetKey::Conference(_)) {
+                                relayout = state.open_member_layer(&snapshot, Some(target));
+                            } else {
+                                let _ = bus.commands.send(Command::MuteToggle(target)).await;
+                            }
+                        }
+                        None => {}
                     }
                 }
-                DeviceStateUpdate::EncoderUp(_) => {}
                 DeviceStateUpdate::TouchPointDown(point) => {
-                    let pages = page_count(&geometry, snapshot.targets.len()).max(1);
-                    state.page = if point == 0 {
-                        (state.page + pages - 1) % pages
+                    let pages = page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
+                    if state.member_layer {
+                        cycle_page(&mut state.member_page, pages, point != 0);
+                        state.touch_member_layer();
                     } else {
-                        (state.page + 1) % pages
-                    };
+                        cycle_page(&mut state.page, pages, point != 0);
+                    }
                     relayout = true;
                 }
                 DeviceStateUpdate::TouchPointUp(_) => {}
@@ -784,21 +972,22 @@ async fn run_device(
                         y1 < y0
                     };
                     if geometry.encoders_follow_bottom_row()
-                        || encoder_page_count(&geometry, snapshot.targets.len()) <= 1
+                        || encoder_page_count(&geometry, key_item_count(&snapshot, &state)) <= 1
                     {
-                        let pages = page_count(&geometry, snapshot.targets.len()).max(1);
-                        state.page = if forward {
-                            (state.page + 1) % pages
+                        let pages = page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
+                        if state.member_layer {
+                            cycle_page(&mut state.member_page, pages, forward);
+                            state.touch_member_layer();
                         } else {
-                            (state.page + pages - 1) % pages
-                        };
+                            cycle_page(&mut state.page, pages, forward);
+                        }
                     } else {
-                        let pages = encoder_page_count(&geometry, snapshot.targets.len()).max(1);
-                        state.encoder_page = if forward {
-                            (state.encoder_page + 1) % pages
-                        } else {
-                            (state.encoder_page + pages - 1) % pages
-                        };
+                        let pages =
+                            encoder_page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
+                        cycle_page(&mut state.encoder_page, pages, forward);
+                        if state.member_layer {
+                            state.touch_member_layer();
+                        }
                     }
                     relayout = true;
                 }
@@ -811,9 +1000,25 @@ async fn run_device(
                         } else {
                             y as u32 * encoders / h.max(1)
                         };
-                        let targets = encoder_targets(&geometry, &state, &snapshot);
-                        if let Some(Some(target)) = targets.get(index as usize) {
-                            let _ = bus.commands.send(Command::MuteToggle(target.key)).await;
+                        match bound_encoder(&geometry, &state, &snapshot, index as u8) {
+                            Some(BoundEncoder::Target(target)) => {
+                                let _ = bus.commands.send(Command::MuteToggle(target)).await;
+                            }
+                            Some(BoundEncoder::Member {
+                                conference,
+                                user_id,
+                                ..
+                            }) => {
+                                let _ = bus
+                                    .commands
+                                    .send(Command::MemberMuteToggle {
+                                        conference,
+                                        user_id,
+                                    })
+                                    .await;
+                                state.touch_member_layer();
+                            }
+                            None => {}
                         }
                     }
                 }
@@ -821,7 +1026,20 @@ async fn run_device(
         }
 
         if relayout {
-            state.clamp_pages(&geometry, snapshot.targets.len());
+            if state.member_layer {
+                match state.member_conference.and_then(|key| snapshot.target(key)) {
+                    None => state.close_member_layer(),
+                    Some(target) => {
+                        if !state.member_selected.is_some_and(|id| {
+                            target.members.iter().any(|member| member.user_id == id)
+                        }) {
+                            state.member_selected =
+                                target.members.first().map(|member| member.user_id);
+                        }
+                    }
+                }
+            }
+            state.clamp_pages(&geometry, &snapshot);
             keys = layout::layout(&geometry, &snapshot, &state, &options);
         }
         let keys_changed = render_all(
@@ -955,22 +1173,61 @@ fn parse_demo_targets(raw: &str) -> Vec<TargetInfo> {
                 receiving: false,
                 volume: 0.8,
                 muted: false,
-                members: Vec::new(),
+                members: if matches!(kind.as_str(), "conference" | "conf") {
+                    demo_conference_members()
+                } else {
+                    Vec::new()
+                },
             })
         })
         .collect()
 }
 
+fn demo_conference_members() -> Vec<ConferenceMemberInfo> {
+    vec![
+        ConferenceMemberInfo {
+            user_id: 101,
+            name: "Adi".into(),
+            online: true,
+            receiving: true,
+            volume: 0.9,
+            muted: false,
+        },
+        ConferenceMemberInfo {
+            user_id: 102,
+            name: "Beni".into(),
+            online: true,
+            receiving: false,
+            volume: 0.7,
+            muted: false,
+        },
+        ConferenceMemberInfo {
+            user_id: 103,
+            name: "Jan".into(),
+            online: false,
+            receiving: false,
+            volume: 0.5,
+            muted: true,
+        },
+    ]
+}
+
 fn dial_views(geometry: &Geometry, state: &DeckState, snapshot: &Snapshot) -> Vec<DeckDialView> {
-    encoder_targets(geometry, state, snapshot)
+    encoder_bindings(geometry, state, snapshot)
         .into_iter()
         .enumerate()
-        .map(|(index, target)| match target {
-            Some(target) => DeckDialView {
+        .map(|(index, binding)| match binding {
+            Some(EncoderBinding::Target(target)) => DeckDialView {
                 index: index as u8,
                 role: target.key.to_string(),
                 title: target.name.clone(),
                 subtitle: format!("{}%", (target.volume * 100.0).round() as u32),
+            },
+            Some(EncoderBinding::Member { conference, member }) => DeckDialView {
+                index: index as u8,
+                role: format!("{conference}/user:{}", member.user_id),
+                title: member.name.clone(),
+                subtitle: format!("{}%", (member.volume * 100.0).round() as u32),
             },
             None => DeckDialView {
                 index: index as u8,
@@ -1061,11 +1318,16 @@ fn publish_deck_view(
         encoders: geometry.encoders,
         touchpoints: geometry.touchpoints,
         key_size: key_size.0,
-        page: state.page,
-        pages: page_count(geometry, snapshot.targets.len()),
+        page: if state.member_layer {
+            state.member_page
+        } else {
+            state.page
+        },
+        pages: page_count(geometry, key_item_count(snapshot, state)),
         encoder_page: state.encoder_page,
-        encoder_pages: encoder_page_count(geometry, snapshot.targets.len()),
+        encoder_pages: encoder_page_count(geometry, key_item_count(snapshot, state)),
         volume_layer: state.volume_layer,
+        member_layer: state.member_layer,
         keys: keys
             .iter()
             .enumerate()
@@ -1101,10 +1363,10 @@ async fn render_lcd(
     rendered: &mut Option<Vec<StripSegment>>,
 ) -> Result<()> {
     let segments: Vec<StripSegment> = if geometry.encoders > 0 {
-        encoder_targets(geometry, state, snapshot)
+        encoder_bindings(geometry, state, snapshot)
             .into_iter()
-            .map(|target| match target {
-                Some(target) => StripSegment {
+            .map(|binding| match binding {
+                Some(EncoderBinding::Target(target)) => StripSegment {
                     title: target.name.clone(),
                     volume: target.volume,
                     muted: target.muted,
@@ -1114,6 +1376,18 @@ async fn render_lcd(
                         palette::INCOMING
                     } else {
                         palette::VOLUME
+                    },
+                },
+                Some(EncoderBinding::Member { member, .. }) => StripSegment {
+                    title: member.name.clone(),
+                    volume: member.volume,
+                    muted: member.muted,
+                    background: if member.receiving {
+                        palette::RECEIVING
+                    } else if member.muted {
+                        palette::MUTED
+                    } else {
+                        palette::MEMBERS
                     },
                 },
                 None => StripSegment {
@@ -1194,5 +1468,8 @@ mod tests {
         assert_eq!(targets[2].key, crate::talk::TargetKey::Feed(1));
         assert!(!targets[2].can_talk);
         assert_eq!(targets[3].name, "beni");
+        assert_eq!(targets[1].members.len(), 3);
+        assert_eq!(targets[1].members[0].name, "Adi");
+        assert!(targets[0].members.is_empty());
     }
 }
