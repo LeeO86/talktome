@@ -316,7 +316,8 @@ pub struct LayoutOptions {
     pub pedal_middle: Option<TargetKey>,
 }
 
-/// Target keys, bottom row left-to-right then the row above, never the command row.
+/// Target key indices in reading order: left to right, top to bottom, never the
+/// command row. Length is the page capacity.
 pub fn target_slots(geometry: &Geometry) -> Vec<u8> {
     if !geometry.visual || geometry.rows <= 1 || geometry.cols == 0 {
         return Vec::new();
@@ -324,7 +325,7 @@ pub fn target_slots(geometry: &Geometry) -> Vec<u8> {
     let cols = geometry.cols as usize;
     let rows = geometry.rows as usize;
     let mut slots = Vec::with_capacity((rows - 1) * cols);
-    for row in (1..rows).rev() {
+    for row in 1..rows {
         for col in 0..cols {
             let index = row * cols + col;
             if index < geometry.keys as usize {
@@ -333,6 +334,36 @@ pub fn target_slots(geometry: &Geometry) -> Vec<u8> {
         }
     }
     slots
+}
+
+/// Place `item_count` targets like the web client: left to right, then top to
+/// bottom, with the used rows sitting on the lowest available target rows.
+pub fn occupied_target_slots(geometry: &Geometry, item_count: usize) -> Vec<u8> {
+    let slots = target_slots(geometry);
+    let cols = geometry.cols as usize;
+    if item_count == 0 || slots.is_empty() || cols == 0 {
+        return Vec::new();
+    }
+    let available_rows = slots.len().div_ceil(cols);
+    let needed_rows = item_count.div_ceil(cols).min(available_rows);
+    let skip = available_rows.saturating_sub(needed_rows) * cols;
+    slots.into_iter().skip(skip).take(item_count).collect()
+}
+
+/// Items sitting on the physical bottom key row, one per encoder (Stream Deck +).
+fn bottom_row_items<T: Copy>(geometry: &Geometry, shown: &[T]) -> Vec<Option<T>> {
+    let slots = occupied_target_slots(geometry, shown.len());
+    let cols = geometry.cols as usize;
+    let bottom_start = (geometry.rows.saturating_sub(1) as usize) * cols;
+    (0..geometry.encoders as usize)
+        .map(|index| {
+            let key = (bottom_start + index) as u8;
+            slots
+                .iter()
+                .position(|&slot| slot == key)
+                .and_then(|pos| shown.get(pos).copied())
+        })
+        .collect()
 }
 
 pub fn page_count(geometry: &Geometry, target_count: usize) -> usize {
@@ -351,7 +382,8 @@ pub fn encoder_page_count(geometry: &Geometry, target_count: usize) -> usize {
     target_count.div_ceil(geometry.encoders as usize).max(1)
 }
 
-/// Targets shown on the current key page, in slot order (bottom row first).
+/// Targets shown on the current key page, in admin order (assigned LTR/TTB
+/// onto bottom-justified rows).
 pub fn page_targets<'a>(
     geometry: &Geometry,
     state: &DeckState,
@@ -368,7 +400,7 @@ pub fn page_targets<'a>(
         .collect()
 }
 
-/// Conference members shown on the current member page, in slot order.
+/// Conference members shown on the current member page, in list order.
 pub fn page_members<'a>(
     geometry: &Geometry,
     state: &DeckState,
@@ -784,10 +816,10 @@ pub fn layout(
         slot.role = role;
         slot.appearance = appearance_for_role(role, snapshot, state, key_pages, encoder_pages);
     }
-    let slots = target_slots(geometry);
     if state.member_layer {
         if let Some(conference) = state.member_conference {
             let shown = page_members(geometry, state, conference_members(snapshot, conference));
+            let slots = occupied_target_slots(geometry, shown.len());
             for (slot, member) in slots.iter().zip(shown.iter()) {
                 if let Some(key) = keys.get_mut(*slot as usize) {
                     key.role = Role::Member {
@@ -800,6 +832,7 @@ pub fn layout(
         }
     } else {
         let shown = page_targets(geometry, state, &snapshot.targets);
+        let slots = occupied_target_slots(geometry, shown.len());
         for (slot, target) in slots.iter().zip(shown.iter()) {
             if let Some(key) = keys.get_mut(*slot as usize) {
                 key.role = Role::Target(target.key);
@@ -858,13 +891,9 @@ pub fn encoder_bindings<'a>(
         let members = conference_members(snapshot, conference);
         if geometry.encoders_follow_bottom_row() {
             let shown = page_members(geometry, state, members);
-            return (0..geometry.encoders as usize)
-                .map(|index| {
-                    shown
-                        .get(index)
-                        .copied()
-                        .map(|member| EncoderBinding::Member { conference, member })
-                })
+            return bottom_row_items(geometry, &shown)
+                .into_iter()
+                .map(|item| item.map(|member| EncoderBinding::Member { conference, member }))
                 .collect();
         }
         let per_page = geometry.encoders.max(1) as usize;
@@ -880,8 +909,9 @@ pub fn encoder_bindings<'a>(
     }
     if geometry.encoders_follow_bottom_row() {
         let shown = page_targets(geometry, state, &snapshot.targets);
-        return (0..geometry.encoders as usize)
-            .map(|index| shown.get(index).copied().map(EncoderBinding::Target))
+        return bottom_row_items(geometry, &shown)
+            .into_iter()
+            .map(|target| target.map(EncoderBinding::Target))
             .collect();
     }
     let per_page = geometry.encoders.max(1) as usize;
@@ -1085,7 +1115,35 @@ mod tests {
     }
 
     #[test]
-    fn mk2_fills_targets_from_the_bottom() {
+    fn occupied_slots_read_ltr_ttb_and_bottom_justify_rows() {
+        let mk2 = geometry("mk2");
+        assert_eq!(target_slots(&mk2), vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        assert_eq!(occupied_target_slots(&mk2, 5), vec![10, 11, 12, 13, 14]);
+        assert_eq!(occupied_target_slots(&mk2, 6), vec![5, 6, 7, 8, 9, 10]);
+        assert_eq!(
+            occupied_target_slots(&mk2, 10),
+            vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        );
+        let xl = geometry("xl");
+        assert_eq!(
+            occupied_target_slots(&xl, 9),
+            (16..25).map(|i| i as u8).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn xl_bottom_justifies_two_target_rows() {
+        let keys = roles("xl", 9, &DeckState::default());
+        assert_eq!(keys[8], Role::Empty);
+        assert_eq!(keys[15], Role::Empty);
+        assert_eq!(keys[16], Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[23], Role::Target(TargetKey::User(7)));
+        assert_eq!(keys[24], Role::Target(TargetKey::Feed(8)));
+        assert_eq!(keys[25], Role::Empty);
+    }
+
+    #[test]
+    fn mk2_bottom_justifies_a_single_target_row() {
         let keys = roles("mk2", 5, &DeckState::default());
         assert_eq!(keys[0], Role::Status);
         assert_eq!(keys[1], Role::VolumeToggle);
@@ -1097,6 +1155,39 @@ mod tests {
         assert_eq!(keys[12], Role::Target(TargetKey::Feed(2)));
         assert_eq!(keys[13], Role::Target(TargetKey::User(3)));
         assert_eq!(keys[14], Role::Target(TargetKey::User(4)));
+    }
+
+    #[test]
+    fn mk2_reads_targets_left_to_right_top_to_bottom() {
+        let keys = roles("mk2", 10, &DeckState::default());
+        assert_eq!(keys[5], Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[9], Role::Target(TargetKey::User(4)));
+        assert_eq!(keys[10], Role::Target(TargetKey::User(5)));
+        assert_eq!(keys[14], Role::Target(TargetKey::User(9)));
+    }
+
+    #[test]
+    fn mk2_partial_second_row_starts_at_top_left_of_the_block() {
+        let keys = roles("mk2", 6, &DeckState::default());
+        assert_eq!(keys[5], Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[9], Role::Target(TargetKey::User(4)));
+        assert_eq!(keys[10], Role::Target(TargetKey::User(5)));
+        assert_eq!(keys[11], Role::Empty);
+        assert_eq!(keys[14], Role::Empty);
+    }
+
+    #[test]
+    fn mk2_last_page_bottom_justifies_leftover_targets() {
+        let geometry = geometry("mk2");
+        let mut state = DeckState::default();
+        let snapshot = snapshot(12);
+        assert_eq!(page_count(&geometry, 12), 2);
+        state.page = 1;
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(keys[5].role, Role::Empty);
+        assert_eq!(keys[10].role, Role::Target(TargetKey::User(10)));
+        assert_eq!(keys[11].role, Role::Target(TargetKey::Feed(11)));
+        assert_eq!(keys[12].role, Role::Empty);
     }
 
     #[test]
@@ -1148,8 +1239,9 @@ mod tests {
         assert_eq!(keys[8].role, Role::Reply);
         assert!(keys.iter().any(|key| key.role == Role::NextEncoderPage));
         assert!(!keys.iter().any(|key| key.role == Role::NextPage));
-        let bottom = 3 * 9;
-        assert_eq!(keys[bottom].role, Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[9].role, Role::Target(TargetKey::User(0)));
+        assert_eq!(keys[17].role, Role::Target(TargetKey::Feed(8)));
+        assert_eq!(keys[27].role, Role::Target(TargetKey::User(18)));
         let encoders = encoder_bindings(&geometry, &state, &snapshot);
         assert_eq!(encoders.len(), 6);
         assert_eq!(binding_target(encoders[0]), Some(TargetKey::User(0)));
@@ -1359,6 +1451,39 @@ mod tests {
                 user_id: 0
             }
         );
+    }
+
+    #[test]
+    fn mk2_member_layer_reads_left_to_right_top_to_bottom() {
+        let snapshot = conference_snapshot(6);
+        let keys = layout(
+            &geometry("mk2"),
+            &snapshot,
+            &member_state(Some(0)),
+            &options(),
+        );
+        assert_eq!(
+            keys[5].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 0
+            }
+        );
+        assert_eq!(
+            keys[9].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 4
+            }
+        );
+        assert_eq!(
+            keys[10].role,
+            Role::Member {
+                conference: TargetKey::Conference(1),
+                user_id: 5
+            }
+        );
+        assert_eq!(keys[11].role, Role::Empty);
     }
 
     #[test]
