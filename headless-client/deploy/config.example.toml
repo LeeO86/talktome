@@ -87,7 +87,18 @@ font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 # dB change per VOL +/− key and encoder tick. Legacy volume_step 0–1 becomes 3 dB.
 volume_step_db = 3
 volume_layer_timeout_s = 8
-# Middle switch of a Stream Deck Pedal
+# Pedal: right switch is always Reply; left and middle are assignable.
+# pedal_left = "user:4"
+# pedal_target = "conference:1"
+# Several decks in one instance (mixed models are fine). When this list is
+# empty, serial/mock/pedal above describe a single deck.
+# [[streamdeck.devices]]
+# mock = "neo"
+# [[streamdeck.devices]]
+# mock = "plusxl"
+# [[streamdeck.devices]]
+# mock = "pedal"
+# pedal_left = "user:4"
 # pedal_target = "conference:1"
 
 [gpio]

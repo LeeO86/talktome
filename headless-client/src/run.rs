@@ -50,7 +50,6 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
     let state::Channels {
         commands: cmd_rx,
         snapshots: snapshot_tx,
-        deck_input: deck_input_rx,
         bus,
     } = state::channels(Snapshot::initial(&config.instance, &config.user.name));
 
@@ -74,13 +73,7 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
             }
         });
     }
-    crate::surfaces::spawn_all(
-        &config,
-        &bus,
-        deck_input_rx,
-        shutdown_rx.clone(),
-        &mut tasks,
-    );
+    crate::surfaces::spawn_all(&config, &bus, shutdown_rx.clone(), &mut tasks);
     if config.web.enabled {
         let ctx = crate::web::WebContext {
             config: config.clone(),

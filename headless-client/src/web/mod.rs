@@ -73,7 +73,8 @@ pub async fn run(
         .route("/api/password", post(change_password))
         .route("/api/logout", post(logout))
         .route("/api/streamdeck", get(streamdeck))
-        .route("/api/streamdeck/key/{index}", get(streamdeck_key))
+        .route("/api/streamdeck/key/{index}", get(streamdeck_key_default))
+        .route("/api/streamdeck/{device}/key/{index}", get(streamdeck_key))
         .route("/api/streamdeck/input", post(streamdeck_input))
         .route("/api/talk", post(talk))
         .route("/api/audio", post(audio))
@@ -90,6 +91,7 @@ pub async fn run(
         .route("/api/login", post(login))
         .route("/api/session", get(session))
         .merge(protected)
+        .layer(middleware::from_fn(no_store_api))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind((web.bind.as_str(), web.port))
@@ -193,6 +195,18 @@ fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
         .lock()
         .map(|mut auth| auth.validate(&token))
         .unwrap_or(false)
+}
+
+async fn no_store_api(request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_string();
+    let mut response = next.run(request).await;
+    if path.contains("/key/") {
+        return response;
+    }
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn require_auth(State(state): State<Shared>, request: Request, next: Next) -> Response {
@@ -359,14 +373,15 @@ fn unix_now() -> u64 {
 
 async fn status(State(state): State<Shared>) -> Response {
     let snapshot = state.ctx.bus.snapshots.borrow().clone();
-    let (gpio, deck, audio) = match state.ctx.bus.hardware.read() {
+    let (gpio, decks, audio) = match state.ctx.bus.hardware.read() {
         Ok(hardware) => (
             hardware.gpio.clone(),
-            hardware.deck.clone(),
+            hardware.decks.clone(),
             hardware.audio.clone(),
         ),
         Err(_) => Default::default(),
     };
+    let deck = decks.first().cloned().unwrap_or_default();
     let config = &state.ctx.config;
     Json(json!({
         "now_unix": unix_now(),
@@ -385,6 +400,7 @@ async fn status(State(state): State<Shared>) -> Response {
         "snapshot": *snapshot,
         "gpio": gpio,
         "deck": deck,
+        "decks": decks,
         "audio": audio,
     }))
     .into_response()
@@ -400,7 +416,7 @@ pub fn running_under_systemd() -> bool {
 
 async fn streamdeck(State(state): State<Shared>) -> Response {
     match state.ctx.bus.hardware.read() {
-        Ok(hardware) => Json(json!(hardware.deck)).into_response(),
+        Ok(hardware) => Json(json!({ "decks": hardware.decks })).into_response(),
         Err(_) => client_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "hardware state unavailable",
@@ -408,9 +424,17 @@ async fn streamdeck(State(state): State<Shared>) -> Response {
     }
 }
 
+async fn streamdeck_key_default(
+    state: State<Shared>,
+    Path(index): Path<u8>,
+    query: Query<HashMap<String, String>>,
+) -> Response {
+    streamdeck_key(state, Path((0, index)), query).await
+}
+
 async fn streamdeck_key(
     State(state): State<Shared>,
-    Path(index): Path<u8>,
+    Path((device, index)): Path<(usize, u8)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     let image = state
@@ -419,7 +443,7 @@ async fn streamdeck_key(
         .hardware
         .read()
         .ok()
-        .and_then(|hardware| hardware.deck_images.get(&index).cloned());
+        .and_then(|hardware| hardware.deck_images.get(&(device, index)).cloned());
     let Some((hash, png)) = image else {
         return client_error(StatusCode::NOT_FOUND, "no image for this key");
     };
@@ -445,6 +469,8 @@ async fn streamdeck_key(
 struct DeckInputBody {
     kind: String,
     #[serde(default)]
+    device: usize,
+    #[serde(default)]
     index: u8,
     #[serde(default)]
     action: Option<String>,
@@ -456,6 +482,13 @@ async fn streamdeck_input(
     State(state): State<Shared>,
     Json(body): Json<DeckInputBody>,
 ) -> Response {
+    tracing::info!(
+        event = "streamdeck-web-input",
+        device = body.device,
+        kind = %body.kind,
+        index = body.index,
+        action = ?body.action
+    );
     let input = match body.kind.as_str() {
         "key" => match body.action.as_deref() {
             Some("down") => DeckInput::KeyDown(body.index),
@@ -463,7 +496,11 @@ async fn streamdeck_input(
             _ => return client_error(StatusCode::BAD_REQUEST, "key input needs action down|up"),
         },
         "encoder" => DeckInput::EncoderTwist(body.index, body.delta.unwrap_or(1)),
-        "encoder-press" => DeckInput::EncoderPress(body.index),
+        "encoder-press" => match body.action.as_deref() {
+            Some("up") | Some("release") => DeckInput::EncoderRelease(body.index),
+            _ => DeckInput::EncoderPress(body.index),
+        },
+        "encoder-release" | "encoder-up" => DeckInput::EncoderRelease(body.index),
         "touch" => DeckInput::TouchPoint(body.index),
         other => {
             return client_error(
@@ -472,17 +509,17 @@ async fn streamdeck_input(
             )
         }
     };
-    let connected = state
-        .ctx
-        .bus
-        .hardware
-        .read()
-        .map(|h| h.deck.connected)
-        .unwrap_or(false);
-    if !connected {
+    let sender = state.ctx.bus.hardware.read().ok().and_then(|hardware| {
+        hardware
+            .decks
+            .get(body.device)
+            .and_then(|deck| deck.connected.then_some(()))?;
+        hardware.deck_inputs.get(body.device).cloned()
+    });
+    let Some(sender) = sender else {
         return client_error(StatusCode::CONFLICT, "no Stream Deck connected");
-    }
-    match state.ctx.bus.deck_input.send(input).await {
+    };
+    match sender.send(input).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(_) => client_error(
             StatusCode::SERVICE_UNAVAILABLE,
