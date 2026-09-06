@@ -16,6 +16,7 @@ use super::socketio::{ConnectOptions, SocketClient, SocketEvent};
 use crate::audio::codec::OpusEncoder;
 use crate::audio::io::AudioStatus;
 use crate::audio::mixer::Mixer;
+use crate::audio::processing::{ProcessingControl, UserAudioPatch};
 use crate::audio::vox::{peak_db, LevelTrigger};
 use crate::config::{Config, ConflictPolicy};
 use crate::rtc::types::{ProducerAnnouncement, RtpCapabilities};
@@ -42,6 +43,7 @@ pub struct SessionIo {
     pub mixer: Arc<Mutex<Mixer>>,
     pub frames: mpsc::Receiver<Vec<f32>>,
     pub audio_status: watch::Receiver<AudioStatus>,
+    pub processing: Arc<ProcessingControl>,
     pub shutdown: watch::Receiver<bool>,
 }
 
@@ -533,6 +535,11 @@ impl Session {
                 }
             }
             tracing::info!(event = "registered", user = %connected.user_name, id = connected.user_id);
+            if let Some(settings) = ack.get("userAudioSettings") {
+                if !settings.is_null() {
+                    self.apply_user_audio_settings(settings);
+                }
+            }
             self.set_connection(ConnectionState::Registered, "");
             self.publish(true);
             return Ok(());
@@ -993,6 +1000,11 @@ impl Session {
             }
             "api-talk-command" => self.handle_api_talk_command(connected, payload).await,
             "api-target-audio-command" => self.handle_api_audio_command(connected, payload).await,
+            "user-audio-settings-updated" => {
+                if let Some(settings) = payload.get("settings") {
+                    self.apply_user_audio_settings(settings);
+                }
+            }
             _ => {
                 tracing::trace!(event = "socket-event-ignored", name);
             }
@@ -1558,6 +1570,30 @@ impl Session {
         }
         self.snapshot_dirty = true;
         Ok(())
+    }
+
+    fn apply_user_audio_settings(&mut self, settings: &Value) {
+        let patch = UserAudioPatch::from_json(settings);
+        if patch.is_empty() {
+            return;
+        }
+        self.io.processing.apply_capture_patch(&patch);
+        if patch.has_dimming() {
+            if let Ok(mut mixer) = self.io.mixer.lock() {
+                mixer.set_dimming(
+                    patch.dim_amount_db,
+                    patch.dim_feeds_while_speaking,
+                    patch.dim_when_addressed,
+                );
+            }
+        }
+        tracing::info!(
+            event = "user-audio-settings",
+            auto_processing = ?patch.audio_auto_processing,
+            input_gain_db = ?patch.user_input_gain_db,
+            dim_db = ?patch.dim_amount_db,
+        );
+        self.snapshot_dirty = true;
     }
 
     fn set_connection(&mut self, state: ConnectionState, detail: &str) {

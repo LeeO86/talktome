@@ -458,6 +458,8 @@
       ['Capture', audio.capture_device ? `${audio.capture_device}${audio.capture_ok ? '' : ' (not open)'}` : status.audio_config.input_device === 'none' ? 'disabled' : 'not open'],
       ['Playback', audio.playback_device ? `${audio.playback_device}${audio.playback_ok ? '' : ' (not open)'}` : status.audio_config.output_device === 'none' ? 'disabled' : 'not open'],
       ['Profile', status.audio_config.profile],
+      ['Processing', audio.auto_processing ? (audio.aec ? 'AEC + NS + AGC' : 'NS + AGC (no AEC)') : 'off'],
+      ['AEC delay', audio.auto_processing && audio.aec ? `${audio.delay_ms} ms` : '–'],
       ['Last error', audio.last_error || '–'],
     ]);
     const level = Math.max(-60, Math.min(0, snap.input_level_db));
@@ -1089,7 +1091,9 @@
         { path: 'audio.input_device', label: 'Input device', type: 'device', direction: 'inputs', nullable: true, help: 'Use tone or tone:440 on a VM with no microphone' },
         { path: 'audio.output_device', label: 'Output device', type: 'device', direction: 'outputs', nullable: true, help: 'wav:/tmp/out.wav records the mix when there is no speaker' },
         { path: 'audio.profile', label: 'Codec profile', type: 'select', options: [['standard', 'Standard (20 ms, FEC)'], ['low', 'Low (10 ms)'], ['ultra-low', 'Ultra low (5 ms)']] },
-        { path: 'audio.input_gain_db', label: 'Input gain (dB)', type: 'number', step: 0.5 },
+        { path: 'audio.auto_processing', label: 'Echo cancel, noise suppress, auto gain', type: 'bool', help: 'Same as the browser Audio auto processing toggle. Admin can override it per user after register. Manual input gain is ignored while this is on.' },
+        { path: 'audio.input_gain_db', label: 'Input gain (dB)', type: 'number', step: 0.5, min: -30, max: 40, help: 'Ignored while auto processing is on (AGC runs instead).' },
+        { path: 'audio.stream_delay_ms', label: 'AEC stream delay (ms)', type: 'number', min: 0, max: 500, nullable: true, help: 'Empty: estimate from capture + playback period. Set if echo remains.' },
         { path: 'audio.default_volume_db', label: 'Default target volume (dB)', type: 'number', step: 0.5, min: -60, max: 0, nullable: true, help: '0 dB is unity. Overrides the legacy 0–1 default_volume value.' },
         { path: 'audio.dim_db', label: 'Dim amount (dB)', type: 'number', step: 1 },
         { path: 'audio.dim_feeds_while_speaking', label: 'Dim feeds while speaking', type: 'bool' },

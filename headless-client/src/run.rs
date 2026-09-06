@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::audio::io::AudioIo;
 use crate::audio::mixer::Mixer;
+use crate::audio::processing::ProcessingControl;
 use crate::config::LoadedConfig;
 use crate::signalling::session::{Session, SessionIo};
 use crate::state::{self, Snapshot};
@@ -40,11 +41,13 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
     let frame_samples =
         (crate::audio::codec::SAMPLE_RATE * config.audio.profile.frame_ms() / 1000) as usize;
     let (frames_tx, frames_rx) = mpsc::channel(64);
+    let processing = ProcessingControl::from_audio(&config.audio);
     let audio_io = AudioIo::start(
         config.audio.clone(),
         frame_samples,
         mixer.clone(),
         frames_tx,
+        processing.clone(),
     );
 
     let state::Channels {
@@ -99,6 +102,7 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
             mixer,
             frames: frames_rx,
             audio_status: audio_io.status.clone(),
+            processing,
             shutdown: shutdown_rx,
         },
     )?;
@@ -132,6 +136,9 @@ async fn mirror_audio_status(
                     capture_device: current.capture_device.clone(),
                     playback_device: current.playback_device.clone(),
                     last_error: current.last_error.clone(),
+                    auto_processing: current.auto_processing,
+                    aec: current.aec,
+                    delay_ms: current.delay_ms,
                 };
             }
         }

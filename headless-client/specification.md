@@ -220,6 +220,8 @@ Events **sent** by the client (all with ack unless noted):
 
 ```text
 register-user            { id, name, kind:"user", force, productionId }
+                         -> { ok, productionId, productions, targetAudioStates,
+                              userAudioSettings }  // settings or null
 get-router-rtp-capabilities            -> RtpCapabilities
 create-send-transport    null          -> { id, iceParameters, iceCandidates, dtlsParameters,
                                             iceServers, iceTransportPolicy }
@@ -265,6 +267,8 @@ session-kicked      { reason, bySocketId }
 api-talk-command    { commandId, action:"press"|"release"|"lock-toggle", targetType, targetId, inputKey }
 api-target-audio-command { commandId, action:"volume-up"|"volume-down"|"mute-toggle",
                            targetType, targetId, step }
+user-audio-settings-updated { settings }   (admin PUT; same camelCase object as
+                           register-user ack `userAudioSettings`)
 ```
 
 REST (with `Authorization: Bearer <token>` where the server checks it):
@@ -425,9 +429,11 @@ written to WAV by the second instance (289 packets for a 6 s tone; the first
   are ALSA names as listed by `talktome-headless --list-audio-devices`
   (e.g. `plughw:CARD=Headset,DEV=0`). A Pi's headphone jack has no input;
   a USB headset or USB audio interface is expected.
-- **Capture**: mono, device rate → `rubato` → 48 kHz, input gain
-  (`audio.input_gain_db`, default from the user's `userInputGainDb`
-  semantics: 0 dB unless configured), RMS level for VOX and meters.
+- **Capture**: mono, device rate → `rubato` → 48 kHz, then either
+  sonora APM (when `audio.auto_processing` / server
+  `audioAutoProcessing` is on) or manual `audio.input_gain_db`
+  (same range as `userInputGainDb`, −30…40 dB). RMS level for VOX and
+  meters is taken after that.
 - **Encode**: libopus 48 kHz mono, `application = voip`, frame size
   `audio.profile` = `standard` (20 ms, FEC on, 64 kbit/s) by default; `low`
   (10 ms) and `ultra-low` (5 ms) mirror `QUALITY_PROFILES` in
@@ -438,16 +444,24 @@ written to WAV by the second instance (289 packets for a 6 s tone; the first
   soft-clipped. `dim_i` implements `dimFeedsWhileSpeaking` (feeds dimmed by
   `audio.dim_db`, default −14 dB, while the user talks) and
   `dimWhenAddressed` (feeds dimmed while `addressedNow` is non-empty).
+  Live `user-audio-settings-updated` can change those dim knobs.
 - **Playback**: 48 kHz → device rate, stereo or mono as the device offers
-  (mono mix duplicated).
+  (mono mix duplicated). A copy of the 48 kHz mix is analysed by AEC as
+  the far-end; playback itself is not delayed.
 - **VOX** (`vox.enabled`, `vox.target`, `vox.threshold_db`,
   `vox.hang_ms`): a level trigger that acts like holding a key for the
   configured target; mirrors `voiceTriggerEnabled/Target/ThresholdDb`.
 - **Hot-plug**: if a stream errors or the device disappears, the pipeline
   keeps running (silence in, drop out) and retries opening the device every
   `audio.reopen_ms` (default 2000); surfaces show "no audio device".
-- **Echo**: not handled. Panels are used with headsets; the server never
-  sends a user's own producer back to them.
+- **Processing** (`audio.auto_processing`, default off; same boolean as
+  browser `audioAutoProcessing`): in-process sonora (WebRTC M145 APM) at
+  10 ms / 48 kHz — high-pass, Wiener NS, AGC2, and AEC3 when **both**
+  capture and playback are real devices (not `tone` / `wav:`). Manual
+  `input_gain_db` is ignored while this is on. `audio.stream_delay_ms`
+  overrides the estimated AEC delay (capture period + playback period,
+  clamped 0–500 ms). Register ack `userAudioSettings` and the
+  `user-audio-settings-updated` event apply the admin toggle live.
 
 ---
 
@@ -648,6 +662,7 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
   "audio": { "input_device": "plughw:CARD=Headset,DEV=0",
              "output_device": "plughw:CARD=Headset,DEV=0",
              "profile": "standard", "input_gain_db": 0,
+             "auto_processing": false,
              "dim_db": -14, "dim_feeds_while_speaking": false,
              "dim_when_addressed": true,
              "jitter_min_ms": 20, "jitter_max_ms": 120, "reopen_ms": 2000,
@@ -927,9 +942,6 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
   device; authentication for `POST /cut-camera`; a preview (green) tally.
 - HTTPS for the web interface (currently plain HTTP, meant for the LAN or a
   reverse proxy).
-- Capture-side echo cancellation / noise suppression / AGC comparable to
-  browser `getUserMedia` (today: raw ALSA/cpal; use PipeWire AEC or a
-  headset that already does AEC).
 - Bridge: deliver `cut-camera` to bridge sessions
   (`queueBridgeControlEvent` filter).
 
@@ -946,6 +958,9 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
   GPIO-only instances are the two-per-Pi case.
 - Config: one schema, JSON or TOML by file extension, env overrides.
 - Packages: arm64, armhf, amd64, built on Bookworm.
+- Capture APM: sonora 0.2 (pure-Rust WebRTC M145 AEC3/NS/AGC2), not
+  `webrtc-audio-processing` (Bookworm's package is pre-AEC3; the Rust
+  crate's bundled C++ build does not fit the `.deb` matrix). MSRV 1.91.
 - Web interface added after review: fixed `admin` login with forced
   password change, status incl. GPIO, live Stream Deck view, settings saved
   to the TOML/JSON file, restart.

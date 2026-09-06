@@ -189,11 +189,15 @@ not found on any chip`.
 
 The browser client asks `getUserMedia` for `echoCancellation`,
 `noiseSuppression` and `autoGainControl` — those run in Chrome/Safari, not
-on the server. The headless client captures raw PCM through ALSA/cpal and
-does **not** include that stack. On a desktop/VM, enable PipeWire/Pulse
-echo-cancel (`module-echo-cancel` or WirePlumber AEC) in front of the ALSA
-device if you need it. On a Pi with a headset, use a USB adapter that
-already does AEC, or keep the speaker and mic acoustically separate.
+on the server. The headless client runs the same algorithm family
+**in-process** with [sonora](https://crates.io/crates/sonora) (WebRTC M145
+AEC3, Wiener noise suppression, AGC2, high-pass). Turn it on with
+`audio.auto_processing = true` or the admin **Audio auto processing**
+toggle for this user (`audioAutoProcessing`). While it is on, manual
+`audio.input_gain_db` is ignored (AGC sets the level). Echo cancellation
+only runs when both capture and playback are real ALSA devices — `tone`
+and `wav:` skips AEC. Optional `audio.stream_delay_ms` overrides the
+estimated loudspeaker-to-mic delay if residual echo remains.
 
 ## Conference member mix
 

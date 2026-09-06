@@ -43,7 +43,13 @@ input_device = "plughw:CARD=Headset,DEV=0"
 output_device = "plughw:CARD=Headset,DEV=0"
 # standard (20 ms + FEC), low (10 ms) or ultra-low (5 ms)
 profile = "standard"
+# Same as the browser "Audio auto processing" toggle: AEC + NS + AGC.
+# Manual input_gain_db is ignored while this is on. Admin can override it
+# per user after register (`user-audio-settings-updated`).
+auto_processing = false
 input_gain_db = 0
+# Optional AEC delay override (0–500 ms). Empty = estimate from callback periods.
+# stream_delay_ms = 40
 dim_db = -14
 dim_feeds_while_speaking = false
 dim_when_addressed = true

@@ -130,6 +130,26 @@ impl Mixer {
         self.addressed = addressed;
     }
 
+    /// Live dimming from the user's server-side audio settings.
+    pub fn set_dimming(
+        &mut self,
+        dim_db: Option<f32>,
+        dim_feeds_while_speaking: Option<bool>,
+        dim_when_addressed: Option<bool>,
+    ) {
+        if let Some(db) = dim_db {
+            if db.is_finite() {
+                self.dim_gain = db_to_gain(db);
+            }
+        }
+        if let Some(enabled) = dim_feeds_while_speaking {
+            self.dim_feeds_while_speaking = enabled;
+        }
+        if let Some(enabled) = dim_when_addressed {
+            self.dim_when_addressed = enabled;
+        }
+    }
+
     pub fn push_packet(&mut self, consumer_id: &str, seq: u16, payload: &[u8]) -> Result<bool> {
         match self.sources.get_mut(consumer_id) {
             Some(source) => {
