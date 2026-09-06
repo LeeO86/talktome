@@ -468,15 +468,43 @@
     }
 
     // Stream Deck card
-    const deck = status.deck || {};
-    setBadge($('#deck-state'), !deck.enabled ? 'disabled' : deck.connected ? (deck.mock ? 'mock' : 'connected') : 'not connected', !deck.enabled ? '' : deck.connected ? (deck.mock ? 'warn' : 'ok') : 'bad');
-    kv($('#deck-details'), [
-      ['Model', deck.kind || '–'],
-      ['Serial', deck.serial || '–'],
-      ['Layout', deck.connected ? `${deck.rows}×${deck.cols} keys${deck.encoders ? `, ${deck.encoders} dials` : ''}${deck.touchpoints ? `, ${deck.touchpoints} touch points` : ''}` : '–'],
-      ['Page', deck.connected ? `${deck.page + 1} / ${deck.pages}${deck.volume_layer ? ' · volume layer' : ''}` : '–'],
-      ['Error', deck.error || '–'],
-    ]);
+    const decks = status.decks && status.decks.length ? status.decks : status.deck ? [status.deck] : [];
+    const anyEnabled = decks.some((deck) => deck.enabled);
+    const connected = decks.filter((deck) => deck.connected);
+    setBadge(
+      $('#deck-state'),
+      !anyEnabled ? 'disabled' : connected.length ? (connected.some((d) => d.mock) ? 'mock' : 'connected') : 'not connected',
+      !anyEnabled ? '' : connected.length ? (connected.some((d) => d.mock) && connected.every((d) => d.mock) ? 'warn' : 'ok') : 'bad'
+    );
+    const deckRows = [];
+    if (!decks.length) {
+      deckRows.push(['Decks', '–']);
+    }
+    decks.forEach((deck, index) => {
+      const prefix = decks.length > 1 ? `Deck ${index + 1}` : 'Model';
+      deckRows.push([
+        prefix,
+        !deck.enabled
+          ? 'disabled'
+          : `${deck.kind || '–'}${deck.mock ? ' (mock)' : ''}${deck.serial ? ` · ${deck.serial}` : ''}${deck.connected ? '' : ' · not connected'}`,
+      ]);
+      if (deck.connected) {
+        deckRows.push([
+          decks.length > 1 ? `Layout ${index + 1}` : 'Layout',
+          `${deck.rows}×${deck.cols} keys${deck.encoders ? `, ${deck.encoders} dials` : ''}${deck.touchpoints ? `, ${deck.touchpoints} touch points` : ''}`,
+        ]);
+        const pages = `keys ${deck.page + 1}/${deck.pages}${deck.encoder_pages > 1 ? ` · dials ${deck.encoder_page + 1}/${deck.encoder_pages}` : ''}${deck.volume_layer ? ' · volume layer' : ''}`;
+        deckRows.push([decks.length > 1 ? `Page ${index + 1}` : 'Page', pages]);
+        if (deck.dials && deck.dials.some((dial) => dial.title)) {
+          deckRows.push([
+            decks.length > 1 ? `Dials ${index + 1}` : 'Dials',
+            deck.dials.map((dial) => (dial.title ? `${dial.index + 1}: ${dial.title}` : `${dial.index + 1}: —`)).join(', '),
+          ]);
+        }
+      }
+      if (deck.error) deckRows.push([decks.length > 1 ? `Error ${index + 1}` : 'Error', deck.error]);
+    });
+    kv($('#deck-details'), deckRows);
 
     // Service card
     setBadge($('#service-state'), status.restart_pending ? 'restarting' : 'running', status.restart_pending ? 'warn' : 'ok');
@@ -669,32 +697,78 @@
 
   async function refreshDeck() {
     if (!state.authenticated || state.restarting) return;
-    let deck;
+    let payload;
     try {
-      deck = await api('GET', '/api/streamdeck');
+      payload = await api('GET', '/api/streamdeck');
     } catch {
       return;
     }
-    renderDeck(deck);
+    const decks = payload && payload.decks ? payload.decks : payload && payload.keys ? [payload] : [];
+    renderDecks(decks);
   }
 
-  function renderDeck(deck) {
-    const grid = $('#deck-grid');
-    const message = $('#deck-message');
-    setBadge($('#deck-view-state'), !deck.enabled ? 'disabled' : deck.connected ? `${deck.kind}${deck.mock ? ' (mock)' : ''}` : 'not connected', !deck.enabled ? '' : deck.connected ? 'ok' : 'bad');
-    $('#deck-page').textContent = deck.connected ? `page ${deck.page + 1}/${deck.pages}${deck.volume_layer ? ' · volume layer' : ''}` : '';
+  function renderDecks(decks) {
+    const list = $('#deck-list');
+    const empty = $('#deck-empty');
+    if (!decks.length) {
+      empty.classList.remove('is-hidden');
+      empty.textContent = 'No Stream Deck configured.';
+      list.replaceChildren();
+      return;
+    }
+    empty.classList.add('is-hidden');
+    const existing = $$('.deck-card', list);
+    if (existing.length !== decks.length) {
+      list.replaceChildren(...decks.map((deck) => buildDeckCard(deck)));
+    }
+    decks.forEach((deck, index) => updateDeckCard(list.children[index], deck, index));
+  }
+
+  function buildDeckCard(deck) {
+    const card = el('article', { class: 'card deck-card', dataset: { device: String(deck.id || 0) } });
+    card.append(
+      el('header', { class: 'card-header' }, [
+        el('h2', { text: 'Stream Deck' }),
+        el('div', { class: 'card-tools' }, [el('span', { class: 'badge deck-view-state' }), el('span', { class: 'muted deck-page' })]),
+      ]),
+      el('p', { class: 'muted deck-message' }),
+      el('div', { class: 'deck-grid' }),
+      el('div', { class: 'deck-encoders' }),
+      el('div', { class: 'deck-encoders deck-touchpoints' }),
+      el('p', { class: 'muted small', text: 'Tap and hold a key to press it on the device. Keys behave exactly like on the hardware: hold to talk, tap to lock.' })
+    );
+    return card;
+  }
+
+  function updateDeckCard(card, deck, device) {
+    if (!card) return;
+    card.dataset.device = String(device);
+    const stateBadge = $('.deck-view-state', card);
+    const pageLabel = $('.deck-page', card);
+    const message = $('.deck-message', card);
+    const grid = $('.deck-grid', card);
+    const encoders = $('.deck-encoders:not(.deck-touchpoints)', card);
+    const touchpoints = $('.deck-touchpoints', card);
+    setBadge(stateBadge, !deck.enabled ? 'disabled' : deck.connected ? `${deck.kind}${deck.mock ? ' (mock)' : ''}` : 'not connected', !deck.enabled ? '' : deck.connected ? 'ok' : 'bad');
+    const pageBits = [];
+    if (deck.connected) {
+      pageBits.push(`keys ${deck.page + 1}/${deck.pages}`);
+      if (deck.encoder_pages > 1) pageBits.push(`dials ${deck.encoder_page + 1}/${deck.encoder_pages}`);
+      if (deck.volume_layer) pageBits.push('volume layer');
+    }
+    pageLabel.textContent = pageBits.join(' · ');
     if (!deck.enabled) {
       message.textContent = 'The Stream Deck surface is disabled in the settings.';
       grid.replaceChildren();
-      $('#deck-encoders').replaceChildren();
-      $('#deck-touchpoints').replaceChildren();
+      encoders.replaceChildren();
+      touchpoints.replaceChildren();
       return;
     }
     if (!deck.connected) {
       message.textContent = deck.error ? `No Stream Deck connected: ${deck.error}` : 'No Stream Deck connected.';
       grid.replaceChildren();
-      $('#deck-encoders').replaceChildren();
-      $('#deck-touchpoints').replaceChildren();
+      encoders.replaceChildren();
+      touchpoints.replaceChildren();
       return;
     }
     message.textContent = deck.serial ? `Serial ${deck.serial}` : '';
@@ -702,46 +776,53 @@
     grid.style.setProperty('--key-size', `${Math.min(96, deck.key_size || 72)}px`);
     grid.style.gridTemplateColumns = `repeat(${deck.cols}, var(--key-size, 72px))`;
     const existing = $$('.deck-key', grid);
-    if (existing.length !== deck.keys.length) {
-      grid.replaceChildren(...deck.keys.map((key) => buildDeckKey(key)));
+    if (existing.length !== (deck.keys || []).length) {
+      grid.replaceChildren(...(deck.keys || []).map((key) => buildDeckKey(device, key)));
     }
-    for (const key of deck.keys) {
+    for (const key of deck.keys || []) {
       const button = grid.children[key.index];
       if (!button) continue;
       button.title = key.subtitle ? `${key.title} · ${key.subtitle}` : key.title || key.role;
       const img = $('img', button);
-      const src = `/api/streamdeck/key/${key.index}?h=${key.hash}`;
+      const src = `/api/streamdeck/${device}/key/${key.index}?h=${key.hash}`;
       if (img.dataset.src !== src) {
         img.dataset.src = src;
         img.src = src;
       }
     }
-    const encoders = $('#deck-encoders');
+    const dials = deck.dials || [];
     if (encoders.children.length !== deck.encoders) {
       encoders.replaceChildren(
         ...Array.from({ length: deck.encoders }, (_, index) =>
           el('div', { class: 'encoder' }, [
-            el('span', { class: 'muted small', text: `Dial ${index + 1}` }),
+            el('span', { class: 'encoder__name' }),
+            el('span', { class: 'muted small encoder__meta' }),
             el('div', { class: 'encoder__row' }, [
-              el('button', { type: 'button', class: 'btn btn-small', text: '−', onclick: () => deckInput({ kind: 'encoder', index, delta: -1 }) }),
-              el('button', { type: 'button', class: 'btn btn-small', text: 'Press', onclick: () => deckInput({ kind: 'encoder-press', index }) }),
-              el('button', { type: 'button', class: 'btn btn-small', text: '+', onclick: () => deckInput({ kind: 'encoder', index, delta: 1 }) }),
+              el('button', { type: 'button', class: 'btn btn-small', text: '−', onclick: () => deckInput(device, { kind: 'encoder', index, delta: -1 }) }),
+              el('button', { type: 'button', class: 'btn btn-small', text: 'Press', onclick: () => deckInput(device, { kind: 'encoder-press', index }) }),
+              el('button', { type: 'button', class: 'btn btn-small', text: '+', onclick: () => deckInput(device, { kind: 'encoder', index, delta: 1 }) }),
             ]),
           ])
         )
       );
     }
-    const touchpoints = $('#deck-touchpoints');
+    for (let index = 0; index < deck.encoders; index += 1) {
+      const node = encoders.children[index];
+      if (!node) continue;
+      const dial = dials[index] || {};
+      $('.encoder__name', node).textContent = dial.title || `Dial ${index + 1}`;
+      $('.encoder__meta', node).textContent = dial.title ? `${dial.subtitle || ''}${dial.role ? ` · ${dial.role}` : ''}`.replace(/^ · /, '') : 'unassigned';
+    }
     if (touchpoints.children.length !== deck.touchpoints) {
       touchpoints.replaceChildren(
         ...Array.from({ length: deck.touchpoints }, (_, index) =>
-          el('button', { type: 'button', class: 'btn btn-small', text: index === 0 ? '◂ previous page' : 'next page ▸', onclick: () => deckInput({ kind: 'touch', index }) })
+          el('button', { type: 'button', class: 'btn btn-small', text: index === 0 ? '◂ previous page' : 'next page ▸', onclick: () => deckInput(device, { kind: 'touch', index }) })
         )
       );
     }
   }
 
-  function buildDeckKey(key) {
+  function buildDeckKey(device, key) {
     const button = el('button', { type: 'button', class: 'deck-key', 'aria-label': key.title || key.role }, el('img', { alt: '' }));
     let down = false;
     const press = (event) => {
@@ -749,13 +830,13 @@
       if (down) return;
       down = true;
       button.classList.add('is-pressed');
-      deckInput({ kind: 'key', index: key.index, action: 'down' });
+      deckInput(device, { kind: 'key', index: key.index, action: 'down' });
     };
     const release = () => {
       if (!down) return;
       down = false;
       button.classList.remove('is-pressed');
-      deckInput({ kind: 'key', index: key.index, action: 'up' });
+      deckInput(device, { kind: 'key', index: key.index, action: 'up' });
       setTimeout(refreshDeck, 150);
     };
     button.addEventListener('pointerdown', press);
@@ -766,8 +847,8 @@
     return button;
   }
 
-  function deckInput(body) {
-    api('POST', '/api/streamdeck/input', body)
+  function deckInput(device, body) {
+    api('POST', '/api/streamdeck/input', { device, ...body })
       .then(() => setTimeout(refreshDeck, 120))
       .catch((error) => flash(error.message, 'error'));
   }
@@ -777,6 +858,7 @@
   // ---------------------------------------------------------------------
 
   const ACTIONS = ['talk', 'reply', 'lock_toggle', 'clear_locks', 'mute_toggle', 'volume_up', 'volume_down'];
+  const DECK_MODELS = [['', 'Real hardware'], ['mk2', 'Stream Deck MK.2 (15 keys)'], ['mini', 'Stream Deck Mini'], ['minimk2', 'Stream Deck Mini MK.2'], ['original', 'Stream Deck Original'], ['originalv2', 'Stream Deck Original V2'], ['xl', 'Stream Deck XL'], ['xlv2', 'Stream Deck XL V2'], ['plus', 'Stream Deck +'], ['plusxl', 'Stream Deck + XL'], ['neo', 'Stream Deck Neo'], ['pedal', 'Stream Deck Pedal']];
   const OUTPUT_NAMES = ['tally', 'talking', 'incoming', 'connected', 'locked'];
 
   const SECTIONS = [
@@ -853,14 +935,16 @@
       desc: 'device binding, brightness, volume layer',
       fields: [
         { path: 'streamdeck.enabled', label: 'Use a Stream Deck', type: 'bool' },
-        { path: 'streamdeck.mock', label: 'Dummy deck (no hardware)', type: 'select', nullable: true, options: [['', 'Real hardware'], ['mk2', 'Stream Deck MK.2 (15 keys)'], ['mini', 'Stream Deck Mini'], ['minimk2', 'Stream Deck Mini MK.2'], ['original', 'Stream Deck Original'], ['originalv2', 'Stream Deck Original V2'], ['xl', 'Stream Deck XL'], ['xlv2', 'Stream Deck XL V2'], ['plus', 'Stream Deck +'], ['plusxl', 'Stream Deck + XL'], ['neo', 'Stream Deck Neo'], ['pedal', 'Stream Deck Pedal']], help: 'Pick a model to test the Stream Deck tab without a USB deck. TALKTOME_MOCK_STREAMDECK overrides this.' },
-        { path: 'streamdeck.serial', label: 'Serial number', type: 'text', nullable: true, help: 'Empty: first deck found' },
+        { path: 'streamdeck.mock', label: 'Dummy deck (no hardware)', type: 'select', nullable: true, options: DECK_MODELS, help: 'Used when the device list below is empty. TALKTOME_MOCK_STREAMDECK overrides the first device.' },
+        { path: 'streamdeck.serial', label: 'Serial number', type: 'text', nullable: true, help: 'Empty: first unused deck found. Used when the device list below is empty.' },
         { path: 'streamdeck.brightness', label: 'Brightness (%)', type: 'number', min: 0, max: 100 },
         { path: 'streamdeck.font_path', label: 'Font file', type: 'text' },
         { path: 'streamdeck.volume_step', label: 'Volume step per key/dial tick', type: 'number', step: 0.01, min: 0.01, max: 1 },
         { path: 'streamdeck.volume_layer_timeout_s', label: 'Volume layer timeout (s)', type: 'number' },
+        { path: 'streamdeck.pedal_left', label: 'Pedal left switch target', type: 'text', nullable: true, help: 'e.g. user:4. Reply is always the right pedal.' },
         { path: 'streamdeck.pedal_target', label: 'Pedal middle switch target', type: 'text', nullable: true },
-        { path: 'streamdeck.layout', label: 'Key layout overrides (JSON object)', type: 'json', wide: true },
+        { path: 'streamdeck.layout', label: 'Key layout overrides (JSON object)', type: 'json', wide: true, help: 'Pedal: {"0":"user:1","1":"conference:2"} for left and middle.' },
+        { type: 'streamdeck-devices' },
       ],
     },
     {
@@ -986,7 +1070,7 @@
         env.classList.add('is-hidden');
       }
       const pending = $('#settings-pending');
-      if (config.editable && fileDiffersFromRunning(state.fileDoc, state.runningDoc)) {
+      if (config.editable && config.file_pending_restart) {
         pending.textContent = 'This file has saved changes the running client is not using yet (for example the Talktome user). Saving another setting keeps those file values. Restart to apply them.';
         pending.classList.remove('is-hidden');
       } else {
@@ -1026,6 +1110,7 @@
   function renderField(field, doc) {
     if (field.type === 'gpio-outputs') return renderGpioOutputs(doc);
     if (field.type === 'gpio-inputs') return renderGpioInputs(doc);
+    if (field.type === 'streamdeck-devices') return renderStreamdeckDevices(doc);
     const value = getPath(doc, field.path);
     const wrapper = el('label', { class: `field${field.wide ? ' wide' : ''}`, dataset: { path: field.path } });
     if (field.type === 'bool') {
@@ -1120,6 +1205,39 @@
     return row;
   }
 
+  function renderStreamdeckDevices(doc) {
+    const devices = getPath(doc, 'streamdeck.devices') || [];
+    const editor = el('div', { class: 'list-editor', dataset: { editor: 'streamdeck-devices' } });
+    const rows = el('div', { class: 'list-editor' });
+    const addRow = (device) => rows.append(streamdeckDeviceRow(device));
+    editor.append(
+      el('h3', { class: 'subheading', text: 'Devices' }),
+      el('p', { class: 'help', text: 'Add one row per Stream Deck (Neo, Plus, Pedal, …). When this list is empty, the serial/mock/pedal fields above are used as a single deck.' }),
+      rows,
+      el('div', {}, el('button', { type: 'button', class: 'btn btn-small', text: '+ Add Stream Deck', onclick: () => addRow({ mock: '', serial: '', pedal_left: '', pedal_target: '', layout: {} }) }))
+    );
+    for (const device of devices) addRow(device);
+    return editor;
+  }
+
+  function streamdeckDeviceRow(device) {
+    const row = el('div', { class: 'list-row', dataset: { device: '1' } });
+    const mock = el('select', { dataset: { field: 'mock' } });
+    for (const [value, label] of DECK_MODELS) mock.append(el('option', { value, text: label }));
+    mock.value = device.mock || '';
+    const layout = el('textarea', { rows: 2, dataset: { field: 'layout' } });
+    layout.value = device.layout && Object.keys(device.layout).length ? JSON.stringify(device.layout) : '';
+    row.append(
+      el('label', { class: 'field' }, [el('span', { text: 'Dummy model' }), mock]),
+      el('label', { class: 'field' }, [el('span', { text: 'Serial' }), el('input', { type: 'text', placeholder: 'first unused', dataset: { field: 'serial' }, value: device.serial || '' })]),
+      el('label', { class: 'field' }, [el('span', { text: 'Pedal left' }), el('input', { type: 'text', placeholder: 'user:4', dataset: { field: 'pedal_left' }, value: device.pedal_left || '' })]),
+      el('label', { class: 'field' }, [el('span', { text: 'Pedal middle' }), el('input', { type: 'text', placeholder: 'conference:1', dataset: { field: 'pedal_target' }, value: device.pedal_target || '' })]),
+      el('label', { class: 'field wide' }, [el('span', { text: 'Layout JSON' }), layout]),
+      el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Remove', onclick: () => row.remove() })
+    );
+    return row;
+  }
+
   function collectDocument() {
     if (state.rawMode) {
       return JSON.parse($('#raw-json').value);
@@ -1185,6 +1303,31 @@
       setPath(doc, 'gpio.outputs', outputs);
       setPath(doc, 'gpio.inputs', inputs);
     }
+    const devices = [];
+    for (const row of $$('[data-editor="streamdeck-devices"] [data-device]')) {
+      const mock = $('[data-field="mock"]', row).value.trim();
+      const serial = $('[data-field="serial"]', row).value.trim();
+      const pedalLeft = $('[data-field="pedal_left"]', row).value.trim();
+      const pedalTarget = $('[data-field="pedal_target"]', row).value.trim();
+      const layoutText = $('[data-field="layout"]', row).value.trim();
+      let layout = {};
+      if (layoutText) {
+        try {
+          layout = JSON.parse(layoutText);
+        } catch (error) {
+          throw new Error(`streamdeck.devices layout: invalid JSON (${error.message})`);
+        }
+      }
+      devices.push({
+        mock: mock || null,
+        serial: serial || null,
+        pedal_left: pedalLeft || null,
+        pedal_target: pedalTarget || null,
+        layout,
+      });
+    }
+    if (devices.length) setPath(doc, 'streamdeck.devices', devices);
+    else if (doc.streamdeck) delete doc.streamdeck.devices;
     return doc;
   }
 

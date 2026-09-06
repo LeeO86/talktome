@@ -6,9 +6,9 @@
 pub mod layout;
 pub mod render;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -19,14 +19,15 @@ use elgato_streamdeck::DeviceStateUpdate;
 use image::{DynamicImage, RgbImage};
 use tokio::sync::watch;
 
-use crate::config::{StreamDeckConfig, TalkConfig};
+use crate::config::{StreamDeckConfig, StreamDeckDeviceConfig, TalkConfig};
 use crate::state::{
-    Bus, Command, DeckInput, DeckKeyView, DeckStatus, InputSource, Snapshot, TargetRef,
+    Bus, Command, DeckDialView, DeckInput, DeckKeyView, DeckStatus, InputSource, Snapshot,
+    TargetRef,
 };
 use crate::talk::TargetKey;
 use layout::{
-    encoder_targets, page_count, palette, Appearance, DeckState, Geometry, KeySpec, LayoutOptions,
-    Role,
+    encoder_page_count, encoder_targets, page_count, palette, Appearance, DeckState, Geometry,
+    KeySpec, LayoutOptions, Role,
 };
 use render::{Renderer, StripSegment};
 use tokio::sync::mpsc;
@@ -175,13 +176,21 @@ struct MockDeck {
 }
 
 impl MockDeck {
-    fn new(kind: Kind) -> Result<Self> {
+    fn new(kind: Kind, id: usize) -> Result<Self> {
         let base = std::env::var_os(super::MOCK_DIR_ENV)
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
-        let dir = base.join("streamdeck");
+        let dir = if id == 0 {
+            base.join("streamdeck")
+        } else {
+            base.join(format!("streamdeck-{id}"))
+        };
         std::fs::create_dir_all(&dir)?;
-        let inputs = base.join("streamdeck-inputs");
+        let inputs = if id == 0 {
+            base.join("streamdeck-inputs")
+        } else {
+            base.join(format!("streamdeck-{id}-inputs"))
+        };
         let offset = std::fs::metadata(&inputs).map(|m| m.len()).unwrap_or(0);
         Ok(Self {
             kind,
@@ -298,41 +307,69 @@ impl MockDeck {
 }
 
 pub async fn run(
+    id: usize,
     config: StreamDeckConfig,
+    device_config: StreamDeckDeviceConfig,
     talk: TalkConfig,
     bus: Bus,
     mut deck_input: mpsc::Receiver<DeckInput>,
     mut shutdown: watch::Receiver<bool>,
+    claimed: Arc<Mutex<HashSet<String>>>,
 ) {
-    let mock_kind = std::env::var(MOCK_ENV)
+    let env_mock = std::env::var(MOCK_ENV)
         .ok()
-        .and_then(|name| kind_from_name(&name))
+        .and_then(|name| kind_from_name(&name));
+    let mock_kind = device_config
+        .mock
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .and_then(kind_from_name)
         .or_else(|| {
-            config
-                .mock
-                .as_deref()
-                .filter(|name| !name.trim().is_empty())
-                .and_then(kind_from_name)
+            if id == 0 {
+                env_mock.or_else(|| {
+                    config
+                        .mock
+                        .as_deref()
+                        .filter(|name| !name.trim().is_empty())
+                        .and_then(kind_from_name)
+                })
+            } else {
+                None
+            }
         });
     let renderer = Renderer::load(&config.font_path);
     let mut warned = false;
-    publish_disconnected(&bus, None);
+    let mut bound_serial = device_config.serial.clone();
+    publish_disconnected(&bus, id, None);
     loop {
         if *shutdown.borrow() {
             return;
         }
         let device = match mock_kind {
-            Some(kind) => MockDeck::new(kind).map(Device::Mock),
-            None => discover(&config.serial),
+            Some(kind) => MockDeck::new(kind, id).map(Device::Mock),
+            None => discover(&bound_serial, &claimed),
         };
         match device {
             Ok(device) => {
                 warned = false;
+                if let Some(serial) = device.serial().await {
+                    bound_serial = Some(serial.clone());
+                    if let Ok(mut claimed) = claimed.lock() {
+                        claimed.insert(serial);
+                    }
+                }
                 let kind = device.kind();
-                tracing::info!(event = "streamdeck-connected", kind = ?kind, mock = mock_kind.is_some());
+                tracing::info!(
+                    event = "streamdeck-connected",
+                    id,
+                    kind = ?kind,
+                    mock = mock_kind.is_some()
+                );
                 let outcome = run_device(
+                    id,
                     device,
                     &config,
+                    &device_config,
                     &talk,
                     &renderer,
                     &bus,
@@ -344,15 +381,15 @@ pub async fn run(
                     return;
                 }
                 let error = outcome.err().map(|e| format!("{e:#}")).unwrap_or_default();
-                tracing::warn!(event = "streamdeck-disconnected", error = %error);
-                publish_disconnected(&bus, Some(error));
+                tracing::warn!(event = "streamdeck-disconnected", id, error = %error);
+                publish_disconnected(&bus, id, Some(error));
             }
             Err(error) => {
                 if !warned {
-                    tracing::warn!(event = "streamdeck-not-found", error = %format!("{error:#}"));
+                    tracing::warn!(event = "streamdeck-not-found", id, error = %format!("{error:#}"));
                     warned = true;
                 }
-                publish_disconnected(&bus, Some(format!("{error:#}")));
+                publish_disconnected(&bus, id, Some(format!("{error:#}")));
             }
         }
         tokio::select! {
@@ -362,18 +399,27 @@ pub async fn run(
     }
 }
 
-fn discover(serial: &Option<String>) -> Result<Device> {
+fn discover(serial: &Option<String>, claimed: &Arc<Mutex<HashSet<String>>>) -> Result<Device> {
     let hid = elgato_streamdeck::new_hidapi().context("initialising hidapi")?;
     let devices = elgato_streamdeck::list_devices(&hid);
     if devices.is_empty() {
         anyhow::bail!("no Stream Deck found");
     }
+    let claimed_serials = claimed.lock().ok();
     let (kind, found_serial) = match serial.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(wanted) => devices
             .into_iter()
             .find(|(_, s)| s == wanted)
             .ok_or_else(|| anyhow!("Stream Deck with serial {wanted:?} not connected"))?,
-        None => devices.into_iter().next().expect("non-empty"),
+        None => devices
+            .into_iter()
+            .find(|(_, s)| {
+                claimed_serials
+                    .as_ref()
+                    .map(|set| !set.contains(s))
+                    .unwrap_or(true)
+            })
+            .ok_or_else(|| anyhow!("no unused Stream Deck connected"))?,
     };
     let deck = AsyncStreamDeck::connect(&hid, kind, &found_serial)
         .map_err(|e| anyhow!("connecting to {kind:?} {found_serial}: {e}"))?;
@@ -404,15 +450,19 @@ struct PressedKey {
     since: Instant,
 }
 
-fn publish_disconnected(bus: &Bus, error: Option<String>) {
+fn publish_disconnected(bus: &Bus, id: usize, error: Option<String>) {
     if let Ok(mut hardware) = bus.hardware.write() {
-        hardware.deck = DeckStatus {
+        if hardware.decks.len() <= id {
+            hardware.decks.resize(id + 1, DeckStatus::default());
+        }
+        hardware.decks[id] = DeckStatus {
+            id,
             enabled: true,
             connected: false,
             error,
             ..DeckStatus::default()
         };
-        hardware.deck_images.clear();
+        hardware.deck_images.retain(|(device, _), _| *device != id);
     }
 }
 
@@ -422,6 +472,7 @@ fn role_label(role: Role) -> String {
         Role::Reply => "reply".into(),
         Role::Target(key) => key.to_string(),
         Role::NextPage => "next-page".into(),
+        Role::NextEncoderPage => "next-dials".into(),
         Role::VolumeToggle => "volume-toggle".into(),
         Role::VolumeUp => "volume-up".into(),
         Role::VolumeDown => "volume-down".into(),
@@ -460,8 +511,10 @@ fn injected_update(input: DeckInput) -> DeviceStateUpdate {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_device(
+    id: usize,
     device: Device,
     config: &StreamDeckConfig,
+    device_config: &StreamDeckDeviceConfig,
     talk: &TalkConfig,
     renderer: &Renderer,
     bus: &Bus,
@@ -472,16 +525,11 @@ async fn run_device(
     let geometry = geometry_for(kind);
     let serial = device.serial().await;
     let is_mock = device.is_mock();
-    let key_size = {
-        let (w, h) = kind.key_image_format().size;
-        (w as u32, h as u32)
-    };
+    let key_size = effective_key_size(kind);
     let lcd_size = kind
         .lcd_image_format()
         .map(|f| (f.size.0 as u32, f.size.1 as u32));
-    let options = LayoutOptions {
-        pedal_target: config.pedal_target.as_deref().and_then(TargetKey::parse),
-    };
+    let options = layout_options(device_config);
     let reader = match &device {
         Device::Real(deck) => Some(deck.get_reader()),
         Device::Mock(_) => None,
@@ -499,7 +547,10 @@ async fn run_device(
     let mut keys: Vec<KeySpec> = layout::layout(&geometry, &snapshot, &state, &options);
     let mut blink = tokio::time::interval(BLINK_PERIOD);
     let volume_timeout = Duration::from_secs(config.volume_layer_timeout_s.max(1));
-    let source = |key: u8| InputSource::StreamDeck(key);
+    let source = |key: u8| InputSource::StreamDeck {
+        device: id as u8,
+        key,
+    };
 
     render_all(
         &device,
@@ -526,7 +577,7 @@ async fn run_device(
         .await?;
     }
     publish_deck_view(
-        bus, kind, &serial, is_mock, &geometry, key_size, &keys, &state, &snapshot, &images,
+        bus, id, kind, &serial, is_mock, &geometry, key_size, &keys, &state, &snapshot, &images,
     );
 
     loop {
@@ -608,8 +659,13 @@ async fn run_device(
                             }
                         }
                         Role::NextPage => {
-                            let pages = page_count(&geometry, &state, snapshot.targets.len());
+                            let pages = page_count(&geometry, snapshot.targets.len());
                             state.page = (state.page + 1) % pages.max(1);
+                            relayout = true;
+                        }
+                        Role::NextEncoderPage => {
+                            let pages = encoder_page_count(&geometry, snapshot.targets.len());
+                            state.encoder_page = (state.encoder_page + 1) % pages.max(1);
                             relayout = true;
                         }
                         Role::VolumeToggle => {
@@ -651,7 +707,7 @@ async fn run_device(
                     match press.role {
                         Role::Status => {
                             if held >= STATUS_HOLD {
-                                let pages = page_count(&geometry, &state, snapshot.targets.len());
+                                let pages = page_count(&geometry, snapshot.targets.len());
                                 state.page = (state.page + 1) % pages.max(1);
                                 relayout = true;
                             } else {
@@ -706,7 +762,7 @@ async fn run_device(
                 }
                 DeviceStateUpdate::EncoderUp(_) => {}
                 DeviceStateUpdate::TouchPointDown(point) => {
-                    let pages = page_count(&geometry, &state, snapshot.targets.len()).max(1);
+                    let pages = page_count(&geometry, snapshot.targets.len()).max(1);
                     state.page = if point == 0 {
                         (state.page + pages - 1) % pages
                     } else {
@@ -716,17 +772,28 @@ async fn run_device(
                 }
                 DeviceStateUpdate::TouchPointUp(_) => {}
                 DeviceStateUpdate::TouchScreenSwipe((x0, y0), (x1, y1)) => {
-                    let pages = page_count(&geometry, &state, snapshot.targets.len()).max(1);
                     let forward = if lcd_size.map(|(w, h)| w >= h).unwrap_or(true) {
                         x1 < x0
                     } else {
                         y1 < y0
                     };
-                    state.page = if forward {
-                        (state.page + 1) % pages
+                    if geometry.encoders_follow_bottom_row()
+                        || encoder_page_count(&geometry, snapshot.targets.len()) <= 1
+                    {
+                        let pages = page_count(&geometry, snapshot.targets.len()).max(1);
+                        state.page = if forward {
+                            (state.page + 1) % pages
+                        } else {
+                            (state.page + pages - 1) % pages
+                        };
                     } else {
-                        (state.page + pages - 1) % pages
-                    };
+                        let pages = encoder_page_count(&geometry, snapshot.targets.len()).max(1);
+                        state.encoder_page = if forward {
+                            (state.encoder_page + 1) % pages
+                        } else {
+                            (state.encoder_page + pages - 1) % pages
+                        };
+                    }
                     relayout = true;
                 }
                 DeviceStateUpdate::TouchScreenPress(x, y)
@@ -748,6 +815,7 @@ async fn run_device(
         }
 
         if relayout {
+            state.clamp_pages(&geometry, snapshot.targets.len());
             keys = layout::layout(&geometry, &snapshot, &state, &options);
         }
         let keys_changed = render_all(
@@ -763,7 +831,8 @@ async fn run_device(
         .await?;
         if relayout || keys_changed {
             publish_deck_view(
-                bus, kind, &serial, is_mock, &geometry, key_size, &keys, &state, &snapshot, &images,
+                bus, id, kind, &serial, is_mock, &geometry, key_size, &keys, &state, &snapshot,
+                &images,
             );
         }
         if let Some(size) = lcd_size {
@@ -782,6 +851,51 @@ async fn run_device(
     }
 }
 
+fn effective_key_size(kind: Kind) -> (u32, u32) {
+    let (w, h) = kind.key_image_format().size;
+    if w == 0 || h == 0 {
+        (96, 96)
+    } else {
+        (w as u32, h as u32)
+    }
+}
+
+fn layout_options(device: &StreamDeckDeviceConfig) -> LayoutOptions {
+    let from_layout = |index: &str| {
+        device
+            .layout
+            .get(index)
+            .and_then(|value| TargetKey::parse(value))
+    };
+    LayoutOptions {
+        pedal_left: from_layout("0")
+            .or_else(|| device.pedal_left.as_deref().and_then(TargetKey::parse)),
+        pedal_middle: from_layout("1")
+            .or_else(|| device.pedal_target.as_deref().and_then(TargetKey::parse)),
+    }
+}
+
+fn dial_views(geometry: &Geometry, state: &DeckState, snapshot: &Snapshot) -> Vec<DeckDialView> {
+    encoder_targets(geometry, state, snapshot)
+        .into_iter()
+        .enumerate()
+        .map(|(index, target)| match target {
+            Some(target) => DeckDialView {
+                index: index as u8,
+                role: target.key.to_string(),
+                title: target.name.clone(),
+                subtitle: format!("{}%", (target.volume * 100.0).round() as u32),
+            },
+            None => DeckDialView {
+                index: index as u8,
+                role: String::new(),
+                title: String::new(),
+                subtitle: String::new(),
+            },
+        })
+        .collect()
+}
+
 /// Re-renders keys whose appearance (or blink phase, when blinking) changed
 /// and keeps PNG copies for the web UI. Returns true when anything changed.
 #[allow(clippy::too_many_arguments)]
@@ -795,9 +909,7 @@ async fn render_all(
     rendered: &mut HashMap<u8, (Appearance, bool)>,
     images: &mut HashMap<u8, (u64, Arc<Vec<u8>>)>,
 ) -> Result<bool> {
-    if !geometry.visual {
-        return Ok(false);
-    }
+    let write_hardware = geometry.visual || device.is_mock();
     let mut changed = false;
     for (index, spec) in keys.iter().enumerate() {
         let key = index as u8;
@@ -815,14 +927,16 @@ async fn render_all(
         if let Some(png) = encode_png(&image) {
             images.insert(key, (image_hash(&image), Arc::new(png)));
         }
-        device
-            .set_key(key, image)
-            .await
-            .context("writing key image")?;
+        if write_hardware {
+            device
+                .set_key(key, image)
+                .await
+                .context("writing key image")?;
+        }
         rendered.insert(key, (spec.appearance.clone(), phase));
         changed = true;
     }
-    if changed {
+    if changed && write_hardware {
         device.flush().await.context("flushing deck")?;
     }
     Ok(changed)
@@ -832,6 +946,7 @@ async fn render_all(
 #[allow(clippy::too_many_arguments)]
 fn publish_deck_view(
     bus: &Bus,
+    id: usize,
     kind: Kind,
     serial: &Option<String>,
     is_mock: bool,
@@ -845,7 +960,11 @@ fn publish_deck_view(
     let Ok(mut hardware) = bus.hardware.write() else {
         return;
     };
-    hardware.deck = DeckStatus {
+    if hardware.decks.len() <= id {
+        hardware.decks.resize(id + 1, DeckStatus::default());
+    }
+    hardware.decks[id] = DeckStatus {
+        id,
         enabled: true,
         connected: true,
         mock: is_mock,
@@ -857,7 +976,9 @@ fn publish_deck_view(
         touchpoints: geometry.touchpoints,
         key_size: key_size.0,
         page: state.page,
-        pages: page_count(geometry, state, snapshot.targets.len()),
+        pages: page_count(geometry, snapshot.targets.len()),
+        encoder_page: state.encoder_page,
+        encoder_pages: encoder_page_count(geometry, snapshot.targets.len()),
         volume_layer: state.volume_layer,
         keys: keys
             .iter()
@@ -873,9 +994,13 @@ fn publish_deck_view(
                     .unwrap_or(0),
             })
             .collect(),
+        dials: dial_views(geometry, state, snapshot),
         error: None,
     };
-    hardware.deck_images = images.clone();
+    hardware.deck_images.retain(|(device, _), _| *device != id);
+    for (key, image) in images {
+        hardware.deck_images.insert((id, *key), image.clone());
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

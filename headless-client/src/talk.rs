@@ -444,7 +444,7 @@ mod tests {
     use super::*;
 
     fn deck(n: u8) -> InputSource {
-        InputSource::StreamDeck(n)
+        InputSource::StreamDeck { device: 0, key: n }
     }
 
     #[test]

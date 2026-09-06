@@ -83,10 +83,15 @@ pub async fn get_config(State(state): State<Shared>) -> Response {
         Some(file) => config::merge_file_over_running(&document, file),
         None => document.clone(),
     };
+    let file_pending_restart = path
+        .and_then(|p| config::read_document(p).ok())
+        .map(|raw| config::file_differs_from_running(&raw, &state.ctx.config))
+        .unwrap_or(false);
     Json(json!({
         "document": document,
         "file_document": file_document,
         "editor_document": editor_document,
+        "file_pending_restart": file_pending_restart,
         "path": path.map(|p| p.display().to_string()),
         "format": path.and_then(format_of),
         "editable": path.is_some(),

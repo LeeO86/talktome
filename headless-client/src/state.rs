@@ -163,7 +163,7 @@ pub enum TargetRef {
 /// physically held key for the same target.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InputSource {
-    StreamDeck(u8),
+    StreamDeck { device: u8, key: u8 },
     Gpio(String),
     Companion(String),
 }
@@ -247,7 +247,16 @@ pub struct DeckKeyView {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct DeckDialView {
+    pub index: u8,
+    pub role: String,
+    pub title: String,
+    pub subtitle: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct DeckStatus {
+    pub id: usize,
     pub enabled: bool,
     pub connected: bool,
     pub mock: bool,
@@ -260,8 +269,11 @@ pub struct DeckStatus {
     pub key_size: u32,
     pub page: usize,
     pub pages: usize,
+    pub encoder_page: usize,
+    pub encoder_pages: usize,
     pub volume_layer: bool,
     pub keys: Vec<DeckKeyView>,
+    pub dials: Vec<DeckDialView>,
     pub error: Option<String>,
 }
 
@@ -278,10 +290,12 @@ pub struct AudioView {
 #[derive(Debug, Default)]
 pub struct Hardware {
     pub gpio: GpioStatus,
-    pub deck: DeckStatus,
-    /// Rendered key images (PNG) keyed by key index with their hash.
-    pub deck_images: HashMap<u8, (u64, Arc<Vec<u8>>)>,
+    pub decks: Vec<DeckStatus>,
+    /// Rendered key images (PNG) keyed by (device, key) with their hash.
+    pub deck_images: HashMap<(usize, u8), (u64, Arc<Vec<u8>>)>,
     pub audio: AudioView,
+    /// Per-device input inlets filled by the Stream Deck tasks.
+    pub deck_inputs: Vec<mpsc::Sender<DeckInput>>,
 }
 
 /// Input injected into the Stream Deck surface (from the web UI).
@@ -301,30 +315,25 @@ pub struct Bus {
     pub commands: mpsc::Sender<Command>,
     pub snapshots: watch::Receiver<Arc<Snapshot>>,
     pub hardware: Arc<RwLock<Hardware>>,
-    pub deck_input: mpsc::Sender<DeckInput>,
 }
 
 pub struct Channels {
     pub commands: mpsc::Receiver<Command>,
     pub snapshots: watch::Sender<Arc<Snapshot>>,
-    pub deck_input: mpsc::Receiver<DeckInput>,
     pub bus: Bus,
 }
 
 pub fn channels(initial: Snapshot) -> Channels {
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let (snap_tx, snap_rx) = watch::channel(Arc::new(initial));
-    let (deck_tx, deck_rx) = mpsc::channel(64);
     let bus = Bus {
         commands: cmd_tx,
         snapshots: snap_rx,
         hardware: Arc::new(RwLock::new(Hardware::default())),
-        deck_input: deck_tx,
     };
     Channels {
         commands: cmd_rx,
         snapshots: snap_tx,
-        deck_input: deck_rx,
         bus,
     }
 }

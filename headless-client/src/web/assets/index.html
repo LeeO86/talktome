@@ -163,20 +163,8 @@
       </section>
 
       <section id="view-deck" class="view is-hidden">
-        <article class="card">
-          <header class="card-header">
-            <h2>Stream Deck</h2>
-            <div class="card-tools">
-              <span id="deck-view-state" class="badge">disabled</span>
-              <span id="deck-page" class="muted"></span>
-            </div>
-          </header>
-          <p id="deck-message" class="muted"></p>
-          <div id="deck-grid" class="deck-grid"></div>
-          <div id="deck-encoders" class="deck-encoders"></div>
-          <div id="deck-touchpoints" class="deck-encoders"></div>
-          <p class="muted small">Tap and hold a key to press it on the device. Keys behave exactly like on the hardware: hold to talk, tap to lock.</p>
-        </article>
+        <div id="deck-list" class="deck-list"></div>
+        <p id="deck-empty" class="muted">No Stream Deck configured.</p>
       </section>
 
       <section id="view-settings" class="view is-hidden">
