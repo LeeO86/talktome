@@ -4,7 +4,10 @@ private let ttmBg = Color(red: 7 / 255, green: 11 / 255, blue: 20 / 255)
 private let ttmText = Color(red: 244 / 255, green: 247 / 255, blue: 251 / 255)
 private let ttmMuted = Color.white.opacity(0.62)
 private let ttmAccent = Color(red: 61 / 255, green: 214 / 255, blue: 245 / 255)
-private let ttmTalk = Color(red: 226 / 255, green: 59 / 255, blue: 74 / 255)
+/// Outgoing talk — same purple as iOS `colors.talking` / web `.talking-to`.
+private let ttmTalking = Color(red: 122 / 255, green: 71 / 255, blue: 199 / 255)
+/// Incoming talk — same green as iOS `colors.speaking` / web `.speaking`.
+private let ttmSpeaking = Color(red: 117 / 255, green: 242 / 255, blue: 184 / 255)
 
 struct WatchRemoteView: View {
   @EnvironmentObject private var remote: WatchRemoteSession
@@ -15,6 +18,8 @@ struct WatchRemoteView: View {
       content
       if let holding = remote.holdingTarget {
         TalkingOverlay(target: holding)
+          // The hold gesture lives on the list row. This overlay must not steal
+          // the touch, or release would fire immediately. Scroll is locked instead.
           .allowsHitTesting(false)
       }
     }
@@ -50,6 +55,8 @@ struct WatchRemoteView: View {
         }
       }
       .listStyle(.elliptical)
+      .scrollDisabled(remote.holdingKey != nil)
+      .scrollIndicators(remote.holdingKey == nil ? .automatic : .hidden)
     }
   }
 
@@ -81,7 +88,7 @@ private struct HoldTalkRow: View {
     VStack(alignment: .leading, spacing: 4) {
       Text(asReply ? "Reply" : target.kindLabel)
         .font(.caption2.weight(.semibold))
-        .foregroundStyle(target.highlighted ? ttmAccent : ttmMuted)
+        .foregroundStyle(target.highlighted ? ttmSpeaking : ttmMuted)
       Text(target.label)
         .font(.headline)
         .foregroundStyle(ttmText)
@@ -95,7 +102,7 @@ private struct HoldTalkRow: View {
     .listRowBackground(rowBackground)
     .contentShape(Rectangle())
     // maximumDistance .infinity keeps the press alive while the finger drifts;
-    // talk only stops when the finger lifts.
+    // talk only stops when the finger lifts. Scroll is disabled while holding.
     .onLongPressGesture(minimumDuration: 0.01, maximumDistance: .infinity, pressing: { pressing in
       if pressing {
         remote.beginTalk(target)
@@ -107,10 +114,10 @@ private struct HoldTalkRow: View {
 
   private var rowBackground: Color {
     if remote.holdingKey == target.key || remote.snapshot.talkingTargetKey == target.key {
-      return ttmTalk.opacity(0.88)
+      return ttmTalking.opacity(0.88)
     }
     if target.highlighted {
-      return ttmAccent.opacity(0.18)
+      return ttmSpeaking.opacity(0.22)
     }
     return Color.white.opacity(0.08)
   }
@@ -121,7 +128,7 @@ private struct TalkingOverlay: View {
 
   var body: some View {
     ZStack {
-      ttmTalk.ignoresSafeArea()
+      ttmTalking.ignoresSafeArea()
       VStack(spacing: 8) {
         Text("TALKING")
           .font(.caption.weight(.bold))
