@@ -498,7 +498,7 @@
           decks.length > 1 ? `Layout ${index + 1}` : 'Layout',
           `${deck.rows}×${deck.cols} keys${deck.encoders ? `, ${deck.encoders} dials` : ''}${deck.touchpoints ? `, ${deck.touchpoints} touch points` : ''}`,
         ]);
-        const pages = `keys ${deck.page + 1}/${deck.pages}${deck.encoder_pages > 1 ? ` · dials ${deck.encoder_page + 1}/${deck.encoder_pages}` : ''}${deck.volume_layer ? ' · volume layer' : ''}`;
+        const pages = `keys ${deck.page + 1}/${deck.pages}${deck.encoder_pages > 1 ? ` · dials ${deck.encoder_page + 1}/${deck.encoder_pages}` : ''}${deck.member_layer ? ' · members layer' : ''}${deck.volume_layer ? ' · volume layer' : ''}`;
         deckRows.push([decks.length > 1 ? `Page ${index + 1}` : 'Page', pages]);
         if (deck.dials && deck.dials.some((dial) => dial.title)) {
           deckRows.push([
@@ -764,6 +764,7 @@
     if (deck.connected) {
       pageBits.push(`keys ${deck.page + 1}/${deck.pages}`);
       if (deck.encoder_pages > 1) pageBits.push(`dials ${deck.encoder_page + 1}/${deck.encoder_pages}`);
+      if (deck.member_layer) pageBits.push('members layer');
       if (deck.volume_layer) pageBits.push('volume layer');
     }
     pageLabel.textContent = pageBits.join(' · ');
@@ -818,7 +819,7 @@
             el('span', { class: 'muted small encoder__meta' }),
             el('div', { class: 'encoder__row' }, [
               el('button', { type: 'button', class: 'btn btn-small', text: '−', onclick: () => deckInput(device, { kind: 'encoder', index, delta: -1 }) }),
-              el('button', { type: 'button', class: 'btn btn-small', text: 'Press', onclick: () => deckInput(device, { kind: 'encoder-press', index }) }),
+              el('button', { type: 'button', class: 'btn btn-small encoder-press', text: 'Press', dataset: { device: String(device), index: String(index) } }),
               el('button', { type: 'button', class: 'btn btn-small', text: '+', onclick: () => deckInput(device, { kind: 'encoder', index, delta: 1 }) }),
             ]),
           ])
@@ -928,6 +929,54 @@
     list.addEventListener('contextmenu', (event) => {
       if (event.target.closest('.deck-key')) event.preventDefault();
     });
+  }
+
+  const encoderHeld = new Map();
+
+  function bindDeckEncoders() {
+    const list = $('#deck-list');
+    if (!list || list.dataset.encoderBound === '1') return;
+    list.dataset.encoderBound = '1';
+
+    const fromEvent = (event) => {
+      const button = event.target.closest && event.target.closest('.encoder-press');
+      if (!button || !list.contains(button)) return null;
+      const device = Number(button.dataset.device);
+      const index = Number(button.dataset.index);
+      if (!Number.isFinite(device) || !Number.isFinite(index)) return null;
+      return { button, device, index, id: `${device}:${index}` };
+    };
+
+    const press = (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      const encoder = fromEvent(event);
+      if (!encoder) return;
+      event.preventDefault();
+      if (encoderHeld.has(encoder.id)) return;
+      encoderHeld.set(encoder.id, true);
+      encoder.button.classList.add('is-pressed');
+      if (typeof encoder.button.setPointerCapture === 'function' && event.pointerId != null) {
+        try {
+          encoder.button.setPointerCapture(event.pointerId);
+        } catch {
+          /* capture is best-effort */
+        }
+      }
+      deckInput(encoder.device, { kind: 'encoder-press', index: encoder.index, action: 'down' });
+    };
+
+    const release = (event) => {
+      const encoder = fromEvent(event);
+      if (!encoder || !encoderHeld.has(encoder.id)) return;
+      encoderHeld.delete(encoder.id);
+      encoder.button.classList.remove('is-pressed');
+      deckInput(encoder.device, { kind: 'encoder-press', index: encoder.index, action: 'up' });
+    };
+
+    list.addEventListener('pointerdown', press);
+    list.addEventListener('pointerup', release);
+    list.addEventListener('pointercancel', release);
+    list.addEventListener('lostpointercapture', release);
   }
 
   function deckInput(device, body) {
@@ -1465,5 +1514,6 @@
   });
 
   bindDeckKeys();
+  bindDeckEncoders();
   boot();
 })();

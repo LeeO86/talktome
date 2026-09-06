@@ -506,7 +506,11 @@ async fn streamdeck_input(
             _ => return client_error(StatusCode::BAD_REQUEST, "key input needs action down|up"),
         },
         "encoder" => DeckInput::EncoderTwist(body.index, body.delta.unwrap_or(1)),
-        "encoder-press" => DeckInput::EncoderPress(body.index),
+        "encoder-press" => match body.action.as_deref() {
+            Some("up") | Some("release") => DeckInput::EncoderRelease(body.index),
+            _ => DeckInput::EncoderPress(body.index),
+        },
+        "encoder-release" | "encoder-up" => DeckInput::EncoderRelease(body.index),
         "touch" => DeckInput::TouchPoint(body.index),
         other => {
             return client_error(

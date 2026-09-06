@@ -321,6 +321,7 @@ pub struct DeckStatus {
     pub encoder_page: usize,
     pub encoder_pages: usize,
     pub volume_layer: bool,
+    pub member_layer: bool,
     pub keys: Vec<DeckKeyView>,
     pub dials: Vec<DeckDialView>,
     pub error: Option<String>,
@@ -357,6 +358,7 @@ pub enum DeckInput {
     KeyUp(u8),
     EncoderTwist(u8, i8),
     EncoderPress(u8),
+    EncoderRelease(u8),
     TouchPoint(u8),
 }
 

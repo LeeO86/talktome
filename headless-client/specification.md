@@ -558,6 +558,19 @@ Every command is answered with the matching `-result` event carrying the
     short (Neo: VOL, MUTE, −, +). Target keys never move. Tap a target to
     select it; `streamdeck.volume_step` (0.05); hold a target 600 ms toggles
     mute. The layer times out after `streamdeck.volume_layer_timeout_s` (8 s).
+  - **Conference members**: a shared **member layer** lists the people in a
+    conference on the target keys (name, hear/mute, per-member volume). It is
+    exclusive with the volume layer and uses the same timeout. Tap a member
+    to select them for MUTE / − / +; hold 600 ms to hear/mute. **NEXT** (and
+    Neo touch points) page members while the layer is open.
+    - **MK.2 / Original / XL / Plus XL**: a **MEMBERS** key occupies the first
+      free command-row cell (after Status, VOL, paging, Reply). Tap to enter
+      or leave the layer.
+    - **Neo / Mini / Plus**: no spare command key. **Hold VOL 600 ms** to open
+      the member layer; a short tap still opens volume.
+    - **Stream Deck + / + XL**: **hold a conference dial 600 ms** to open that
+      conference's member layer (a short press still mutes). In the member
+      layer, dials mix the visible members.
   - **Stream Deck +**: four dials line up with the four keys of the bottom
     row; dial *n* is the same target as that key (current key page). Rotate
     = volume, press = mute. No separate dial paging. Strip swipe pages keys.
