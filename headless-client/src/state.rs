@@ -286,13 +286,16 @@ pub struct AudioView {
     pub last_error: Option<String>,
 }
 
+pub type DeckImage = (u64, Arc<Vec<u8>>);
+pub type DeckImages = HashMap<(usize, u8), DeckImage>;
+
 /// Hardware state written by the surfaces and read by the web UI.
 #[derive(Debug, Default)]
 pub struct Hardware {
     pub gpio: GpioStatus,
     pub decks: Vec<DeckStatus>,
     /// Rendered key images (PNG) keyed by (device, key) with their hash.
-    pub deck_images: HashMap<(usize, u8), (u64, Arc<Vec<u8>>)>,
+    pub deck_images: DeckImages,
     pub audio: AudioView,
     /// Per-device input inlets filled by the Stream Deck tasks.
     pub deck_inputs: Vec<mpsc::Sender<DeckInput>>,

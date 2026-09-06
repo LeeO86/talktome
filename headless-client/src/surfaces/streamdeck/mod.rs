@@ -306,6 +306,7 @@ impl MockDeck {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     id: usize,
     config: StreamDeckConfig,
