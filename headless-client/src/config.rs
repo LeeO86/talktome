@@ -1432,7 +1432,7 @@ mod tests {
             resolved[0].layout.get("0").map(String::as_str),
             Some("conf:8")
         );
-        assert!(resolved[0].layout.get("1").is_none());
+        assert!(!resolved[0].layout.contains_key("1"));
 
         let toml =
             from_document(parse_document(Path::new("cam1.toml"), toml_text).unwrap()).unwrap();
