@@ -150,6 +150,54 @@ impl Snapshot {
     pub fn target(&self, key: TargetKey) -> Option<&TargetInfo> {
         self.targets.iter().find(|t| t.key == key)
     }
+
+    /// Label for the Reply key: the conference (or target) being talked to,
+    /// never the caller’s display name. Matches the web client’s reply button.
+    pub fn reply_label(&self) -> Option<String> {
+        let name_of = |key: TargetKey| self.target(key).map(|target| target.name.clone());
+        let conference_name = |key: TargetKey| match key {
+            TargetKey::Conference(_) => name_of(key),
+            _ => None,
+        };
+        if let Some(key) = self.reply_target {
+            if let Some(name) = conference_name(key) {
+                return Some(name);
+            }
+        }
+        if let Some(name) = self
+            .incoming
+            .iter()
+            .find_map(|incoming| incoming.target.and_then(conference_name))
+        {
+            return Some(name);
+        }
+        if let Some(name) = self
+            .reply_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let is_caller = self
+                .incoming
+                .iter()
+                .any(|incoming| incoming.from_name.eq_ignore_ascii_case(name));
+            let has_conference = self
+                .incoming
+                .iter()
+                .any(|incoming| matches!(incoming.target, Some(TargetKey::Conference(_))));
+            if !(is_caller && has_conference) {
+                return Some(name.to_string());
+            }
+        }
+        if let Some(key) = self.reply_target {
+            if let Some(name) = name_of(key) {
+                return Some(name);
+            }
+        }
+        self.incoming
+            .iter()
+            .find_map(|incoming| incoming.target.and_then(name_of))
+    }
 }
 
 /// What a talk action refers to.

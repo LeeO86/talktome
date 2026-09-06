@@ -362,24 +362,7 @@ fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
 }
 
 fn reply_conference_name(snapshot: &Snapshot) -> Option<String> {
-    if let Some(name) = snapshot
-        .reply_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        return Some(name.to_string());
-    }
-    if let Some(key) = snapshot.reply_target {
-        if let Some(target) = snapshot.target(key) {
-            return Some(target.name.clone());
-        }
-    }
-    snapshot.incoming.first().and_then(|incoming| {
-        incoming
-            .target
-            .and_then(|key| snapshot.target(key).map(|target| target.name.clone()))
-    })
+    snapshot.reply_label()
 }
 
 fn reply_appearance(snapshot: &Snapshot) -> Appearance {
@@ -818,13 +801,15 @@ mod tests {
     #[test]
     fn reply_shows_conference_not_caller() {
         let mut snapshot = snapshot(2);
+        snapshot.targets[1].key = TargetKey::Conference(1);
+        snapshot.targets[1].name = "News".into();
         snapshot.reply_target = Some(TargetKey::User(0));
-        snapshot.reply_name = Some("News".into());
+        snapshot.reply_name = Some("jan".into());
+        snapshot.targets[0].name = "jan".into();
         snapshot.incoming = vec![crate::state::IncomingInfo {
             from_name: "jan".into(),
-            target: Some(TargetKey::User(0)),
+            target: Some(TargetKey::Conference(1)),
         }];
-        snapshot.targets[0].name = "News".into();
         let keys = layout(
             &geometry("neo"),
             &snapshot,
@@ -833,6 +818,7 @@ mod tests {
         );
         assert_eq!(keys[3].role, Role::Reply);
         assert_eq!(keys[3].appearance.subtitle, "News");
+        assert_ne!(keys[3].appearance.subtitle, "jan");
         assert_eq!(keys[3].appearance.background, palette::INCOMING);
     }
 
