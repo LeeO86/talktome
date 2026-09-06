@@ -34,17 +34,22 @@ test('keeps production layouts separate from the global target matrix', () => {
     db.updateUserBridgeEndpoint(anna, {
       enabled: true,
       bridgeDevice: 'test-bridge',
-      productionId: production,
+      triggerMode: 'audio-level',
+      triggerTargetType: 'conference',
+      triggerTargetId: regie,
     });
     db.updateFeedBridgeEndpoint(program, {
       enabled: true,
       bridgeDevice: 'test-bridge',
-      productionId: production,
     });
-    assert.equal(db.getUserById(anna).bridge_production_id, production);
-    assert.equal(db.getAllFeeds().find((feed) => feed.id === program).bridge_production_id, production);
-    assert.equal(db.getBridgeEndpointsForDevice('test-bridge')[0].production_id, production);
-    assert.equal(db.getFeedBridgeEndpointsForDevice('test-bridge')[0].production_id, production);
+    assert.equal('bridge_production_id' in db.getUserById(anna), false);
+    assert.equal('bridge_production_id' in db.getAllFeeds().find((feed) => feed.id === program), false);
+    assert.equal('production_id' in db.getBridgeEndpointsForDevice('test-bridge')[0], false);
+    assert.equal('production_id' in db.getFeedBridgeEndpointsForDevice('test-bridge')[0], false);
+    assert.deepEqual(
+      db.getBridgeTargetsForUser(anna).map((target) => target.targetType),
+      ['conference']
+    );
 
     const secondProduction = db.createProduction('Evening show');
     db.setProductionUser(secondProduction, luis);
@@ -101,8 +106,8 @@ test('keeps production layouts separate from the global target matrix', () => {
     assert.equal(snapshot.productionConferences.length, 2);
     assert.equal(snapshot.productionFeeds.length, 1);
     assert.equal(snapshot.productionConferenceMemberships.length, 2);
-    assert.equal(snapshot.userBridgeEndpoints[0].production_id, production);
-    assert.equal(snapshot.feedBridgeEndpoints[0].production_id, production);
+    assert.equal(snapshot.userBridgeEndpoints[0].production_id, null);
+    assert.equal(snapshot.feedBridgeEndpoints[0].production_id, null);
     assert.equal(
       snapshot.productionConferenceMemberships.find((membership) => (
         Number(membership.production_id) === Number(production)
@@ -112,11 +117,17 @@ test('keeps production layouts separate from the global target matrix', () => {
       0
     );
 
+    // Older backups may still contain the retired bridge production scope.
+    snapshot.userBridgeEndpoints[0].production_id = production;
+    snapshot.feedBridgeEndpoints[0].production_id = production;
     db.importDatabaseSnapshot(snapshot);
     assert.equal(db.getProductionById(production).name, 'Morning show');
     assert.equal(db.getProductionTargets(anna, production).length, 2);
-    assert.equal(db.getUserById(anna).bridge_production_id, production);
-    assert.equal(db.getAllFeeds().find((feed) => feed.id === program).bridge_production_id, production);
+    assert.equal('bridge_production_id' in db.getUserById(anna), false);
+    assert.equal('bridge_production_id' in db.getAllFeeds().find((feed) => feed.id === program), false);
+    const restoredSnapshot = db.exportDatabaseSnapshot();
+    assert.equal(restoredSnapshot.userBridgeEndpoints[0].production_id, null);
+    assert.equal(restoredSnapshot.feedBridgeEndpoints[0].production_id, null);
     assert.equal(
       db.getProductionTargets(anna, production).find((target) => target.targetType === 'conference').canTalk,
       false

@@ -11,9 +11,9 @@ test('mobile admin forms and navigation fit the viewport', () => {
   assert.match(html, /\.entity-sidebar \.entity-create-form \.password-input-wrap,[\s\S]*?inline-size:\s*100%;/);
   assert.match(html, /\.entity-sidebar \.entity-create-form button\[type='submit'\][\s\S]*?width:\s*100%;/);
   assert.match(html, /\.entity-sidebar \.entity-create-form\s*\{[^}]*display:\s*grid;[^}]*gap:\s*0\.55rem;/s);
-  assert.match(html, /\.entity-sidebar \.entity-create-form \.field-group\s*\{[^}]*display:\s*grid;[^}]*gap:\s*0\.25rem;/s);
+  assert.match(html, /\.entity-sidebar \.entity-create-form \.field-group\s*\{[^}]*display:\s*contents;/s);
   assert.match(html, /:is\(#user-form, #conf-form, #feed-form\)\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/s);
-  assert.match(html, /:is\(#user-form, #conf-form, #feed-form\) > \.field-group,[\s\S]*?width:\s*100% !important;/);
+  assert.match(html, /:is\(#user-form, #conf-form, #feed-form\) > button\[type='submit'\][\s\S]*?width:\s*100% !important;/);
   assert.match(html, /:is\(#user-form, #feed-form\) > \.field-group > \.password-input-wrap > input\s*\{[^}]*width:\s*100% !important;/s);
   assert.match(script, /matchMedia\?\.\('\(hover: none\) and \(pointer: coarse\)'\)[\s\S]*?link\.blur\(\)/);
 });

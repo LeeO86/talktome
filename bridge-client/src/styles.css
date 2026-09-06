@@ -372,10 +372,6 @@ h3 {
   grid-template-columns: minmax(0, 1fr) 8rem;
 }
 
-.managed-port-control--production {
-  max-width: 24rem;
-}
-
 .managed-port-trigger-grid {
   align-items: start;
   display: grid;
