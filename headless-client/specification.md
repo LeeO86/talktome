@@ -569,8 +569,10 @@ Every command is answered with the matching `-result` event carrying the
     **Reply** at the far right. Reply shows the conference being talked to
     (same as the web client), not the caller. Tap status: clear locks.
     Hold status 2 s: next key page.
-  - Remaining keys: targets filled from the **bottom row upward** (web
-    client order). Feeds show name + volume; press toggles mute.
+  - Remaining keys: targets in **left-to-right, top-to-bottom** order like
+    the web client. If there are fewer targets than keys, whole rows sit on
+    the lowest available rows (empty rows stay above the block). Feeds show
+    name + volume; press toggles mute.
   - **Volume on models without enough command-row space**: **VOL** toggles
     the volume layer. Mute / − / + are placed on the command row between
     VOL and Reply, overlaying status/paging/reply only when the row is too

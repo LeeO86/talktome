@@ -211,9 +211,11 @@ server-side mute. The conference fader still scales the whole conference.
   the left, **VOL** next to it, **NEXT** (when there are more targets than
   keys) one left of **Reply**, and **Reply** at the far right. Reply shows
   the conference (or target) being talked to, not the caller name.
-- Remaining keys are targets, filled from the **bottom row upward** like the
-  web client. Hold to talk, tap to toggle a talk lock (purple with a lock
-  badge). Feeds cannot be talked to; pressing a feed toggles its mute.
+- Remaining keys are targets in the same order as the web client: **left to
+  right, top to bottom**. If there are fewer targets than keys, used rows sit
+  on the **lowest available rows** (empty rows above the block). Hold to talk,
+  tap to toggle a talk lock (purple with a lock badge). Feeds cannot be talked
+  to; pressing a feed toggles its mute.
 - `VOL` opens the volume layer: mute / − / + occupy the command row (on a
   Neo the whole top row becomes VOL, MUTE, −, +) and **targets do not
   move**. Tap a target to select it. Steps use `streamdeck.volume_step_db`
