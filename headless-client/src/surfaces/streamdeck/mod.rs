@@ -1076,8 +1076,8 @@ fn publish_deck_view(
                 subtitle: spec.appearance.subtitle.clone(),
                 hash: images
                     .get(&(index as u8))
-                    .map(|(hash, _)| *hash)
-                    .unwrap_or(0),
+                    .map(|(hash, _)| hash.to_string())
+                    .unwrap_or_else(|| "0".into()),
             })
             .collect(),
         dials: dial_views(geometry, state, snapshot),

@@ -291,7 +291,8 @@ pub struct DeckKeyView {
     pub title: String,
     pub subtitle: String,
     /// Changes whenever the rendered image changes; used as cache key.
-    pub hash: u64,
+    /// String so the browser does not round a u64 past 2^53.
+    pub hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]

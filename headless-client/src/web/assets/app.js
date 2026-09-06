@@ -74,6 +74,7 @@
   }
 
   function setBadge(node, text, kind) {
+    if (!node) return;
     node.textContent = text;
     node.className = `badge${kind ? ` badge-${kind}` : ''}`;
   }
@@ -377,7 +378,11 @@
       return;
     }
     state.status = status;
-    renderStatus(status);
+    try {
+      renderStatus(status);
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   function renderStatus(status) {
@@ -703,8 +708,13 @@
     } catch {
       return;
     }
-    const decks = payload && payload.decks ? payload.decks : payload && payload.keys ? [payload] : [];
-    renderDecks(decks);
+    try {
+      const decks = payload && payload.decks ? payload.decks : payload && payload.keys ? [payload] : [];
+      renderDecks(decks);
+    } catch (error) {
+      console.error(error);
+      flash(`Stream Deck view failed: ${error.message}`, 'error');
+    }
   }
 
   function renderDecks(decks) {
@@ -791,6 +801,7 @@
       const fallback = $('.deck-key__fallback', button);
       const label = [key.title, key.subtitle].filter(Boolean).join('\n');
       if (fallback) fallback.textContent = label || ' ';
+      if (!img) continue;
       const src = `/api/streamdeck/${device}/key/${key.index}?h=${key.hash}`;
       if (img.dataset.src !== src) {
         img.dataset.src = src;
@@ -818,8 +829,10 @@
       const node = encoders.children[index];
       if (!node) continue;
       const dial = dials[index] || {};
-      $('.encoder__name', node).textContent = dial.title || `Dial ${index + 1}`;
-      $('.encoder__meta', node).textContent = dial.title ? `${dial.subtitle || ''}${dial.role ? ` · ${dial.role}` : ''}`.replace(/^ · /, '') : 'unassigned';
+      const name = $('.encoder__name', node);
+      const meta = $('.encoder__meta', node);
+      if (name) name.textContent = dial.title || `Dial ${index + 1}`;
+      if (meta) meta.textContent = dial.title ? `${dial.subtitle || ''}${dial.role ? ` · ${dial.role}` : ''}`.replace(/^ · /, '') : 'unassigned';
     }
     if (touchpoints.children.length !== deck.touchpoints) {
       touchpoints.replaceChildren(
@@ -866,7 +879,10 @@
       if (!key) return;
       event.preventDefault();
       if (deckHeld.has(key.id)) return;
+      const lastDown = Number(key.button.dataset.lastDown || 0);
+      if (Date.now() - lastDown < 400) return;
       deckHeld.set(key.id, true);
+      key.button.dataset.lastDown = String(Date.now());
       key.button.dataset.pointerAt = String(Date.now());
       key.button.classList.add('is-pressed');
       if (typeof key.button.setPointerCapture === 'function' && event.pointerId != null) {
