@@ -23,9 +23,14 @@ pub fn spawn_all(
     if let Some(dir) = std::env::var_os(MOCK_DIR_ENV) {
         tasks.spawn(mock::run(dir.into(), bus.clone(), shutdown.clone()));
     }
-    if config.gpio.enabled && (!config.gpio.outputs.is_empty() || !config.gpio.inputs.is_empty()) {
+    if config.gpio.enabled
+        && (!config.gpio.outputs.is_empty()
+            || !config.gpio.inputs.is_empty()
+            || !config.gpio.target_outputs.is_empty())
+    {
         tasks.spawn(gpio::run(
             config.gpio.clone(),
+            config.streamdeck.volume_step_db(),
             bus.clone(),
             shutdown.clone(),
         ));

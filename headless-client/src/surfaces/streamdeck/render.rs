@@ -224,7 +224,7 @@ impl Renderer {
                 let subtitle = if segment.muted {
                     "MUTED".to_string()
                 } else {
-                    format!("{}%", (segment.volume * 100.0).round() as u32)
+                    crate::audio::mixer::format_volume_db(segment.volume)
                 };
                 let sub_scale = (seg_h as f32 * 0.22).max(9.0);
                 draw_text_at(

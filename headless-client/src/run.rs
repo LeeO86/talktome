@@ -30,7 +30,7 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
     spawn_signal_handler(shutdown_tx.clone());
 
     let mixer = Arc::new(Mutex::new(Mixer::new(
-        config.audio.default_volume,
+        config.audio.default_volume_linear(),
         config.audio.dim_db,
         config.audio.dim_feeds_while_speaking,
         config.audio.dim_when_addressed,

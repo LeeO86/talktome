@@ -416,6 +416,16 @@ main {
   background: rgba(34, 197, 94, 0.08);
 }
 
+.target.is-offline {
+  opacity: 0.72;
+}
+
+.btn-talk:disabled,
+.btn-lock:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .target__name {
   display: flex;
   align-items: center;
@@ -462,7 +472,7 @@ main {
 
 .member {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   gap: 0.4rem;
   align-items: center;
   font-size: 0.85rem;

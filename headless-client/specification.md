@@ -486,8 +486,11 @@ one of `user:<id>`, `conference:<id>`, `feed:<id>` (feeds are listen-only,
 ### 9.1 Volume and mute
 
 Per target key `user:<id>` / `conference:<id>` / `feed:<id>`:
-`volume` 0.0–1.0 (default 0.9), `muted` bool. Applied in the mixer. Changes
-come from the deck (§10), GPIO (§11), and Companion (§9.4). The browser
+`volume` 0.0–1.0 internally (0 dB = unity, −60 dB = mute), `muted` bool.
+Surfaces and Settings show and step levels in **dB**
+(`audio.default_volume_db`, `streamdeck.volume_step_db`, default 3 dB).
+Applied in the mixer. Changes come from the deck (§10), GPIO (§11), the
+web UI, and Companion (§9.4). The browser
 keeps this state client-local and only *reports* it; the headless client
 does the same: state is persisted in
 `$STATE_DIRECTORY/audio-state.json` (`/var/lib/talktome-headless/<instance>/`)
@@ -552,7 +555,8 @@ Every command is answered with the matching `-result` event carrying the
   - **Volume on models without dials**: a **VOL** key (right-most on the
     first row) toggles the volume layer; in that layer the target keys show
     the volume bar, tap selects the target, `+` / `−` keys change it by
-    `streamdeck.volume_step` (0.05), hold a target key 600 ms toggles mute.
+    `streamdeck.volume_step_db` (default 3 dB; legacy `volume_step` 0–1
+    values become 3 dB), hold a target key 600 ms toggles mute.
     The layer times out after `streamdeck.volume_layer_timeout_s` (8 s).
   - **Stream Deck + / + XL dials**: dial *n* controls the target on the
     *n*-th key of the current page (excluding status/reply); rotate =
@@ -575,13 +579,21 @@ Every command is answered with the matching `-result` event carrying the
   user is added to group `gpio` (which owns `/dev/gpiochip*`); that group is
   not created on other Debian images, and the unit must not require it.
 - **Outputs** (`gpio.outputs`): `tally` (camera on air), `talking`,
-  `incoming`, `connected`, `locked`; each with `active_low`.
+  `incoming`, `connected` (only while registered **and** both media
+  transports are up), `locked`; each with `active_low`.
+- **Target outputs** (`gpio.target_outputs`): a list of
+  `{ line, target, when, active_low }`. `when` is `receiving` (audio is
+  currently playing from that user/conference/feed) or `incoming` (that
+  target is addressing us). Add or remove rows in Settings.
 - **Inputs** (`gpio.inputs`): a list of `{ line, action, target, active_low,
   debounce_ms }` with actions `talk` (hold = talk, tap = lock, same rules as
   a deck key), `reply`, `lock_toggle`, `clear_locks`, `mute_toggle`,
-  `volume_up`, `volume_down`. Edge events are debounced in software
-  (`debounce_ms`, default 20) in addition to the kernel debounce where
-  available.
+  `volume_up`, `volume_down`. After the lines are requested, the **current
+  level** is sampled so an already-held (typically inverted) button starts
+  talking immediately instead of waiting for the next edge. Edge events are
+  debounced in software (`debounce_ms`, default 20) in addition to the
+  kernel debounce where available. Talk/lock to an offline **user** is
+  ignored.
 - GPIO-only instances (the two-instances-per-Pi case) simply omit the
   `streamdeck` section; two instances must not share lines.
 - A `mock` GPIO backend (env `TALKTOME_GPIO_BACKEND=mock`) writes line
@@ -614,21 +626,23 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
              "profile": "standard", "input_gain_db": 0,
              "dim_db": -14, "dim_feeds_while_speaking": false,
              "dim_when_addressed": true,
-             "jitter_min_ms": 20, "jitter_max_ms": 120, "reopen_ms": 2000 },
+             "jitter_min_ms": 20, "jitter_max_ms": 120, "reopen_ms": 2000,
+             "default_volume_db": 0 },
   "vox": { "enabled": false, "target": "conference:1", "threshold_db": -32, "hang_ms": 600 },
   "talk": { "tap_ms": 250, "lock_multiple": false },
   "ice": { "servers": null, "transport_policy": null },   // null = use the server's
   "network": { "ice_disconnect_grace_ms": 4000 },
   "streamdeck": { "enabled": true, "serial": null, "mock": null, "brightness": 60,
                   "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                  "volume_step": 0.05, "volume_layer_timeout_s": 8,
+                  "volume_step_db": 3, "volume_layer_timeout_s": 8,
                   "pedal_target": "conference:1", "layout": {} },
   "gpio": { "enabled": true, "chip": null,
             "outputs": { "tally": { "line": "GPIO17", "active_low": false },
                          "talking": { "line": "GPIO27" } },
             "inputs": [ { "line": "GPIO22", "action": "talk", "target": "conference:1",
                           "active_low": true, "debounce_ms": 20 },
-                        { "line": "GPIO23", "action": "reply", "active_low": true } ] },
+                        { "line": "GPIO23", "action": "reply", "active_low": true } ],
+            "target_outputs": [ { "line": "GPIO18", "target": "conference:1", "when": "receiving" } ] },
   "web": { "enabled": true, "bind": "0.0.0.0", "port": 8080, "password": "admin" },
   "health": { "port": null },               // optional /healthz listener
   "log": { "level": "info", "format": "auto" } // auto = JSON when under systemd
@@ -724,9 +738,11 @@ panel is not the same icon as Admin or the black-on-white Bridge.
 - **Status**: connection (state, detail, server, user id, production,
   registration age, reconnects, send/receive transport state, consumers,
   producer id, ICE URLs announced by the server and the local webrtc-rs
-  façade when TURNS is bridged, tally), talk destinations in a wrapping
-  grid (conference **Members** for per-person hear/mute and level), talk
-  state with press-and-hold Talk, Lock, volume slider and Mute per target,
+  façade when TURNS is bridged, ICE RTT and packet loss, receive
+  concealment, tally), talk destinations in a wrapping
+  grid (conference **Members** for per-person hear/mute and level in dB), talk
+  state with press-and-hold Talk, Lock, volume slider (dB) and Mute per target
+  (Talk/Lock disabled when that **user** is offline),
   incoming callers and reply target, audio devices and input level, GPIO
   backend with every configured output (driven state) and input (pressed,
   event count), Stream Deck model / serial / page, and service details
@@ -735,7 +751,8 @@ panel is not the same icon as Admin or the black-on-white Bridge.
   cached by content hash), dials and touch points; pressing in the browser
   injects the same input the hardware would produce.
 - **Settings**: a form over the whole schema (§12), audio devices listed from
-  ALSA, GPIO output/input editors, JSON fields for ICE overrides and key
+  ALSA, GPIO named outputs plus dynamically added per-target outputs,
+  target dropdowns for VOX/GPIO/pedal, JSON fields for ICE overrides and key
   layout, and a raw JSON editor. The form edits the **configuration file**,
   not the in-memory process: after Save, values already in the file (the
   Talktome user, devices, …) stay put when another field is changed, even

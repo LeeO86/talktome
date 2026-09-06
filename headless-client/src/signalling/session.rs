@@ -145,7 +145,7 @@ impl Session {
         } else {
             None
         };
-        let audio = AudioState::load(&config.state_dir(), config.audio.default_volume);
+        let audio = AudioState::load(&config.state_dir(), config.audio.default_volume_linear());
         if let Ok(mut mixer) = io.mixer.lock() {
             for (key, level) in audio.iter_levels() {
                 mixer.set_level(key, level);
@@ -317,6 +317,42 @@ impl Session {
                 self.apply_member_level(conference_id, user_id, level);
             }
             Command::MemberVolumeSet { .. } | Command::MemberMuteToggle { .. } => {}
+            Command::TalkPress { source, target } => {
+                if !self.target_is_talkable(target) {
+                    self.detail = "user offline".into();
+                    self.snapshot_dirty = true;
+                    return;
+                }
+                if let Some(change) = self.talk.press(source, target, Instant::now()) {
+                    self.pending_talk_change = Some(change);
+                    self.snapshot_dirty = true;
+                } else {
+                    self.detail = "no target".into();
+                    self.snapshot_dirty = true;
+                }
+            }
+            Command::TalkRelease { source, target } => {
+                if let Some(change) = self.talk.release(source, target, Instant::now()) {
+                    self.pending_talk_change = Some(change);
+                    self.snapshot_dirty = true;
+                }
+            }
+            Command::LockToggle { target } => {
+                if !self.target_is_talkable(target) {
+                    self.detail = "user offline".into();
+                    self.snapshot_dirty = true;
+                    return;
+                }
+                if let Some(change) = self.talk.toggle_lock(target) {
+                    self.pending_talk_change = Some(change);
+                    self.snapshot_dirty = true;
+                }
+            }
+            Command::ClearLocks => {
+                let change = self.talk.clear_locks();
+                self.pending_talk_change = Some(change);
+                self.snapshot_dirty = true;
+            }
             Command::Refresh => self.snapshot_dirty = true,
             _ => {}
         }
@@ -553,6 +589,7 @@ impl Session {
             ice_servers: send.ice_servers.clone(),
             ice_servers_announced: send.ice_servers_announced.clone(),
             ice_transport_policy: send.ice_transport_policy.clone(),
+            ..Default::default()
         });
         connected.media = Some(Media {
             factory,
@@ -745,6 +782,7 @@ impl Session {
 
         let mut tick = tokio::time::interval(Duration::from_millis(500));
         let mut last_sync = Instant::now();
+        let mut last_stats = Instant::now();
         let mut targets_reload_due: Option<Instant> = None;
         let mut shutdown = self.io.shutdown.clone();
 
@@ -842,6 +880,10 @@ impl Session {
                         self.sync_active_producers(&mut connected).await;
                         self.compact_recv_transport(&mut connected).await;
                     }
+                    if last_stats.elapsed() >= Duration::from_secs(2) {
+                        last_stats = Instant::now();
+                        self.refresh_media_stats(&connected).await;
+                    }
                     if self.audio_state_dirty
                         && self.last_audio_snapshot.elapsed() >= SNAPSHOT_DEBOUNCE
                     {
@@ -930,6 +972,15 @@ impl Session {
                             .collect()
                     })
                     .unwrap_or_default();
+                let online = self.online_users.clone();
+                if let Some(change) = self.talk.drop_unavailable(|key| match key {
+                    TargetKey::User(id) => online.contains(&id),
+                    TargetKey::Feed(_) => false,
+                    TargetKey::Conference(_) => true,
+                }) {
+                    self.send_talk_change(connected, &change, "user-offline")
+                        .await;
+                }
                 self.snapshot_dirty = true;
             }
             "cut-camera" => {
@@ -1064,19 +1115,31 @@ impl Session {
     async fn handle_command(&mut self, connected: &mut Connected, command: Command) {
         let now = Instant::now();
         match command {
-            Command::TalkPress { source, target } => match self.talk.press(source, target, now) {
-                Some(change) => self.send_talk_change(connected, &change, "press").await,
-                None => {
-                    self.detail = "no target".into();
+            Command::TalkPress { source, target } => {
+                if !self.target_is_talkable(target) {
+                    self.detail = "user offline".into();
                     self.snapshot_dirty = true;
+                    return;
                 }
-            },
+                match self.talk.press(source, target, now) {
+                    Some(change) => self.send_talk_change(connected, &change, "press").await,
+                    None => {
+                        self.detail = "no target".into();
+                        self.snapshot_dirty = true;
+                    }
+                }
+            }
             Command::TalkRelease { source, target } => {
                 if let Some(change) = self.talk.release(source, target, now) {
                     self.send_talk_change(connected, &change, "release").await;
                 }
             }
             Command::LockToggle { target } => {
+                if !self.target_is_talkable(target) {
+                    self.detail = "user offline".into();
+                    self.snapshot_dirty = true;
+                    return;
+                }
                 if let Some(change) = self.talk.toggle_lock(target) {
                     self.send_talk_change(connected, &change, "lock-toggle")
                         .await;
@@ -1264,6 +1327,45 @@ impl Session {
         }
     }
 
+    fn target_is_talkable(&self, target: TargetRef) -> bool {
+        let Some(key) = (match target {
+            TargetRef::Key(key) => Some(key),
+            TargetRef::Reply => self.talk.reply_target(),
+        }) else {
+            return false;
+        };
+        match key {
+            TargetKey::User(id) => self.online_users.contains(&id),
+            TargetKey::Conference(_) => true,
+            TargetKey::Feed(_) => false,
+        }
+    }
+
+    async fn refresh_media_stats(&mut self, connected: &Connected) {
+        let Some(media) = connected.media.as_ref() else {
+            return;
+        };
+        let send = crate::rtc::LinkStats::from_report(&media.send.stats_report().await);
+        let recv = crate::rtc::LinkStats::from_report(&media.recv.stats_report().await);
+        let link = send.merge(recv);
+        let conceal = self.io.mixer.lock().ok().and_then(|mixer| {
+            let stats = mixer.receive_stats();
+            let den = stats.packets + stats.concealed;
+            if den == 0 {
+                None
+            } else {
+                Some(((stats.concealed as f32) / den as f32 * 1000.0).round() / 10.0)
+            }
+        });
+        if let Some(info) = self.media_info.as_mut() {
+            info.rtt_ms = link.rtt_ms;
+            info.packet_loss_pct = link.packet_loss_pct;
+            info.packets_lost = (link.packets_lost > 0).then_some(link.packets_lost);
+            info.packets_received = (link.packets_received > 0).then_some(link.packets_received);
+            info.recv_conceal_pct = conceal;
+        }
+    }
+
     async fn handle_api_talk_command(&mut self, connected: &mut Connected, payload: Value) {
         let command_id = payload.get("commandId").cloned().unwrap_or(Value::Null);
         let action = payload
@@ -1290,9 +1392,13 @@ impl Session {
         let now = Instant::now();
         let (ok, reason, change) = match (action.as_str(), target) {
             ("press", Some(target)) if self.known_target(target) => {
-                match self.talk.press(source, target, now) {
-                    Some(change) => (true, None, Some(change)),
-                    None => (false, Some("press-failed"), None),
+                if !self.target_is_talkable(target) {
+                    (false, Some("target-not-available"), None)
+                } else {
+                    match self.talk.press(source, target, now) {
+                        Some(change) => (true, None, Some(change)),
+                        None => (false, Some("press-failed"), None),
+                    }
                 }
             }
             ("release", Some(target)) => {
@@ -1301,9 +1407,13 @@ impl Session {
             }
             ("release", None) => (true, None, None),
             ("lock-toggle", Some(target)) if self.known_target(target) => {
-                match self.talk.toggle_lock(target) {
-                    Some(change) => (true, None, Some(change)),
-                    None => (false, Some("target-not-available"), None),
+                if !self.target_is_talkable(target) {
+                    (false, Some("target-not-available"), None)
+                } else {
+                    match self.talk.toggle_lock(target) {
+                        Some(change) => (true, None, Some(change)),
+                        None => (false, Some("target-not-available"), None),
+                    }
                 }
             }
             ("press" | "lock-toggle", _) => (false, Some("target-not-available"), None),

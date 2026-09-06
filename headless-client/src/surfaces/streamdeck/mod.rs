@@ -19,6 +19,7 @@ use elgato_streamdeck::DeviceStateUpdate;
 use image::{DynamicImage, RgbImage};
 use tokio::sync::watch;
 
+use crate::audio::mixer::step_volume_db;
 use crate::config::{StreamDeckConfig, TalkConfig};
 use crate::state::{
     Bus, Command, DeckInput, DeckKeyView, DeckStatus, InputSource, Snapshot, TargetRef,
@@ -596,13 +597,24 @@ async fn run_device(
                                 state.touch_volume_layer();
                                 relayout = true;
                             } else if target.can_talk() {
-                                let _ = bus
-                                    .commands
-                                    .send(Command::TalkPress {
-                                        source: source(key),
-                                        target: TargetRef::Key(target),
-                                    })
-                                    .await;
+                                if matches!(target, TargetKey::User(_))
+                                    && snapshot
+                                        .targets
+                                        .iter()
+                                        .find(|t| t.key == target)
+                                        .is_some_and(|t| !t.online)
+                                {
+                                    // Offline users stay grey; the press is ignored so
+                                    // the operator sees that talk does not engage.
+                                } else {
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::TalkPress {
+                                            source: source(key),
+                                            target: TargetRef::Key(target),
+                                        })
+                                        .await;
+                                }
                             } else {
                                 let _ = bus.commands.send(Command::MuteToggle(target)).await;
                             }
@@ -624,13 +636,22 @@ async fn run_device(
                             state.touch_volume_layer();
                             if let Some(target) = state.selected {
                                 let delta = if role == Role::VolumeUp {
-                                    config.volume_step
+                                    config.volume_step_db()
                                 } else {
-                                    -config.volume_step
+                                    -config.volume_step_db()
                                 };
+                                let current = snapshot
+                                    .targets
+                                    .iter()
+                                    .find(|t| t.key == target)
+                                    .map(|t| t.volume)
+                                    .unwrap_or(1.0);
                                 let _ = bus
                                     .commands
-                                    .send(Command::VolumeStep { target, delta })
+                                    .send(Command::VolumeSet {
+                                        target,
+                                        volume: step_volume_db(current, delta),
+                                    })
                                     .await;
                             }
                         }
@@ -688,12 +709,13 @@ async fn run_device(
                 DeviceStateUpdate::EncoderTwist(encoder, ticks) => {
                     let targets = encoder_targets(&geometry, &state, &snapshot);
                     if let Some(Some(target)) = targets.get(encoder as usize) {
-                        let delta = config.volume_step * ticks as f32;
+                        let delta = config.volume_step_db() * ticks as f32;
+                        let current = target.volume;
                         let _ = bus
                             .commands
-                            .send(Command::VolumeStep {
+                            .send(Command::VolumeSet {
                                 target: target.key,
-                                delta,
+                                volume: step_volume_db(current, delta),
                             })
                             .await;
                     }

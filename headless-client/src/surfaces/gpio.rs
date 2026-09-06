@@ -13,7 +13,9 @@ use gpiocdev::request::Request;
 use gpiocdev::tokio::AsyncRequest;
 use tokio::sync::{mpsc, watch};
 
-use crate::config::{GpioConfig, GpioInputAction, GpioInputConfig};
+use crate::config::{
+    GpioConfig, GpioInputAction, GpioInputConfig, GpioTargetOutputConfig, GpioTargetWhen,
+};
 use crate::state::{
     Bus, Command, GpioInputView, GpioOutputView, GpioStatus, InputSource, Snapshot, TargetRef,
 };
@@ -30,8 +32,45 @@ pub fn output_states(snapshot: &Snapshot) -> HashMap<&'static str, bool> {
     states.insert("tally", snapshot.on_air);
     states.insert("talking", snapshot.talking);
     states.insert("incoming", !snapshot.incoming.is_empty());
-    states.insert("connected", snapshot.connection.is_online());
+    states.insert("connected", snapshot.connection.is_ready());
     states.insert("locked", snapshot.lock_active);
+    states
+}
+
+pub fn target_output_id(output: &GpioTargetOutputConfig) -> String {
+    format!("{}:{}", output.when.as_str(), output.target)
+}
+
+pub fn target_output_active(snapshot: &Snapshot, output: &GpioTargetOutputConfig) -> bool {
+    let Some(key) = TargetKey::parse(&output.target) else {
+        return false;
+    };
+    let Some(target) = snapshot.targets.iter().find(|t| t.key == key) else {
+        return false;
+    };
+    match output.when {
+        GpioTargetWhen::Incoming => target.incoming,
+        GpioTargetWhen::Receiving => target.receiving,
+    }
+}
+
+fn desired_output_states(config: &GpioConfig, snapshot: &Snapshot) -> HashMap<String, bool> {
+    let named = output_states(snapshot);
+    let mut states = HashMap::new();
+    for name in OUTPUT_NAMES {
+        if config.outputs.contains_key(*name) {
+            states.insert(
+                (*name).to_string(),
+                named.get(name).copied().unwrap_or(false),
+            );
+        }
+    }
+    for output in &config.target_outputs {
+        states.insert(
+            target_output_id(output),
+            target_output_active(snapshot, output),
+        );
+    }
     states
 }
 
@@ -63,6 +102,13 @@ pub fn initial_status(config: &GpioConfig, backend: &str) -> GpioStatus {
                     error: None,
                 })
             })
+            .chain(config.target_outputs.iter().map(|output| GpioOutputView {
+                name: target_output_id(output),
+                line: output.line.clone(),
+                active_low: output.active_low,
+                active: None,
+                error: None,
+            }))
             .collect(),
         inputs: config
             .inputs
@@ -82,6 +128,12 @@ pub fn initial_status(config: &GpioConfig, backend: &str) -> GpioStatus {
 fn publish_status(bus: &Bus, status: &GpioStatus) {
     if let Ok(mut hardware) = bus.hardware.write() {
         hardware.gpio = status.clone();
+    }
+}
+
+fn set_input_pressed(status: &mut GpioStatus, index: usize, pressed: bool) {
+    if let Some(view) = status.inputs.get_mut(index) {
+        view.pressed = pressed;
     }
 }
 
@@ -157,6 +209,17 @@ pub fn command_for_input(input: &GpioInputConfig, pressed: bool) -> Option<Comma
     }
 }
 
+/// Hold-to-talk / reply honour the line level at startup; edge-only actions do not.
+pub fn initial_command_for_input(input: &GpioInputConfig, pressed: bool) -> Option<Command> {
+    if !pressed {
+        return None;
+    }
+    match input.action {
+        GpioInputAction::Talk | GpioInputAction::Reply => command_for_input(input, true),
+        _ => None,
+    }
+}
+
 /// Software debounce on top of whatever the kernel provides.
 pub struct Debouncer {
     window: Duration,
@@ -184,18 +247,27 @@ impl Debouncer {
         self.last.insert(event.index, (now, event.pressed));
         Some(event)
     }
+
+    pub fn seed(&mut self, index: usize, pressed: bool, now: Instant) {
+        self.last.insert(index, (now, pressed));
+    }
 }
 
-pub async fn run(config: GpioConfig, bus: Bus, shutdown: watch::Receiver<bool>) {
+pub async fn run(
+    config: GpioConfig,
+    volume_step_db: f32,
+    bus: Bus,
+    shutdown: watch::Receiver<bool>,
+) {
     let mock = std::env::var(BACKEND_ENV)
         .map(|v| !v.is_empty() && v != "0" && v != "false")
         .unwrap_or(false);
     let mut status = initial_status(&config, if mock { "mock" } else { "gpiocdev" });
     publish_status(&bus, &status);
     let result = if mock {
-        run_mock(config, &bus, &mut status, shutdown).await
+        run_mock(config, volume_step_db, &bus, &mut status, shutdown).await
     } else {
-        run_real(config, &bus, &mut status, shutdown).await
+        run_real(config, volume_step_db, &bus, &mut status, shutdown).await
     };
     if let Err(error) = result {
         tracing::error!(event = "gpio-failed", error = %format!("{error:#}"));
@@ -258,16 +330,29 @@ struct OutputLine {
 
 async fn run_real(
     config: GpioConfig,
+    volume_step_db: f32,
     bus: &Bus,
     status: &mut GpioStatus,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     // Outputs: one request per line (lines may live on different chips).
-    let mut outputs: HashMap<&'static str, OutputLine> = HashMap::new();
-    for (name, output) in &config.outputs {
-        let Some(static_name) = OUTPUT_NAMES.iter().find(|n| **n == name.as_str()) else {
-            continue;
-        };
+    let mut outputs: HashMap<String, OutputLine> = HashMap::new();
+    let mut named: Vec<(String, crate::config::GpioOutputConfig)> = config
+        .outputs
+        .iter()
+        .filter(|(name, _)| OUTPUT_NAMES.contains(&name.as_str()))
+        .map(|(name, output)| (name.clone(), output.clone()))
+        .collect();
+    for output in &config.target_outputs {
+        named.push((
+            target_output_id(output),
+            crate::config::GpioOutputConfig {
+                line: output.line.clone(),
+                active_low: output.active_low,
+            },
+        ));
+    }
+    for (name, output) in &named {
         let resolved = resolve_line(&config, &output.line)?;
         let mut builder = Request::builder();
         builder
@@ -283,7 +368,7 @@ async fn run_real(
             .with_context(|| format!("requesting output {} ({})", name, output.line))?;
         tracing::info!(event = "gpio-output", name, line = %output.line, chip = %resolved.chip.display(), offset = resolved.offset);
         outputs.insert(
-            static_name,
+            name.clone(),
             OutputLine {
                 request,
                 offset: resolved.offset,
@@ -294,17 +379,16 @@ async fn run_real(
 
     // Inputs: grouped per chip in one request each, with edge detection.
     let mut per_chip: HashMap<PathBuf, Vec<(usize, Offset)>> = HashMap::new();
-    let mut resolved_inputs = Vec::new();
     for (index, input) in config.inputs.iter().enumerate() {
         let resolved = resolve_line(&config, &input.line)?;
         per_chip
             .entry(resolved.chip.clone())
             .or_default()
             .push((index, resolved.offset));
-        resolved_inputs.push(resolved);
     }
     let (event_tx, mut event_rx) = mpsc::channel::<InputEvent>(64);
     let inputs = Arc::new(config.inputs.clone());
+    let mut initial_levels: Vec<(usize, bool)> = Vec::new();
     for (chip, lines) in per_chip {
         let mut builder = Request::builder();
         builder.on_chip(&chip).with_consumer("talktome-headless");
@@ -343,6 +427,8 @@ async fn run_real(
                         .with_edge_detection(EdgeDetection::BothEdges);
                     if input.active_low {
                         builder.as_active_low();
+                    } else {
+                        builder.as_active_high();
                     }
                 }
                 builder
@@ -350,6 +436,27 @@ async fn run_real(
                     .with_context(|| format!("requesting inputs on {}", chip.display()))?
             }
         };
+        for (index, offset) in &lines {
+            match request.value(*offset) {
+                Ok(value) => {
+                    let pressed = matches!(value, Value::Active);
+                    initial_levels.push((*index, pressed));
+                    tracing::info!(
+                        event = "gpio-input-initial",
+                        line = %config.inputs[*index].line,
+                        pressed,
+                        active_low = config.inputs[*index].active_low
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        event = "gpio-input-initial-failed",
+                        line = %config.inputs[*index].line,
+                        error = %error
+                    );
+                }
+            }
+        }
         let offsets: HashMap<Offset, usize> = lines
             .iter()
             .map(|(index, offset)| (*offset, *index))
@@ -397,7 +504,21 @@ async fn run_real(
             .max()
             .unwrap_or(20),
     );
-    apply_outputs(&mut outputs, &snapshots.borrow(), status);
+    apply_outputs(&config, &mut outputs, &snapshots.borrow(), status);
+    let now = Instant::now();
+    for (index, pressed) in initial_levels {
+        set_input_pressed(status, index, pressed);
+        debouncer.seed(index, pressed, now);
+        if let Some(command) = initial_command_for_input(&inputs[index], pressed) {
+            tracing::info!(
+                event = "gpio-input",
+                line = %inputs[index].line,
+                pressed,
+                initial = true
+            );
+            let _ = bus.commands.send(command).await;
+        }
+    }
     publish_status(bus, status);
 
     loop {
@@ -405,7 +526,7 @@ async fn run_real(
             changed = snapshots.changed() => {
                 if changed.is_err() { break; }
                 let snapshot = snapshots.borrow().clone();
-                if apply_outputs(&mut outputs, &snapshot, status) {
+                if apply_outputs(&config, &mut outputs, &snapshot, status) {
                     publish_status(bus, status);
                 }
             }
@@ -415,7 +536,13 @@ async fn run_real(
                     tracing::info!(event = "gpio-input", line = %input.line, pressed = event.pressed);
                     record_input(status, event.index, event.pressed);
                     publish_status(bus, status);
-                    if let Some(command) = command_for_input(input, event.pressed) {
+                    let snapshot = snapshots.borrow().clone();
+                    if let Some(command) = runtime_command_for_input(
+                        input,
+                        event.pressed,
+                        volume_step_db,
+                        &snapshot,
+                    ) {
                         let _ = bus.commands.send(command).await;
                     }
                 }
@@ -431,13 +558,43 @@ async fn run_real(
     Ok(())
 }
 
+fn runtime_command_for_input(
+    input: &GpioInputConfig,
+    pressed: bool,
+    volume_step_db: f32,
+    snapshot: &Snapshot,
+) -> Option<Command> {
+    match input.action {
+        GpioInputAction::VolumeUp | GpioInputAction::VolumeDown if pressed => {
+            let key = TargetKey::parse(input.target.as_deref()?)?;
+            let current = snapshot
+                .targets
+                .iter()
+                .find(|t| t.key == key)
+                .map(|t| t.volume)
+                .unwrap_or(1.0);
+            let delta = if input.action == GpioInputAction::VolumeUp {
+                volume_step_db
+            } else {
+                -volume_step_db
+            };
+            Some(Command::VolumeSet {
+                target: key,
+                volume: crate::audio::mixer::step_volume_db(current, delta),
+            })
+        }
+        _ => command_for_input(input, pressed),
+    }
+}
+
 /// Drives changed outputs; returns true when any line state changed.
 fn apply_outputs(
-    outputs: &mut HashMap<&'static str, OutputLine>,
+    config: &GpioConfig,
+    outputs: &mut HashMap<String, OutputLine>,
     snapshot: &Snapshot,
     status: &mut GpioStatus,
 ) -> bool {
-    let states = output_states(snapshot);
+    let states = desired_output_states(config, snapshot);
     let mut changed = false;
     for (name, output) in outputs.iter_mut() {
         let active = states.get(name).copied().unwrap_or(false);
@@ -453,7 +610,7 @@ fn apply_outputs(
             Ok(()) => {
                 output.current = Some(active);
                 record_output(status, name, Some(active), None);
-                if *name == "tally" {
+                if name == "tally" {
                     tracing::info!(event = "tally-output", active);
                 }
             }
@@ -471,6 +628,7 @@ fn apply_outputs(
 /// `<line> press|release` appended to `<dir>/gpio-inputs`.
 async fn run_mock(
     config: GpioConfig,
+    volume_step_db: f32,
     bus: &Bus,
     status: &mut GpioStatus,
     mut shutdown: watch::Receiver<bool>,
@@ -490,16 +648,12 @@ async fn run_mock(
     tracing::info!(event = "gpio-mock", dir = %dir.display());
 
     let write_outputs = |snapshot: &Snapshot, status: &mut GpioStatus| {
-        let states = output_states(snapshot);
-        let map: serde_json::Map<String, serde_json::Value> = config
-            .outputs
-            .keys()
-            .map(|name| {
-                let active = states.get(name.as_str()).copied().unwrap_or(false);
-                record_output(status, name, Some(active), None);
-                (name.clone(), serde_json::Value::Bool(active))
-            })
-            .collect();
+        let states = desired_output_states(&config, snapshot);
+        let mut map = serde_json::Map::new();
+        for (name, active) in &states {
+            record_output(status, name, Some(*active), None);
+            map.insert(name.clone(), serde_json::Value::Bool(*active));
+        }
         let _ = std::fs::write(
             &outputs_path,
             serde_json::to_string_pretty(&map).unwrap_or_default(),
@@ -507,6 +661,24 @@ async fn run_mock(
         publish_status(bus, status);
     };
     write_outputs(&snapshots.borrow(), status);
+
+    if let Ok(text) = std::fs::read_to_string(&inputs_path) {
+        let now = Instant::now();
+        for (index, pressed) in last_mock_input_states(&text, &config.inputs) {
+            set_input_pressed(status, index, pressed);
+            debouncer.seed(index, pressed, now);
+            if let Some(command) = initial_command_for_input(&config.inputs[index], pressed) {
+                tracing::info!(
+                    event = "gpio-input",
+                    line = %config.inputs[index].line,
+                    pressed,
+                    initial = true
+                );
+                let _ = bus.commands.send(command).await;
+            }
+        }
+        publish_status(bus, status);
+    }
 
     loop {
         tokio::select! {
@@ -532,7 +704,13 @@ async fn run_mock(
                         tracing::info!(event = "gpio-input", line = name, pressed);
                         record_input(status, index, pressed);
                         publish_status(bus, status);
-                        if let Some(command) = command_for_input(&config.inputs[index], pressed) {
+                        let snapshot = snapshots.borrow().clone();
+                        if let Some(command) = runtime_command_for_input(
+                            &config.inputs[index],
+                            pressed,
+                            volume_step_db,
+                            &snapshot,
+                        ) {
                             let _ = bus.commands.send(command).await;
                         }
                     }
@@ -545,6 +723,23 @@ async fn run_mock(
         }
     }
     Ok(())
+}
+
+fn last_mock_input_states(text: &str, inputs: &[GpioInputConfig]) -> Vec<(usize, bool)> {
+    let mut last = HashMap::new();
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(name), Some(state)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Some(index) = inputs.iter().position(|input| input.line == name) else {
+            continue;
+        };
+        last.insert(index, matches!(state, "press" | "1" | "on" | "active"));
+    }
+    let mut states: Vec<_> = last.into_iter().collect();
+    states.sort_by_key(|(index, _)| *index);
+    states
 }
 
 /// `talktome-headless list-gpio`.
@@ -588,6 +783,7 @@ pub fn list() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::GpioTargetWhen;
     use crate::state::ConnectionState;
 
     fn input(action: GpioInputAction, target: Option<&str>) -> GpioInputConfig {
@@ -598,6 +794,40 @@ mod tests {
             active_low: true,
             debounce_ms: 20,
         }
+    }
+
+    #[test]
+    fn runtime_volume_steps_in_db() {
+        use crate::state::TargetInfo;
+        let mut snapshot = Snapshot::initial("i", "u");
+        snapshot.targets.push(TargetInfo {
+            key: TargetKey::Feed(1),
+            name: "PGM".into(),
+            can_talk: false,
+            online: true,
+            held: false,
+            locked: false,
+            incoming: false,
+            receiving: false,
+            volume: 1.0,
+            muted: false,
+            members: Vec::new(),
+        });
+        let down = input(GpioInputAction::VolumeDown, Some("feed:1"));
+        match runtime_command_for_input(&down, true, 6.0, &snapshot) {
+            Some(Command::VolumeSet { volume, .. }) => {
+                assert!((crate::audio::mixer::volume_to_db(volume) + 6.0).abs() < 0.05);
+            }
+            other => panic!("expected VolumeSet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn last_mock_line_is_the_startup_level() {
+        let inputs = vec![input(GpioInputAction::Talk, Some("conference:1"))];
+        let states =
+            last_mock_input_states("GPIO22 press\nGPIO22 release\nGPIO22 press\n", &inputs);
+        assert_eq!(states, vec![(0, true)]);
     }
 
     #[test]
@@ -643,6 +873,85 @@ mod tests {
         assert!(states["tally"]);
         assert!(states["connected"]);
         assert!(!states["talking"]);
+        snapshot.connection = ConnectionState::Registered;
+        assert!(!output_states(&snapshot)["connected"]);
+        snapshot.connection = ConnectionState::Disconnected;
+        assert!(!output_states(&snapshot)["connected"]);
+    }
+
+    #[test]
+    fn initial_hold_talks_edge_actions_do_not() {
+        let talk = input(GpioInputAction::Talk, Some("conference:1"));
+        assert!(matches!(
+            initial_command_for_input(&talk, true),
+            Some(Command::TalkPress { .. })
+        ));
+        assert!(initial_command_for_input(&talk, false).is_none());
+        let lock = input(GpioInputAction::LockToggle, Some("user:2"));
+        assert!(initial_command_for_input(&lock, true).is_none());
+    }
+
+    #[test]
+    fn target_output_follows_receiving_or_incoming() {
+        use crate::config::GpioTargetOutputConfig;
+        use crate::state::TargetInfo;
+        let mut snapshot = Snapshot::initial("i", "u");
+        snapshot.targets.push(TargetInfo {
+            key: TargetKey::Conference(1),
+            name: "News".into(),
+            can_talk: true,
+            online: true,
+            held: false,
+            locked: false,
+            incoming: true,
+            receiving: false,
+            volume: 1.0,
+            muted: false,
+            members: Vec::new(),
+        });
+        let incoming = GpioTargetOutputConfig {
+            line: "GPIO18".into(),
+            target: "conference:1".into(),
+            active_low: false,
+            when: GpioTargetWhen::Incoming,
+        };
+        let receiving = GpioTargetOutputConfig {
+            line: "GPIO19".into(),
+            target: "conference:1".into(),
+            active_low: false,
+            when: GpioTargetWhen::Receiving,
+        };
+        assert!(target_output_active(&snapshot, &incoming));
+        assert!(!target_output_active(&snapshot, &receiving));
+        snapshot.targets[0].receiving = true;
+        snapshot.targets[0].incoming = false;
+        assert!(!target_output_active(&snapshot, &incoming));
+        assert!(target_output_active(&snapshot, &receiving));
+    }
+
+    #[test]
+    fn debouncer_seed_skips_the_startup_level() {
+        let mut debouncer = Debouncer::new(0);
+        let t0 = Instant::now();
+        debouncer.seed(0, true, t0);
+        assert!(debouncer
+            .filter(
+                InputEvent {
+                    index: 0,
+                    pressed: true
+                },
+                t0
+            )
+            .is_none());
+        assert!(debouncer
+            .filter(
+                InputEvent {
+                    index: 0,
+                    pressed: false
+                },
+                t0
+            )
+            .is_some());
     }
 
     #[test]
