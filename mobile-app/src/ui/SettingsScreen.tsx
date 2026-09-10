@@ -322,11 +322,12 @@ export function SettingsScreen({ visible, onClose }: Props) {
               </Text>
             </Pressable>
             <Text style={styles.footnote}>
-              Pair speaker-mic audio (HFP/HSP) in system Bluetooth first. Add accessory here for the
-              PTT GATT link. Up to {BLE_MAX_ACCESSORIES} accessories can stay connected; tap one
-              above to set its talk target. Reply follows this production (last incoming, else first
-              talkable card). A fixed target is used only while that card exists here. PTT-Z01 and
-              Herda HB980-Plus are in the catalog.
+              Pair speaker-mic audio (HFP/HSP) in system Bluetooth first — that name is often
+              Herdt980D-Zello or HB980D-Zello. Add accessory here for the PTT GATT link, which
+              may advertise as Herda PTT. Up to {BLE_MAX_ACCESSORIES} accessories can stay
+              connected; tap one above to set its talk target. Reply follows this production
+              (last incoming, else first talkable card). A fixed target is used only while that
+              card exists here. PTT-Z01 and Herda HB980-Plus are in the catalog.
             </Text>
             {store.bleMessage && (store.bleScanning || store.bleKind === 'connected' || store.bleKind === 'connecting') ? (
               <Text style={styles.footnote}>{store.bleMessage}</Text>

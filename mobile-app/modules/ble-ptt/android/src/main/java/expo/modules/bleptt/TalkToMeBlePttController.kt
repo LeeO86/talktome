@@ -111,6 +111,7 @@ class TalkToMeBlePttController(private val context: Context) {
       return
     }
     adapter = bluetoothAdapter
+    connectBondedMatches()
     startScanning(reason = "add-accessory")
   }
 
@@ -204,6 +205,30 @@ class TalkToMeBlePttController(private val context: Context) {
       }
     }
     emit()
+  }
+
+  private fun connectBondedMatches() {
+    if (!hasConnectPermission()) {
+      return
+    }
+    val bonded = try {
+      adapter?.bondedDevices ?: return
+    } catch (_: SecurityException) {
+      return
+    }
+    for (device in bonded) {
+      val name = safeName(device)
+      if (BleAccessoryCatalog.match(catalog, name, null) == null) {
+        continue
+      }
+      connect(
+        device,
+        reason = "bonded",
+        requireCatalogMatch = true,
+        autoReconnect = true,
+        advertisedName = name,
+      )
+    }
   }
 
   private fun startScanning(reason: String) {

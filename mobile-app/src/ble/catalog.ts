@@ -51,8 +51,18 @@ export const ACCESSORY_CATALOG: readonly AccessoryProfile[] = [
     id: 'herda-hb980-plus',
     label: 'Herda HB980-Plus wireless speaker mic',
     kind: 'speaker-mic',
-    names: ['HB9800D', 'HB980D', 'HB980-PLUS', 'HB980PLUS'],
-    nameIncludes: ['HB980'],
+    // Dual-mode: classic HFP often advertises *Zello (Herdt980D-Zello / HB980D-Zello);
+    // the PTT GATT link is a separate LE name, commonly "Herda PTT".
+    names: [
+      'HB9800D',
+      'HB980D',
+      'HB980-PLUS',
+      'HB980PLUS',
+      'HB980D-Zello',
+      'Herdt980D-Zello',
+      'Herda PTT',
+    ],
+    nameIncludes: ['HB980', 'HERDA PTT', 'HERDAPTT', 'HERDA-PTT', 'HERDT980', 'HERDA980'],
     codec: 'auto',
     discovery: 'vendor-notify',
     pttKeycodes: DEFAULT_ZELLO_PTT_KEYCODES,

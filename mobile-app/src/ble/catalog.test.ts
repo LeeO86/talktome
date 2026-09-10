@@ -21,7 +21,7 @@ describe('BLE accessory catalog', () => {
     expect(catalogForNative()[1]).toMatchObject({
       id: 'herda-hb980-plus',
       discovery: 'vendor-notify',
-      names: expect.arrayContaining(['HB9800D', 'HB980D']),
+      names: expect.arrayContaining(['HB9800D', 'HB980D', 'Herda PTT', 'Herdt980D-Zello']),
     });
   });
 
@@ -39,6 +39,9 @@ describe('BLE accessory catalog', () => {
     expect(matchAccessoryProfile({ name: 'HB9800D' })?.id).toBe('herda-hb980-plus');
     expect(matchAccessoryProfile({ name: 'HB980D' })?.discovery).toBe('vendor-notify');
     expect(matchAccessoryProfile({ name: 'Herda HB980-Plus' })?.id).toBe('herda-hb980-plus');
+    expect(matchAccessoryProfile({ name: 'Herda PTT' })?.id).toBe('herda-hb980-plus');
+    expect(matchAccessoryProfile({ name: 'Herdt980D-Zello' })?.id).toBe('herda-hb980-plus');
+    expect(matchAccessoryProfile({ name: 'HB980D-Zello' })?.id).toBe('herda-hb980-plus');
     expect(matchAccessoryProfile({ profileId: 'herda-hb980-plus' })?.kind).toBe('speaker-mic');
   });
 

@@ -30,7 +30,7 @@ data class AccessoryScanProfile(
 
 object BleAccessoryCatalog {
   const val DEFAULT_JSON =
-    """[{"id":"ptt-z01","names":["PTT-Z01"],"nameIncludes":[],"serviceUuid":"FFE0","characteristicUuid":"FFE1","discovery":"fixed"},{"id":"herda-hb980-plus","names":["HB9800D","HB980D","HB980-PLUS","HB980PLUS"],"nameIncludes":["HB980"],"serviceUuid":"","characteristicUuid":"","discovery":"vendor-notify"}]"""
+    """[{"id":"ptt-z01","names":["PTT-Z01"],"nameIncludes":[],"serviceUuid":"FFE0","characteristicUuid":"FFE1","discovery":"fixed"},{"id":"herda-hb980-plus","names":["HB9800D","HB980D","HB980-PLUS","HB980PLUS","HB980D-Zello","Herdt980D-Zello","Herda PTT"],"nameIncludes":["HB980","HERDA PTT","HERDAPTT","HERDA-PTT","HERDT980","HERDA980"],"serviceUuid":"","characteristicUuid":"","discovery":"vendor-notify"}]"""
 
   fun parse(json: String?): List<AccessoryScanProfile> {
     val raw = json?.trim().orEmpty().ifEmpty { DEFAULT_JSON }
