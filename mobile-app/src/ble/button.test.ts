@@ -42,4 +42,12 @@ describe('BleButtonPolicy', () => {
       'unlockTalk',
     );
   });
+
+  it('ignores a release when the accessory was not held', () => {
+    const policy = new BleButtonPolicy();
+    expect(policy.isHeld()).toBe(false);
+    expect(policy.handle(false, shortLock, 1000)).toBeNull();
+    expect(policy.handle(true, shortLock, 1100)).toBe('startTalk');
+    expect(policy.isHeld()).toBe(true);
+  });
 });

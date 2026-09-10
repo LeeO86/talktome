@@ -13,7 +13,8 @@ import type {
 import { EMPTY_CONFERENCE_LISTEN, type ConferenceListenState } from './conferenceListen';
 import { DEFAULT_OPERATOR_AUDIO, type OperatorAudioSettings } from './operatorAudio';
 import { emptyAudioRouteSnapshot, type AudioRoute } from '../audio/routes';
-import type { BleConnectionKind } from '../ble/native';
+import type { BleConnectionKind, BleDeviceState } from '../ble/native';
+import { DEFAULT_BLE_RELEASE_TIMEOUT_MS, type BleDeviceBinding } from '../ble/bindings';
 import { DEFAULT_BLE_TARGET, type BleTargetSelection } from '../ble/target';
 import type { SavedProfile } from './remembered';
 import type { SignalingHealth } from './connectionHealth';
@@ -93,6 +94,11 @@ export type SessionUiState = {
   bleKind: BleConnectionKind;
   bleName: string;
   bleMessage: string;
+  bleScanning: boolean;
+  bleDevices: BleDeviceState[];
+  bleBindings: BleDeviceBinding[];
+  bleFocusedDeviceId: string;
+  bleReleaseTimeoutMs: number;
   bleShortPressLocks: boolean;
   bleTargetKind: 'reply' | 'target';
   bleTargetType: string;
@@ -178,6 +184,11 @@ export const initialState: SessionUiState = {
   bleKind: 'idle',
   bleName: '',
   bleMessage: '',
+  bleScanning: false,
+  bleDevices: [],
+  bleBindings: [],
+  bleFocusedDeviceId: '',
+  bleReleaseTimeoutMs: DEFAULT_BLE_RELEASE_TIMEOUT_MS,
   bleShortPressLocks: true,
   bleTargetKind: 'reply',
   bleTargetType: '',

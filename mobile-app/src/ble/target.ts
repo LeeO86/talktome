@@ -1,4 +1,4 @@
-import { talkTargetIdentity, type TalkTarget } from '../protocol';
+import { firstTalkableTarget, talkTargetIdentity, type TalkTarget } from '../protocol';
 
 export type BleTargetSelection =
   | { kind: 'reply' }
@@ -14,24 +14,46 @@ export function bleTalkCandidates(targets: TalkTarget[]): TalkTarget[] {
   return targets.filter((target) => target.canTalk && target.type !== 'feed');
 }
 
+function talkableInProduction(target: TalkTarget | null | undefined, targets: TalkTarget[]): TalkTarget | null {
+  if (!target) {
+    return null;
+  }
+  const key = talkTargetIdentity(target);
+  return (
+    targets.find(
+      (item) => talkTargetIdentity(item) === key && item.canTalk && item.type !== 'feed',
+    ) ?? null
+  );
+}
+
+/** Reply in this production, else the first talkable card (same idea as the on-screen Reply control). */
+export function resolveBleReplyFallback(input: {
+  replyTarget: TalkTarget | null;
+  targets: TalkTarget[];
+}): TalkTarget | null {
+  return talkableInProduction(input.replyTarget, input.targets) ?? firstTalkableTarget(input.targets);
+}
+
 export function resolveBleTalkTarget(input: {
   selection: BleTargetSelection;
   replyTarget: TalkTarget | null;
   targets: TalkTarget[];
 }): TalkTarget | null {
+  const reply = resolveBleReplyFallback(input);
   if (input.selection.kind === 'reply') {
-    return input.replyTarget;
+    return reply;
   }
 
-  const key = talkTargetIdentity(input.selection);
-  return (
-    input.targets.find((target) => talkTargetIdentity(target) === key) ?? {
+  const live = talkableInProduction(
+    {
       type: input.selection.type,
       id: input.selection.id,
       label: input.selection.label,
       canTalk: true,
-    }
+    },
+    input.targets,
   );
+  return live ?? reply;
 }
 
 export function describeBleTarget(selection: BleTargetSelection): string {

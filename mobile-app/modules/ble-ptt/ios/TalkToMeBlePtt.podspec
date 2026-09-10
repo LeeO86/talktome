@@ -1,8 +1,8 @@
 Pod::Spec.new do |s|
   s.name           = 'TalkToMeBlePtt'
   s.version        = '0.1.0'
-  s.summary        = 'BLE PTT-Z01 GATT button for TalkToMe'
-  s.description    = 'Core Bluetooth central for FFE0/FFE1 press-to-talk buttons'
+  s.summary        = 'BLE PTT accessory central for TalkToMe'
+  s.description    = 'Core Bluetooth central for catalogued PTT buttons and speaker mics'
   s.author         = 'TalkToMe Mobile'
   s.homepage       = 'https://github.com/LeeO86/talktome-mobile'
   s.platforms      = { :ios => '15.1' }

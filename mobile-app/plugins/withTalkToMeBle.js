@@ -33,7 +33,7 @@ function withTalkToMeBle(config) {
     mod.modResults.UIBackgroundModes = [...modes];
     mod.modResults.NSBluetoothAlwaysUsageDescription =
       mod.modResults.NSBluetoothAlwaysUsageDescription ??
-      'TalkToMe connects to wireless PTT buttons.';
+      'TalkToMe connects to wireless PTT buttons and speaker mics.';
     return mod;
   });
   return config;

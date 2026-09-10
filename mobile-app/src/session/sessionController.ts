@@ -24,7 +24,6 @@ import {
 } from '../servers/tlsTrust';
 import { isRegisterConflict, isRegisterOk, SignalingClient } from '../signaling/client';
 import { stopForegroundService } from '../background/foregroundService';
-import { BleButtonPolicy } from '../ble/button';
 import { startBleNative } from '../ble/native';
 import { loadBlePreferences } from '../ble/preferences';
 import type { BleTargetSelection } from '../ble/target';
@@ -86,7 +85,6 @@ export class SessionController {
   pttChannelUUID: string | null = null;
   readonly pttJoin = new SystemPttJoinGate();
   fgsSync: Promise<void> = Promise.resolve();
-  readonly blePolicy = new BleButtonPolicy();
 
   // Server-configured client defaults (1.4.4+) and per-key explicit choices.
   // Explicit choices always beat server defaults, like the web client.
@@ -136,6 +134,9 @@ export class SessionController {
       operatorAudio: resolveOperatorAudio(operatorAudioOverrides),
       ...this.mediaCoordinator.audioDeviceFields(),
       ...bleFieldsFromSelection(blePreferences.target, blePreferences.shortPressLocksTalk),
+      bleBindings: blePreferences.devices,
+      bleFocusedDeviceId: blePreferences.devices[0]?.id ?? '',
+      bleReleaseTimeoutMs: blePreferences.releaseTimeoutMs,
     });
     this.pendingPassword = last ? await passwordForProfile(last.id) : undefined;
     this.pendingLoginToken = Boolean(last?.loginToken);
@@ -495,7 +496,7 @@ export class SessionController {
     this.lockedTargets = [];
     this.overrideFrom = null;
     this.liveProducers = new Map();
-    this.blePolicy.reset();
+    this.background.resetBleAccessorySession();
     this.pttJoin.settle();
     await this.background.leaveSystemPtt();
     await this.background.teardownAudioSession();
@@ -531,6 +532,11 @@ export class SessionController {
       bleKind: next.bleKind,
       bleName: next.bleName,
       bleMessage: next.bleMessage,
+      bleScanning: next.bleScanning,
+      bleDevices: next.bleDevices,
+      bleBindings: next.bleBindings,
+      bleFocusedDeviceId: next.bleFocusedDeviceId,
+      bleReleaseTimeoutMs: next.bleReleaseTimeoutMs,
       bleShortPressLocks: next.bleShortPressLocks,
       bleTargetKind: next.bleTargetKind,
       bleTargetType: next.bleTargetType,
@@ -1040,24 +1046,40 @@ export class SessionController {
     return this.background.bluetoothButtonCandidates();
   }
 
-  bluetoothButtonSelection(): BleTargetSelection {
-    return this.background.bluetoothButtonSelection();
+  bluetoothButtonSelection(deviceId?: string): BleTargetSelection {
+    return this.background.bluetoothButtonSelection(deviceId);
   }
 
-  setBluetoothButtonTarget(selection: BleTargetSelection): void {
-    this.background.setBluetoothButtonTarget(selection);
+  setBluetoothButtonTarget(selection: BleTargetSelection, deviceId?: string): void {
+    this.background.setBluetoothButtonTarget(selection, deviceId);
   }
 
   setBluetoothButtonShortPressLocks(enabled: boolean): void {
     this.background.setBluetoothButtonShortPressLocks(enabled);
   }
 
+  cycleBluetoothReleaseTimeout(): void {
+    this.background.cycleBluetoothReleaseTimeout();
+  }
+
+  focusBluetoothAccessory(deviceId: string): void {
+    this.background.focusBluetoothAccessory(deviceId);
+  }
+
   async connectBluetoothButton(): Promise<void> {
     await this.background.connectBluetoothButton();
   }
 
-  async disconnectBluetoothButton(): Promise<void> {
-    await this.background.disconnectBluetoothButton();
+  async connectKnownBluetoothAccessory(deviceId: string): Promise<void> {
+    await this.background.connectKnownBluetoothAccessory(deviceId);
+  }
+
+  async disconnectBluetoothButton(deviceId?: string): Promise<void> {
+    await this.background.disconnectBluetoothButton(deviceId);
+  }
+
+  removeBluetoothAccessory(deviceId: string): void {
+    this.background.removeBluetoothAccessory(deviceId);
   }
 
   async openBatteryEducation(): Promise<void> {

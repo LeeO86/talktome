@@ -5,6 +5,12 @@ import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
 import { describeAudioRouteKind } from '../audio/routes';
 import { pttStatusLabel, shouldShowPttJoinBanner } from '../ptt/policy';
 import { describeBleConnection } from '../ble/native';
+import {
+  BLE_MAX_ACCESSORIES,
+  describeBleDeviceStatus,
+  describeBleReleaseTimeout,
+  liveDeviceById,
+} from '../ble/bindings';
 import { describeBleTarget, type BleTargetSelection } from '../ble/target';
 import { fgsStatusLabel } from '../background/fgs';
 import { FEED_DIM_DB_OPTIONS, dimDbFromSliderPosition, sliderPositionFromDimDb } from '../session/operatorAudio';
@@ -21,20 +27,15 @@ type Props = {
 export function SettingsScreen({ visible, onClose }: Props) {
   const store = useSessionStore();
   const audio = store.operatorAudio;
-  const selection = session.bluetoothButtonSelection();
+  const selection = session.bluetoothButtonSelection(store.bleFocusedDeviceId);
   const candidates = session.bluetoothButtonCandidates();
   const bleState = {
     kind: store.bleKind,
     name: store.bleName || undefined,
     message: store.bleMessage || undefined,
+    scanning: store.bleScanning,
+    devices: store.bleDevices,
   };
-  const showConnect =
-    store.bleKind === 'idle' ||
-    store.bleKind === 'failed' ||
-    store.bleKind === 'disconnected' ||
-    store.bleKind === 'unavailable';
-  const showDisconnect =
-    store.bleKind === 'scanning' || store.bleKind === 'connecting' || store.bleKind === 'connected';
 
   useEffect(() => {
     if (visible) {
@@ -212,7 +213,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Bluetooth Button</Text>
+            <Text style={styles.sectionTitle}>Bluetooth accessories</Text>
             <View style={styles.row}>
               <Text style={styles.rowLabel}>Status</Text>
               <Text style={styles.rowValue}>{describeBleConnection(bleState)}</Text>
@@ -225,50 +226,111 @@ export function SettingsScreen({ visible, onClose }: Props) {
                 trackColor={{ true: '#3DD6F5' }}
               />
             </View>
-            {showConnect ? (
-              <Pressable style={styles.row} onPress={() => void session.connectBluetoothButton()}>
-                <Text style={styles.actionLabel}>
-                  {store.bleKind === 'scanning' ? 'Scanning…' : 'Connect'}
-                </Text>
-              </Pressable>
-            ) : null}
-            {showDisconnect ? (
-              <Pressable style={styles.row} onPress={() => void session.disconnectBluetoothButton()}>
-                <Text style={styles.actionLabel}>Disconnect</Text>
-              </Pressable>
-            ) : null}
+            <Pressable style={styles.row} onPress={() => session.cycleBluetoothReleaseTimeout()}>
+              <Text style={styles.rowLabel}>Release timeout</Text>
+              <Text style={styles.rowValue}>{describeBleReleaseTimeout(store.bleReleaseTimeoutMs)}</Text>
+            </Pressable>
             <Text style={styles.footnote}>
-              GATT PTT-Z01-class buttons (service FFE0, characteristic FFE1). Press 0x01/0xAB,
-              release 0x00/0xCD.
+              If a PTT release notify is lost, TalkToMe closes the mic after this delay. Off never
+              forces a release (disconnect still does). Tap to cycle 10s / 15s / 30s / 1 min / 2 min / Off.
             </Text>
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Bluetooth Button Target</Text>
-            <TargetChoice
-              selection={{ kind: 'reply' }}
-              current={selection}
-              onPress={() => session.setBluetoothButtonTarget({ kind: 'reply' })}
-            />
-            {candidates.map((target) => (
-              <TargetChoice
-                key={`${target.type}-${target.id}`}
-                selection={{ kind: 'target', type: target.type, id: target.id, label: target.label }}
-                current={selection}
-                onPress={() =>
-                  session.setBluetoothButtonTarget({
-                    kind: 'target',
-                    type: target.type,
-                    id: target.id,
-                    label: target.label,
-                  })
-                }
-              />
-            ))}
+            <Text style={styles.sectionTitle}>My accessories</Text>
+            {store.bleBindings.length === 0 ? (
+              <Text style={styles.footnote}>No PTT accessories yet. Add one below.</Text>
+            ) : (
+              store.bleBindings.map((binding) => {
+                const live = liveDeviceById(store.bleDevices, binding.id);
+                const connected = live?.kind === 'connected' || live?.kind === 'connecting';
+                const focused = store.bleFocusedDeviceId === binding.id;
+                return (
+                  <View key={binding.id}>
+                    <Pressable
+                      style={[styles.row, focused && styles.rowSelected]}
+                      onPress={() => session.focusBluetoothAccessory(binding.id)}
+                    >
+                      <Text style={styles.rowLabel}>{binding.name}</Text>
+                      <Text style={styles.rowValue}>{describeBleDeviceStatus(live)}</Text>
+                    </Pressable>
+                    <View style={styles.row}>
+                      <Text style={styles.rowLabel}>Target</Text>
+                      <Text style={styles.rowValue}>{describeBleTarget(binding.target)}</Text>
+                    </View>
+                    {connected ? (
+                      <Pressable
+                        style={styles.row}
+                        onPress={() => void session.disconnectBluetoothButton(binding.id)}
+                      >
+                        <Text style={styles.actionLabel}>Disconnect</Text>
+                      </Pressable>
+                    ) : (
+                      <Pressable
+                        style={styles.row}
+                        onPress={() => void session.connectKnownBluetoothAccessory(binding.id)}
+                      >
+                        <Text style={styles.actionLabel}>Connect</Text>
+                      </Pressable>
+                    )}
+                    <Pressable style={styles.row} onPress={() => session.removeBluetoothAccessory(binding.id)}>
+                      <Text style={styles.actionLabel}>Remove</Text>
+                    </Pressable>
+                    {focused ? (
+                      <>
+                        <TargetChoice
+                          selection={{ kind: 'reply' }}
+                          current={selection}
+                          onPress={() => session.setBluetoothButtonTarget({ kind: 'reply' }, binding.id)}
+                        />
+                        {candidates.map((target) => (
+                          <TargetChoice
+                            key={`${binding.id}-${target.type}-${target.id}`}
+                            selection={{
+                              kind: 'target',
+                              type: target.type,
+                              id: target.id,
+                              label: target.label,
+                            }}
+                            current={selection}
+                            onPress={() =>
+                              session.setBluetoothButtonTarget(
+                                {
+                                  kind: 'target',
+                                  type: target.type,
+                                  id: target.id,
+                                  label: target.label,
+                                },
+                                binding.id,
+                              )
+                            }
+                          />
+                        ))}
+                      </>
+                    ) : null}
+                  </View>
+                );
+              })
+            )}
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Other accessories</Text>
+            <Pressable style={styles.row} onPress={() => void session.connectBluetoothButton()}>
+              <Text style={styles.actionLabel}>
+                {store.bleScanning ? 'Scanning…' : 'Add accessory'}
+              </Text>
+            </Pressable>
             <Text style={styles.footnote}>
-              Reply follows the last incoming talk or the last target you spoke to. Pick a fixed
-              target if you want the button to ignore Reply.
+              Pair speaker-mic audio (HFP/HSP) in system Bluetooth first. Add accessory here for the
+              PTT GATT link. Up to {BLE_MAX_ACCESSORIES} accessories can stay connected; tap one
+              above to set its talk target. Reply follows this production (last incoming, else first
+              talkable card). A fixed target is used only while that card exists here. PTT-Z01 and
+              Herda HB980-Plus are in the catalog.
             </Text>
+            {store.bleMessage && (store.bleScanning || store.bleKind === 'connected' || store.bleKind === 'connecting') ? (
+              <Text style={styles.footnote}>{store.bleMessage}</Text>
+            ) : null}
           </View>
 
           {Platform.OS === 'ios' ? (

@@ -1,5 +1,7 @@
 import { requireNativeModule } from 'expo-modules-core';
 
+import { catalogForNative } from './catalog';
+
 export type BleConnectionKind =
   | 'idle'
   | 'scanning'
@@ -9,21 +11,46 @@ export type BleConnectionKind =
   | 'unavailable'
   | 'failed';
 
+export type BleDeviceState = {
+  id: string;
+  kind: BleConnectionKind;
+  name?: string;
+  message?: string;
+  profileId?: string;
+};
+
 export type BleConnectionState = {
   kind: BleConnectionKind;
   name?: string;
   message?: string;
+  profileId?: string;
+  scanning?: boolean;
+  devices?: BleDeviceState[];
+};
+
+export type BleNotifyEvent = {
+  deviceId?: string;
+  data: unknown;
+  serviceUuid?: string;
+  characteristicUuid?: string;
+};
+
+export type BleButtonEvent = {
+  pressed: boolean;
+  deviceId?: string;
 };
 
 type NativeBlePtt = {
   isAvailable?: () => boolean;
   getState?: () => BleConnectionState;
-  start?: () => Promise<BleConnectionState>;
-  scanAndConnect?: () => Promise<BleConnectionState>;
-  disconnect?: () => Promise<BleConnectionState>;
+  start?: (catalogJson?: string) => Promise<BleConnectionState>;
+  scanAndConnect?: (catalogJson?: string) => Promise<BleConnectionState>;
+  connectDevice?: (deviceId: string, catalogJson?: string) => Promise<BleConnectionState>;
+  disconnect?: (deviceId?: string) => Promise<BleConnectionState>;
   addListener?: {
     (eventName: 'onState', listener: (event: BleConnectionState) => void): { remove: () => void };
-    (eventName: 'onButton', listener: (event: { pressed: boolean }) => void): { remove: () => void };
+    (eventName: 'onButton', listener: (event: BleButtonEvent) => void): { remove: () => void };
+    (eventName: 'onNotify', listener: (event: BleNotifyEvent) => void): { remove: () => void };
     (eventName: 'onDiagnostic', listener: (event: { message: string }) => void): { remove: () => void };
   };
 };
@@ -43,12 +70,27 @@ function loadNative(): NativeBlePtt | null {
   return cached;
 }
 
+function catalogJson(): string {
+  return JSON.stringify(catalogForNative());
+}
+
+function coerceDevices(state: BleConnectionState): BleConnectionState {
+  const devices = Array.isArray(state.devices)
+    ? state.devices.filter((device): device is BleDeviceState => Boolean(device?.id && device.kind))
+    : [];
+  return { ...state, devices };
+}
+
 export function bleNativeAvailable(): boolean {
   return loadNative() != null;
 }
 
 export function bleNativeState(): BleConnectionState {
-  return loadNative()?.getState?.() ?? { kind: 'unavailable', message: 'Rebuild the Dev Client to enable Bluetooth PTT.' };
+  const native = loadNative()?.getState?.();
+  if (!native) {
+    return { kind: 'unavailable', message: 'Rebuild the Dev Client to enable Bluetooth PTT.', devices: [] };
+  }
+  return coerceDevices(native);
 }
 
 export async function startBleNative(): Promise<BleConnectionState> {
@@ -57,9 +99,9 @@ export async function startBleNative(): Promise<BleConnectionState> {
     return bleNativeState();
   }
   try {
-    return await native.start();
+    return coerceDevices(await native.start(catalogJson()));
   } catch {
-    return { kind: 'idle' };
+    return { kind: 'idle', devices: [] };
   }
 }
 
@@ -69,23 +111,36 @@ export async function scanAndConnectBle(): Promise<BleConnectionState> {
     return bleNativeState();
   }
   try {
-    return await native.scanAndConnect();
+    return coerceDevices(await native.scanAndConnect(catalogJson()));
   } catch {
-    return { kind: 'unavailable', message: 'Bluetooth permission is required to scan for a PTT button.' };
+    return { kind: 'unavailable', message: 'Bluetooth permission is required to scan for a PTT accessory.', devices: [] };
   }
 }
 
-export async function disconnectBle(): Promise<BleConnectionState> {
+export async function connectBleDevice(deviceId: string): Promise<BleConnectionState> {
+  const native = loadNative();
+  if (!native?.connectDevice) {
+    return scanAndConnectBle();
+  }
+  try {
+    return coerceDevices(await native.connectDevice(deviceId, catalogJson()));
+  } catch {
+    return scanAndConnectBle();
+  }
+}
+
+export async function disconnectBle(deviceId?: string): Promise<BleConnectionState> {
   const native = loadNative();
   if (!native?.disconnect) {
     return bleNativeState();
   }
-  return native.disconnect();
+  return coerceDevices(await native.disconnect(deviceId ?? ''));
 }
 
 export function subscribeBleNative(handlers: {
   onState?: (state: BleConnectionState) => void;
-  onButton?: (pressed: boolean) => void;
+  onButton?: (event: BleButtonEvent) => void;
+  onNotify?: (event: BleNotifyEvent) => void;
   onDiagnostic?: (message: string) => void;
 }): () => void {
   const native = loadNative();
@@ -93,10 +148,11 @@ export function subscribeBleNative(handlers: {
     return () => undefined;
   }
   const subscriptions = [
-    handlers.onState ? native.addListener('onState', handlers.onState) : null,
-    handlers.onButton
-      ? native.addListener('onButton', (event: { pressed: boolean }) => handlers.onButton?.(event.pressed))
+    handlers.onState
+      ? native.addListener('onState', (event) => handlers.onState?.(coerceDevices(event)))
       : null,
+    handlers.onButton ? native.addListener('onButton', handlers.onButton) : null,
+    handlers.onNotify ? native.addListener('onNotify', handlers.onNotify) : null,
     handlers.onDiagnostic
       ? native.addListener('onDiagnostic', (event: { message: string }) => handlers.onDiagnostic?.(event.message))
       : null,
@@ -109,17 +165,22 @@ export function subscribeBleNative(handlers: {
 }
 
 export function describeBleConnection(state: BleConnectionState): string {
+  const names = (state.devices ?? [])
+    .filter((device) => device.kind === 'connected' || device.kind === 'connecting')
+    .map((device) => device.name)
+    .filter((name): name is string => Boolean(name && name.trim()));
+  const label = names.join(', ') || state.name;
   switch (state.kind) {
     case 'idle':
-      return 'Not connected';
+      return names.length ? `${names.length} saved` : 'Not connected';
     case 'scanning':
-      return 'Scanning…';
+      return label ? `Scanning… (${label})` : 'Scanning…';
     case 'connecting':
-      return state.name ? `Connecting to ${state.name}` : 'Connecting…';
+      return label ? `Connecting to ${label}` : 'Connecting…';
     case 'connected':
-      return state.name ? `Connected to ${state.name}` : 'Connected';
+      return label ? `Connected to ${label}` : 'Connected';
     case 'disconnected':
-      return state.name ? `Disconnected from ${state.name}` : 'Disconnected';
+      return label ? `Disconnected from ${label}` : 'Disconnected';
     case 'unavailable':
     case 'failed':
       return state.message ?? (state.kind === 'failed' ? 'Connection failed' : 'Bluetooth unavailable');

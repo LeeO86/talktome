@@ -1,41 +1,67 @@
 import CoreBluetooth
 import Foundation
 
-/// Ported from talktome-apple BluetoothButtonController @ 004d6e76 by Daniel Jocher.
-/// Emits press/release only; short-press lock policy lives in JS.
+private final class AccessoryLink {
+  let id: UUID
+  var peripheral: CBPeripheral
+  var profile: AccessoryScanProfile?
+  var kind = "connecting"
+  var message: String?
+  var pendingCharacteristicDiscoveries = 0
+  var pendingNotifyEnables = 0
+  var enabledNotifyCount = 0
+  var didFinishSubscribe = false
+  var autoReconnect = true
+  var subscribeTimeoutWork: DispatchWorkItem?
+
+  init(peripheral: CBPeripheral, profile: AccessoryScanProfile?) {
+    self.id = peripheral.identifier
+    self.peripheral = peripheral
+    self.profile = profile
+  }
+}
+
+/// BLE central for several catalogued PTT accessories at once.
 final class TalkToMeBlePttController: NSObject {
   var onState: (([String: Any]) -> Void)?
-  var onButton: ((Bool) -> Void)?
+  var onButton: ((String, Bool) -> Void)?
+  var onNotify: ((String, [Int], String, String) -> Void)?
   var onDiagnostic: ((String) -> Void)?
 
   private let userDefaults: UserDefaults
   private var centralManager: CBCentralManager?
-  private var peripheral: CBPeripheral?
-  private var buttonCharacteristic: CBCharacteristic?
-  private var stateKind = "idle"
-  private var lastPressedValue: Bool?
+  private var links: [UUID: AccessoryLink] = [:]
+  private var scanning = false
   private var scanTimeoutWork: DispatchWorkItem?
-  private var shouldReconnectAutomatically = true
+  private var catalog: [AccessoryScanProfile] = BleAccessoryCatalog.parse(nil)
+  private var loggedScanIds = Set<UUID>()
 
-  private static let buttonServiceUUID = CBUUID(string: "FFE0")
-  private static let buttonCharacteristicUUID = CBUUID(string: "FFE1")
   private static let restorationIdentifier = "io.github.leeo86.talktome-mobile.ble-button"
   private static let storedPeripheralIdentifierKey = "talktome.ble.peripheralIdentifier"
-  private static let expectedNames = ["PTT-Z01"]
+  private static let storedPeripheralIdentifiersKey = "talktome.ble.peripheralIdentifiers"
+  private static let maxLinks = 8
 
   init(userDefaults: UserDefaults = .standard) {
     self.userDefaults = userDefaults
     super.init()
+    migrateStoredIdentifier()
+  }
+
+  func setCatalogJSON(_ json: String) {
+    let parsed = BleAccessoryCatalog.parse(json)
+    if parsed.isEmpty == false {
+      catalog = parsed
+    }
   }
 
   func currentState() -> [String: Any] {
-    snapshot(kind: stateKind, name: peripheral.flatMap { displayName(for: $0) }, message: nil)
+    snapshot(message: nil)
   }
 
   func start() {
     ensureCentralManager()
     guard let centralManager else {
-      emit(kind: "unavailable", message: "Bluetooth is currently unavailable.")
+      emit(kindOverride: "unavailable", message: "Bluetooth is currently unavailable.")
       return
     }
     handle(managerState: centralManager.state)
@@ -44,32 +70,71 @@ final class TalkToMeBlePttController: NSObject {
   func scanAndConnect() {
     ensureCentralManager()
     guard let centralManager else {
-      emit(kind: "unavailable", message: "Bluetooth is currently unavailable.")
+      emit(kindOverride: "unavailable", message: "Bluetooth is currently unavailable.")
       return
     }
     guard centralManager.state == .poweredOn else {
       handle(managerState: centralManager.state)
       return
     }
-    startScanning(reason: "manual-connect")
+    startScanning(reason: "add-accessory")
   }
 
-  func disconnect() {
-    shouldReconnectAutomatically = false
-    cancelScanTimeout()
-    centralManager?.stopScan()
-    lastPressedValue = nil
-    buttonCharacteristic = nil
-
-    guard let peripheral else {
-      clearStoredPeripheralIdentifier()
-      emit(kind: "idle")
-      emitDiagnostic("Bluetooth button disconnected.")
+  func connectStored(id rawId: String) {
+    ensureCentralManager()
+    guard let centralManager, centralManager.state == .poweredOn else {
+      start()
       return
     }
+    guard let uuid = UUID(uuidString: rawId) else {
+      startScanning(reason: "reconnect")
+      return
+    }
+    remember(uuid)
+    if let existing = links[uuid], existing.peripheral.state == .connected {
+      existing.kind = existing.enabledNotifyCount > 0 ? "connected" : "connecting"
+      emit()
+      return
+    }
+    let peripherals = centralManager.retrievePeripherals(withIdentifiers: [uuid])
+    if let peripheral = peripherals.first {
+      connect(to: peripheral, reason: "stored-id", requireCatalogMatch: false, autoReconnect: true)
+      return
+    }
+    startScanning(reason: "reconnect")
+  }
 
-    centralManager?.cancelPeripheralConnection(peripheral)
-    clearStoredPeripheralIdentifier()
+  func disconnect(id rawId: String?) {
+    let trimmed = rawId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if trimmed.isEmpty {
+      cancelScanTimeout()
+      centralManager?.stopScan()
+      scanning = false
+      for link in Array(links.values) {
+        link.autoReconnect = false
+        onButton?(link.id.uuidString, false)
+        cancelSubscribeTimeout(link)
+        centralManager?.cancelPeripheralConnection(link.peripheral)
+      }
+      links.removeAll()
+      clearStoredIdentifiers()
+      emit()
+      emitDiagnostic("Bluetooth accessories disconnected.")
+      return
+    }
+    guard let uuid = UUID(uuidString: trimmed), let link = links[uuid] else {
+      forget(UUID(uuidString: trimmed))
+      emit()
+      return
+    }
+    link.autoReconnect = false
+    onButton?(link.id.uuidString, false)
+    cancelSubscribeTimeout(link)
+    forget(uuid)
+    centralManager?.cancelPeripheralConnection(link.peripheral)
+    links.removeValue(forKey: uuid)
+    emit()
+    emitDiagnostic("Bluetooth accessory disconnected from \(displayName(for: link)).")
   }
 
   private func ensureCentralManager() {
@@ -89,137 +154,206 @@ final class TalkToMeBlePttController: NSObject {
   private func handle(managerState: CBManagerState) {
     switch managerState {
     case .poweredOn:
-      reconnectStoredPeripheralIfNeeded(startScanningIfNecessary: true)
+      reconnectStoredPeripherals()
     case .poweredOff:
-      emit(kind: "unavailable", message: "Bluetooth is turned off on this iPhone.")
+      emit(kindOverride: "unavailable", message: "Bluetooth is turned off on this iPhone.")
     case .unauthorized:
-      emit(kind: "unavailable", message: "Bluetooth access is denied for TalkToMe.")
+      emit(kindOverride: "unavailable", message: "Bluetooth access is denied for TalkToMe.")
     case .unsupported:
-      emit(kind: "unavailable", message: "This iPhone does not support Bluetooth LE.")
+      emit(kindOverride: "unavailable", message: "This iPhone does not support Bluetooth LE.")
     case .resetting:
-      emit(kind: "unavailable", message: "Bluetooth is resetting.")
+      emit(kindOverride: "unavailable", message: "Bluetooth is resetting.")
     case .unknown:
-      emit(kind: "idle")
+      emit()
     @unknown default:
-      emit(kind: "unavailable", message: "Bluetooth is in an unknown state.")
+      emit(kindOverride: "unavailable", message: "Bluetooth is in an unknown state.")
     }
   }
 
-  private func reconnectStoredPeripheralIfNeeded(startScanningIfNecessary: Bool) {
-    guard buttonCharacteristic == nil else {
-      if let peripheral {
-        emit(kind: "connected", name: displayName(for: peripheral))
-      }
-      return
-    }
-
-    if let peripheral, peripheral.state == .connected {
-      peripheral.delegate = self
-      peripheral.discoverServices([Self.buttonServiceUUID])
-      emit(kind: "connecting", name: displayName(for: peripheral))
-      return
-    }
-
+  private func reconnectStoredPeripherals() {
     guard let centralManager else {
-      emit(kind: "idle")
+      emit()
       return
     }
-
-    if let storedIdentifier = storedPeripheralIdentifier() {
-      let peripherals = centralManager.retrievePeripherals(withIdentifiers: [storedIdentifier])
-      if let restoredPeripheral = peripherals.first {
-        connect(to: restoredPeripheral, reason: "stored-identifier")
-        return
+    let stored = storedIdentifiers()
+    if stored.isEmpty, links.isEmpty {
+      emit()
+      return
+    }
+    for identifier in stored {
+      if let existing = links[identifier], existing.peripheral.state == .connected {
+        continue
+      }
+      let peripherals = centralManager.retrievePeripherals(withIdentifiers: [identifier])
+      if let peripheral = peripherals.first {
+        connect(to: peripheral, reason: "stored-identifier", requireCatalogMatch: false, autoReconnect: true)
       }
     }
-
-    let connectedPeripherals = centralManager.retrieveConnectedPeripherals(withServices: [Self.buttonServiceUUID])
-    if let connectedPeripheral = connectedPeripherals.first(where: { matchesExpectedPeripheral($0, advertisementData: [:]) }) {
-      connect(to: connectedPeripheral, reason: "connected-peripheral")
-      return
+    let knownServices = catalog.compactMap(\.serviceUUID)
+    if knownServices.isEmpty == false {
+      let connected = centralManager.retrieveConnectedPeripherals(withServices: knownServices)
+      for peripheral in connected where links[peripheral.identifier] == nil {
+        if BleAccessoryCatalog.match(catalog, name: peripheral.name, advertisedServices: knownServices) != nil {
+          connect(to: peripheral, reason: "connected-peripheral", requireCatalogMatch: false, autoReconnect: true)
+        }
+      }
     }
-
-    if startScanningIfNecessary, storedPeripheralIdentifier() != nil {
-      startScanning(reason: "auto-reconnect")
-      return
-    }
-
-    emit(kind: "idle")
+    emit()
   }
 
   private func startScanning(reason: String) {
     guard let centralManager else {
-      emit(kind: "idle")
+      emit()
       return
     }
-
     cancelScanTimeout()
     centralManager.stopScan()
-    shouldReconnectAutomatically = true
-    emit(kind: "scanning")
-    emitDiagnostic("Bluetooth button scan started (\(reason)).")
-
+    loggedScanIds.removeAll()
+    scanning = true
+    emit()
+    emitDiagnostic("Bluetooth accessory scan started (\(reason)).")
     centralManager.scanForPeripherals(
-      withServices: [Self.buttonServiceUUID],
+      withServices: nil,
       options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
     )
-
     let work = DispatchWorkItem { [weak self] in
-      guard let self, self.stateKind == "scanning" else {
+      guard let self, self.scanning else {
         return
       }
       self.centralManager?.stopScan()
-      self.emit(kind: "failed", message: "No compatible Bluetooth button found.")
-      self.emitDiagnostic("Bluetooth button scan timed out without a matching peripheral.")
+      self.scanning = false
+      if self.links.isEmpty {
+        self.emit(kindOverride: "failed", message: "No compatible Bluetooth accessory found.")
+        self.emitDiagnostic("Bluetooth accessory scan timed out without a matching peripheral.")
+        return
+      }
+      self.emit()
+      self.emitDiagnostic("Bluetooth accessory scan finished.")
     }
     scanTimeoutWork = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
   }
 
-  private func connect(to peripheral: CBPeripheral, reason: String) {
+  private func connect(
+    to peripheral: CBPeripheral,
+    reason: String,
+    requireCatalogMatch: Bool,
+    autoReconnect: Bool,
+    advertisedName: String? = nil,
+    advertisedServices: [CBUUID] = []
+  ) {
     guard let centralManager else {
       return
     }
-    shouldReconnectAutomatically = true
-    cancelScanTimeout()
-    centralManager.stopScan()
-    self.peripheral = peripheral
-    self.peripheral?.delegate = self
-    emit(kind: "connecting", name: displayName(for: peripheral))
-    emitDiagnostic("Bluetooth button connecting (\(reason)) to \(displayName(for: peripheral)).")
+    let profile = BleAccessoryCatalog.match(
+      catalog,
+      name: advertisedName ?? peripheral.name,
+      advertisedServices: advertisedServices
+    )
+    if requireCatalogMatch && profile == nil && links[peripheral.identifier] == nil {
+      return
+    }
+    if let existing = links[peripheral.identifier] {
+      existing.autoReconnect = autoReconnect
+      existing.peripheral = peripheral
+      existing.profile = profile ?? existing.profile ?? .vendorNotifyFallback
+      peripheral.delegate = self
+      if peripheral.state == .connected || peripheral.state == .connecting {
+        emit()
+        return
+      }
+      existing.kind = "connecting"
+      existing.message = nil
+      remember(existing.id)
+      emit()
+      emitDiagnostic("Bluetooth accessory connecting (\(reason)) to \(displayName(for: existing)).")
+      centralManager.connect(peripheral, options: nil)
+      return
+    }
+    if links.count >= Self.maxLinks {
+      emitDiagnostic("Bluetooth accessory limit reached (\(Self.maxLinks)).")
+      return
+    }
+    let link = AccessoryLink(peripheral: peripheral, profile: profile ?? .vendorNotifyFallback)
+    link.autoReconnect = autoReconnect
+    links[link.id] = link
+    remember(link.id)
+    peripheral.delegate = self
+    emit()
+    emitDiagnostic("Bluetooth accessory connecting (\(reason)) to \(displayName(for: link)).")
     centralManager.connect(peripheral, options: nil)
   }
 
-  private func handleDiscoveredValue(_ data: Data) {
-    guard let firstByte = data.first else {
+  private func discover(for link: AccessoryLink) {
+    resetSubscribe(link)
+    let profile = link.profile ?? BleAccessoryCatalog.match(catalog, name: link.peripheral.name, advertisedServices: []) ?? .vendorNotifyFallback
+    link.profile = profile
+    if profile.isVendorNotify {
+      armSubscribeTimeout(link)
+      link.peripheral.discoverServices(nil)
       return
     }
-    let pressed: Bool?
-    switch firstByte {
-    case 0x01, 0xAB:
-      pressed = true
-    case 0x00, 0xCD:
-      pressed = false
-    default:
-      pressed = nil
+    if let service = profile.serviceUUID {
+      link.peripheral.discoverServices([service])
+    } else {
+      armSubscribeTimeout(link)
+      link.peripheral.discoverServices(nil)
     }
-    guard let pressed, lastPressedValue != pressed else {
+  }
+
+  private func resetSubscribe(_ link: AccessoryLink) {
+    link.pendingCharacteristicDiscoveries = 0
+    link.pendingNotifyEnables = 0
+    link.enabledNotifyCount = 0
+    link.didFinishSubscribe = false
+    cancelSubscribeTimeout(link)
+  }
+
+  private func emitNotify(_ link: AccessoryLink, _ characteristic: CBCharacteristic) {
+    guard let value = characteristic.value, value.isEmpty == false else {
       return
     }
-    lastPressedValue = pressed
-    emitDiagnostic("Bluetooth button \(pressed ? "pressed" : "released").")
-    onButton?(pressed)
+    let serviceUuid = characteristic.service?.uuid.uuidString ?? ""
+    emitDiagnostic("notify \(displayName(for: link)) \(characteristic.uuid.uuidString) \(BleAccessoryCatalog.hex(value))")
+    onNotify?(link.id.uuidString, value.map { Int($0) }, serviceUuid, characteristic.uuid.uuidString)
   }
 
-  private func emit(kind: String, name: String? = nil, message: String? = nil) {
-    stateKind = kind
-    onState?(snapshot(kind: kind, name: name, message: message))
+  private func aggregateKind() -> String {
+    if scanning {
+      return "scanning"
+    }
+    let kinds = links.values.map(\.kind)
+    if kinds.contains("connected") {
+      return "connected"
+    }
+    if kinds.contains("connecting") {
+      return "connecting"
+    }
+    if kinds.contains("unavailable") {
+      return "unavailable"
+    }
+    if kinds.contains("failed") && kinds.contains("connected") == false {
+      return "failed"
+    }
+    if kinds.contains("disconnected") {
+      return "disconnected"
+    }
+    return "idle"
   }
 
-  private func snapshot(kind: String, name: String?, message: String?) -> [String: Any] {
-    var payload: [String: Any] = ["kind": kind]
-    if let name, name.isEmpty == false {
-      payload["name"] = name
+  private func snapshot(message: String?, kindOverride: String? = nil) -> [String: Any] {
+    let kind = kindOverride ?? aggregateKind()
+    let connectedNames = links.values
+      .filter { $0.kind == "connected" || $0.kind == "connecting" }
+      .map { displayName(for: $0) }
+      .joined(separator: ", ")
+    var payload: [String: Any] = [
+      "kind": kind,
+      "scanning": scanning,
+      "devices": links.values.map { deviceSnapshot($0) },
+    ]
+    if connectedNames.isEmpty == false {
+      payload["name"] = connectedNames
     }
     if let message, message.isEmpty == false {
       payload["message"] = message
@@ -227,52 +361,146 @@ final class TalkToMeBlePttController: NSObject {
     return payload
   }
 
+  private func deviceSnapshot(_ link: AccessoryLink) -> [String: Any] {
+    var payload: [String: Any] = [
+      "id": link.id.uuidString,
+      "kind": link.kind,
+      "name": displayName(for: link),
+    ]
+    if let profileId = link.profile?.id, profileId.isEmpty == false {
+      payload["profileId"] = profileId
+    }
+    if let message = link.message, message.isEmpty == false {
+      payload["message"] = message
+    }
+    return payload
+  }
+
+  private func emit(kindOverride: String? = nil, message: String? = nil) {
+    onState?(snapshot(message: message, kindOverride: kindOverride))
+  }
+
   private func emitDiagnostic(_ message: String) {
     onDiagnostic?(message)
   }
 
+  private func displayName(for link: AccessoryLink) -> String {
+    let rawName = link.peripheral.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let rawName, rawName.isEmpty == false {
+      return rawName
+    }
+    return link.profile?.id ?? "Bluetooth accessory"
+  }
+
   private func displayName(for peripheral: CBPeripheral) -> String {
+    if let link = links[peripheral.identifier] {
+      return displayName(for: link)
+    }
     let rawName = peripheral.name?.trimmingCharacters(in: .whitespacesAndNewlines)
     if let rawName, rawName.isEmpty == false {
       return rawName
     }
-    return "PTT-Z01"
+    return "Bluetooth accessory"
   }
 
-  private func matchesExpectedPeripheral(_ peripheral: CBPeripheral, advertisementData: [String: Any]) -> Bool {
-    if let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String)?.uppercased(),
-       Self.expectedNames.contains(name) {
-      return true
+  private func advertisedName(_ advertisementData: [String: Any], peripheral: CBPeripheral) -> String? {
+    if let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String {
+      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      if trimmed.isEmpty == false {
+        return trimmed
+      }
     }
-    if let name = peripheral.name?.uppercased(),
-       Self.expectedNames.contains(name) {
-      return true
-    }
-    if let serviceUUIDs = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID],
-       serviceUUIDs.contains(Self.buttonServiceUUID) {
-      return true
-    }
-    return false
+    return peripheral.name
   }
 
-  private func storedPeripheralIdentifier() -> UUID? {
-    guard let value = userDefaults.string(forKey: Self.storedPeripheralIdentifierKey) else {
-      return nil
+  private func advertisedServices(_ advertisementData: [String: Any]) -> [CBUUID] {
+    (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
+  }
+
+  private func link(for peripheral: CBPeripheral) -> AccessoryLink? {
+    links[peripheral.identifier]
+  }
+
+  private func storedIdentifiers() -> [UUID] {
+    (userDefaults.stringArray(forKey: Self.storedPeripheralIdentifiersKey) ?? []).compactMap(UUID.init(uuidString:))
+  }
+
+  private func remember(_ identifier: UUID) {
+    var ids = storedIdentifiers()
+    if ids.contains(identifier) == false {
+      ids.append(identifier)
+      userDefaults.set(ids.map(\.uuidString), forKey: Self.storedPeripheralIdentifiersKey)
     }
-    return UUID(uuidString: value)
   }
 
-  private func storePeripheralIdentifier(_ identifier: UUID) {
-    userDefaults.set(identifier.uuidString, forKey: Self.storedPeripheralIdentifierKey)
+  private func forget(_ identifier: UUID?) {
+    guard let identifier else {
+      return
+    }
+    let ids = storedIdentifiers().filter { $0 != identifier }
+    userDefaults.set(ids.map(\.uuidString), forKey: Self.storedPeripheralIdentifiersKey)
   }
 
-  private func clearStoredPeripheralIdentifier() {
+  private func clearStoredIdentifiers() {
+    userDefaults.removeObject(forKey: Self.storedPeripheralIdentifiersKey)
+    userDefaults.removeObject(forKey: Self.storedPeripheralIdentifierKey)
+  }
+
+  private func migrateStoredIdentifier() {
+    guard storedIdentifiers().isEmpty,
+          let legacy = userDefaults.string(forKey: Self.storedPeripheralIdentifierKey),
+          let uuid = UUID(uuidString: legacy) else {
+      return
+    }
+    userDefaults.set([uuid.uuidString], forKey: Self.storedPeripheralIdentifiersKey)
     userDefaults.removeObject(forKey: Self.storedPeripheralIdentifierKey)
   }
 
   private func cancelScanTimeout() {
     scanTimeoutWork?.cancel()
     scanTimeoutWork = nil
+  }
+
+  private func cancelSubscribeTimeout(_ link: AccessoryLink) {
+    link.subscribeTimeoutWork?.cancel()
+    link.subscribeTimeoutWork = nil
+  }
+
+  private func armSubscribeTimeout(_ link: AccessoryLink) {
+    cancelSubscribeTimeout(link)
+    let id = link.id
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, let current = self.links[id], current.kind == "connecting" else {
+        return
+      }
+      current.pendingCharacteristicDiscoveries = 0
+      current.pendingNotifyEnables = 0
+      current.didFinishSubscribe = false
+      self.finishVendorSubscribeIfReady(link: current)
+    }
+    link.subscribeTimeoutWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+  }
+
+  private func finishVendorSubscribeIfReady(link: AccessoryLink) {
+    guard link.didFinishSubscribe == false else {
+      return
+    }
+    guard link.pendingCharacteristicDiscoveries == 0, link.pendingNotifyEnables == 0 else {
+      return
+    }
+    link.didFinishSubscribe = true
+    cancelSubscribeTimeout(link)
+    if link.enabledNotifyCount > 0 {
+      link.kind = "connected"
+      link.message = nil
+      emit()
+      emitDiagnostic("Bluetooth accessory notifications enabled on \(displayName(for: link)) (\(link.enabledNotifyCount)).")
+      return
+    }
+    link.kind = "failed"
+    link.message = "The connected accessory does not expose a vendor PTT notify characteristic."
+    emit()
   }
 }
 
@@ -282,12 +510,11 @@ extension TalkToMeBlePttController: CBCentralManagerDelegate {
   }
 
   func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
-    if let restoredPeripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
-       let restoredPeripheral = restoredPeripherals.first {
-      peripheral = restoredPeripheral
-      peripheral?.delegate = self
-      emitDiagnostic("Bluetooth button restore received \(displayName(for: restoredPeripheral)).")
-      reconnectStoredPeripheralIfNeeded(startScanningIfNecessary: false)
+    if let restoredPeripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
+      for peripheral in restoredPeripherals {
+        peripheral.delegate = self
+        connect(to: peripheral, reason: "restore", requireCatalogMatch: false, autoReconnect: true)
+      }
     }
   }
 
@@ -298,92 +525,250 @@ extension TalkToMeBlePttController: CBCentralManagerDelegate {
     rssi RSSI: NSNumber
   ) {
     _ = RSSI
-    guard matchesExpectedPeripheral(peripheral, advertisementData: advertisementData) else {
+    let name = advertisedName(advertisementData, peripheral: peripheral)
+    let services = advertisedServices(advertisementData)
+    if loggedScanIds.contains(peripheral.identifier) == false {
+      loggedScanIds.insert(peripheral.identifier)
+      let serviceList = services.map(\.uuidString).joined(separator: ",")
+      if let name, name.isEmpty == false {
+        emitDiagnostic("Scan saw \(name) services=\(serviceList)")
+      }
+    }
+    guard BleAccessoryCatalog.match(catalog, name: name, advertisedServices: services) != nil else {
       return
     }
-    connect(to: peripheral, reason: "scan")
+    connect(
+      to: peripheral,
+      reason: "scan",
+      requireCatalogMatch: true,
+      autoReconnect: true,
+      advertisedName: name,
+      advertisedServices: services
+    )
+    if links.count >= Self.maxLinks {
+      cancelScanTimeout()
+      centralManager?.stopScan()
+      scanning = false
+      emit()
+    }
   }
 
   func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-    storePeripheralIdentifier(peripheral.identifier)
-    self.peripheral = peripheral
-    self.peripheral?.delegate = self
-    lastPressedValue = nil
-    emitDiagnostic("Bluetooth button connected to \(displayName(for: peripheral)).")
-    peripheral.discoverServices([Self.buttonServiceUUID])
+    remember(peripheral.identifier)
+    peripheral.delegate = self
+    if link(for: peripheral) == nil, links.count >= Self.maxLinks {
+      central.cancelPeripheralConnection(peripheral)
+      emitDiagnostic("Bluetooth accessory limit reached (\(Self.maxLinks)).")
+      return
+    }
+    let link = link(for: peripheral) ?? {
+      let created = AccessoryLink(
+        peripheral: peripheral,
+        profile: BleAccessoryCatalog.match(catalog, name: peripheral.name, advertisedServices: []) ?? .vendorNotifyFallback
+      )
+      links[created.id] = created
+      return created
+    }()
+    link.peripheral = peripheral
+    link.kind = "connecting"
+    emitDiagnostic("Bluetooth accessory connected to \(displayName(for: link)).")
+    discover(for: link)
+    emit()
   }
 
   func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
     let message = error?.localizedDescription ?? "Unknown error."
-    emit(kind: "failed", message: "Bluetooth button connection failed: \(message)")
-    emitDiagnostic("Bluetooth button failed to connect: \(message)")
-    if shouldReconnectAutomatically {
-      reconnectStoredPeripheralIfNeeded(startScanningIfNecessary: true)
+    if let link = link(for: peripheral) {
+      link.kind = "failed"
+      link.message = "Bluetooth accessory connection failed: \(message)"
+      emit()
+      if link.autoReconnect {
+        connect(to: peripheral, reason: "retry", requireCatalogMatch: false, autoReconnect: true)
+      }
     }
+    emitDiagnostic("Bluetooth accessory failed to connect: \(message)")
   }
 
   func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-    buttonCharacteristic = nil
-    lastPressedValue = nil
-    let name = displayName(for: peripheral)
-    self.peripheral = nil
-    if shouldReconnectAutomatically {
-      emit(kind: "disconnected", name: name)
-      emitDiagnostic("Bluetooth button disconnected from \(name). Reconnecting.")
-      reconnectStoredPeripheralIfNeeded(startScanningIfNecessary: true)
+    guard let link = link(for: peripheral) else {
+      emit()
       return
     }
-    emit(kind: "idle")
-    emitDiagnostic("Bluetooth button disconnected from \(name).")
+    cancelSubscribeTimeout(link)
+    onButton?(link.id.uuidString, false)
+    let name = displayName(for: link)
+    if link.autoReconnect, storedIdentifiers().contains(link.id) {
+      link.kind = "disconnected"
+      link.message = nil
+      emit()
+      emitDiagnostic("Bluetooth accessory disconnected from \(name). Reconnecting.")
+      connect(to: peripheral, reason: "auto-reconnect", requireCatalogMatch: false, autoReconnect: true)
+      return
+    }
+    links.removeValue(forKey: link.id)
+    emit()
+    emitDiagnostic("Bluetooth accessory disconnected from \(name).")
   }
 }
 
 extension TalkToMeBlePttController: CBPeripheralDelegate {
   func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+    guard let link = link(for: peripheral) else {
+      return
+    }
     if let error {
-      emit(kind: "failed", message: "Bluetooth services could not be discovered: \(error.localizedDescription)")
+      link.kind = "failed"
+      link.message = "Bluetooth services could not be discovered: \(error.localizedDescription)"
+      emit()
       return
     }
-    guard let service = peripheral.services?.first(where: { $0.uuid == Self.buttonServiceUUID }) else {
-      emit(kind: "failed", message: "The connected accessory does not expose the expected PTT service.")
+    let profile = link.profile ?? .vendorNotifyFallback
+    if profile.isVendorNotify == false, let serviceUUID = profile.serviceUUID {
+      guard let service = peripheral.services?.first(where: { $0.uuid == serviceUUID }) else {
+        link.kind = "failed"
+        link.message = "The connected accessory does not expose the expected PTT service."
+        emit()
+        return
+      }
+      if let characteristicUUID = profile.characteristicUUID {
+        peripheral.discoverCharacteristics([characteristicUUID], for: service)
+      } else {
+        peripheral.discoverCharacteristics(nil, for: service)
+      }
       return
     }
-    peripheral.discoverCharacteristics([Self.buttonCharacteristicUUID], for: service)
+
+    let services = peripheral.services ?? []
+    if services.isEmpty {
+      link.kind = "failed"
+      link.message = "The connected accessory does not expose GATT services."
+      emit()
+      return
+    }
+    link.pendingCharacteristicDiscoveries = 0
+    for service in services {
+      emitDiagnostic("GATT \(displayName(for: link)) service \(service.uuid.uuidString)")
+      if BleAccessoryCatalog.isDeviceInformation(service.uuid) {
+        link.pendingCharacteristicDiscoveries += 1
+        peripheral.discoverCharacteristics(nil, for: service)
+        continue
+      }
+      if BleAccessoryCatalog.shouldSkipService(service.uuid) {
+        continue
+      }
+      link.pendingCharacteristicDiscoveries += 1
+      peripheral.discoverCharacteristics(nil, for: service)
+    }
+    if link.pendingCharacteristicDiscoveries == 0 {
+      finishVendorSubscribeIfReady(link: link)
+    }
   }
 
   func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+    guard let link = link(for: peripheral) else {
+      return
+    }
     if let error {
-      emit(kind: "failed", message: "Bluetooth characteristics could not be discovered: \(error.localizedDescription)")
+      link.kind = "failed"
+      link.message = "Bluetooth characteristics could not be discovered: \(error.localizedDescription)"
+      emit()
       return
     }
-    guard let characteristic = service.characteristics?.first(where: { $0.uuid == Self.buttonCharacteristicUUID }) else {
-      emit(kind: "failed", message: "The connected accessory does not expose the expected PTT characteristic.")
+    let profile = link.profile ?? .vendorNotifyFallback
+    let characteristics = service.characteristics ?? []
+
+    if profile.isVendorNotify == false {
+      let wanted = profile.characteristicUUID
+      guard let characteristic = characteristics.first(where: { wanted == nil || $0.uuid == wanted }) else {
+        link.kind = "failed"
+        link.message = "The connected accessory does not expose the expected PTT characteristic."
+        emit()
+        return
+      }
+      link.pendingNotifyEnables += 1
+      peripheral.setNotifyValue(true, for: characteristic)
       return
     }
-    buttonCharacteristic = characteristic
-    peripheral.setNotifyValue(true, for: characteristic)
+
+    link.pendingCharacteristicDiscoveries = max(0, link.pendingCharacteristicDiscoveries - 1)
+    let summary = characteristics
+      .map { "\($0.uuid.uuidString)(\(BleAccessoryCatalog.propertyLabel($0.properties)))" }
+      .joined(separator: ",")
+    emitDiagnostic("GATT \(displayName(for: link)) \(service.uuid.uuidString) chars: \(summary)")
+
+    if BleAccessoryCatalog.isDeviceInformation(service.uuid) {
+      for characteristic in characteristics {
+        peripheral.readValue(for: characteristic)
+      }
+      finishVendorSubscribeIfReady(link: link)
+      return
+    }
+
+    for characteristic in characteristics {
+      if BleAccessoryCatalog.shouldSkipCharacteristic(characteristic.uuid) {
+        continue
+      }
+      if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
+        link.pendingNotifyEnables += 1
+        peripheral.setNotifyValue(true, for: characteristic)
+      }
+    }
+    finishVendorSubscribeIfReady(link: link)
   }
 
   func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-    if let error {
-      emit(kind: "failed", message: "Bluetooth notifications could not be enabled: \(error.localizedDescription)")
+    guard let link = link(for: peripheral) else {
       return
     }
-    guard characteristic.uuid == Self.buttonCharacteristicUUID, characteristic.isNotifying else {
+    let profile = link.profile ?? .vendorNotifyFallback
+    if profile.isVendorNotify == false {
+      if let error {
+        link.kind = "failed"
+        link.message = "Bluetooth notifications could not be enabled: \(error.localizedDescription)"
+        emit()
+        return
+      }
+      guard characteristic.isNotifying else {
+        return
+      }
+      link.enabledNotifyCount += 1
+      link.kind = "connected"
+      link.message = nil
+      emit()
+      emitDiagnostic("Bluetooth accessory notifications enabled on \(displayName(for: link)) \(characteristic.uuid.uuidString).")
       return
     }
-    emit(kind: "connected", name: displayName(for: peripheral))
-    emitDiagnostic("Bluetooth button notifications enabled on FFE1.")
+
+    link.pendingNotifyEnables = max(0, link.pendingNotifyEnables - 1)
+    if error == nil, characteristic.isNotifying {
+      link.enabledNotifyCount += 1
+      emitDiagnostic("notify enabled \(displayName(for: link)) \(characteristic.uuid.uuidString)")
+    } else if let error {
+      emitDiagnostic("notify failed \(characteristic.uuid.uuidString): \(error.localizedDescription)")
+    }
+    finishVendorSubscribeIfReady(link: link)
   }
 
   func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+    guard let link = link(for: peripheral) else {
+      return
+    }
     if let error {
-      emitDiagnostic("Bluetooth button value update failed: \(error.localizedDescription)")
+      emitDiagnostic("Bluetooth accessory value update failed: \(error.localizedDescription)")
       return
     }
-    guard characteristic.uuid == Self.buttonCharacteristicUUID, let value = characteristic.value else {
+    if let serviceUUID = characteristic.service?.uuid, BleAccessoryCatalog.shouldSkipService(serviceUUID) {
+      if let value = characteristic.value, let text = String(data: value, encoding: .utf8), text.isEmpty == false {
+        emitDiagnostic("DIS \(characteristic.uuid.uuidString) \(text)")
+      }
       return
     }
-    handleDiscoveredValue(value)
+    if BleAccessoryCatalog.shouldSkipCharacteristic(characteristic.uuid) {
+      if let value = characteristic.value, let text = String(data: value, encoding: .utf8), text.isEmpty == false {
+        emitDiagnostic("DIS \(characteristic.uuid.uuidString) \(text)")
+      }
+      return
+    }
+    emitNotify(link, characteristic)
   }
 }

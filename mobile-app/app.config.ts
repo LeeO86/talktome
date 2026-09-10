@@ -14,7 +14,7 @@ const config: ExpoConfig = {
     supportsTablet: true,
     icon: './assets/icon.png',
     bundleIdentifier: 'io.github.leeo86.talktome-mobile',
-    buildNumber: '10',
+    buildNumber: '12',
     appleTeamId: '4876GGFAH9',
     entitlements: {
       'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
@@ -31,7 +31,7 @@ const config: ExpoConfig = {
         'TalkToMe uses the microphone so you can talk to other operators.',
       NSLocalNetworkUsageDescription:
         'TalkToMe connects to your self-hosted intercom on the local network.',
-      NSBluetoothAlwaysUsageDescription: 'TalkToMe connects to wireless PTT buttons.',
+      NSBluetoothAlwaysUsageDescription: 'TalkToMe connects to wireless PTT buttons and speaker mics.',
       NSCameraUsageDescription: 'TalkToMe uses the camera to scan server and login QR codes.',
       NSAppTransportSecurity: {
         NSAllowsLocalNetworking: true,
@@ -57,7 +57,7 @@ const config: ExpoConfig = {
   android: {
     // Android Java packages cannot contain a hyphen.
     package: 'io.github.leeo86.talktomemobile',
-    versionCode: 10,
+    versionCode: 12,
     adaptiveIcon: {
       backgroundColor: '#000000',
       foregroundImage: './assets/android-icon-foreground.png',

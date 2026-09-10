@@ -22,6 +22,10 @@ export class BleButtonPolicy {
     if (this.lastPressed === pressed) {
       return null;
     }
+    if (!pressed && this.lastPressed !== true) {
+      this.lastPressed = false;
+      return null;
+    }
     this.lastPressed = pressed;
     if (pressed) {
       this.pressedAtMs = nowMs;
@@ -38,6 +42,10 @@ export class BleButtonPolicy {
       shortPressLocks: options.shortPressLocks,
       unlockOnRelease,
     });
+  }
+
+  isHeld(): boolean {
+    return this.lastPressed === true;
   }
 
   reset(): void {

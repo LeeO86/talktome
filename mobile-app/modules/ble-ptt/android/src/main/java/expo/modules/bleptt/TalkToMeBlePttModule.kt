@@ -9,7 +9,7 @@ class TalkToMeBlePttModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("TalkToMeBlePtt")
 
-    Events("onState", "onButton", "onDiagnostic")
+    Events("onState", "onButton", "onDiagnostic", "onNotify")
 
     Function("isAvailable") {
       true
@@ -17,44 +17,64 @@ class TalkToMeBlePttModule : Module() {
 
     Function("getState") {
       try {
-        controller()?.currentState() ?: mapOf("kind" to "idle")
+        controller()?.currentState() ?: mapOf("kind" to "idle", "devices" to emptyList<Map<String, Any?>>())
       } catch (_: SecurityException) {
-        mapOf("kind" to "idle")
+        mapOf("kind" to "idle", "devices" to emptyList<Map<String, Any?>>())
       }
     }
 
-    AsyncFunction("start") {
+    AsyncFunction("start") { catalogJson: String ->
       try {
         val current = controller() ?: return@AsyncFunction mapOf(
           "kind" to "unavailable",
           "message" to "Bluetooth is currently unavailable.",
+          "devices" to emptyList<Map<String, Any?>>(),
         )
+        current.setCatalogJson(catalogJson)
         current.start()
         current.currentState()
       } catch (_: SecurityException) {
-        mapOf("kind" to "idle")
+        mapOf("kind" to "idle", "devices" to emptyList<Map<String, Any?>>())
       }
     }
 
-    AsyncFunction("scanAndConnect") {
+    AsyncFunction("scanAndConnect") { catalogJson: String ->
       try {
         val current = controller() ?: return@AsyncFunction mapOf(
           "kind" to "unavailable",
           "message" to "Bluetooth is currently unavailable.",
+          "devices" to emptyList<Map<String, Any?>>(),
         )
+        current.setCatalogJson(catalogJson)
         current.scanAndConnect()
         current.currentState()
       } catch (_: SecurityException) {
         mapOf(
           "kind" to "unavailable",
-          "message" to "Bluetooth permission is required to scan for a PTT button.",
+          "message" to "Bluetooth permission is required to scan for a PTT accessory.",
+          "devices" to emptyList<Map<String, Any?>>(),
         )
       }
     }
 
-    AsyncFunction("disconnect") {
-      val current = controller() ?: return@AsyncFunction mapOf("kind" to "idle")
-      current.disconnect()
+    AsyncFunction("connectDevice") { deviceId: String, catalogJson: String ->
+      try {
+        val current = controller() ?: return@AsyncFunction mapOf(
+          "kind" to "unavailable",
+          "message" to "Bluetooth is currently unavailable.",
+          "devices" to emptyList<Map<String, Any?>>(),
+        )
+        current.setCatalogJson(catalogJson)
+        current.connectStored(deviceId)
+        current.currentState()
+      } catch (_: SecurityException) {
+        mapOf("kind" to "idle", "devices" to emptyList<Map<String, Any?>>())
+      }
+    }
+
+    AsyncFunction("disconnect") { deviceId: String ->
+      val current = controller() ?: return@AsyncFunction mapOf("kind" to "idle", "devices" to emptyList<Map<String, Any?>>())
+      current.disconnect(deviceId)
       current.currentState()
     }
   }
@@ -71,8 +91,20 @@ class TalkToMeBlePttModule : Module() {
         sendEvent("onState", payload)
       }
 
-      override fun onButton(pressed: Boolean) {
-        sendEvent("onButton", mapOf("pressed" to pressed))
+      override fun onButton(deviceId: String, pressed: Boolean) {
+        sendEvent("onButton", mapOf("deviceId" to deviceId, "pressed" to pressed))
+      }
+
+      override fun onNotify(deviceId: String, data: List<Int>, serviceUuid: String, characteristicUuid: String) {
+        sendEvent(
+          "onNotify",
+          mapOf(
+            "deviceId" to deviceId,
+            "data" to data,
+            "serviceUuid" to serviceUuid,
+            "characteristicUuid" to characteristicUuid,
+          ),
+        )
       }
 
       override fun onDiagnostic(message: String) {

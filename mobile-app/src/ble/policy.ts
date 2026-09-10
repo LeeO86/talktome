@@ -1,27 +1,17 @@
 // Ported from talktome-apple BluetoothButtonController @ 004d6e76 by Daniel Jocher.
-// GATT map: service FFE0, characteristic FFE1, name PTT-Z01.
-// Press bytes 0x01 / 0xAB, release 0x00 / 0xCD. Short press (<250ms) locks;
-// a second short press on the same locked target unlocks.
+// GATT maps live in catalog.ts. Press/release policy (short-press lock) stays here.
 
-export const BLE_BUTTON_SERVICE_UUID = 'FFE0';
-export const BLE_BUTTON_CHARACTERISTIC_UUID = 'FFE1';
-export const BLE_BUTTON_EXPECTED_NAMES = ['PTT-Z01'] as const;
-export const BLE_SHORT_PRESS_LOCK_MS = 250;
+export {
+  BLE_BUTTON_CHARACTERISTIC_UUID,
+  BLE_BUTTON_EXPECTED_NAMES,
+  BLE_BUTTON_SERVICE_UUID,
+  BLE_SHORT_PRESS_LOCK_MS,
+  decodeButtonByte,
+  matchesExpectedBleName,
+} from './catalog';
+import { BLE_SHORT_PRESS_LOCK_MS } from './catalog';
 
 export type BleTalkAction = 'startTalk' | 'stopTalk' | 'lockTalk' | 'unlockTalk';
-
-export function decodeButtonByte(byte: number): boolean | null {
-  switch (byte & 0xff) {
-    case 0x01:
-    case 0xab:
-      return true;
-    case 0x00:
-    case 0xcd:
-      return false;
-    default:
-      return null;
-  }
-}
 
 export function talkActionForButtonPress(input?: { lockedToTarget?: boolean }): BleTalkAction | null {
   if (input?.lockedToTarget) {
@@ -46,9 +36,4 @@ export function talkActionForButtonRelease(input: {
     return 'lockTalk';
   }
   return 'stopTalk';
-}
-
-export function matchesExpectedBleName(name: string | null | undefined): boolean {
-  const normalized = name?.trim().toUpperCase();
-  return Boolean(normalized && BLE_BUTTON_EXPECTED_NAMES.includes(normalized as (typeof BLE_BUTTON_EXPECTED_NAMES)[number]));
 }

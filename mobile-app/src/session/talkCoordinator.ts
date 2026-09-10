@@ -356,7 +356,16 @@ export class TalkCoordinator {
     useSessionStore.setState({ statusMessage: `Locked to ${keep.label}.` });
   }
 
-  async unlockTalk(): Promise<void> {
+  async unlockTalk(target?: TalkTarget): Promise<void> {
+    if (
+      target &&
+      useSessionStore.getState().lockMultipleTargets &&
+      this.c.lockedTargets.length > 1 &&
+      this.c.lockedTargets.some((item) => talkTargetIdentity(item) === talkTargetIdentity(target))
+    ) {
+      await this.removeLock(target);
+      return;
+    }
     try {
       await this.c.media?.stopTalking();
     } finally {
