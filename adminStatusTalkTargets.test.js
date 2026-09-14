@@ -5,6 +5,7 @@ const test = require('node:test');
 
 const server = fs.readFileSync(path.join(__dirname, 'serverCore.js'), 'utf8');
 const admin = fs.readFileSync(path.join(__dirname, 'public', 'admin.js'), 'utf8');
+const adminHtml = fs.readFileSync(path.join(__dirname, 'public', 'admin.html'), 'utf8');
 
 test('admin status resolves active talk targets to display names', () => {
   assert.match(server, /function buildAdminStatusTalkTargets\(targets, usersById, conferencesById\)/);
@@ -16,4 +17,18 @@ test('admin status resolves active talk targets to display names', () => {
 test('talking users show an arrow and their active target names', () => {
   assert.match(admin, /return `→ \$\{names\.length > 0 \? names\.join\(', '\) : 'Target'\}`/);
   assert.match(admin, /talkingLabel: formatStatusTalkTargetLabel\(user\)/);
+});
+
+test('admin status exposes and conditionally renders the active production', () => {
+  assert.match(server, /const multipleProductionsEnabled = areMultipleProductionsEnabled\(\)/);
+  assert.match(server, /activeProduction: activeProduction/);
+  assert.match(server, /multipleProductionsEnabled,/);
+  assert.match(admin, /const showProductionColumn = payload\.multipleProductionsEnabled === true/);
+  assert.match(admin, /user\.activeProduction\?\.name/);
+  assert.match(adminHtml, /data-status-production-column hidden>Production<\/th>/);
+});
+
+test('status tables reserve less space for short names than detailed client data', () => {
+  assert.match(adminHtml, /<col style="width: 8rem;">\s*<col data-status-production-column/);
+  assert.match(adminHtml, /status-table--users\.status-table--with-production/);
 });

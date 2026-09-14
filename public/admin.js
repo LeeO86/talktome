@@ -1484,6 +1484,7 @@ function syncStopTransmissionButtons(users = latestAdminStatus?.users || []) {
 
 function renderAdminStatus(payload = {}) {
   const canRestartServer = Boolean(adminState.isSuperAdmin && payload.restartSupported);
+  const showProductionColumn = payload.multipleProductionsEnabled === true;
   containerRestartPanel?.classList.toggle('is-hidden', !canRestartServer);
   latestAdminStatus = payload;
   const users = Array.isArray(payload.users) ? [...payload.users] : [];
@@ -1513,6 +1514,12 @@ function renderAdminStatus(payload = {}) {
   setStatusText('status-bridges-count', `${summary.bridgesOnline || 0} online of ${summary.bridgesTotal || 0}`);
   setStatusText('status-companions-count', `${summary.companionsOnline || 0} online of ${companions.length}`);
 
+  const usersTable = statusUsersBody?.closest('.status-table--users');
+  usersTable?.classList.toggle('status-table--with-production', showProductionColumn);
+  usersTable?.querySelectorAll('[data-status-production-column]').forEach((element) => {
+    element.hidden = !showProductionColumn;
+  });
+
   if (statusUsersBody) {
     statusUsersBody.innerHTML = users.length
       ? users.map((user) => {
@@ -1525,6 +1532,9 @@ function renderAdminStatus(payload = {}) {
             : user.configuredAsBridge
               ? 'Bridge configured'
               : '-';
+          const productionLabel = user.online
+            ? user.activeProduction?.name || (user.connectionType === 'bridge' ? 'Global' : '-')
+            : '-';
           return `
             <tr>
               <td>${statusIndicatorHtml({
@@ -1532,6 +1542,7 @@ function renderAdminStatus(payload = {}) {
                 talkingLabel: formatStatusTalkTargetLabel(user),
               })}</td>
               <td>${userNameHtml}</td>
+              ${showProductionColumn ? `<td title="${escapeHtml(productionLabel)}">${escapeHtml(productionLabel)}</td>` : ''}
               <td>${escapeHtml(clientLabel)}</td>
               <td>${escapeHtml(user.remoteAddress || '-')}</td>
               <td title="WebRTC round-trip time from this browser">${formatStatusLatency(user.networkStats)}</td>
@@ -1541,7 +1552,7 @@ function renderAdminStatus(payload = {}) {
             </tr>
           `;
         }).join('')
-      : '<tr><td colspan="8" class="status-empty">No users configured.</td></tr>';
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No users configured.</td></tr>`;
   }
 
   if (statusFeedsBody) {

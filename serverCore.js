@@ -3734,9 +3734,13 @@ function buildAdminStatusTalkTargets(targets, usersById, conferencesById) {
 
 function buildAdminStatusSnapshot() {
   const now = Date.now();
+  const multipleProductionsEnabled = areMultipleProductionsEnabled();
   const allUsers = getAllUsers();
   const allFeeds = getAllFeeds();
   const allConferences = getAllConferences();
+  const productionsById = multipleProductionsEnabled
+    ? new Map(getAllProductions().map((production) => [String(production.id), production]))
+    : new Map();
   const usersById = new Map(allUsers.map((user) => [String(user.id), user]));
   const conferencesById = new Map(allConferences.map((conference) => [String(conference.id), conference]));
   const users = allUsers
@@ -3748,6 +3752,9 @@ function buildAdminStatusSnapshot() {
       const isBridge = Boolean(peer?.isBridgePeer);
       const activeTargets = peer ? getPeerActiveTalkTargets(peer) : [];
       const talkTargets = buildAdminStatusTalkTargets(activeTargets, usersById, conferencesById);
+      const activeProduction = online && multipleProductionsEnabled && peer.productionId != null
+        ? productionsById.get(String(peer.productionId)) || null
+        : null;
       const bridge = isBridge
         ? bridgeRegistry.get(String(peer.bridgeId)) || null
         : null;
@@ -3759,6 +3766,9 @@ function buildAdminStatusSnapshot() {
         online,
         talking: online && activeTargets.length > 0,
         talkTargets,
+        activeProduction: activeProduction
+          ? { id: Number(activeProduction.id), name: activeProduction.name }
+          : null,
         connectionType: online ? (isBridge ? "bridge" : "browser") : null,
         configuredAsBridge: Boolean(user.bridge_enabled),
         bridgeName: bridge?.name || (isBridge ? peer.bridgeId : null),
@@ -3854,6 +3864,7 @@ function buildAdminStatusSnapshot() {
     serverStartedAt: statusIsoTimestamp(SERVER_STARTED_AT),
     runningInContainer: isRunningInContainer(),
     restartSupported: isServerRestartSupported(),
+    multipleProductionsEnabled,
     users,
     feeds,
     bridges,

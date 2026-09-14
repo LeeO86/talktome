@@ -2592,10 +2592,18 @@
 
       .status-table {
         width: 100%;
-        min-width: 52rem;
+        min-width: 59.3rem;
         table-layout: fixed;
         border-collapse: collapse;
         font-size: 0.84rem;
+      }
+
+      .status-table--users {
+        min-width: 62.5rem;
+      }
+
+      .status-table--users.status-table--with-production {
+        min-width: 70.5rem;
       }
 
       .status-table th,
@@ -2931,6 +2939,10 @@
           display: block;
         }
 
+        .status-table--users.status-table--with-production {
+          min-width: 0;
+        }
+
         .status-table colgroup,
         .status-table thead {
           display: none;
@@ -2978,6 +2990,14 @@
         .status-table td:nth-child(6)::before { content: 'Loss'; }
         .status-table td:nth-child(7)::before { content: 'Connected since'; }
         .status-table td:nth-child(8)::before { content: 'Last seen'; }
+
+        .status-table--users.status-table--with-production td:nth-child(3)::before { content: 'Production'; }
+        .status-table--users.status-table--with-production td:nth-child(4)::before { content: 'Client'; }
+        .status-table--users.status-table--with-production td:nth-child(5)::before { content: 'Address'; }
+        .status-table--users.status-table--with-production td:nth-child(6)::before { content: 'RTT'; }
+        .status-table--users.status-table--with-production td:nth-child(7)::before { content: 'Loss'; }
+        .status-table--users.status-table--with-production td:nth-child(8)::before { content: 'Connected since'; }
+        .status-table--users.status-table--with-production td:nth-child(9)::before { content: 'Last seen'; }
 
         .status-table tbody tr:has(.status-empty) {
           grid-template-columns: 1fr;
@@ -3379,18 +3399,20 @@
               <table class="status-table status-table--users">
                 <colgroup>
                   <col style="width: 13rem;">
-                  <col style="width: 16rem;">
-                  <col style="width: 16%;">
-                  <col style="width: 18%;">
-                  <col style="width: 7rem;">
-                  <col style="width: 6rem;">
-                  <col style="width: 15%;">
-                  <col style="width: 15%;">
+                  <col style="width: 8rem;">
+                  <col data-status-production-column style="width: 8rem;" hidden>
+                  <col style="width: 10rem;">
+                  <col style="width: 8.5rem;">
+                  <col style="width: 4.5rem;">
+                  <col style="width: 4.5rem;">
+                  <col style="width: 7.5rem;">
+                  <col style="width: 6.5rem;">
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
+                    <th data-status-production-column hidden>Production</th>
                     <th>Client</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>
@@ -3415,13 +3437,13 @@
               <table class="status-table status-table--feeds">
                 <colgroup>
                   <col style="width: 9.8rem;">
-                  <col style="width: 16rem;">
-                  <col style="width: 16%;">
-                  <col style="width: 18%;">
-                  <col style="width: 7rem;">
-                  <col style="width: 6rem;">
-                  <col style="width: 15%;">
-                  <col style="width: 15%;">
+                  <col style="width: 8rem;">
+                  <col style="width: 10rem;">
+                  <col style="width: 8.5rem;">
+                  <col style="width: 4.5rem;">
+                  <col style="width: 4.5rem;">
+                  <col style="width: 7.5rem;">
+                  <col style="width: 6.5rem;">
                 </colgroup>
                 <thead>
                   <tr>
@@ -3451,13 +3473,13 @@
               <table class="status-table status-table--bridges">
                 <colgroup>
                   <col style="width: 9.8rem;">
-                  <col style="width: 16rem;">
-                  <col style="width: 16%;">
-                  <col style="width: 18%;">
-                  <col style="width: 7rem;">
-                  <col style="width: 6rem;">
-                  <col style="width: 15%;">
-                  <col style="width: 15%;">
+                  <col style="width: 8rem;">
+                  <col style="width: 10rem;">
+                  <col style="width: 8.5rem;">
+                  <col style="width: 4.5rem;">
+                  <col style="width: 4.5rem;">
+                  <col style="width: 7.5rem;">
+                  <col style="width: 6.5rem;">
                 </colgroup>
                 <thead>
                   <tr>
@@ -3487,13 +3509,13 @@
               <table class="status-table status-table--companions">
                 <colgroup>
                   <col style="width: 9.8rem;">
-                  <col style="width: 16rem;">
-                  <col style="width: 16%;">
-                  <col style="width: 18%;">
-                  <col style="width: 7rem;">
-                  <col style="width: 6rem;">
-                  <col style="width: 15%;">
-                  <col style="width: 15%;">
+                  <col style="width: 8rem;">
+                  <col style="width: 10rem;">
+                  <col style="width: 8.5rem;">
+                  <col style="width: 4.5rem;">
+                  <col style="width: 4.5rem;">
+                  <col style="width: 7.5rem;">
+                  <col style="width: 6.5rem;">
                 </colgroup>
                 <thead>
                   <tr>
