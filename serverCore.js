@@ -2959,6 +2959,7 @@ app.get("/login/options", (req, res) => {
   try {
     const settings = resolveGuestLoginSettings(loadRuntimeConfig() || {}, { createProfile: false });
     res.json({
+      appVersion: SERVER_APP_VERSION,
       guestLogin: {
         enabled: settings.enabled,
         label: settings.profileName || "Guest",
@@ -2970,6 +2971,7 @@ app.get("/login/options", (req, res) => {
   } catch (err) {
     console.error("Login options error:", err);
     res.json({
+      appVersion: SERVER_APP_VERSION,
       guestLogin: { enabled: false, label: "Guest" },
       sso: { enabled: PROXY_SSO_CONFIG.enabled },
     });

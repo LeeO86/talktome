@@ -3494,6 +3494,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const guestLoginPanel = document.getElementById("guest-login-panel");
   const guestLoginButton = document.getElementById("guest-login-button");
   const guestDisplayNameInput = document.getElementById("guest-display-name");
+  const settingsServerVersion = document.getElementById('settings-server-version');
   const productionLoginPanel = document.getElementById('production-login-panel');
   const productionLoginOptions = document.getElementById('production-login-options');
   const bridgeLoginPanel = document.getElementById('bridge-login-panel');
@@ -3797,6 +3798,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch('/login/options');
       if (!res.ok) throw new Error(`Login options failed: ${res.status}`);
       const payload = await res.json();
+      const appVersion = String(payload?.appVersion || '').trim();
+      if (settingsServerVersion && appVersion) {
+        const displayVersion = appVersion === 'unknown'
+          ? 'unknown'
+          : `v${appVersion.replace(/^v/i, '')}`;
+        settingsServerVersion.textContent = `Server ${displayVersion}`;
+        settingsServerVersion.hidden = false;
+      }
       const guestLogin = payload?.guestLogin || {};
       const enabled = guestLogin.enabled === true;
       guestLoginEnabled = enabled;

@@ -377,12 +377,21 @@
 
       .settings-actions {
         display: flex;
-        justify-content: flex-end;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
         position: sticky;
-        bottom: -1rem;
-        padding-top: 0.5rem;
-        padding-bottom: 1.1rem;
+        bottom: -0.5rem;
+        padding-top: 0.4rem;
+        padding-bottom: 0.2rem;
         background: #1f2937;
+      }
+
+      .settings-server-version {
+        color: rgba(148, 163, 184, 0.82);
+        font-size: 0.72rem;
+        line-height: 1;
+        white-space: nowrap;
       }
 
       .settings-nav-button {
@@ -2366,6 +2375,7 @@
                 <span class="settings-nav-button__arrow" aria-hidden="true">&#8250;</span>
               </button>
               <div class="settings-actions">
+                <span id="settings-server-version" class="settings-server-version" hidden></span>
                 <button id="logout-btn" type="button" class="logout-btn">Logout</button>
               </div>
             </div>

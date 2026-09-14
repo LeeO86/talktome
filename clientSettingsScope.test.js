@@ -7,6 +7,10 @@ const clientSource = fs.readFileSync(
   path.join(__dirname, "public", "client.js"),
   "utf8",
 );
+const clientHtml = fs.readFileSync(
+  path.join(__dirname, "public", "index.html"),
+  "utf8",
+);
 
 function sourceBetween(startMarker, endMarker) {
   const start = clientSource.indexOf(startMarker);
@@ -44,4 +48,10 @@ test("feed ducking does not change listen-only conference playback levels", () =
 
   assert.doesNotMatch(playbackLevel, /listenOnlyConferenceKeys|feedDuckingFactor/);
   assert.doesNotMatch(feedDucking, /listenOnlyConferenceKeys/);
+});
+
+test("settings footer shows the current server version beside logout", () => {
+  assert.match(clientHtml, /<div class="settings-actions">\s*<span id="settings-server-version"[^>]*><\/span>\s*<button id="logout-btn"/s);
+  assert.match(clientHtml, /\.settings-actions\s*\{[^}]*justify-content:\s*space-between;[^}]*padding-bottom:\s*0\.2rem;/s);
+  assert.match(clientSource, /settingsServerVersion\.textContent = `Server \$\{displayVersion\}`/);
 });
