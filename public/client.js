@@ -8479,7 +8479,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         li.classList.toggle('is-offline', !activeFeedKeys.has(key));
       }
       if (statusEl) {
-        statusEl.textContent = getSpeakerStatusText(key, isSpeaking);
+        renderSpeakerStatus(statusEl, key, isSpeaking);
       }
 
       applyMuteVisualState(li, mutedPeers.has(key));
@@ -10557,8 +10557,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       speakerNames.push(normalizedName);
     });
 
-    if (!speakerNames.length) return 'Speaking';
-    return `${speakerNames.join(', ')} speaking`;
+    return speakerNames.join(', ');
   }
 
   function getSpeakerStatusText(targetKey, isSpeaking) {
@@ -10570,6 +10569,26 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       return getConferenceSpeakerStatusText(targetKey);
     }
     return '';
+  }
+
+  function renderSpeakerStatus(statusEl, targetKey, isSpeaking) {
+    const text = getSpeakerStatusText(targetKey, isSpeaking);
+    const showTalkIcon = isSpeaking && targetKey.startsWith('conf-');
+    const signature = JSON.stringify([showTalkIcon, text]);
+    if (statusEl.dataset.speakerStatus === signature) return;
+    statusEl.dataset.speakerStatus = signature;
+    statusEl.replaceChildren();
+    statusEl.removeAttribute('aria-label');
+    if (showTalkIcon) {
+      const icon = document.createElement('img');
+      icon.className = 'speaker-status-icon';
+      icon.src = UI_ICONS.talk;
+      icon.alt = '';
+      icon.setAttribute('aria-hidden', 'true');
+      statusEl.appendChild(icon);
+      statusEl.setAttribute('aria-label', text ? `${text} speaking` : 'Speaking');
+    }
+    if (text) statusEl.appendChild(document.createTextNode(text));
   }
 
   function updateSpeakerHighlight(targetKey, isSpeaking) {
@@ -10599,7 +10618,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       }
       icon?.classList.add("speaking");
       if (statusEl) {
-        statusEl.textContent = getSpeakerStatusText(targetKey, true);
+        renderSpeakerStatus(statusEl, targetKey, true);
       }
 
       applyFeedDucking();
@@ -10617,7 +10636,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     }
     icon?.classList.remove("speaking");
     if (statusEl) {
-      statusEl.textContent = '';
+      renderSpeakerStatus(statusEl, targetKey, false);
     }
     if (lockTargetMatches) {
       el?.classList.add("talking-to");
