@@ -94,7 +94,8 @@
         font-weight: 650;
         line-height: 1.25;
       }
-      .user-audio-settings-dialog button.user-audio-settings-dialog__close {
+      .user-audio-settings-dialog button.user-audio-settings-dialog__close,
+      button.image-lightbox__close {
         display: grid;
         place-items: center;
         width: 2.2rem;
@@ -1119,7 +1120,8 @@
 
       .config-panel button:not(.media-network-qr-button),
       .admin-action-dialog__actions button,
-      .user-audio-settings-dialog__close {
+      .user-audio-settings-dialog__close,
+      .image-lightbox__close {
         height: 2.2rem;
         min-height: 0;
         padding: 0.4rem 0.75rem;
@@ -1132,7 +1134,8 @@
 
       .config-panel button:not(.media-network-qr-button):hover,
       .admin-action-dialog__actions button:hover,
-      .user-audio-settings-dialog__close:hover {
+      .user-audio-settings-dialog__close:hover,
+      .image-lightbox__close:hover {
         border-color: rgba(59, 130, 246, 0.58);
         background: rgba(37, 99, 235, 0.3);
       }
@@ -1491,14 +1494,6 @@
         position: absolute;
         top: 0.85rem;
         right: 0.85rem;
-        width: 2.4rem;
-        height: 2.4rem;
-        border: 1px solid rgba(148, 163, 184, 0.24);
-        border-radius: 999px;
-        background: rgba(30, 41, 59, 0.84);
-        color: var(--text);
-        font-size: 1.1rem;
-        cursor: pointer;
       }
 
       .image-lightbox__title {
