@@ -37,26 +37,32 @@
       }
 
       html.preview-camera,
-      body.preview-camera {
+      html.preview-camera body {
         background-color: #00875a !important;
       }
 
       html.cut-camera,
-      body.cut-camera {
+      html.cut-camera body {
         background-color: #e00000 !important;
       }
 
-      /* Safari on iOS samples a fixed element at the lower viewport edge for
-         its floating toolbar tint. Keep this above the fixed reply bar. */
-      #safari-tally-sampler {
+      /* Keep tally inside the application on iOS. Safari's lower browser
+         chrome cannot reliably follow dynamic page colors. */
+      body::after {
+        content: "";
         position: fixed;
-        left: 0;
-        right: 0;
-        bottom: -1px;
-        height: 4px;
-        background-color: #0b1120;
+        inset: 0;
+        border: 0.4rem solid transparent;
         pointer-events: none;
-        z-index: 1001;
+        z-index: 1100;
+      }
+
+      body.preview-camera::after {
+        border-color: #00875a;
+      }
+
+      body.cut-camera::after {
+        border-color: #e00000;
       }
 
       .container {
@@ -2125,7 +2131,6 @@
     </style>
   </head>
   <body>
-    <div id="safari-tally-sampler" aria-hidden="true"></div>
     <div class="container">
     <!-- Login Section -->
     <div id="login-container" class="login-overlay" role="dialog" aria-modal="true" aria-labelledby="login-title">

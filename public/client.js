@@ -7,6 +7,14 @@ const socket = io({
   timeout: 10000,
 });
 
+const USER_AGENT = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+const isTouchMacUA = typeof navigator !== 'undefined'
+  ? navigator.maxTouchPoints > 1 && /Macintosh/.test(USER_AGENT)
+  : false;
+const isiOS = typeof navigator !== 'undefined'
+  ? /iPad|iPhone|iPod/.test(USER_AGENT) || isTouchMacUA
+  : false;
+
 function setupPasswordVisibilityToggles(root = document) {
   root.querySelectorAll('[data-password-toggle]').forEach((button) => {
     if (button.dataset.passwordToggleReady === 'true') return;
@@ -53,20 +61,23 @@ socket.on("cut-camera", (value) => {
   // one color state to Safari instead of leaving both classes active.
   const visiblePrv = prv && !pgm;
   const themeColor = pgm ? "#e00000" : visiblePrv ? "#00875a" : "#0b1120";
+  const browserThemeColor = isiOS ? "#0b1120" : themeColor;
   const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 
-  for (const element of [document.documentElement, document.body]) {
-    element.classList.remove("preview-camera", "cut-camera");
-    if (pgm) element.classList.add("cut-camera");
-    else if (visiblePrv) element.classList.add("preview-camera");
-    // Safari 26 derives its chrome from the rendered page background rather
-    // than reliably observing a dynamically changed theme-color meta tag.
-    element.style.backgroundColor = themeColor;
-  }
+  document.documentElement.classList.remove("preview-camera", "cut-camera");
+  document.body.classList.remove("preview-camera", "cut-camera");
+  if (pgm) document.body.classList.add("cut-camera");
+  else if (visiblePrv) document.body.classList.add("preview-camera");
 
-  const safariTallySampler = document.getElementById("safari-tally-sampler");
-  if (safariTallySampler) safariTallySampler.style.backgroundColor = themeColor;
-  themeColorMeta?.setAttribute("content", themeColor);
+  // iOS Safari caches the lower browser chrome color independently. Keep the
+  // browser surface neutral there and render tally only in the application.
+  if (!isiOS) {
+    if (pgm) document.documentElement.classList.add("cut-camera");
+    else if (visiblePrv) document.documentElement.classList.add("preview-camera");
+  }
+  document.documentElement.style.backgroundColor = browserThemeColor;
+  document.body.style.backgroundColor = browserThemeColor;
+  themeColorMeta?.setAttribute("content", browserThemeColor);
 });
 
 const BASE_REPLY_LABEL = "REPLY";
@@ -313,16 +324,9 @@ function didReachSlideToLockThreshold(currentX, startX) {
   return leftHandModeEnabled ? delta >= 42 : delta <= -42;
 }
 
-const USER_AGENT = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-const isTouchMacUA = typeof navigator !== 'undefined'
-  ? navigator.maxTouchPoints > 1 && /Macintosh/.test(USER_AGENT)
-  : false;
 const isAndroidBrowser = /Android/i.test(USER_AGENT);
 const isMobileBrowser = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobi/i.test(USER_AGENT)
   || isTouchMacUA;
-const isiOS = typeof navigator !== 'undefined'
-  ? /iPad|iPhone|iPod/.test(USER_AGENT) || isTouchMacUA
-  : false;
 const isSafariBrowser = typeof navigator !== 'undefined'
   ? /Safari/i.test(USER_AGENT) && !/Chrome|CriOS|Edg|OPR|Firefox|FxiOS/i.test(USER_AGENT)
   : false;
