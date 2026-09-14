@@ -47,7 +47,10 @@ function setupPasswordVisibilityToggles(root = document) {
 setupPasswordVisibilityToggles();
 
 socket.on("cut-camera", (value) => {
-  document.body.classList.toggle("cut-camera", value);
+  const pgm = typeof value === "boolean" ? value : Boolean(value?.pgm);
+  const prv = typeof value === "object" && value !== null ? Boolean(value.prv) : false;
+  document.body.classList.toggle("preview-camera", prv);
+  document.body.classList.toggle("cut-camera", pgm);
 });
 
 const BASE_REPLY_LABEL = "REPLY";

@@ -39,6 +39,7 @@ const {
 } = require("./defaultClientSettings");
 const { stopPeerTransmission } = require("./transmissionControl");
 const { resolveActiveProductionSelection } = require("./productionSelection");
+const { createTallyStateStore, normalizeTallyBus } = require("./tallyState");
 const {
   arePeersInSameActiveProduction: arePeersInSameActiveProductionScope,
   canRouteTargetBetweenPeers,
@@ -2368,7 +2369,7 @@ function ensureCompanionUserState(userId, fallbackName = null) {
   return state;
 }
 
-function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot = null) {
+function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot = null, productionId = null) {
   const base = ensureCompanionUserState(userId, fallbackName);
   const found = findUserPeerByUserId(userId);
   const peer = found?.peer || null;
@@ -2383,6 +2384,7 @@ function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot =
   const lastTargets = normalizeCompanionVisibleRuntimeTalkTargets(base.lastTargets);
   const lastTarget = normalizeCompanionVisibleRuntimeTalkTarget(base.lastTarget) || lastTargets[0] || currentTarget || null;
   const incomingTalkState = sanitizeCompanionIncomingTalkState(buildIncomingTalkStateForUser(userId, incomingSnapshot));
+  const tally = getTallyState(productionId);
 
   return {
     userId,
@@ -2396,7 +2398,8 @@ function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot =
     lastTarget,
     lastTargets: lastTargets.length > 0 ? lastTargets : (lastTarget ? [lastTarget] : []),
     lastSpokeAt: base.lastSpokeAt || null,
-    cutCamera: Boolean(resolvedName && cutCameraUser && resolvedName === cutCameraUser),
+    cutCamera: Boolean(resolvedName && tally.pgmUser === resolvedName),
+    previewCamera: Boolean(resolvedName && tally.prvUser === resolvedName),
     lastCommandId: base.lastCommandId || null,
     lastCommandResult: base.lastCommandResult || null,
     targetAudioStates: normalizeCompanionTargetAudioStates(base.targetAudioStates),
@@ -2473,13 +2476,18 @@ function buildCompanionSnapshot(productionId = null) {
     .map((user) => ({
     id: user.id,
     name: user.name,
-    state: buildCompanionUserState(user.id, user.name, incomingSnapshot),
+    state: buildCompanionUserState(user.id, user.name, incomingSnapshot, productionId),
   }));
 
   return {
     version: 1,
     serverTime: new Date().toISOString(),
-    cutCameraUser,
+    cutCameraUser: getTallyState(productionId).pgmUser,
+    previewCameraUser: getTallyState(productionId).prvUser,
+    tally: {
+      productionId,
+      ...getTallyState(productionId),
+    },
     users,
     conferences: productionId === null ? getAllConferences() : getProductionConferences(productionId),
     feeds: productionId === null ? getAllFeeds() : getProductionFeeds(productionId),
@@ -2510,12 +2518,16 @@ function emitCompanionEvent(event, payload = {}) {
 
 function emitCompanionUserState(userId, reason = "state-updated", fallbackName = null, incomingSnapshot = null) {
   if (!isCompanionAddressableUserId(userId)) return;
-  const state = buildCompanionUserState(userId, fallbackName, incomingSnapshot);
-  emitCompanionEvent("user-state", {
-    reason,
-    at: new Date().toISOString(),
-    state,
-  });
+  if (!companionNamespace) return;
+  for (const socket of companionNamespace.sockets.values()) {
+    const productionId = socket.data?.productionId ?? getDefaultTallyProductionId();
+    if (productionId !== null && !isUserInProduction(userId, productionId)) continue;
+    socket.emit("user-state", {
+      reason,
+      at: new Date().toISOString(),
+      state: buildCompanionUserState(userId, fallbackName, incomingSnapshot, productionId),
+    });
+  }
 }
 
 function updateCompanionUserState(userId, patch = {}, { reason = "state-updated", fallbackName = null } = {}) {
@@ -2726,8 +2738,48 @@ const HTTP_PORT = (() => {
 const httpPortSource = process.env.HTTP_PORT ? "explicit" : (HTTP_PORT !== null ? "auto" : "disabled");
 const RTC_PORT_RANGE = resolveActiveRtcPortRange(loadRuntimeConfig() || {});
 
-// Track the user whose camera is currently "cut"
-let cutCameraUser = null;
+// Tally is transient and scoped to the active production.
+const tallyState = createTallyStateStore();
+
+function getDefaultTallyProductionId() {
+  return getPrimaryProduction()?.id ?? null;
+}
+
+function getTallyState(productionId = null) {
+  return tallyState.get(productionId ?? getDefaultTallyProductionId());
+}
+
+function buildPeerTallyState(peer) {
+  const productionId = peer?.productionId ?? getDefaultTallyProductionId();
+  const state = getTallyState(productionId);
+  return {
+    productionId,
+    pgm: Boolean(peer?.name && peer.name === state.pgmUser),
+    prv: Boolean(peer?.name && peer.name === state.prvUser),
+  };
+}
+
+function emitPeerTallyState(peer) {
+  if (peer?.socket && isOperatorPeer(peer)) {
+    peer.socket.emit("cut-camera", buildPeerTallyState(peer));
+  }
+}
+
+function emitProductionTallyState(productionId) {
+  for (const peer of peers.values()) {
+    if (!isOperatorPeer(peer)) continue;
+    if (String(peer.productionId ?? "") !== String(productionId ?? "")) continue;
+    emitPeerTallyState(peer);
+  }
+}
+
+function emitCompanionTallyEvent(productionId, payload) {
+  if (!companionNamespace) return;
+  for (const socket of companionNamespace.sockets.values()) {
+    if (String(socket.data?.productionId ?? "") !== String(productionId ?? "")) continue;
+    socket.emit("cut-camera", payload);
+  }
+}
 
 // === GET ===
 app.get("/users", requireAdmin, (req, res) => {
@@ -3263,6 +3315,7 @@ app.delete("/admin/productions/:productionId", requireAdmin, (req, res) => {
     if (!deleteProduction(req.params.productionId)) {
       return res.status(404).json({ error: "Production not found" });
     }
+    tallyState.remove(req.params.productionId);
     resetPeersUsingProduction(req.params.productionId);
     notifyAvailableProductionsChanged();
     res.sendStatus(204);
@@ -4310,6 +4363,7 @@ app.put("/admin/settings/multiple-productions", requireAdmin, (req, res) => {
         peer.socket.emit("user-targets-updated");
         peer.socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
         peer.socket.emit("conference-members-updated", { conferenceId: null });
+        emitPeerTallyState(peer);
       }
       reconcileAllProducerRecipients();
       broadcastRuntimeUserStates("multiple-productions-disabled");
@@ -4723,7 +4777,7 @@ app.get("/api/v1/companion/users", requireCompanionApiKey, (req, res) => {
     .map((user) => ({
       id: user.id,
       name: user.name,
-      state: buildCompanionUserState(user.id, user.name),
+      state: buildCompanionUserState(user.id, user.name, null, productionId),
     }));
 
   if (!hasCompanionGlobalAccess(req.companionAuth)) {
@@ -5910,6 +5964,7 @@ function resetPeersUsingProduction(productionId, userId = null) {
     peer.socket.emit("user-targets-updated");
     peer.socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
     peer.socket.emit("conference-members-updated", { conferenceId: null });
+    emitPeerTallyState(peer);
   }
   reconcileAllProducerRecipients();
 }
@@ -6083,34 +6138,54 @@ app.post("/cut-camera", (req, res) => {
     return res.status(400).json({ error: "user must be provided" });
   }
 
-  console.log(`[CUT-CAMERA] Request for user: ${user}`);
-  const previousCutCameraUser = cutCameraUser;
-  // empty string disables all highlights
-  cutCameraUser = user.trim() || null;
-
-  for (const peer of peers.values()) {
-    peer.socket.emit("cut-camera", peer.name === cutCameraUser);
+  let bus;
+  let productionId;
+  try {
+    bus = normalizeTallyBus(req.body?.bus);
+    productionId = resolveCompanionProduction({ type: "api-key" }, req.body?.productionId);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
   }
 
-  emitCompanionEvent("cut-camera", {
-    at: new Date().toISOString(),
-    previousUser: previousCutCameraUser,
-    user: cutCameraUser,
-  });
+  const nextUser = user.trim() || null;
+  if (nextUser) {
+    const matchedUser = getUserByName(nextUser);
+    if (!isCompanionAddressableUser(matchedUser)) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (productionId !== null && !isUserInProduction(matchedUser.id, productionId)) {
+      return res.status(400).json({ error: "User is not a member of this production" });
+    }
+  }
 
-  if (previousCutCameraUser !== cutCameraUser) {
-    const touchedNames = new Set([previousCutCameraUser, cutCameraUser].filter(Boolean));
+  console.log(`[TALLY] ${bus.toUpperCase()} request for ${nextUser || "off"} in production ${productionId}`);
+  const updated = tallyState.set(productionId, bus, nextUser);
+  emitProductionTallyState(productionId);
+
+  const payload = {
+    at: new Date().toISOString(),
+    productionId,
+    bus,
+    previousUser: updated.previousUser,
+    user: updated.user,
+    pgmUser: updated.pgmUser,
+    prvUser: updated.prvUser,
+  };
+  emitCompanionTallyEvent(productionId, payload);
+
+  if (updated.previousUser !== updated.user) {
+    const touchedNames = new Set([updated.previousUser, updated.user].filter(Boolean));
     if (touchedNames.size) {
       const allUsers = getAllUsers();
       allUsers.forEach((u) => {
-        if (touchedNames.has(u.name)) {
+        if (touchedNames.has(u.name) && (productionId === null || isUserInProduction(u.id, productionId))) {
           emitCompanionUserState(u.id, "cut-camera-changed", u.name);
         }
       });
     }
   }
 
-  res.json({ user: cutCameraUser });
+  res.json(payload);
 });
 
 
@@ -7503,7 +7578,7 @@ io.on("connection", (socket) => {
       peer.guestProfileUserId = null;
       peer.productionId = activeProductionId;
       console.log(`[USER] Registered operator ${effectiveName} (${effectiveId}) on socket ${socket.id}`);
-      socket.emit("cut-camera", effectiveName === cutCameraUser);
+      emitPeerTallyState(peer);
     } else if (normalizedKind === "feed") {
       const existingFeed = Array.from(peers.entries()).find(([sid, p]) => (
         sid !== socket.id
@@ -7614,6 +7689,7 @@ io.on("connection", (socket) => {
     const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
     try {
       peer.productionId = normalizeActiveProductionId(productionId, userId);
+      emitPeerTallyState(peer);
       socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
       socket.emit("conference-members-updated", { conferenceId: null });
       reconcileAllProducerRecipients({ forceAnnounce: true });

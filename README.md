@@ -237,8 +237,8 @@ Main endpoints:
 Production-aware Companion clients receive the available Productions in the
 login/config response. Pass `productionId` as a query parameter to the state,
 users, conferences, feeds and targets endpoints, and as Socket.IO auth data for
-a filtered snapshot and event stream. Omitting it keeps the existing global
-Companion behavior.
+a filtered snapshot and event stream. Omitting it selects the primary Production;
+when Multiple Productions is disabled, an explicitly supplied value is ignored.
 
 Socket.IO namespace: `/companion` with `snapshot`, `user-state`, `command-result`, and `cut-camera` events.
 
@@ -261,10 +261,13 @@ page.
 ```bash
 curl -X POST https://<IP>:<PORT>/cut-camera \
   -H "Content-Type: application/json" \
-  -d '{"user":"<USERNAME>"}'
+  -d '{"user":"<USERNAME>","bus":"pgm","productionId":1}'
 ```
 
-The matching user UI turns red while on-air. Also intergrated as action in companion plugin.
+`pgm` turns the matching user UI red and `prv` turns it green. Tally is scoped to
+the selected Production. Omit `bus` for the legacy PGM behavior; omit
+`productionId` to use the primary Production. Send an empty `user` to clear the
+selected bus. The legacy `cutCameraUser` snapshot field remains available for PGM.
 
 ## Shortcuts
 
