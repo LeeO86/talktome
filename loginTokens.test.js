@@ -40,18 +40,24 @@ test('user and feed login tokens resolve and are revoked when replaced or reset'
   }
 });
 
-test('admin exposes shared user and feed login QR controls', () => {
+test('admin exposes shared user, feed and guest login QR controls', () => {
   const server = fs.readFileSync(path.join(__dirname, 'serverCore.js'), 'utf8');
   const admin = fs.readFileSync(path.join(__dirname, 'public/admin.js'), 'utf8');
+  const client = fs.readFileSync(path.join(__dirname, 'public/client.js'), 'utf8');
   const html = fs.readFileSync(path.join(__dirname, 'public/admin.html'), 'utf8');
 
   assert.match(server, /app\.post\("\/admin\/users\/:id\/login-link"/);
   assert.match(server, /app\.post\("\/admin\/feeds\/:id\/login-link"/);
   assert.match(server, /req\.query\?\.qr === "1"/);
   assert.match(server, /QRCode\.toDataURL\(loginUrl/);
-  assert.match(admin, /openEntityLoginQr\("user"/);
+  assert.match(server, /loginUrl = buildGuestLoginUrl\(connectUrl\)/);
+  assert.match(admin, /openEntityLoginQr\("\$\{isGuestProfile \? 'guest' : 'user'\}"/);
   assert.match(admin, /openEntityLoginQr\("feed"/);
+  assert.match(admin, /isGuestProfile \? 'guest' : 'user'/);
   assert.match(admin, /function holdButtonWidth\(button\)/);
   assert.match(admin, /title: `Login QR Code · \$\{entityName\}`/);
+  assert.match(client, /window\.location\.hash !== '#guest'/);
+  assert.match(client, /guestLoginRequested && guestLoginEnabled/);
   assert.match(html, /id="admin-image-lightbox-download"[\s\S]+<span>Download<\/span>/);
+  assert.match(html, /\.badge\.guest-profile\s*\{[^}]*white-space:\s*nowrap;/s);
 });

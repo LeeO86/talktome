@@ -2574,15 +2574,12 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
         : `<button type="button" class="small admin-role-toggle ${isAdmin ? 'warning' : ''}" onclick="toggleAdminRole(${user.id}, ${isAdmin ? 'false' : 'true'})">${isAdmin ? 'Remove admin' : 'Make admin'}</button>`
       : '';
     const passwordAttrs = isGuestProfile ? 'disabled title="Guest profile does not use a password"' : '';
-    const loginLinkAttrs = isGuestProfile
-        ? 'disabled title="Guest profile does not use a login URL"'
-        : '';
     const copyLoginButton = isSuperadmin
       ? ''
-      : `<button type="button" class="small copy-login-url-button" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>`;
+      : `<button type="button" class="small copy-login-url-button" onclick='copyEntityLoginUrl("${isGuestProfile ? 'guest' : 'user'}", ${user.id}, ${JSON.stringify(user.name)}, this)'>Copy Login URL</button>`;
     const loginQrButton = isSuperadmin
       ? ''
-      : `<button type="button" class="small" onclick='openEntityLoginQr("user", ${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>QR Code</button>`;
+      : `<button type="button" class="small" onclick='openEntityLoginQr("${isGuestProfile ? 'guest' : 'user'}", ${user.id}, ${JSON.stringify(user.name)}, this)'>QR Code</button>`;
     const deleteAttrs = isGuestProfile
       ? 'disabled title="Guest profile cannot be deleted"'
       : isAdmin ? 'disabled title="Admin accounts cannot be deleted"' : '';
@@ -3780,7 +3777,7 @@ async function requestAdminLoginLink(kind, entityId, includeQrCode = false) {
     method: 'POST'
   });
   const payload = await res.json().catch(() => ({}));
-  if (!res.ok || !payload.token) {
+  if (!res.ok || !payload.loginUrl) {
     throw new Error(payload.error || 'Failed to create login URL');
   }
   return payload;
@@ -3805,18 +3802,17 @@ function holdButtonWidth(button) {
   };
 }
 
-window.copyUserLoginUrl = async function (userId, userName, button) {
+window.copyEntityLoginUrl = async function (kind, entityId, entityName, button) {
+  const normalizedKind = kind === 'feed' ? 'feed' : kind === 'guest' ? 'guest' : 'user';
   const originalLabel = button?.textContent || 'Copy Login URL';
   const releaseButtonWidth = holdButtonWidth(button);
   if (button) button.disabled = true;
   try {
-    const payload = await requestAdminLoginLink('user', userId);
+    const payload = await requestAdminLoginLink(normalizedKind, entityId);
 
-    const loginUrl = payload.loginUrl
-      || `${window.location.origin}/#login=${encodeURIComponent(payload.token)}`;
-    await copyTextToClipboard(loginUrl);
+    await copyTextToClipboard(payload.loginUrl);
     if (button) button.textContent = 'Copied';
-    showMessage(`✅ Login URL copied for ${userName}`, 'success', 'user');
+    showMessage(`✅ Login URL copied for ${entityName}`, 'success', normalizedKind === 'feed' ? 'feed' : 'user');
     window.setTimeout(() => {
       if (button) {
         button.textContent = originalLabel;
@@ -3834,8 +3830,12 @@ window.copyUserLoginUrl = async function (userId, userName, button) {
   }
 };
 
+window.copyUserLoginUrl = function (userId, userName, button) {
+  return window.copyEntityLoginUrl('user', userId, userName, button);
+};
+
 window.openEntityLoginQr = async function (kind, entityId, entityName, button) {
-  const normalizedKind = kind === 'feed' ? 'feed' : 'user';
+  const normalizedKind = kind === 'feed' ? 'feed' : kind === 'guest' ? 'guest' : 'user';
   const messageSection = normalizedKind === 'feed' ? 'feed' : 'user';
   if (button) button.disabled = true;
   try {
@@ -3843,7 +3843,7 @@ window.openEntityLoginQr = async function (kind, entityId, entityName, button) {
     if (!payload.qrCodeDataUrl || !payload.loginUrl) {
       throw new Error('Failed to create login QR code');
     }
-    const typeLabel = normalizedKind === 'feed' ? 'Feed' : 'User';
+    const typeLabel = normalizedKind === 'feed' ? 'Feed' : normalizedKind === 'guest' ? 'Guest' : 'User';
     openAdminImageLightbox({
       dataUrl: payload.qrCodeDataUrl,
       title: `Login QR Code · ${entityName}`,

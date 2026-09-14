@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildLoginUrl, selectAdminQrUrl } = require("./qrConnectUrl");
+const { buildGuestLoginUrl, buildLoginUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 
 test("prefers the selected adapter over a localhost admin URL", () => {
   assert.equal(selectAdminQrUrl({
@@ -75,4 +75,12 @@ test("builds a shareable login URL from the selected adapter URL", () => {
 test("does not build a login URL without a usable base URL or token", () => {
   assert.equal(buildLoginUrl("", "token"), "");
   assert.equal(buildLoginUrl("https://192.168.178.166:8444", ""), "");
+});
+
+test("builds a guest login URL without creating a credential token", () => {
+  assert.equal(
+    buildGuestLoginUrl("https://192.168.178.166:8444"),
+    "https://192.168.178.166:8444/#guest"
+  );
+  assert.equal(buildGuestLoginUrl(""), "");
 });

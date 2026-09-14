@@ -14,7 +14,7 @@ const { createBrowserSessionStore } = require("./browserSessions");
 const { loadProxySsoConfig, resolveProxySsoIdentity } = require("./proxySso");
 const { getDataDir } = require("./dataPaths");
 const { ApplePttPushService } = require("./applePttPushService");
-const { buildLoginUrl, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
+const { buildGuestLoginUrl, buildLoginUrl, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
 const { installHttpRedirectOnHttpsPort } = require("./httpsRedirect");
 const {
@@ -4612,12 +4612,29 @@ app.put("/admin/users/:id/admin", requireAdmin, (req, res) => {
 });
 
 async function createAdminLoginLinkPayload(kind, id, req, includeQrCode = false) {
-  const token = kind === "feed"
-    ? createFeedLoginToken(id)
-    : createUserLoginToken(id);
   const active = resolveTransportAnnouncedAddress();
   const connectUrl = resolveAdminConnectUrl(active.announcedAddress, req);
-  const loginUrl = buildLoginUrl(connectUrl, token);
+  let token = null;
+  let loginUrl = "";
+
+  if (kind === "feed") {
+    token = createFeedLoginToken(id);
+    loginUrl = buildLoginUrl(connectUrl, token);
+  } else {
+    const user = getUserById(id);
+    if (!user) throw new Error("User not found");
+
+    if (user.is_guest_profile) {
+      const guestSettings = resolveGuestLoginSettings(loadRuntimeConfig() || {}, { createProfile: false });
+      if (!guestSettings.enabled || String(guestSettings.profileUserId) !== String(user.id)) {
+        throw new Error("Guest login is disabled");
+      }
+      loginUrl = buildGuestLoginUrl(connectUrl);
+    } else {
+      token = createUserLoginToken(id);
+      loginUrl = buildLoginUrl(connectUrl, token);
+    }
+  }
   let qrCodeDataUrl = null;
 
   if (includeQrCode && loginUrl) {

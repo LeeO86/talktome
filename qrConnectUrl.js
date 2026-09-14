@@ -61,7 +61,13 @@ function buildLoginUrl(connectUrl, token) {
   return `${normalized}/#login=${encodeURIComponent(normalizedToken)}`;
 }
 
+function buildGuestLoginUrl(connectUrl) {
+  const normalized = normalizeConnectUrl(connectUrl);
+  return normalized ? `${normalized}/#guest` : "";
+}
+
 module.exports = {
+  buildGuestLoginUrl,
   buildLoginUrl,
   isLocalOnlyConnectUrl,
   isMdnsConnectUrl,

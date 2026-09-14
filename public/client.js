@@ -3719,6 +3719,10 @@ document.addEventListener("DOMContentLoaded", () => {
   );
   const focusLoginNameField = () => {
     if (!loginUsernameInput || session.name) return;
+    if (guestLoginRequested && guestLoginEnabled && guestDisplayNameInput) {
+      window.requestAnimationFrame(() => guestDisplayNameInput.focus());
+      return;
+    }
     if (guestLoginEnabled && isMobileLoginViewport()) return;
     window.requestAnimationFrame(() => {
       try {
@@ -6776,6 +6780,14 @@ let cachedOperatorTargets = null;
 
   const loginToken = consumeLoginTokenFromHash();
 
+  function consumeGuestLoginIntentFromHash() {
+    if (window.location.hash !== '#guest') return false;
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    return true;
+  }
+
+  const guestLoginRequested = consumeGuestLoginIntentFromHash();
+
   function clearStoredCredentialIdentity() {
     localStorage.removeItem("userId");
     localStorage.removeItem(FEED_ID_STORAGE_KEY);
@@ -6812,6 +6824,14 @@ let cachedOperatorTargets = null;
 
   async function bootstrapLogin() {
     await loadLoginOptions();
+
+    if (guestLoginRequested) {
+      clearStoredIdentity();
+      if (!guestLoginEnabled) {
+        setLoginError('Guest login is not available');
+      }
+      return;
+    }
 
     if (loginToken) {
       clearStoredIdentity();

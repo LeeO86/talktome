@@ -152,6 +152,7 @@ Back up this directory before upgrades if you need to preserve accounts and rout
 - Feeds log in at `/`, publish their assigned feed, and cannot talk back.
 - Guests are enabled in Admin `Config`.
 - All Guests share the targets and conference memberships of the generated `Guest` profile.
+- The Guest profile in Admin `Users` provides a shareable login URL and QR code; Guests still choose their own display name when opening it.
 - Guest profiles cannot be direct targets, admins, deleted, or password-reset.
 - Online Guests can still be answered through `Reply`.
 - Guest login is passwordless and stored only in browser `sessionStorage`, so page refresh keeps it, but closing the browser session clears it.
