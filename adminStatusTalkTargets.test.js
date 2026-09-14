@@ -17,6 +17,9 @@ test('admin status resolves active talk targets to display names', () => {
 test('talking users show an arrow and their active target names', () => {
   assert.match(admin, /return `→ \$\{names\.length > 0 \? names\.join\(', '\) : 'Target'\}`/);
   assert.match(admin, /talkingLabel: formatStatusTalkTargetLabel\(user\)/);
+  assert.match(adminHtml, /@keyframes statusTalkingLedPulse/);
+  assert.match(adminHtml, /\.status-indicator__dot\.is-talking \{\s*background: #8b5cf6;\s*animation: statusTalkingLedPulse/);
+  assert.doesNotMatch(adminHtml, /statusTalkingLedBlink/);
 });
 
 test('admin status exposes and conditionally renders the active production', () => {
