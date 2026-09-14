@@ -2592,18 +2592,18 @@
 
       .status-table {
         width: 100%;
-        min-width: 59.3rem;
+        min-width: 59.5rem;
         table-layout: fixed;
         border-collapse: collapse;
         font-size: 0.84rem;
       }
 
       .status-table--users {
-        min-width: 62.5rem;
+        min-width: 59.5rem;
       }
 
       .status-table--users.status-table--with-production {
-        min-width: 70.5rem;
+        min-width: 67.5rem;
       }
 
       .status-table th,
@@ -2690,6 +2690,7 @@
       .status-indicator__dot.is-talking {
         background: #8b5cf6;
         animation: statusTalkingLedPulse 1.35s ease-in-out infinite;
+        animation-delay: var(--status-talking-animation-delay, 0ms);
       }
 
       @media (prefers-reduced-motion: reduce) {
@@ -3399,7 +3400,7 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--users">
                 <colgroup>
-                  <col style="width: 13rem;">
+                  <col style="width: 10rem;">
                   <col style="width: 8rem;">
                   <col data-status-production-column style="width: 8rem;" hidden>
                   <col style="width: 10rem;">
@@ -3407,7 +3408,7 @@
                   <col style="width: 4.5rem;">
                   <col style="width: 4.5rem;">
                   <col style="width: 7.5rem;">
-                  <col style="width: 6.5rem;">
+                  <col>
                 </colgroup>
                 <thead>
                   <tr>
@@ -3437,14 +3438,14 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--feeds">
                 <colgroup>
-                  <col style="width: 9.8rem;">
+                  <col style="width: 10rem;">
                   <col style="width: 8rem;">
                   <col style="width: 10rem;">
                   <col style="width: 8.5rem;">
                   <col style="width: 4.5rem;">
                   <col style="width: 4.5rem;">
                   <col style="width: 7.5rem;">
-                  <col style="width: 6.5rem;">
+                  <col>
                 </colgroup>
                 <thead>
                   <tr>
@@ -3473,14 +3474,14 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--bridges">
                 <colgroup>
-                  <col style="width: 9.8rem;">
+                  <col style="width: 10rem;">
                   <col style="width: 8rem;">
                   <col style="width: 10rem;">
                   <col style="width: 8.5rem;">
                   <col style="width: 4.5rem;">
                   <col style="width: 4.5rem;">
                   <col style="width: 7.5rem;">
-                  <col style="width: 6.5rem;">
+                  <col>
                 </colgroup>
                 <thead>
                   <tr>
@@ -3509,14 +3510,14 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--companions">
                 <colgroup>
-                  <col style="width: 9.8rem;">
+                  <col style="width: 10rem;">
                   <col style="width: 8rem;">
                   <col style="width: 10rem;">
                   <col style="width: 8.5rem;">
                   <col style="width: 4.5rem;">
                   <col style="width: 4.5rem;">
                   <col style="width: 7.5rem;">
-                  <col style="width: 6.5rem;">
+                  <col>
                 </colgroup>
                 <thead>
                   <tr>

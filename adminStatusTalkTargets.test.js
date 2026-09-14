@@ -19,6 +19,8 @@ test('talking users show an arrow and their active target names', () => {
   assert.match(admin, /talkingLabel: formatStatusTalkTargetLabel\(user\)/);
   assert.match(adminHtml, /@keyframes statusTalkingLedPulse/);
   assert.match(adminHtml, /\.status-indicator__dot\.is-talking \{\s*background: #8b5cf6;\s*animation: statusTalkingLedPulse/);
+  assert.match(admin, /Date\.now\(\) % STATUS_TALKING_PULSE_MS/);
+  assert.match(adminHtml, /animation-delay: var\(--status-talking-animation-delay, 0ms\)/);
   assert.doesNotMatch(adminHtml, /statusTalkingLedBlink/);
 });
 
@@ -34,4 +36,5 @@ test('admin status exposes and conditionally renders the active production', () 
 test('status tables reserve less space for short names than detailed client data', () => {
   assert.match(adminHtml, /<col style="width: 8rem;">\s*<col data-status-production-column/);
   assert.match(adminHtml, /status-table--users\.status-table--with-production/);
+  assert.equal((adminHtml.match(/<col style="width: 10rem;">\s*<col style="width: 8rem;">/g) || []).length, 4);
 });

@@ -1387,12 +1387,17 @@ function statusTimeHtml(value, { suffix = true, empty = 'Never' } = {}) {
   return `<span title="${escapeHtml(exact)}">${escapeHtml(formatStatusElapsed(value, { suffix }))}</span>`;
 }
 
+const STATUS_TALKING_PULSE_MS = 1350;
+
 function statusIndicatorHtml({ online, talking = false, talkingLabel = 'Talking', warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning' }) {
   const label = talking ? talkingLabel : warning ? warningLabel : online ? onlineLabel : offlineLabel;
   const stateClass = talking ? 'is-talking' : warning ? 'is-warning' : online ? 'is-online' : '';
+  const animationPhase = talking
+    ? ` style="--status-talking-animation-delay: -${Date.now() % STATUS_TALKING_PULSE_MS}ms"`
+    : '';
   return `
     <span class="status-indicator">
-      <span class="status-indicator__dot ${stateClass}" aria-hidden="true"></span>
+      <span class="status-indicator__dot ${stateClass}"${animationPhase} aria-hidden="true"></span>
       <span title="${escapeHtml(label)}">${escapeHtml(label)}</span>
     </span>
   `;
