@@ -79,7 +79,8 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS feeds (
                                           id INTEGER PRIMARY KEY AUTOINCREMENT,
                                           name TEXT NOT NULL UNIQUE,
-                                          password TEXT NOT NULL
+                                          password TEXT NOT NULL,
+                                          login_token_hash TEXT
     );
 
     CREATE TABLE IF NOT EXISTS user_feed_targets (
@@ -409,6 +410,7 @@ ensureColumn("users", "is_guest_profile", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("users", "login_token_hash", "TEXT");
 ensureColumn("users", "last_online_at", "TEXT");
 ensureColumn("users", "audio_settings", "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("feeds", "login_token_hash", "TEXT");
 ensureColumn("user_bridge_endpoints", "trigger_mode", "TEXT NOT NULL DEFAULT 'external'");
 ensureColumn("user_bridge_endpoints", "trigger_target_type", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("user_bridge_endpoints", "trigger_target_id", "INTEGER");

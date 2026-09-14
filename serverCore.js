@@ -140,11 +140,13 @@ const {
   createUser,
   createConference,
   createFeed,
+  createFeedLoginToken,
   updateUserName,
   updateConferenceName,
   updateUserPassword,
   createUserLoginToken,
   getUserByLoginToken,
+  getFeedByLoginToken,
   updateAdminPassword,
   updateFeedName,
   updateFeedPassword,
@@ -815,12 +817,12 @@ function createUserBrowserSession(res, user, source = "password") {
   setBrowserSessionCookie(res, token);
 }
 
-function createFeedBrowserSession(res, feed) {
+function createFeedBrowserSession(res, feed, source = "password") {
   const { token } = browserSessions.create({
     kind: "feed",
     feedId: Number(feed.id),
     name: feed.name,
-    source: "password",
+    source,
   });
   setBrowserSessionCookie(res, token);
 }
@@ -3046,13 +3048,19 @@ app.post("/login", (req, res) => {
 app.post("/login/token", (req, res) => {
   try {
     const user = getUserByLoginToken(req.body?.token);
-    if (!user) {
-      return res.status(401).json({ error: "Invalid or expired login link" });
+    if (user) {
+      console.log("Login URL used for user:", user.name);
+      res.setHeader("Cache-Control", "no-store");
+      createUserBrowserSession(res, user, "login-token");
+      return res.json(buildLoginIdentity(user));
     }
-    console.log("Login URL used for user:", user.name);
+
+    const feed = getFeedByLoginToken(req.body?.token);
+    if (!feed) return res.status(401).json({ error: "Invalid or expired login link" });
+    console.log("Login URL used for feed:", feed.name);
     res.setHeader("Cache-Control", "no-store");
-    createUserBrowserSession(res, user, "login-token");
-    return res.json(buildLoginIdentity(user));
+    createFeedBrowserSession(res, feed, "login-token");
+    return res.json(buildLoginIdentity(feed, "feed"));
   } catch (err) {
     console.error("Login URL error:", err);
     return res.status(500).json({ error: "Login link failed" });
@@ -4603,16 +4611,58 @@ app.put("/admin/users/:id/admin", requireAdmin, (req, res) => {
   }
 });
 
-app.post("/admin/users/:id/login-link", requireAdmin, (req, res) => {
+async function createAdminLoginLinkPayload(kind, id, req, includeQrCode = false) {
+  const token = kind === "feed"
+    ? createFeedLoginToken(id)
+    : createUserLoginToken(id);
+  const active = resolveTransportAnnouncedAddress();
+  const connectUrl = resolveAdminConnectUrl(active.announcedAddress, req);
+  const loginUrl = buildLoginUrl(connectUrl, token);
+  let qrCodeDataUrl = null;
+
+  if (includeQrCode && loginUrl) {
+    qrCodeDataUrl = await QRCode.toDataURL(loginUrl, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 640,
+      color: {
+        dark: "#0f172a",
+        light: "#ffffff",
+      },
+    });
+  }
+
+  return { token, loginUrl: loginUrl || null, qrCodeDataUrl };
+}
+
+app.post("/admin/users/:id/login-link", requireAdmin, async (req, res) => {
   try {
-    const token = createUserLoginToken(req.params.id);
-    const active = resolveTransportAnnouncedAddress();
-    const connectUrl = resolveAdminConnectUrl(active.announcedAddress, req);
-    const loginUrl = buildLoginUrl(connectUrl, token);
+    const payload = await createAdminLoginLinkPayload(
+      "user",
+      req.params.id,
+      req,
+      req.query?.qr === "1"
+    );
     res.setHeader("Cache-Control", "no-store");
-    return res.json({ token, loginUrl: loginUrl || null });
+    return res.json(payload);
   } catch (err) {
     const status = err.message === "User not found" ? 404 : 400;
+    return res.status(status).json({ error: err.message || "Failed to create login link" });
+  }
+});
+
+app.post("/admin/feeds/:id/login-link", requireAdmin, async (req, res) => {
+  try {
+    const payload = await createAdminLoginLinkPayload(
+      "feed",
+      req.params.id,
+      req,
+      req.query?.qr === "1"
+    );
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(payload);
+  } catch (err) {
+    const status = err.message === "Feed not found" ? 404 : 400;
     return res.status(status).json({ error: err.message || "Failed to create login link" });
   }
 });

@@ -118,6 +118,7 @@ const defaultClientLeftHand = document.getElementById('default-client-left-hand'
 const defaultClientLockMultiple = document.getElementById('default-client-lock-multiple');
 const adminImageLightbox = document.getElementById('admin-image-lightbox');
 const adminImageLightboxClose = document.getElementById('admin-image-lightbox-close');
+const adminImageLightboxTitle = document.getElementById('admin-image-lightbox-title');
 const adminImageLightboxImage = document.getElementById('admin-image-lightbox-image');
 const adminImageLightboxDownloadButton = document.getElementById('admin-image-lightbox-download');
 const adminActionDialog = document.getElementById('admin-action-dialog');
@@ -366,6 +367,7 @@ const collapsibleAdminSections = {
 const ADMIN_SECTION_COLLAPSED_STORAGE_PREFIX = 'talktome:admin-section-collapsed:';
 
 let currentMediaNetworkQrState = null;
+let currentAdminImageLightboxState = null;
 let currentBridgeRegistry = [];
 let currentAdminCatalog = { users: [], conferences: [], feeds: [] };
 const targetAssignmentsByUser = new Map();
@@ -1114,6 +1116,7 @@ function buildRenderedQrImageDataUrl({ qrCodeDataUrl, qrUrl, mdnsHostLabel }) {
 function closeAdminImageLightbox() {
   if (!adminImageLightbox) return;
   adminImageLightbox.classList.add('is-hidden');
+  currentAdminImageLightboxState = null;
   document.body.style.removeProperty('overflow');
 }
 
@@ -1168,13 +1171,41 @@ async function downloadMediaNetworkQrImage() {
   }
 }
 
-function openAdminImageLightbox() {
-  if (!adminImageLightbox || !currentMediaNetworkQrState?.renderedQrDataUrl) return;
+async function downloadAdminImageLightboxImage() {
+  const state = currentAdminImageLightboxState;
+  if (!state?.dataUrl) return;
+  try {
+    const blob = await rasterizeQrDataUrlToPngBlob(state.dataUrl);
+    triggerDownload(blob, state.filename || 'talktome-login-qr.png');
+  } catch (error) {
+    console.error('Failed to download QR image:', error);
+    showMessage('❌ Failed to download QR image', 'error', state.messageSection || 'user');
+  }
+}
+
+function openAdminImageLightbox({ dataUrl, title, alt, filename, messageSection } = {}) {
+  if (!adminImageLightbox || !dataUrl) return;
+  currentAdminImageLightboxState = { dataUrl, filename, messageSection };
+  if (adminImageLightboxTitle) {
+    adminImageLightboxTitle.textContent = title || 'QR Code';
+  }
   if (adminImageLightboxImage) {
-    adminImageLightboxImage.src = currentMediaNetworkQrState.renderedQrDataUrl;
+    adminImageLightboxImage.src = dataUrl;
+    adminImageLightboxImage.alt = alt || title || 'QR Code';
   }
   adminImageLightbox.classList.remove('is-hidden');
   document.body.style.overflow = 'hidden';
+}
+
+function openMediaNetworkQrLightbox() {
+  if (!currentMediaNetworkQrState?.renderedQrDataUrl) return;
+  openAdminImageLightbox({
+    dataUrl: currentMediaNetworkQrState.renderedQrDataUrl,
+    title: 'Connection QR Code',
+    alt: 'Large connection QR code',
+    filename: buildMediaNetworkQrFilename('png'),
+    messageSection: 'config',
+  });
 }
 
 function renderMediaNetworkQr(payload = null) {
@@ -2548,7 +2579,10 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
         : '';
     const copyLoginButton = isSuperadmin
       ? ''
-      : `<button type="button" class="small" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>`;
+      : `<button type="button" class="small copy-login-url-button" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>`;
+    const loginQrButton = isSuperadmin
+      ? ''
+      : `<button type="button" class="small" onclick='openEntityLoginQr("user", ${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>QR Code</button>`;
     const deleteAttrs = isGuestProfile
       ? 'disabled title="Guest profile cannot be deleted"'
       : isAdmin ? 'disabled title="Admin accounts cannot be deleted"' : '';
@@ -2668,6 +2702,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
         </div>
         <div class="inline-controls" onclick="event.stopPropagation()">
           ${copyLoginButton}
+          ${loginQrButton}
           <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
           ${stopTransmissionButton}
@@ -2723,6 +2758,7 @@ async function renderFeedList(feeds) {
           ${bridgeBadge}
         </div>
         <div class="inline-controls" onclick="event.stopPropagation()">
+          <button type="button" class="small" onclick='openEntityLoginQr("feed", ${feed.id}, ${JSON.stringify(feed.name)}, this)'>QR Code</button>
           <button type="button" class="small warning" onclick='editFeed(${feed.id}, ${JSON.stringify(feed.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetFeedPassword(${feed.id}, ${JSON.stringify(feed.name)})'>Reset Password</button>
           <button type="button" class="small danger" onclick="deleteFeed(${feed.id})">Delete</button>
@@ -3734,17 +3770,47 @@ window.toggleAdminRole = async function (userId, shouldMakeAdmin) {
   }
 };
 
+function getAdminLoginLinkPath(kind, entityId, includeQrCode = false) {
+  const collection = kind === 'feed' ? 'feeds' : 'users';
+  return `/admin/${collection}/${entityId}/login-link${includeQrCode ? '?qr=1' : ''}`;
+}
+
+async function requestAdminLoginLink(kind, entityId, includeQrCode = false) {
+  const res = await authedFetch(getAdminLoginLinkPath(kind, entityId, includeQrCode), {
+    method: 'POST'
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || !payload.token) {
+    throw new Error(payload.error || 'Failed to create login URL');
+  }
+  return payload;
+}
+
+function buildEntityLoginQrFilename(kind, entityName) {
+  const safeName = String(entityName || kind)
+    .trim()
+    .replace(/[^a-z0-9.-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-') || kind;
+  return `talktome-${kind}-${safeName}-login-qr.png`;
+}
+
+function holdButtonWidth(button) {
+  if (!button) return () => {};
+  const originalWidth = button.style.width;
+  const width = button.getBoundingClientRect().width;
+  if (width > 0) button.style.width = `${Math.ceil(width)}px`;
+  return () => {
+    button.style.width = originalWidth;
+  };
+}
+
 window.copyUserLoginUrl = async function (userId, userName, button) {
   const originalLabel = button?.textContent || 'Copy Login URL';
+  const releaseButtonWidth = holdButtonWidth(button);
   if (button) button.disabled = true;
   try {
-    const res = await authedFetch(`/admin/users/${userId}/login-link`, {
-      method: 'POST'
-    });
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok || !payload.token) {
-      throw new Error(payload.error || 'Failed to create login URL');
-    }
+    const payload = await requestAdminLoginLink('user', userId);
 
     const loginUrl = payload.loginUrl
       || `${window.location.origin}/#login=${encodeURIComponent(payload.token)}`;
@@ -3755,12 +3821,41 @@ window.copyUserLoginUrl = async function (userId, userName, button) {
       if (button) {
         button.textContent = originalLabel;
         button.disabled = false;
+        releaseButtonWidth();
       }
     }, 1800);
   } catch (err) {
-    if (button) button.disabled = false;
+    if (button) {
+      button.disabled = false;
+      releaseButtonWidth();
+    }
     showMessage(`❌ ${err.message || 'Failed to copy login URL'}`, 'error', 'user');
     console.error('Failed to copy login URL:', err);
+  }
+};
+
+window.openEntityLoginQr = async function (kind, entityId, entityName, button) {
+  const normalizedKind = kind === 'feed' ? 'feed' : 'user';
+  const messageSection = normalizedKind === 'feed' ? 'feed' : 'user';
+  if (button) button.disabled = true;
+  try {
+    const payload = await requestAdminLoginLink(normalizedKind, entityId, true);
+    if (!payload.qrCodeDataUrl || !payload.loginUrl) {
+      throw new Error('Failed to create login QR code');
+    }
+    const typeLabel = normalizedKind === 'feed' ? 'Feed' : 'User';
+    openAdminImageLightbox({
+      dataUrl: payload.qrCodeDataUrl,
+      title: `Login QR Code · ${entityName}`,
+      alt: `Login QR code for ${typeLabel.toLowerCase()} ${entityName}`,
+      filename: buildEntityLoginQrFilename(normalizedKind, entityName),
+      messageSection,
+    });
+  } catch (err) {
+    showMessage(`❌ ${err.message || 'Failed to create login QR code'}`, 'error', messageSection);
+    console.error('Failed to create login QR code:', err);
+  } finally {
+    if (button) button.disabled = false;
   }
 };
 
@@ -4867,7 +4962,7 @@ setupMatrixInteractions(targetMatrixContainer, '.target-matrix-toggle', handleTa
 setupMatrixInteractions(productionTargetMatrixContainer, '.production-target-toggle', handleProductionTargetToggle);
 
 if (mediaNetworkQrButton) {
-  mediaNetworkQrButton.addEventListener('click', () => openAdminImageLightbox());
+  mediaNetworkQrButton.addEventListener('click', () => openMediaNetworkQrLightbox());
 }
 
 if (mediaNetworkQrDownloadButton) {
@@ -4879,7 +4974,7 @@ if (adminImageLightboxClose) {
 }
 
 if (adminImageLightboxDownloadButton) {
-  adminImageLightboxDownloadButton.addEventListener('click', () => downloadMediaNetworkQrImage());
+  adminImageLightboxDownloadButton.addEventListener('click', () => downloadAdminImageLightboxImage());
 }
 
 if (adminImageLightbox) {

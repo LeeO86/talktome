@@ -893,7 +893,7 @@ function exportDatabaseSnapshot() {
       ORDER BY id
     `).all(),
     feeds: db.prepare(`
-      SELECT id, name, password
+      SELECT id, name, password, login_token_hash
       FROM feeds
       ORDER BY id
     `).all(),
@@ -1045,8 +1045,8 @@ function importDatabaseSnapshot(snapshot) {
       VALUES (?, ?)
     `);
     const insertFeed = db.prepare(`
-      INSERT INTO feeds (id, name, password)
-      VALUES (?, ?, ?)
+      INSERT INTO feeds (id, name, password, login_token_hash)
+      VALUES (?, ?, ?, ?)
     `);
     const insertMembership = db.prepare(`
       INSERT INTO user_conference (user_id, conference_id)
@@ -1165,7 +1165,12 @@ function importDatabaseSnapshot(snapshot) {
     });
 
     feeds.forEach((row) => {
-      insertFeed.run(Number(row.id), String(row.name), String(row.password));
+      insertFeed.run(
+        Number(row.id),
+        String(row.name),
+        String(row.password),
+        row.login_token_hash ? String(row.login_token_hash) : null
+      );
     });
 
     userConference.forEach((row) => {
@@ -1566,6 +1571,34 @@ function getUserByLoginToken(token) {
   `).get(tokenHash) || null;
 }
 
+function createFeedLoginToken(id) {
+  const feedId = Number(id);
+  if (!Number.isInteger(feedId) || feedId < 1) {
+    throw new Error('Invalid feed id');
+  }
+
+  const feed = db.prepare('SELECT id FROM feeds WHERE id = ?').get(feedId);
+  if (!feed) throw new Error('Feed not found');
+
+  const token = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  db.prepare('UPDATE feeds SET login_token_hash = ? WHERE id = ?').run(tokenHash, feedId);
+  return token;
+}
+
+function getFeedByLoginToken(token) {
+  if (typeof token !== 'string') return null;
+  const normalizedToken = token.trim();
+  if (normalizedToken.length < 32 || normalizedToken.length > 256) return null;
+
+  const tokenHash = crypto.createHash('sha256').update(normalizedToken).digest('hex');
+  return db.prepare(`
+    SELECT id, name
+    FROM feeds
+    WHERE login_token_hash = ?
+  `).get(tokenHash) || null;
+}
+
 function updateAdminPassword(id, password) {
   const hash = bcrypt.hashSync(password, 10);
   const stmt = db.prepare('UPDATE users SET password = ?, admin_must_change = 0 WHERE id = ?');
@@ -1715,7 +1748,7 @@ function updateFeedName(id, name) {
 
 function updateFeedPassword(id, password) {
   const hash = bcrypt.hashSync(password, 10);
-  const stmt = db.prepare('UPDATE feeds SET password = ? WHERE id = ?');
+  const stmt = db.prepare('UPDATE feeds SET password = ?, login_token_hash = NULL WHERE id = ?');
   const result = stmt.run(hash, id);
   return result.changes > 0;
 }
@@ -2237,6 +2270,8 @@ module.exports = {
   updateUserPassword,
   createUserLoginToken,
   getUserByLoginToken,
+  createFeedLoginToken,
+  getFeedByLoginToken,
   updateAdminPassword,
   updateFeedName,
   updateFeedPassword,
