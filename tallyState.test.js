@@ -45,9 +45,12 @@ test("server and browser expose production-aware PGM and PRV tally", () => {
   assert.match(client, /else if \(visiblePrv\) element\.classList\.add\("preview-camera"\)/);
   assert.match(client, /const themeColor = pgm \? "#e00000" : visiblePrv \? "#00875a" : "#0b1120"/);
   assert.match(client, /element\.style\.backgroundColor = themeColor/);
+  assert.match(client, /safariTallySampler\.style\.backgroundColor = themeColor/);
   assert.match(client, /themeColorMeta\?\.setAttribute\("content", themeColor\)/);
   assert.match(html, /user-scalable=no, viewport-fit=cover/);
   assert.match(html, /meta name="theme-color" content="#0b1120"/);
   assert.match(html, /html\.preview-camera,[\s\S]+#00875a/);
   assert.match(html, /html\.cut-camera,[\s\S]+#e00000/);
+  assert.match(html, /#safari-tally-sampler[\s\S]+position: fixed;[\s\S]+bottom: -1px;[\s\S]+height: 4px/);
+  assert.match(html, /<div id="safari-tally-sampler" aria-hidden="true"><\/div>/);
 });

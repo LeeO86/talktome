@@ -64,6 +64,8 @@ socket.on("cut-camera", (value) => {
     element.style.backgroundColor = themeColor;
   }
 
+  const safariTallySampler = document.getElementById("safari-tally-sampler");
+  if (safariTallySampler) safariTallySampler.style.backgroundColor = themeColor;
   themeColorMeta?.setAttribute("content", themeColor);
 });
 
