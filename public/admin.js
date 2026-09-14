@@ -1387,15 +1387,23 @@ function statusTimeHtml(value, { suffix = true, empty = 'Never' } = {}) {
   return `<span title="${escapeHtml(exact)}">${escapeHtml(formatStatusElapsed(value, { suffix }))}</span>`;
 }
 
-function statusIndicatorHtml({ online, talking = false, warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning' }) {
-  const label = talking ? 'Talking' : warning ? warningLabel : online ? onlineLabel : offlineLabel;
+function statusIndicatorHtml({ online, talking = false, talkingLabel = 'Talking', warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning' }) {
+  const label = talking ? talkingLabel : warning ? warningLabel : online ? onlineLabel : offlineLabel;
   const stateClass = talking ? 'is-talking' : warning ? 'is-warning' : online ? 'is-online' : '';
   return `
     <span class="status-indicator">
       <span class="status-indicator__dot ${stateClass}" aria-hidden="true"></span>
-      <span>${escapeHtml(label)}</span>
+      <span title="${escapeHtml(label)}">${escapeHtml(label)}</span>
     </span>
   `;
+}
+
+function formatStatusTalkTargetLabel(user) {
+  const targets = Array.isArray(user?.talkTargets) ? user.talkTargets : [];
+  const names = targets
+    .map((target) => String(target?.name || '').trim())
+    .filter(Boolean);
+  return `→ ${names.length > 0 ? names.join(', ') : 'Target'}`;
 }
 
 function setServerReachability(online) {
@@ -1519,7 +1527,10 @@ function renderAdminStatus(payload = {}) {
               : '-';
           return `
             <tr>
-              <td>${statusIndicatorHtml(user)}</td>
+              <td>${statusIndicatorHtml({
+                ...user,
+                talkingLabel: formatStatusTalkTargetLabel(user),
+              })}</td>
               <td>${userNameHtml}</td>
               <td>${escapeHtml(clientLabel)}</td>
               <td>${escapeHtml(user.remoteAddress || '-')}</td>

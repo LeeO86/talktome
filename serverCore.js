@@ -3708,10 +3708,37 @@ function getFreshBrowserMediaStats(peer, now = Date.now()) {
   };
 }
 
+function buildAdminStatusTalkTargets(targets, usersById, conferencesById) {
+  return normalizeRuntimeTalkTargets(targets).map((target) => {
+    if (target.type === "user") {
+      return {
+        ...target,
+        name: usersById.get(String(target.id))?.name || `User ${target.id}`,
+      };
+    }
+    if (target.type === "conference") {
+      return {
+        ...target,
+        name: conferencesById.get(String(target.id))?.name || `Conference ${target.id}`,
+      };
+    }
+    if (target.type === "guest") {
+      return {
+        ...target,
+        name: findGuestPeerByGuestId(target.id)?.peer?.name || "Guest",
+      };
+    }
+    return target;
+  });
+}
+
 function buildAdminStatusSnapshot() {
   const now = Date.now();
   const allUsers = getAllUsers();
   const allFeeds = getAllFeeds();
+  const allConferences = getAllConferences();
+  const usersById = new Map(allUsers.map((user) => [String(user.id), user]));
+  const conferencesById = new Map(allConferences.map((conference) => [String(conference.id), conference]));
   const users = allUsers
     .filter((user) => !user.is_superadmin && !user.is_guest_profile)
     .map((user) => {
@@ -3720,6 +3747,7 @@ function buildAdminStatusSnapshot() {
       const online = Boolean(peer);
       const isBridge = Boolean(peer?.isBridgePeer);
       const activeTargets = peer ? getPeerActiveTalkTargets(peer) : [];
+      const talkTargets = buildAdminStatusTalkTargets(activeTargets, usersById, conferencesById);
       const bridge = isBridge
         ? bridgeRegistry.get(String(peer.bridgeId)) || null
         : null;
@@ -3730,6 +3758,7 @@ function buildAdminStatusSnapshot() {
         name: user.name,
         online,
         talking: online && activeTargets.length > 0,
+        talkTargets,
         connectionType: online ? (isBridge ? "bridge" : "browser") : null,
         configuredAsBridge: Boolean(user.bridge_enabled),
         bridgeName: bridge?.name || (isBridge ? peer.bridgeId : null),
