@@ -38,6 +38,27 @@ test("keeps a usable reverse proxy host ahead of the selected adapter", () => {
   }), "https://intercom.example.com");
 });
 
+test("prefers the selected adapter over an mDNS request URL", () => {
+  assert.equal(selectAdminQrUrl({
+    requestUrl: "https://intercom.local:8444",
+    adapterUrl: "https://192.168.178.166:8444",
+  }), "https://192.168.178.166:8444");
+});
+
+test("prefers the selected adapter over a configured mDNS URL", () => {
+  assert.equal(selectAdminQrUrl({
+    configuredUrl: "https://intercom.local:8444",
+    requestUrl: "https://intercom.local:8444",
+    adapterUrl: "https://192.168.178.166:8444",
+  }), "https://192.168.178.166:8444");
+});
+
+test("falls back to mDNS when no adapter or public URL is available", () => {
+  assert.equal(selectAdminQrUrl({
+    requestUrl: "https://intercom.local:8444",
+  }), "https://intercom.local:8444");
+});
+
 test("falls back to localhost when no adapter address is available", () => {
   assert.equal(selectAdminQrUrl({
     requestUrl: "https://localhost:8444",
