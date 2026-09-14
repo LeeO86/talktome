@@ -216,7 +216,11 @@ const {
   setUserAdminRole,
   updateUserBridgeEndpoint,
   exportDatabaseSnapshot,
-  importDatabaseSnapshot
+  importDatabaseSnapshot,
+  saveBrowserSession,
+  getBrowserSessionByToken,
+  deleteBrowserSession,
+  purgeExpiredBrowserSessions,
 } = require("./dbHandler");
 
 const app = express();
@@ -740,7 +744,15 @@ const ADMIN_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const BROWSER_SESSION_COOKIE = "talktome_session";
 const BROWSER_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const adminSessions = new Map();
-const browserSessions = createBrowserSessionStore({ ttlMs: BROWSER_SESSION_TTL_MS });
+const browserSessions = createBrowserSessionStore({
+  ttlMs: BROWSER_SESSION_TTL_MS,
+  persistence: {
+    read: getBrowserSessionByToken,
+    write: saveBrowserSession,
+    remove: deleteBrowserSession,
+    purgeExpired: purgeExpiredBrowserSessions,
+  },
+});
 const adminStatusStreams = new Set();
 let adminStatusBroadcastTimer = null;
 let pendingAdminStatusReason = "status-changed";

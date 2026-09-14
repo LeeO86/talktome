@@ -8,6 +8,79 @@ const BRIDGE_TRIGGER_DEFAULT_THRESHOLD_DB = -45;
 const BRIDGE_TRIGGER_MIN_THRESHOLD_DB = -120;
 const BRIDGE_TRIGGER_MAX_THRESHOLD_DB = -10;
 
+function hashBrowserSessionToken(token) {
+  const normalized = typeof token === 'string' ? token.trim() : '';
+  if (!normalized) return null;
+  return crypto.createHash('sha256').update(normalized).digest('hex');
+}
+
+function saveBrowserSession(token, session = {}) {
+  const tokenHash = hashBrowserSessionToken(token);
+  const kind = session.kind === 'feed' ? 'feed' : session.kind === 'user' ? 'user' : null;
+  const identityId = Number(kind === 'user' ? session.userId : session.feedId);
+  const createdAt = Number(session.createdAt);
+  const expiresAt = Number(session.expiresAt);
+  if (!tokenHash || !kind || !Number.isInteger(identityId) || identityId < 1) {
+    throw new Error('Invalid browser session identity');
+  }
+  if (!Number.isFinite(createdAt) || !Number.isFinite(expiresAt) || expiresAt <= createdAt) {
+    throw new Error('Invalid browser session lifetime');
+  }
+
+  db.prepare(`
+    INSERT INTO browser_sessions
+      (token_hash, kind, identity_id, name, source, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(token_hash) DO UPDATE SET
+      kind = excluded.kind,
+      identity_id = excluded.identity_id,
+      name = excluded.name,
+      source = excluded.source,
+      created_at = excluded.created_at,
+      expires_at = excluded.expires_at
+  `).run(
+    tokenHash,
+    kind,
+    identityId,
+    String(session.name || ''),
+    String(session.source || 'password'),
+    createdAt,
+    expiresAt
+  );
+}
+
+function getBrowserSessionByToken(token) {
+  const tokenHash = hashBrowserSessionToken(token);
+  if (!tokenHash) return null;
+  const row = db.prepare(`
+    SELECT kind, identity_id, name, source, created_at, expires_at
+    FROM browser_sessions
+    WHERE token_hash = ?
+  `).get(tokenHash);
+  if (!row) return null;
+  return {
+    kind: row.kind,
+    userId: row.kind === 'user' ? Number(row.identity_id) : undefined,
+    feedId: row.kind === 'feed' ? Number(row.identity_id) : undefined,
+    name: row.name,
+    source: row.source,
+    createdAt: Number(row.created_at),
+    expiresAt: Number(row.expires_at),
+  };
+}
+
+function deleteBrowserSession(token) {
+  const tokenHash = hashBrowserSessionToken(token);
+  if (!tokenHash) return false;
+  return db.prepare('DELETE FROM browser_sessions WHERE token_hash = ?')
+    .run(tokenHash).changes > 0;
+}
+
+function purgeExpiredBrowserSessions(now = Date.now()) {
+  return db.prepare('DELETE FROM browser_sessions WHERE expires_at <= ?')
+    .run(Number(now)).changes;
+}
+
 function normalizeBridgeText(value) {
   if (value === null || value === undefined) return '';
   return String(value).trim().slice(0, BRIDGE_ENDPOINT_TEXT_LIMIT);
@@ -1009,6 +1082,7 @@ function importDatabaseSnapshot(snapshot) {
   }
 
   const restore = db.transaction(() => {
+    db.prepare('DELETE FROM browser_sessions').run();
     db.prepare('DELETE FROM user_bridge_endpoints').run();
     db.prepare('DELETE FROM feed_bridge_endpoints').run();
     db.prepare('DELETE FROM production_user_conference').run();
@@ -2216,6 +2290,10 @@ ensureDefaultAdmin();
 
 
 module.exports = {
+  saveBrowserSession,
+  getBrowserSessionByToken,
+  deleteBrowserSession,
+  purgeExpiredBrowserSessions,
   getAllUsers,
   getUserById,
   getUserAudioSettings,

@@ -214,6 +214,19 @@ db.exec(`
                                                             updated_at   TEXT    NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS browser_sessions (
+                                                      token_hash  TEXT PRIMARY KEY,
+                                                      kind        TEXT    NOT NULL,
+                                                      identity_id INTEGER NOT NULL,
+                                                      name        TEXT    NOT NULL DEFAULT '',
+                                                      source      TEXT    NOT NULL DEFAULT 'password',
+                                                      created_at  INTEGER NOT NULL,
+                                                      expires_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_browser_sessions_expires_at
+      ON browser_sessions(expires_at);
+
     DROP TABLE IF EXISTS user_global_targets;
 `);
 
