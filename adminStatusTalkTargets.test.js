@@ -34,7 +34,9 @@ test('admin status exposes and conditionally renders the active production', () 
 });
 
 test('status tables reserve less space for short names than detailed client data', () => {
-  assert.match(adminHtml, /<col style="width: 8rem;">\s*<col data-status-production-column/);
-  assert.match(adminHtml, /status-table--users\.status-table--with-production/);
-  assert.equal((adminHtml.match(/<col style="width: 10rem;">\s*<col style="width: 8rem;">/g) || []).length, 4);
+  assert.match(adminHtml, /\.status-col--status \{ width: 20%; \}/);
+  assert.equal((adminHtml.match(/<col class="status-col--status">\s*<col class="status-col--name">/g) || []).length, 4);
+  assert.equal((adminHtml.match(/class="status-col--production" data-status-production-column hidden/g) || []).length, 4);
+  assert.match(admin, /document\.querySelectorAll\('#status-section \.status-table'\)/);
+  assert.match(admin, /status-production-spacer/);
 });

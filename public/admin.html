@@ -2598,13 +2598,27 @@
         font-size: 0.84rem;
       }
 
-      .status-table--users {
-        min-width: 59.5rem;
-      }
-
-      .status-table--users.status-table--with-production {
+      .status-table.status-table--with-production {
         min-width: 67.5rem;
       }
+
+      .status-col--status { width: 20%; }
+      .status-col--name { width: 10%; }
+      .status-col--production { width: 10%; }
+      .status-col--client { width: 16%; }
+      .status-col--address { width: 16%; }
+      .status-col--rtt { width: 7%; }
+      .status-col--loss { width: 7%; }
+      .status-col--connected { width: 12%; }
+      .status-col--last-seen { width: 12%; }
+
+      .status-table--with-production .status-col--name { width: 9%; }
+      .status-table--with-production .status-col--client { width: 14%; }
+      .status-table--with-production .status-col--address { width: 14%; }
+      .status-table--with-production .status-col--rtt { width: 6%; }
+      .status-table--with-production .status-col--loss { width: 6%; }
+      .status-table--with-production .status-col--connected { width: 10.5%; }
+      .status-table--with-production .status-col--last-seen { width: 10.5%; }
 
       .status-table th,
       .status-table td {
@@ -2941,7 +2955,7 @@
           display: block;
         }
 
-        .status-table--users.status-table--with-production {
+        .status-table.status-table--with-production {
           min-width: 0;
         }
 
@@ -2993,13 +3007,17 @@
         .status-table td:nth-child(7)::before { content: 'Connected since'; }
         .status-table td:nth-child(8)::before { content: 'Last seen'; }
 
-        .status-table--users.status-table--with-production td:nth-child(3)::before { content: 'Production'; }
-        .status-table--users.status-table--with-production td:nth-child(4)::before { content: 'Client'; }
-        .status-table--users.status-table--with-production td:nth-child(5)::before { content: 'Address'; }
-        .status-table--users.status-table--with-production td:nth-child(6)::before { content: 'RTT'; }
-        .status-table--users.status-table--with-production td:nth-child(7)::before { content: 'Loss'; }
-        .status-table--users.status-table--with-production td:nth-child(8)::before { content: 'Connected since'; }
-        .status-table--users.status-table--with-production td:nth-child(9)::before { content: 'Last seen'; }
+        .status-table--with-production td:nth-child(3)::before { content: 'Production'; }
+        .status-table--with-production td:nth-child(4)::before { content: 'Client'; }
+        .status-table--with-production td:nth-child(5)::before { content: 'Address'; }
+        .status-table--with-production td:nth-child(6)::before { content: 'RTT'; }
+        .status-table--with-production td:nth-child(7)::before { content: 'Loss'; }
+        .status-table--with-production td:nth-child(8)::before { content: 'Connected since'; }
+        .status-table--with-production td:nth-child(9)::before { content: 'Last seen'; }
+
+        .status-table--with-production .status-production-spacer {
+          display: none;
+        }
 
         .status-table tbody tr:has(.status-empty) {
           grid-template-columns: 1fr;
@@ -3400,15 +3418,15 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--users">
                 <colgroup>
-                  <col style="width: 10rem;">
-                  <col style="width: 8rem;">
-                  <col data-status-production-column style="width: 8rem;" hidden>
-                  <col style="width: 10rem;">
-                  <col style="width: 8.5rem;">
-                  <col style="width: 4.5rem;">
-                  <col style="width: 4.5rem;">
-                  <col style="width: 7.5rem;">
-                  <col>
+                  <col class="status-col--status">
+                  <col class="status-col--name">
+                  <col class="status-col--production" data-status-production-column hidden>
+                  <col class="status-col--client">
+                  <col class="status-col--address">
+                  <col class="status-col--rtt">
+                  <col class="status-col--loss">
+                  <col class="status-col--connected">
+                  <col class="status-col--last-seen">
                 </colgroup>
                 <thead>
                   <tr>
@@ -3438,19 +3456,21 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--feeds">
                 <colgroup>
-                  <col style="width: 10rem;">
-                  <col style="width: 8rem;">
-                  <col style="width: 10rem;">
-                  <col style="width: 8.5rem;">
-                  <col style="width: 4.5rem;">
-                  <col style="width: 4.5rem;">
-                  <col style="width: 7.5rem;">
-                  <col>
+                  <col class="status-col--status">
+                  <col class="status-col--name">
+                  <col class="status-col--production" data-status-production-column hidden>
+                  <col class="status-col--client">
+                  <col class="status-col--address">
+                  <col class="status-col--rtt">
+                  <col class="status-col--loss">
+                  <col class="status-col--connected">
+                  <col class="status-col--last-seen">
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
+                    <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>
@@ -3474,19 +3494,21 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--bridges">
                 <colgroup>
-                  <col style="width: 10rem;">
-                  <col style="width: 8rem;">
-                  <col style="width: 10rem;">
-                  <col style="width: 8.5rem;">
-                  <col style="width: 4.5rem;">
-                  <col style="width: 4.5rem;">
-                  <col style="width: 7.5rem;">
-                  <col>
+                  <col class="status-col--status">
+                  <col class="status-col--name">
+                  <col class="status-col--production" data-status-production-column hidden>
+                  <col class="status-col--client">
+                  <col class="status-col--address">
+                  <col class="status-col--rtt">
+                  <col class="status-col--loss">
+                  <col class="status-col--connected">
+                  <col class="status-col--last-seen">
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
+                    <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>
@@ -3510,19 +3532,21 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--companions">
                 <colgroup>
-                  <col style="width: 10rem;">
-                  <col style="width: 8rem;">
-                  <col style="width: 10rem;">
-                  <col style="width: 8.5rem;">
-                  <col style="width: 4.5rem;">
-                  <col style="width: 4.5rem;">
-                  <col style="width: 7.5rem;">
-                  <col>
+                  <col class="status-col--status">
+                  <col class="status-col--name">
+                  <col class="status-col--production" data-status-production-column hidden>
+                  <col class="status-col--client">
+                  <col class="status-col--address">
+                  <col class="status-col--rtt">
+                  <col class="status-col--loss">
+                  <col class="status-col--connected">
+                  <col class="status-col--last-seen">
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
+                    <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>

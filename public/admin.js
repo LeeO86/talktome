@@ -1519,10 +1519,11 @@ function renderAdminStatus(payload = {}) {
   setStatusText('status-bridges-count', `${summary.bridgesOnline || 0} online of ${summary.bridgesTotal || 0}`);
   setStatusText('status-companions-count', `${summary.companionsOnline || 0} online of ${companions.length}`);
 
-  const usersTable = statusUsersBody?.closest('.status-table--users');
-  usersTable?.classList.toggle('status-table--with-production', showProductionColumn);
-  usersTable?.querySelectorAll('[data-status-production-column]').forEach((element) => {
-    element.hidden = !showProductionColumn;
+  document.querySelectorAll('#status-section .status-table').forEach((table) => {
+    table.classList.toggle('status-table--with-production', showProductionColumn);
+    table.querySelectorAll('[data-status-production-column]').forEach((element) => {
+      element.hidden = !showProductionColumn;
+    });
   });
 
   if (statusUsersBody) {
@@ -1572,6 +1573,7 @@ function renderAdminStatus(payload = {}) {
             <tr>
               <td>${statusIndicatorHtml(feed)}</td>
               <td><span class="status-primary">${escapeHtml(feed.name)}</span></td>
+              ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
               <td>${escapeHtml(clientLabel)}</td>
               <td>${escapeHtml(feed.remoteAddress || '-')}</td>
               <td title="WebRTC round-trip time from this browser">${formatStatusLatency(feed.networkStats)}</td>
@@ -1581,7 +1583,7 @@ function renderAdminStatus(payload = {}) {
             </tr>
           `;
         }).join('')
-      : '<tr><td colspan="8" class="status-empty">No feeds configured.</td></tr>';
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No feeds configured.</td></tr>`;
   }
 
   if (statusBridgesBody) {
@@ -1596,6 +1598,7 @@ function renderAdminStatus(payload = {}) {
                 warningLabel: 'Device missing',
               })}</td>
               <td><span class="status-primary">${escapeHtml(bridge.name)}</span></td>
+              ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
               <td>${escapeHtml(bridge.client || 'Bridge')}</td>
               <td>${escapeHtml(bridge.remoteAddress || '-')}</td>
               <td>-</td>
@@ -1604,7 +1607,7 @@ function renderAdminStatus(payload = {}) {
               <td>${bridge.online ? 'Now' : statusTimeHtml(bridge.lastSeenAt)}</td>
             </tr>
           `).join('')
-      : '<tr><td colspan="8" class="status-empty">No bridge announced.</td></tr>';
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No bridge announced.</td></tr>`;
   }
 
   if (statusCompanionsBody) {
@@ -1620,6 +1623,7 @@ function renderAdminStatus(payload = {}) {
             <tr>
               <td>${statusIndicatorHtml({ online: companion.online, onlineLabel: 'Online', offlineLabel: 'Stale' })}</td>
               <td><span class="status-primary">${escapeHtml(companion.name)}</span></td>
+              ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
               <td>${escapeHtml(companion.client || '-')}</td>
               <td>${escapeHtml(companion.remoteAddress || '-')}</td>
               <td>-</td>
@@ -1629,7 +1633,7 @@ function renderAdminStatus(payload = {}) {
             </tr>
           `;
         }).join('')
-      : '<tr><td colspan="8" class="status-empty">No Companion instance connected.</td></tr>';
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No Companion instance connected.</td></tr>`;
   }
 
   setStatusText('status-version', `Server version ${payload.appVersion || 'unknown'}`);
