@@ -41,6 +41,9 @@ test("server and browser expose production-aware PGM and PRV tally", () => {
   assert.match(server, /previewCameraUser:/);
   assert.match(client, /classList\.toggle\("preview-camera", prv\)/);
   assert.match(client, /classList\.toggle\("cut-camera", pgm\)/);
-  assert.match(html, /body\.preview-camera[\s\S]+#00b140/);
-  assert.match(html, /body\.cut-camera[\s\S]+#e00000/);
+  assert.match(client, /const themeColor = pgm \? "#e00000" : prv \? "#00b140" : "#0b1120"/);
+  assert.match(client, /themeColorMeta\?\.setAttribute\("content", themeColor\)/);
+  assert.match(html, /meta name="theme-color" content="#0b1120"/);
+  assert.match(html, /html\.preview-camera,[\s\S]+#00b140/);
+  assert.match(html, /html\.cut-camera,[\s\S]+#e00000/);
 });

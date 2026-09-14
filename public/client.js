@@ -49,8 +49,13 @@ setupPasswordVisibilityToggles();
 socket.on("cut-camera", (value) => {
   const pgm = typeof value === "boolean" ? value : Boolean(value?.pgm);
   const prv = typeof value === "object" && value !== null ? Boolean(value.prv) : false;
+  const themeColor = pgm ? "#e00000" : prv ? "#00b140" : "#0b1120";
+  const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+  document.documentElement.classList.toggle("preview-camera", prv);
+  document.documentElement.classList.toggle("cut-camera", pgm);
   document.body.classList.toggle("preview-camera", prv);
   document.body.classList.toggle("cut-camera", pgm);
+  themeColorMeta?.setAttribute("content", themeColor);
 });
 
 const BASE_REPLY_LABEL = "REPLY";
