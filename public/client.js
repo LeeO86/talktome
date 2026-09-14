@@ -7183,7 +7183,7 @@ let cachedOperatorTargets = null;
         && Number(target.targetId) === numericConferenceId
       ));
     if (!conferenceIsVisible) return;
-    await renderTargetList(cachedUsers);
+    await renderTargetList(cachedUsers, { membershipUpdateOnly: true });
   });
 
   function resolveApiUserTargetSocketId(rawTargetId) {
@@ -8905,6 +8905,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   function renderConferenceMembersModal(target, users = cachedUsers) {
     if (!conferenceMembersModalDescription || !conferenceMembersModalList) return;
     const conferenceId = Number(target?.targetId);
+    conferenceMembersModal.dataset.conferenceId = String(conferenceId);
     const members = normalizeConferenceTargetMembers(target);
     const usersById = new Map();
     (Array.isArray(users) ? users : []).forEach((user) => {
@@ -9039,7 +9040,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     event.stopPropagation();
   });
 
-  async function renderTargetList(users) {
+  async function renderTargetList(users, { membershipUpdateOnly = false } = {}) {
     if (!isOperatorSession()) return;
     const dbUserId = getOperatorProfileUserId();
     if (!dbUserId) return;
@@ -9057,7 +9058,23 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       return;
     }
 
-    cachedOperatorTargets = Array.isArray(targets) ? targets.map((target) => ({ ...target })) : [];
+    // Membership notifications also reach other participants. Preserve their
+    // buttons, held keys and icon nodes when only the member data changed.
+    const withoutMembers = (items) => items.map(({ members, ...target }) => target);
+    if (membershipUpdateOnly && Array.isArray(targets) && Array.isArray(cachedOperatorTargets)
+      && JSON.stringify(withoutMembers(targets)) === JSON.stringify(withoutMembers(cachedOperatorTargets))) {
+      targets.forEach((target, index) => {
+        cachedOperatorTargets[index].members = target.members;
+      });
+      if (conferenceMembersModal && !conferenceMembersModal.hidden) {
+        const target = cachedOperatorTargets.find((item) => item.targetType === 'conference'
+          && String(item.targetId) === conferenceMembersModal.dataset.conferenceId);
+        if (target) renderConferenceMembersModal(target, users);
+      }
+      return;
+    }
+
+    cachedOperatorTargets = Array.isArray(targets) ? targets : [];
 
     const list = document.getElementById('targets-list');
     if (!list) return;
