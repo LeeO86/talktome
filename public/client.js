@@ -49,12 +49,21 @@ setupPasswordVisibilityToggles();
 socket.on("cut-camera", (value) => {
   const pgm = typeof value === "boolean" ? value : Boolean(value?.pgm);
   const prv = typeof value === "object" && value !== null ? Boolean(value.prv) : false;
-  const themeColor = pgm ? "#e00000" : prv ? "#00b140" : "#0b1120";
+  // A user may be on both buses. PGM has visual priority, so expose exactly
+  // one color state to Safari instead of leaving both classes active.
+  const visiblePrv = prv && !pgm;
+  const themeColor = pgm ? "#e00000" : visiblePrv ? "#00875a" : "#0b1120";
   const themeColorMeta = document.querySelector('meta[name="theme-color"]');
-  document.documentElement.classList.toggle("preview-camera", prv);
-  document.documentElement.classList.toggle("cut-camera", pgm);
-  document.body.classList.toggle("preview-camera", prv);
-  document.body.classList.toggle("cut-camera", pgm);
+
+  for (const element of [document.documentElement, document.body]) {
+    element.classList.remove("preview-camera", "cut-camera");
+    if (pgm) element.classList.add("cut-camera");
+    else if (visiblePrv) element.classList.add("preview-camera");
+    // Safari 26 derives its chrome from the rendered page background rather
+    // than reliably observing a dynamically changed theme-color meta tag.
+    element.style.backgroundColor = themeColor;
+  }
+
   themeColorMeta?.setAttribute("content", themeColor);
 });
 
