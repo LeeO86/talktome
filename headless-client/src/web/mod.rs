@@ -1,7 +1,7 @@
 //! Local administration web interface: fixed `admin` login, status page with
-//! GPIO and connection details, live Stream Deck view, remote talk/volume
-//! control, configuration editing saved back to the TOML/JSON file, and
-//! service restart.
+//! GPIO and connection details, a Remote Control tab matching the browser
+//! client talk layout, live Stream Deck view, configuration editing saved
+//! back to the TOML/JSON file, and service restart.
 
 mod auth;
 mod config_api;
@@ -34,6 +34,9 @@ const APP_JS: &str = include_str!("assets/app.js");
 const STYLE_CSS: &str = include_str!("assets/style.css");
 const TALKTOME_ICON_PNG: &[u8] = include_bytes!("assets/talktome-icon.png");
 const APPLE_TOUCH_ICON_PNG: &[u8] = include_bytes!("assets/apple-touch-icon.png");
+const WALKIE_ICON_PNG: &[u8] = include_bytes!("assets/walkie-talkies-white.png");
+const SPEAKER_ON_PNG: &[u8] = include_bytes!("assets/speaker-white.png");
+const SPEAKER_MUTED_PNG: &[u8] = include_bytes!("assets/speaker-muted.png");
 
 /// Everything the web handlers need from the running client.
 pub struct WebContext {
@@ -90,6 +93,9 @@ pub async fn run(
         .route("/talktome-icon.png", get(talktome_icon))
         .route("/apple-touch-icon.png", get(apple_touch_icon))
         .route("/favicon.ico", get(talktome_icon))
+        .route("/images/walkie-talkies-white.png", get(walkie_icon))
+        .route("/images/speaker-white.png", get(speaker_on_icon))
+        .route("/images/speaker-muted.png", get(speaker_muted_icon))
         .route("/api/login", post(login))
         .route("/api/session", get(session))
         .merge(protected)
@@ -168,6 +174,18 @@ async fn talktome_icon() -> impl IntoResponse {
 
 async fn apple_touch_icon() -> impl IntoResponse {
     png_asset(APPLE_TOUCH_ICON_PNG)
+}
+
+async fn walkie_icon() -> impl IntoResponse {
+    png_asset(WALKIE_ICON_PNG)
+}
+
+async fn speaker_on_icon() -> impl IntoResponse {
+    png_asset(SPEAKER_ON_PNG)
+}
+
+async fn speaker_muted_icon() -> impl IntoResponse {
+    png_asset(SPEAKER_MUTED_PNG)
 }
 
 fn png_asset(bytes: &'static [u8]) -> impl IntoResponse {
@@ -382,7 +400,8 @@ fn unix_now() -> u64 {
 }
 
 async fn status(State(state): State<Shared>) -> Response {
-    let snapshot = state.ctx.bus.snapshots.borrow().clone();
+    let snapshot =
+        crate::surfaces::streamdeck::overlay_demo_targets(state.ctx.bus.snapshots.borrow().clone());
     let (gpio, decks, audio) = match state.ctx.bus.hardware.read() {
         Ok(hardware) => (
             hardware.gpio.clone(),
@@ -589,7 +608,12 @@ async fn talk(State(state): State<Shared>, Json(body): Json<TalkBody>) -> Respon
                 );
             };
             if matches!(body.action.as_str(), "press" | "lock")
-                && user_target_offline(&state.ctx.bus.snapshots.borrow(), target)
+                && user_target_offline(
+                    &crate::surfaces::streamdeck::overlay_demo_targets(
+                        state.ctx.bus.snapshots.borrow().clone(),
+                    ),
+                    target,
+                )
             {
                 return client_error(StatusCode::CONFLICT, "user is offline");
             }

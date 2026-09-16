@@ -812,14 +812,15 @@ home-screen bookmarks.
   registration age, reconnects, send/receive transport state, consumers,
   producer id, ICE URLs announced by the server and the local webrtc-rs
   façade when TURNS is bridged, ICE RTT and packet loss, receive
-  concealment, PGM/PRV tally, Talktome server version), talk destinations in a wrapping
-  grid (conference **Members** for per-person hear/mute and level in dB), talk
-  state with press-and-hold Talk, Lock, volume slider (dB) and Mute per target
-  (Talk/Lock disabled when that **user** is offline),
-  incoming callers and reply target, audio devices and input level, GPIO
-  backend with every configured output (driven state) and input (pressed,
-  event count), Stream Deck model / serial / page, and service details
-  (version, uptime, config path, supervisor, ports).
+  concealment, PGM/PRV tally, Talktome server version), audio devices and
+  input level, GPIO backend with every configured output (driven state)
+  and input (pressed, event count), Stream Deck model / serial / page, and
+  service details (version, uptime, config path, supervisor, ports).
+- **Remote Control**: the same destination layout as the browser client
+  (`public/index.html`): wrapping target rows with icon, name, volume
+  slider and mute / hold-to-talk (slide left to lock), a reply bar, and a
+  conference members dialog for per-person hear/mute and level. Talk is
+  disabled when that **user** is offline.
 - **Stream Deck**: the rendered key images of every attached deck (PNG per
   key, cached by content hash), dials with the currently assigned target,
   and touch points; pressing in the browser injects the same input the

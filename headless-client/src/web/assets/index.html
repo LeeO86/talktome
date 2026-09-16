@@ -78,6 +78,7 @@
       </div>
       <nav class="topbar__nav" aria-label="Sections">
         <a href="#status" data-view="status">Status</a>
+        <a href="#remote" data-view="remote"><span class="nav-wide">Remote Control</span><span class="nav-narrow">Remote</span></a>
         <a href="#deck" data-view="deck">Stream Deck</a>
         <a href="#settings" data-view="settings">Settings</a>
       </nav>
@@ -101,18 +102,6 @@
               <span id="conn-state" class="badge">offline</span>
             </header>
             <dl class="kv" id="conn-details"></dl>
-          </article>
-
-          <article class="card card-talk">
-            <header class="card-header">
-              <h2>Talk</h2>
-              <div class="card-tools">
-                <span id="talk-state" class="badge">idle</span>
-                <button type="button" class="btn btn-small" id="clear-locks">Clear locks</button>
-              </div>
-            </header>
-            <div id="incoming" class="incoming"></div>
-            <div id="targets" class="targets"></div>
           </article>
 
           <article class="card card-audio">
@@ -164,6 +153,14 @@
         </div>
       </section>
 
+      <section id="view-remote" class="view is-hidden">
+        <ul id="targets-list"></ul>
+        <p id="targets-empty" class="muted remote-empty is-hidden">No targets assigned to this user yet. Assign them in Talktome Admin.</p>
+        <div class="reply-bar">
+          <button id="reply" type="button" data-label="🔊 REPLY" aria-label="Reply" disabled></button>
+        </div>
+      </section>
+
       <section id="view-deck" class="view is-hidden">
         <div id="deck-list" class="deck-list"></div>
         <p id="deck-empty" class="muted">No Stream Deck configured.</p>
@@ -195,6 +192,25 @@
         </article>
       </section>
     </main>
+
+    <div
+      id="conference-members-modal"
+      class="conference-members-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="conference-members-modal-description"
+      hidden
+    >
+      <section class="conference-members-modal__card">
+        <p id="conference-members-modal-description" class="conference-members-modal__description">
+          Choose who you hear in this conference.
+        </p>
+        <div id="conference-members-modal-list" class="conference-members-list"></div>
+        <footer class="conference-members-modal__footer">
+          <button id="conference-members-modal-done" class="conference-members-modal__done" type="button">Done</button>
+        </footer>
+      </section>
+    </div>
 
     <script src="/app.js?v=__VERSION__"></script>
   </body>

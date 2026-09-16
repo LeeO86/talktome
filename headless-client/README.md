@@ -118,10 +118,13 @@ desktops:
   written to the configuration file; saving Settings does the same rewrite.
 - **Status**: Talktome connection (state, server, user, production, transports,
   consumers, ICE servers, RTT, packet loss, receive concealment, reconnects,
-  PGM/PRV tally), the talk state with press-and-hold Talk, Lock, volume (dB) and mute
-  controls per target (Talk/Lock disabled when that user is offline), audio
-  devices with an input meter, every configured GPIO output (live state) and
-  input (pressed, event count), Stream Deck and service details.
+  PGM/PRV tally), audio devices with an input meter, every configured GPIO
+  output (live state) and input (pressed, event count), Stream Deck and service
+  details.
+- **Remote Control**: the same talk layout as the Talktome web client — destination
+  rows with icon, name, volume, mute and hold-to-talk (slide left to lock), a
+  reply bar, and conference **Members** for per-person hear/mute and level.
+  Talk is disabled when that user is offline.
 - **Stream Deck**: live rendering of the attached deck; keys, dials and touch
   points can be operated from the browser and behave like the hardware.
 - **Settings**: every configuration value as a form (audio devices are listed
@@ -135,9 +138,9 @@ desktops:
 The interface is plain HTTP on the local network. Keep it on the production
 LAN or a management network, or put a reverse proxy with TLS in front of it.
 
-On a wide screen the Talk destinations fill a wrapping grid so you do not
-have to zoom out; Settings sections sit two-across until one is opened.
-Phones keep a single column.
+On a wide screen the Remote Control destinations fill a wrapping grid like the
+web client so you do not have to zoom out; Settings sections sit two-across until
+one is opened. Phones keep a single column.
 
 ## Testing without hardware (OrbStack VM, CI, a board with no deck)
 
@@ -164,9 +167,10 @@ Save & restart. The web Stream Deck view renders the keys; taps talk/lock
 like hardware. Optional file input: `TALKTOME_SURFACE_MOCK_DIR=/tmp/tt` and
 append lines such as `down 3` / `up 3` to `$TALKTOME_SURFACE_MOCK_DIR/streamdeck-inputs`.
 
-With no Talktome server (so no live targets), mock decks can still show a
-layout using `TALKTOME_DEMO_TARGETS=adi,beni,conference:News,feed:Virus`
-and `TALKTOME_DEMO_REPLY=News`. Those names are paint-only and disappear as
+With no Talktome server (so no live targets), the Remote Control tab and
+mock decks can still show destinations using
+`TALKTOME_DEMO_TARGETS=adi,beni,conference:News,feed:Virus` and
+`TALKTOME_DEMO_REPLY=News`. Those names are paint-only and disappear as
 soon as the client receives real targets.
 
 The VM also has no USB headset. Capture a 440 Hz sine instead of a

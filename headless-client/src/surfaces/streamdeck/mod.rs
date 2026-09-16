@@ -1128,7 +1128,14 @@ fn layout_options(device: &StreamDeckDeviceConfig) -> LayoutOptions {
 }
 
 fn with_demo_targets(snapshot: Arc<Snapshot>, is_mock: bool) -> Arc<Snapshot> {
-    if !is_mock || !snapshot.targets.is_empty() {
+    if !is_mock {
+        return snapshot;
+    }
+    overlay_demo_targets(snapshot)
+}
+
+pub(crate) fn overlay_demo_targets(snapshot: Arc<Snapshot>) -> Arc<Snapshot> {
+    if !snapshot.targets.is_empty() {
         return snapshot;
     }
     let Ok(raw) = std::env::var(DEMO_TARGETS_ENV) else {

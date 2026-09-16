@@ -18,7 +18,8 @@
     audioDevices: { inputs: [], outputs: [] },
     rawMode: false,
     pressed: new Set(),
-    memberOpen: new Set(),
+    locks: new Set(),
+    memberModalKey: null,
     volumeTimers: new Map(),
     restarting: false,
   };
@@ -127,6 +128,12 @@
   }
 
   const MUTE_DB = -60;
+  const SLIDE_LOCK_PX = 42;
+  const UI_ICONS = {
+    talk: '/images/walkie-talkies-white.png',
+    speakerOn: '/images/speaker-white.png',
+    speakerMuted: '/images/speaker-muted.png',
+  };
   function linearToDb(linear) {
     const value = Number(linear);
     if (!Number.isFinite(value) || value <= 1e-6) return MUTE_DB;
@@ -142,14 +149,6 @@
     if (db <= MUTE_DB) return '-inf dB';
     const rounded = Math.round(db * 10) / 10;
     return `${rounded.toFixed(1)} dB`;
-  }
-  function volumeStepDb() {
-    const deck = state.configDoc && state.configDoc.streamdeck;
-    const configured = Number(deck && deck.volume_step_db);
-    if (Number.isFinite(configured) && configured > 0) return configured;
-    const legacy = Number(deck && deck.volume_step);
-    if (Number.isFinite(legacy) && legacy > 1) return legacy;
-    return 3;
   }
 
   function kv(container, rows) {
@@ -373,11 +372,12 @@
 
   function routeFromHash() {
     const view = (location.hash || '#status').slice(1);
-    showView(['status', 'deck', 'settings'].includes(view) ? view : 'status');
+    showView(['status', 'remote', 'deck', 'settings'].includes(view) ? view : 'status');
   }
 
   function showView(view) {
     state.view = view;
+    document.body.dataset.view = view;
     for (const section of $$('.view')) section.classList.toggle('is-hidden', section.id !== `view-${view}`);
     for (const link of $$('.topbar__nav a')) {
       if (link.dataset.view === view) link.setAttribute('aria-current', 'location');
@@ -431,6 +431,7 @@
     state.status = status;
     try {
       renderStatus(status);
+      renderRemote(status.snapshot);
     } catch (error) {
       console.error(error);
     }
@@ -464,18 +465,6 @@
       ['Camera tally', tallyBadges(snap)],
       ['Talktome server', snap.server_version ? formatServerVersion(snap.server_version) : '–'],
     ]);
-
-    // Talk card
-    const talking = snap.talking;
-    setBadge($('#talk-state'), talking ? (snap.lock_active ? 'talking · locked' : 'talking') : snap.lock_active ? 'locked' : 'idle', talking || snap.lock_active ? 'talk' : '');
-    const incoming = $('#incoming');
-    incoming.replaceChildren(
-      ...snap.incoming.map((entry) => badge(`${entry.from_name} → ${entry.target ? labelForTarget(snap, targetKey(entry.target)) : 'you'}`, 'ok'))
-    );
-    if (snap.reply_target) {
-      incoming.append(badge(`Reply → ${snap.reply_name || targetKey(snap.reply_target)}`, 'info'));
-    }
-    renderTargets(snap);
 
     // Audio card
     const audio = status.audio || {};
@@ -591,14 +580,114 @@
     return `${bridged.join(', ')} — local UDP façade for TURNS/TURN-TCP, not a second TURN hop`;
   }
 
-  function labelForTarget(snap, key) {
-    const target = snap.targets.find((t) => targetKey(t.key) === key);
-    return target ? target.name : key;
+  function iconSrc(name) {
+    return el('img', { class: 'btn-icon', src: UI_ICONS[name], alt: '', 'aria-hidden': 'true' });
+  }
+
+  function postTalk(action, target) {
+    return api('POST', '/api/talk', { action, target }).catch((error) => {
+      const connection = state.status && state.status.snapshot && state.status.snapshot.connection;
+      const offline = !connection || !['ready', 'registered'].includes(connection);
+      if (offline && /session not running|user is offline|no target/i.test(error.message)) return;
+      flash(error.message, 'error');
+    });
+  }
+
+  function postAudio(body) {
+    return api('POST', '/api/audio', body).catch((error) => {
+      const connection = state.status && state.status.snapshot && state.status.snapshot.connection;
+      const offline = !connection || !['ready', 'registered'].includes(connection);
+      if (offline && /session not running/i.test(error.message)) return;
+      flash(error.message, 'error');
+    });
+  }
+
+  function toggleLock(target) {
+    if (state.locks.has(target)) state.locks.delete(target);
+    else state.locks.add(target);
+    postTalk('lock', target);
+    if (state.status && state.status.snapshot) renderRemote(state.status.snapshot);
+  }
+
+  function bindHoldTalk(element, getTarget, options = {}) {
+    const ignore = options.ignoreSelector || '';
+    let active = false;
+    let startX = 0;
+    let lockedBySlide = false;
+    const begin = (event) => {
+      if (ignore && event.target.closest(ignore)) return;
+      if (element.disabled) return;
+      const target = getTarget();
+      if (!target) return;
+      event.preventDefault();
+      if (options.isLocked && options.isLocked()) {
+        toggleLock(target);
+        return;
+      }
+      active = true;
+      lockedBySlide = false;
+      startX = event.clientX;
+      state.pressed.add(target);
+      (options.row || element).classList.add('ptt-pressing');
+      try {
+        element.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      postTalk('press', target);
+    };
+    const move = (event) => {
+      if (!active || lockedBySlide) return;
+      if (event.clientX - startX <= -SLIDE_LOCK_PX) {
+        lockedBySlide = true;
+        const target = getTarget();
+        if (target) {
+          state.locks.add(target);
+          postTalk('lock', target);
+          if (state.status && state.status.snapshot) renderRemote(state.status.snapshot);
+        }
+      }
+    };
+    const end = (event) => {
+      if (!active) return;
+      active = false;
+      (options.row || element).classList.remove('ptt-pressing');
+      const target = getTarget();
+      if (target) state.pressed.delete(target);
+      if (!lockedBySlide && target) postTalk('release', target);
+      try {
+        element.releasePointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+    };
+    element.addEventListener('pointerdown', begin);
+    element.addEventListener('pointermove', move);
+    element.addEventListener('pointerup', end);
+    element.addEventListener('pointercancel', end);
+    element.addEventListener('contextmenu', (event) => event.preventDefault());
+  }
+
+  function renderRemote(snap) {
+    const online = ['ready', 'registered'].includes(snap.connection);
+    if (online) {
+      state.locks = new Set(snap.targets.filter((target) => target.locked).map((target) => targetKey(target.key)));
+      const replyKey = snap.reply_target ? targetKey(snap.reply_target) : null;
+      if (replyKey && state.locks.has(replyKey)) state.locks.add('reply');
+    }
+    renderTargets(snap);
+    updateReply(snap);
+    if (state.memberModalKey) {
+      const open = snap.targets.find((target) => targetKey(target.key) === state.memberModalKey);
+      if (open) renderMembersModal(open);
+      else closeMembersModal();
+    }
   }
 
   function renderTargets(snap) {
-    const container = $('#targets');
-    const existing = new Map($$('.target', container).map((node) => [node.dataset.key, node]));
+    const container = $('#targets-list');
+    const empty = $('#targets-empty');
+    const existing = new Map($$('li.target-item', container).map((node) => [node.dataset.key, node]));
     const seen = new Set();
     for (const target of snap.targets) {
       const key = targetKey(target.key);
@@ -613,171 +702,230 @@
     for (const [key, node] of existing) {
       if (!seen.has(key)) node.remove();
     }
-    if (!snap.targets.length) {
-      container.replaceChildren(el('p', { class: 'muted', text: 'No targets assigned to this user yet. Assign them in Talktome Admin.' }));
-    }
+    empty.classList.toggle('is-hidden', snap.targets.length > 0);
   }
 
   function buildTargetRow(key, target) {
     const kind = targetKind(key);
-    const row = el('div', { class: 'target', dataset: { key } });
-    const flags = el('div', { class: 'target__flags' });
-    const controls = el('div', { class: 'target__controls' });
-    const talkButton = el('button', { type: 'button', class: 'btn btn-small btn-talk', text: 'Talk' });
-    const lockButton = el('button', { type: 'button', class: 'btn btn-small btn-lock', text: 'Lock' });
-    const slider = el('input', { type: 'range', min: String(MUTE_DB), max: '0', step: String(volumeStepDb()) });
-    const volume = el('span', { class: 'target__volume' });
-    const muteButton = el('button', { type: 'button', class: 'btn btn-small btn-mute', text: 'Mute' });
+    const canTalk = target.can_talk && kind !== 'feed';
+    const row = el('li', {
+      class: `target-item ${kind === 'conference' ? 'conf-target' : kind === 'feed' ? 'feed-target' : 'user-target'}${canTalk ? '' : kind === 'feed' ? '' : ' monitor-only-target'}`,
+      dataset: { key, type: kind },
+    });
 
-    if (target.can_talk && kind !== 'feed') {
-      const press = (event) => {
-        event.preventDefault();
-        if (talkButton.disabled || state.pressed.has(key)) return;
-        state.pressed.add(key);
-        talkButton.classList.add('is-active');
-        api('POST', '/api/talk', { action: 'press', target: key }).catch((error) => {
-          flash(error.message, 'error');
-          state.pressed.delete(key);
-          talkButton.classList.remove('is-active');
-        });
-      };
-      const release = () => {
-        if (!state.pressed.has(key)) return;
-        state.pressed.delete(key);
-        talkButton.classList.remove('is-active');
-        api('POST', '/api/talk', { action: 'release', target: key }).catch(() => {});
-      };
-      talkButton.addEventListener('pointerdown', press);
-      talkButton.addEventListener('pointerup', release);
-      talkButton.addEventListener('pointercancel', release);
-      talkButton.addEventListener('pointerleave', release);
-      talkButton.addEventListener('contextmenu', (event) => event.preventDefault());
-      lockButton.addEventListener('click', () => {
-        if (lockButton.disabled) return;
-        api('POST', '/api/talk', { action: 'lock', target: key }).catch((error) => flash(error.message, 'error'));
+    const iconClass = kind === 'conference' ? 'conf-icon' : kind === 'feed' ? 'feed-icon' : 'user-icon';
+    const icon = el('div', { class: iconClass });
+    if (kind === 'conference') {
+      icon.setAttribute('role', 'button');
+      icon.tabIndex = 0;
+      icon.title = 'Choose who you hear';
+      icon.addEventListener('pointerdown', (event) => event.stopPropagation());
+      icon.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openMembersModal(key);
       });
-      controls.append(talkButton, lockButton);
-    } else {
-      controls.append(el('span', { class: 'muted small', text: 'listen only' }), el('span'));
+      icon.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openMembersModal(key);
+      });
     }
+
+    const label = el('span', { class: 'target-label' });
+    const status = el('div', { class: 'target-status target-status-inline' });
+    const labelRow = el('div', { class: 'target-label-row' }, [label, status]);
+    const slider = el('input', { type: 'range', class: 'volume-slider', min: '0', max: '1', step: '0.01', title: 'Volume' });
+    slider.addEventListener('pointerdown', (event) => event.stopPropagation());
     slider.addEventListener('input', () => {
-      volume.textContent = `${Number(slider.value).toFixed(1)} dB`;
       clearTimeout(state.volumeTimers.get(key));
       state.volumeTimers.set(
         key,
-        setTimeout(() => api('POST', '/api/audio', { action: 'volume-set', target: key, value: dbToLinear(Number(slider.value)) }).catch((error) => flash(error.message, 'error')), 150)
+        setTimeout(() => postAudio({ action: 'volume-set', target: key, value: Number(slider.value) }), 150)
       );
     });
-    muteButton.addEventListener('click', () => api('POST', '/api/audio', { action: 'mute-toggle', target: key }).catch((error) => flash(error.message, 'error')));
-    controls.append(slider, volume, muteButton);
-    const members = el('div', { class: 'target__members is-hidden' });
-    const membersToggle = el('button', { type: 'button', class: 'btn btn-small target__members-toggle is-hidden', text: 'Members' });
-    membersToggle.addEventListener('click', () => {
-      if (state.memberOpen.has(key)) state.memberOpen.delete(key);
-      else state.memberOpen.add(key);
-      members.classList.toggle('is-hidden', !state.memberOpen.has(key));
+    const info = el('div', { class: 'target-info' }, [labelRow, slider]);
+
+    const muteButton = el('button', { type: 'button', class: 'mute-btn', title: 'Mute' }, [iconSrc('speakerOn')]);
+    muteButton.addEventListener('pointerdown', (event) => event.stopPropagation());
+    muteButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      postAudio({ action: 'mute-toggle', target: key });
     });
-    row.append(
-      el('div', { class: 'target__name' }, [el('span', { class: 'kind', text: kind }), el('span', { class: 'name' })]),
-      flags,
-      controls,
-      membersToggle,
-      members
-    );
-    row._parts = { flags, talkButton, lockButton, slider, volume, muteButton, members, membersToggle };
+
+    const actions = el('div', { class: 'target-actions ptt-actions' }, [muteButton]);
+    let talkButton = null;
+    if (canTalk) {
+      talkButton = el('button', { type: 'button', class: 'talk-btn', title: 'Hold to talk' }, [iconSrc('talk')]);
+      talkButton.setAttribute('aria-pressed', 'false');
+      bindHoldTalk(talkButton, () => key, {
+        row,
+        isLocked: () => row.classList.contains('talk-locked'),
+      });
+      talkButton.addEventListener('pointerdown', (event) => event.stopPropagation());
+      actions.append(talkButton);
+      const hint = el('div', { class: 'slide-to-lock-hint', text: '← Slide to lock', 'aria-hidden': 'true' });
+      bindHoldTalk(row, () => key, {
+        row,
+        ignoreSelector: '.talk-btn, .mute-btn, .volume-slider, .conf-icon',
+        isLocked: () => row.classList.contains('talk-locked'),
+      });
+      row.append(icon, info, actions, hint);
+    } else {
+      row.append(icon, info, actions);
+    }
+
+    row._parts = { icon, label, status, slider, muteButton, talkButton };
     return row;
   }
 
   function updateTargetRow(node, target) {
     const parts = node._parts;
-    $('.name', node).textContent = target.name;
-    node.classList.toggle('is-incoming', target.incoming);
-    node.classList.toggle('is-receiving', target.receiving);
-    node.classList.toggle('is-talking', target.held || target.locked);
-    const userOffline = targetKind(targetKey(target.key)) === 'user' && !target.online;
+    const key = targetKey(target.key);
+    const kind = targetKind(key);
+    const userOffline = kind === 'user' && !target.online;
+    const locked = target.locked || state.locks.has(key);
+    const talking = target.held || locked || state.pressed.has(key);
+    const speaking = target.incoming || target.receiving;
+    parts.label.textContent = target.name;
+    if (kind === 'user') {
+      parts.icon.textContent = target.name ? target.name.charAt(0).toUpperCase() : '?';
+    } else if (kind === 'conference') {
+      parts.icon.textContent = '📡';
+      parts.icon.setAttribute('aria-label', `Choose who you hear in ${target.name}`);
+    } else {
+      parts.icon.textContent = '🎧';
+    }
     node.classList.toggle('is-offline', userOffline);
+    node.classList.toggle('talking-to', talking);
+    node.classList.toggle('speaking', speaking);
+    node.classList.toggle('talk-locked', locked);
+    node.classList.toggle('muted', target.muted);
     if (parts.talkButton) {
       parts.talkButton.disabled = userOffline;
-      parts.talkButton.title = userOffline ? 'User is offline' : '';
+      parts.talkButton.title = userOffline ? 'Offline' : locked ? 'Locked — tap to unlock' : 'Hold to talk';
+      parts.talkButton.setAttribute('aria-pressed', talking ? 'true' : 'false');
+      parts.talkButton.setAttribute('aria-label', userOffline ? `${target.name} is offline` : `Hold to talk to ${target.name}`);
     }
-    if (parts.lockButton) {
-      parts.lockButton.disabled = userOffline;
-      parts.lockButton.title = userOffline ? 'User is offline' : '';
-    }
-    const flags = [];
-    flags.push(badge(target.online ? 'online' : 'offline', target.online ? 'ok' : ''));
-    if (target.incoming) flags.push(badge('calling', 'ok'));
-    if (target.receiving) flags.push(badge('receiving', 'ok'));
-    if (target.locked) flags.push(badge('locked', 'talk'));
-    if (target.held) flags.push(badge('talking', 'talk'));
-    if (target.muted) flags.push(badge('muted', 'bad'));
-    parts.flags.replaceChildren(...flags);
-    parts.lockButton.classList.toggle('is-active', target.locked);
-    parts.muteButton.classList.toggle('is-active', target.muted);
+    const muteIcon = $('img', parts.muteButton);
+    if (muteIcon) muteIcon.src = target.muted ? UI_ICONS.speakerMuted : UI_ICONS.speakerOn;
+    parts.muteButton.title = target.muted ? 'Unmute' : 'Mute';
     if (document.activeElement !== parts.slider) {
-      parts.slider.step = String(volumeStepDb());
-      parts.slider.value = linearToDb(target.volume).toFixed(1);
-      parts.volume.textContent = formatDb(target.volume);
+      parts.slider.disabled = userOffline;
+      parts.slider.value = String(Math.max(0, Math.min(1, Number(target.volume) || 0)));
     }
-    const members = target.members || [];
-    const showMembers = targetKind(targetKey(target.key)) === 'conference' && members.length;
-    parts.membersToggle.classList.toggle('is-hidden', !showMembers);
-    if (showMembers) {
-      parts.membersToggle.textContent = `Members (${members.length})`;
-      parts.members.classList.toggle('is-hidden', !state.memberOpen.has(targetKey(target.key)));
-      if (state.memberOpen.has(targetKey(target.key))) {
-        renderMembers(parts.members, targetKey(target.key), members);
-      }
-    } else {
-      parts.members.replaceChildren();
-      parts.members.classList.add('is-hidden');
+    const speakers = (target.members || []).filter((member) => member.receiving).map((member) => member.name).filter(Boolean);
+    parts.status.replaceChildren();
+    if (kind === 'conference' && speaking) {
+      parts.status.append(el('img', { class: 'speaker-status-icon', src: UI_ICONS.talk, alt: '', 'aria-hidden': 'true' }));
     }
+    if (speakers.length) parts.status.append(document.createTextNode(speakers.join(', ')));
+    else if (target.incoming) parts.status.append(document.createTextNode('calling'));
   }
 
-  function renderMembers(container, conferenceKey, members) {
-    const existing = new Map($$('.member', container).map((node) => [node.dataset.userId, node]));
+  function updateReply(snap) {
+    const button = $('#reply');
+    const replyKey = snap.reply_target ? targetKey(snap.reply_target) : null;
+    const replyTarget = replyKey ? snap.targets.find((target) => targetKey(target.key) === replyKey) : null;
+    const active = Boolean(
+      state.pressed.has('reply') ||
+        state.locks.has('reply') ||
+        (replyTarget && (replyTarget.held || replyTarget.locked || (replyKey && state.locks.has(replyKey))))
+    );
+    button.disabled = !snap.reply_target;
+    button.classList.toggle('active', active);
+    button.dataset.label = snap.reply_name ? `🔊 ${snap.reply_name}` : '🔊 REPLY';
+    button.setAttribute('aria-label', snap.reply_name ? `Reply ${snap.reply_name}` : 'Reply');
+  }
+
+  function bindReply() {
+    const button = $('#reply');
+    bindHoldTalk(button, () => 'reply', {
+      isLocked: () => {
+        const snap = state.status && state.status.snapshot;
+        if (!snap || !snap.reply_target) return false;
+        const key = targetKey(snap.reply_target);
+        const target = snap.targets.find((item) => targetKey(item.key) === key);
+        return Boolean((target && target.locked) || state.locks.has(key) || state.locks.has('reply'));
+      },
+    });
+  }
+
+  function openMembersModal(key) {
+    const snap = state.status && state.status.snapshot;
+    const target = snap && snap.targets.find((item) => targetKey(item.key) === key);
+    if (!target) return;
+    state.memberModalKey = key;
+    renderMembersModal(target);
+    $('#conference-members-modal').hidden = false;
+  }
+
+  function closeMembersModal() {
+    state.memberModalKey = null;
+    $('#conference-members-modal').hidden = true;
+  }
+
+  function renderMembersModal(target) {
+    const conferenceKey = targetKey(target.key);
+    $('#conference-members-modal-description').textContent = `Choose who you hear in ${target.name}.`;
+    const list = $('#conference-members-modal-list');
+    const members = target.members || [];
+    if (!members.length) {
+      list.replaceChildren(el('span', { class: 'conference-members-empty', text: 'No other members' }));
+      return;
+    }
+    const existing = new Map($$('.conference-member-listen', list).map((node) => [node.dataset.userId, node]));
     const seen = new Set();
     for (const member of members) {
       const id = String(member.user_id);
       seen.add(id);
-      let node = existing.get(id);
-      if (!node) {
-        node = el('div', { class: 'member', dataset: { userId: id } });
-        const name = el('span', { class: 'member__name' });
-        const slider = el('input', { type: 'range', min: String(MUTE_DB), max: '0', step: String(volumeStepDb()) });
-        const volume = el('span', { class: 'target__volume' });
-        const mute = el('button', { type: 'button', class: 'btn btn-small btn-mute', text: 'Hear' });
+      let row = existing.get(id);
+      if (!row) {
+        row = el('div', { class: 'conference-member-listen', dataset: { userId: id } });
+        const checkbox = el('input', { type: 'checkbox', class: 'conference-member-listen-checkbox' });
+        const name = el('span', { class: 'conference-member-name' });
+        const online = el('span', { class: 'conference-member-online-state' });
+        const toggle = el('label', { class: 'conference-member-listen__toggle' }, [checkbox, name, online]);
+        const slider = el('input', { type: 'range', class: 'conference-member-level__slider', min: '0', max: '1', step: '0.01' });
+        const value = el('output', { class: 'conference-member-level__value' });
+        const level = el('div', { class: 'conference-member-level' }, [slider, value]);
+        checkbox.addEventListener('change', () => {
+          postAudio({ action: 'member-mute-toggle', target: conferenceKey, member: `user:${id}` });
+        });
         slider.addEventListener('input', () => {
-          volume.textContent = `${Number(slider.value).toFixed(1)} dB`;
+          value.textContent = formatDb(Number(slider.value));
           const timerKey = `${conferenceKey}/${id}`;
           clearTimeout(state.volumeTimers.get(timerKey));
           state.volumeTimers.set(
             timerKey,
-            setTimeout(() => api('POST', '/api/audio', { action: 'member-volume-set', target: conferenceKey, member: `user:${id}`, value: dbToLinear(Number(slider.value)) }).catch((error) => flash(error.message, 'error')), 150)
+            setTimeout(() => postAudio({ action: 'member-volume-set', target: conferenceKey, member: `user:${id}`, value: Number(slider.value) }), 150)
           );
         });
-        mute.addEventListener('click', () => api('POST', '/api/audio', { action: 'member-mute-toggle', target: conferenceKey, member: `user:${id}` }).catch((error) => flash(error.message, 'error')));
-        node.append(name, slider, volume, mute);
-        node._parts = { name, slider, volume, mute };
-        container.append(node);
+        row.append(toggle, level);
+        row._parts = { checkbox, name, online, slider, value };
+        list.append(row);
       }
-      node._parts.name.textContent = `${member.name}${member.online ? '' : ' (offline)'}${member.receiving ? ' · speaking' : ''}`;
-      node.classList.toggle('is-muted', member.muted);
-      node.classList.toggle('is-speaking', member.receiving);
-      node._parts.mute.classList.toggle('is-active', member.muted);
-      node._parts.mute.textContent = member.muted ? 'Muted' : 'Hear';
-      if (document.activeElement !== node._parts.slider) {
-        node._parts.slider.step = String(volumeStepDb());
-        node._parts.slider.value = linearToDb(member.volume).toFixed(1);
-        if (node._parts.volume) node._parts.volume.textContent = formatDb(member.volume);
+      row.classList.toggle('is-offline', !member.online);
+      row.classList.toggle('is-muted', member.muted);
+      row.classList.toggle('is-speaking', member.receiving);
+      row._parts.name.textContent = member.name || `User ${id}`;
+      row._parts.online.textContent = member.online ? 'Online' : 'Offline';
+      row._parts.checkbox.checked = !member.muted;
+      row._parts.checkbox.setAttribute('aria-label', `Hear ${member.name || `user ${id}`}`);
+      if (document.activeElement !== row._parts.slider) {
+        row._parts.slider.value = String(Math.max(0, Math.min(1, Number(member.volume) || 0)));
+        row._parts.value.textContent = formatDb(member.volume);
       }
     }
-    for (const [id, node] of existing) {
-      if (!seen.has(id)) node.remove();
+    for (const [id, row] of existing) {
+      if (!seen.has(id)) row.remove();
     }
   }
 
-  $('#clear-locks').addEventListener('click', () => api('POST', '/api/talk', { action: 'clear-locks' }).catch((error) => flash(error.message, 'error')));
+  bindReply();
+  $('#conference-members-modal-done').addEventListener('click', closeMembersModal);
+  $('#conference-members-modal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeMembersModal();
+  });
 
   // ---------------------------------------------------------------------
   // Stream Deck view
