@@ -336,6 +336,16 @@ pub struct GpioStatus {
     pub inputs: Vec<GpioInputView>,
 }
 
+/// Live view of the local JSON-lines control socket.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct SocketStatus {
+    pub enabled: bool,
+    pub unix_path: Option<String>,
+    pub tcp: Option<String>,
+    pub clients: u32,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct DeckKeyView {
     pub index: u8,
@@ -401,6 +411,7 @@ pub type DeckImages = HashMap<(usize, u8), DeckImage>;
 #[derive(Debug, Default)]
 pub struct Hardware {
     pub gpio: GpioStatus,
+    pub socket: SocketStatus,
     pub decks: Vec<DeckStatus>,
     /// Rendered key images (PNG) keyed by (device, key) with their hash.
     pub deck_images: DeckImages,

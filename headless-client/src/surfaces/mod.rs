@@ -1,6 +1,7 @@
-//! Control surfaces: Stream Deck, GPIO and a file-driven mock.
+//! Control surfaces: Stream Deck, GPIO, local socket and a file-driven mock.
 
 pub mod gpio;
+pub mod local_api;
 pub mod mock;
 pub mod streamdeck;
 
@@ -77,5 +78,31 @@ pub fn spawn_all(
             enabled: false,
             ..DeckStatus::default()
         }];
+    }
+    if let Ok(mut hardware) = bus.hardware.write() {
+        hardware.socket.enabled = config.socket.enabled;
+        hardware.socket.unix_path = if config.socket.enabled {
+            Some(
+                config
+                    .socket
+                    .resolved_path(&config.instance)
+                    .display()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        hardware.socket.tcp = config.socket.tcp_bind().map(str::to_string);
+        hardware.socket.clients = 0;
+        hardware.socket.error = None;
+    }
+    if config.socket.enabled {
+        tasks.spawn(local_api::run(
+            config.socket.clone(),
+            config.instance.clone(),
+            config.streamdeck.volume_step_db(),
+            bus.clone(),
+            shutdown.clone(),
+        ));
     }
 }

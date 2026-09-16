@@ -2,9 +2,10 @@
 
 `talktome-headless` turns a Raspberry Pi (or any small Linux board) into a
 Talktome intercom panel. It logs in as a normal Talktome user over WebRTC,
-drives an attached Elgato Stream Deck as the key panel and mirrors PGM/PRV
-camera tally and talk state to GPIO lines. It is written in Rust and shipped as a
-Debian package for arm64, armhf and amd64.
+drives an attached Elgato Stream Deck as the key panel, mirrors PGM/PRV
+camera tally and talk state to GPIO lines, and exposes a local JSON-lines
+socket so a custom display or volume rotaries can attach. It is written in
+Rust and shipped as a Debian package for arm64, armhf and amd64.
 
 The design and protocol details are in [specification.md](specification.md).
 
@@ -50,7 +51,7 @@ self-signed server certificate) `tls.ca_file`, `tls.fingerprint_sha256` or
 the configuration file; every `TALKTOME_<SECTION>_<KEY>` variable overrides
 the corresponding setting.
 
-Everything else (audio devices, Stream Deck, GPIO lines, volumes, web port)
+Everything else (audio devices, Stream Deck, GPIO lines, local socket, volumes, web port)
 can be edited afterwards in the web interface (see below) or in the file.
 Helpers for provisioning on the command line:
 
@@ -119,7 +120,8 @@ desktops:
 - **Status**: Talktome connection (state, server, user, production, transports,
   consumers, ICE servers, RTT, packet loss, receive concealment, reconnects,
   PGM/PRV tally), audio devices with an input meter, every configured GPIO
-  output (live state) and input (pressed, event count), Stream Deck and service
+  output (live state) and input (pressed, event count), the local control
+  socket (path, optional loopback TCP, connected clients), Stream Deck and service
   details.
 - **Remote Control**: the same talk layout as the Talktome web client — destination
   rows with icon, name, volume, mute and hold-to-talk (slide left to lock), a
@@ -188,6 +190,10 @@ sends that sine to a target for 10 s using the running account.
 GPIO lines from the example config (`GPIO17`, …) do not exist in OrbStack.
 Turn GPIO off (`gpio.enabled = false`) or you will see `GPIO line "GPIO27"
 not found on any chip`.
+
+The local control socket still works without a Stream Deck or GPIO. Point
+`examples/socket_panel.py --socket … --once` at the path shown on the
+Status page (Local socket card).
 
 ## Audio processing (AEC / NS / AGC)
 
@@ -314,6 +320,77 @@ client samples the current level, so an already-held inverted button starts
 talking immediately instead of waiting for the next edge. Lines are
 addressed by kernel name (`GPIO17` on Raspberry Pi OS) or by `gpio.chip`
 plus offset. Volume +/− steps use `streamdeck.volume_step_db`.
+
+## Local control socket (display / rotaries)
+
+The Stream Deck and GPIO surfaces are optional. A custom OLED, encoder
+board or MCU talks to the same talk/volume bus over a **JSON-lines Unix
+socket** (optional loopback TCP for development).
+
+Under systemd the path is `$RUNTIME_DIRECTORY/control.sock`
+(`/run/talktome-headless/<instance>/control.sock`). Otherwise
+`/tmp/talktome-headless-<instance>-control.sock`. The file is `0660`
+(`talktome-headless` user and group). Add the panel process to that group
+to connect. Disable with `socket.enabled = false`. Optional
+`socket.tcp = "127.0.0.1:9876"` is **loopback only**.
+
+Protocol version 1: after connect the server writes `hello` then
+`snapshot`; it pushes a new `snapshot` on every state change. Commands are
+one JSON object per line. Targets use the same strings as GPIO / VOX
+(`user:4`, `conference:1`, `feed:2`, or `reply`). Volume rotaries should
+send `volume-step` with `delta_db` (default `streamdeck.volume_step_db`).
+
+| Client → server | Fields | Server → client |
+| --- | --- | --- |
+| `hello` | `client`, `id` | `hello` (protocol, version, instance) + `snapshot` |
+| `get` / `snapshot` | | `snapshot` |
+| `ping` | `id` | `pong` |
+| `press` / `release` / `lock` | `target` | `ack` |
+| `clear-locks` | | `ack` |
+| `reply` | `action`: `press` or `release` | `ack` |
+| `mute` | `target` | `ack` |
+| `volume` | `target`, `value` (0–1) | `ack` |
+| `volume-db` | `target`, `db` | `ack` |
+| `volume-step` | `target`, `delta_db` | `ack` |
+| `member-mute` | `target` (conference), `member` (`user:<id>`) | `ack` |
+| `member-volume` | `target`, `member`, `value` | `ack` |
+| `member-volume-db` | `target`, `member`, `db` | `ack` |
+| `member-volume-step` | `target`, `member`, `delta_db` | `ack` |
+
+Errors are `{ "op": "error", "error": "…" }`. A snapshot includes string
+keys, `volume_db` per target/member, tally (`on_air` / `preview`), and the
+current reply target.
+
+Packaged example (also in the source tree):
+
+```bash
+# live text "display" of the snapshot
+python3 /usr/share/talktome-headless/examples/socket_panel.py \
+  --socket /run/talktome-headless/cam1/control.sock
+
+# rotary: + / − steps conference 1 by 3 dB
+python3 /usr/share/talktome-headless/examples/socket_panel.py \
+  --socket /run/talktome-headless/cam1/control.sock \
+  --rotary conference:1 --step 3
+
+# one-shot from an MCU bridge
+python3 /usr/share/talktome-headless/examples/socket_panel.py \
+  --socket /run/talktome-headless/cam1/control.sock \
+  --exec 'step conference:1 -0.5'
+```
+
+A rotary firmware only needs to write lines such as:
+
+```json
+{"op":"hello","client":"oled-knobs"}
+{"op":"volume-step","target":"conference:1","delta_db":-0.5,"id":12}
+{"op":"press","target":"user:4","id":13}
+{"op":"release","target":"user:4","id":14}
+```
+
+`id` is echoed on `ack` so the panel can match replies. Talk presses are
+attributed as `socket:<client>` so they do not steal a Stream Deck hold on
+the same target.
 
 ## Diagnostics without hardware
 

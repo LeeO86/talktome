@@ -30,6 +30,8 @@ pub struct Config {
     pub network: NetworkConfig,
     pub streamdeck: StreamDeckConfig,
     pub gpio: GpioConfig,
+    /// Local JSON-lines control socket for a display, rotary encoders, or MCU.
+    pub socket: SocketConfig,
     pub health: HealthConfig,
     pub log: LogConfig,
     pub web: WebConfig,
@@ -368,6 +370,21 @@ pub struct GpioTargetOutputConfig {
     pub when: GpioTargetWhen,
 }
 
+/// Local JSON-lines socket so a custom OLED, rotary board or MCU can attach
+/// to the same talk / volume bus as the Stream Deck and GPIO surfaces.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SocketConfig {
+    pub enabled: bool,
+    /// Unix socket path. Empty/`null` = `$RUNTIME_DIRECTORY/control.sock`
+    /// under systemd, otherwise `/tmp/talktome-headless-<instance>-control.sock`.
+    pub path: Option<PathBuf>,
+    /// Optional loopback TCP bind (`127.0.0.1:9876` or `[::1]:9876`) for
+    /// development. Empty/`null` = Unix socket only. Non-loopback binds are
+    /// rejected.
+    pub tcp: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HealthConfig {
@@ -414,6 +431,7 @@ impl Default for Config {
             network: NetworkConfig::default(),
             streamdeck: StreamDeckConfig::default(),
             gpio: GpioConfig::default(),
+            socket: SocketConfig::default(),
             health: HealthConfig::default(),
             log: LogConfig::default(),
             web: WebConfig::default(),
@@ -544,6 +562,73 @@ impl Default for GpioConfig {
     }
 }
 
+impl Default for SocketConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: None,
+            tcp: None,
+        }
+    }
+}
+
+impl SocketConfig {
+    /// Filesystem path the Unix listener binds.
+    pub fn resolved_path(&self, instance: &str) -> PathBuf {
+        if let Some(path) = &self.path {
+            if !path.as_os_str().is_empty() {
+                return path.clone();
+            }
+        }
+        if let Ok(dir) = std::env::var("RUNTIME_DIRECTORY") {
+            if let Some(first) = dir.split(':').next() {
+                if !first.is_empty() {
+                    return PathBuf::from(first).join("control.sock");
+                }
+            }
+        }
+        std::env::temp_dir().join(format!("talktome-headless-{instance}-control.sock"))
+    }
+
+    /// Loopback TCP bind string, if configured.
+    pub fn tcp_bind(&self) -> Option<&str> {
+        self.tcp.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    }
+}
+
+/// `socket.tcp` must be `host:port` on loopback (`127.0.0.1`, `::1`, `localhost`).
+pub fn validate_socket_tcp(bind: &str) -> Result<()> {
+    let bind = bind.trim();
+    if bind.is_empty() {
+        return Ok(());
+    }
+    if let Ok(addr) = bind.parse::<std::net::SocketAddr>() {
+        if addr.ip().is_loopback() {
+            return Ok(());
+        }
+        bail!("socket.tcp {bind:?} must be a loopback address (127.0.0.1 or [::1])");
+    }
+    let (host, port) = if let Some(rest) = bind.strip_prefix('[') {
+        let (host, rest) = rest
+            .split_once(']')
+            .ok_or_else(|| anyhow!("socket.tcp {bind:?} is not a valid [IPv6]:port"))?;
+        let port = rest
+            .strip_prefix(':')
+            .ok_or_else(|| anyhow!("socket.tcp {bind:?} needs a port"))?;
+        (host, port)
+    } else {
+        bind.rsplit_once(':')
+            .ok_or_else(|| anyhow!("socket.tcp {bind:?} must be host:port"))?
+    };
+    if port.is_empty() || port.parse::<u16>().is_err() {
+        bail!("socket.tcp {bind:?} needs a valid port");
+    }
+    if host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1" {
+        return Ok(());
+    }
+    bail!("socket.tcp {bind:?} must be a loopback address (127.0.0.1, [::1], or localhost)");
+}
+
 impl Default for HealthConfig {
     fn default() -> Self {
         Self {
@@ -644,6 +729,7 @@ where
         "network",
         "streamdeck",
         "gpio",
+        "socket",
         "health",
         "log",
         "web",
@@ -1011,6 +1097,9 @@ impl Config {
                 bail!("web.password must not be empty");
             }
         }
+        if let Some(bind) = self.socket.tcp_bind() {
+            validate_socket_tcp(bind)?;
+        }
         Ok(())
     }
 
@@ -1141,6 +1230,39 @@ mod tests {
         );
         let legacy = StreamDeckConfig::default();
         assert_eq!(legacy.volume_step_db(), 3.0);
+    }
+
+    #[test]
+    fn socket_tcp_must_be_loopback_and_env_overrides_work() {
+        let mut doc = minimal_json();
+        let applied = apply_env_overrides(
+            &mut doc,
+            vec![
+                ("TALKTOME_SOCKET_ENABLED".to_string(), "false".to_string()),
+                (
+                    "TALKTOME_SOCKET_TCP".to_string(),
+                    "127.0.0.1:9876".to_string(),
+                ),
+            ],
+        );
+        assert!(applied.contains(&"TALKTOME_SOCKET_ENABLED".to_string()));
+        let config = from_document(doc).unwrap();
+        assert!(!config.socket.enabled);
+        assert_eq!(config.socket.tcp.as_deref(), Some("127.0.0.1:9876"));
+        config.validate().unwrap();
+
+        let mut config = from_document(minimal_json()).unwrap();
+        assert!(config.socket.enabled);
+        config.socket.tcp = Some("0.0.0.0:9876".into());
+        assert!(config.validate().is_err());
+        config.socket.tcp = Some("192.168.0.5:9".into());
+        assert!(config.validate().is_err());
+        config.socket.tcp = Some("localhost:9876".into());
+        config.validate().unwrap();
+        config.socket.tcp = Some("[::1]:9876".into());
+        config.validate().unwrap();
+        validate_socket_tcp("127.0.0.1:1").unwrap();
+        assert!(validate_socket_tcp("8.8.8.8:53").is_err());
     }
 
     #[test]

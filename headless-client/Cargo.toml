@@ -94,5 +94,6 @@ assets = [
     ["deploy/udev/60-talktome-streamdeck.rules", "lib/udev/rules.d/", "644"],
     ["deploy/config.example.json", "usr/share/talktome-headless/", "644"],
     ["deploy/config.example.toml", "usr/share/talktome-headless/", "644"],
+    ["examples/socket_panel.py", "usr/share/talktome-headless/examples/", "755"],
     ["README.md", "usr/share/doc/talktome-headless/", "644"],
 ]
