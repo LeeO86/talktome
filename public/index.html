@@ -4,8 +4,9 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
+    <meta name="theme-color" content="#0b1120" />
     <title>Talktome</title>
     <link rel="icon" type="image/png" href="/images/talktome-icon.png" />
     <link rel="stylesheet" href="/login.css" />
@@ -16,6 +17,7 @@
         touch-action: manipulation;
         height: 100%;
         overflow: hidden;
+        background-color: #0b1120;
       }
 
       /* Global */
@@ -34,8 +36,33 @@
         color: #e2e8f0;
       }
 
-      body.cut-camera {
-        background-color: red !important;
+      html.preview-camera,
+      html.preview-camera body {
+        background-color: #00875a !important;
+      }
+
+      html.cut-camera,
+      html.cut-camera body {
+        background-color: #e00000 !important;
+      }
+
+      /* Keep tally inside the application on iOS. Safari's lower browser
+         chrome cannot reliably follow dynamic page colors. */
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        border: 0.4rem solid transparent;
+        pointer-events: none;
+        z-index: 1100;
+      }
+
+      body.preview-camera::after {
+        border-color: #00875a;
+      }
+
+      body.cut-camera::after {
+        border-color: #e00000;
       }
 
       .container {
@@ -350,12 +377,21 @@
 
       .settings-actions {
         display: flex;
-        justify-content: flex-end;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
         position: sticky;
-        bottom: -1rem;
-        padding-top: 0.5rem;
-        padding-bottom: 1.1rem;
+        bottom: -0.5rem;
+        padding-top: 0.4rem;
+        padding-bottom: 0.2rem;
         background: #1f2937;
+      }
+
+      .settings-server-version {
+        color: rgba(148, 163, 184, 0.82);
+        font-size: 0.72rem;
+        line-height: 1;
+        white-space: nowrap;
       }
 
       .settings-nav-button {
@@ -1254,6 +1290,14 @@
 
       #targets-list .target-status:empty {
         display: none;
+      }
+
+      #targets-list .speaker-status-icon {
+        width: 1em;
+        height: 1em;
+        object-fit: contain;
+        vertical-align: -0.15em;
+        margin-right: 0.3em;
       }
 
       .target-label-row {
@@ -2339,6 +2383,7 @@
                 <span class="settings-nav-button__arrow" aria-hidden="true">&#8250;</span>
               </button>
               <div class="settings-actions">
+                <span id="settings-server-version" class="settings-server-version" hidden></span>
                 <button id="logout-btn" type="button" class="logout-btn">Logout</button>
               </div>
             </div>

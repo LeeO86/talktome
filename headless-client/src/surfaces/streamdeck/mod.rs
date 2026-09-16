@@ -1128,7 +1128,14 @@ fn layout_options(device: &StreamDeckDeviceConfig) -> LayoutOptions {
 }
 
 fn with_demo_targets(snapshot: Arc<Snapshot>, is_mock: bool) -> Arc<Snapshot> {
-    if !is_mock || !snapshot.targets.is_empty() {
+    if !is_mock {
+        return snapshot;
+    }
+    overlay_demo_targets(snapshot)
+}
+
+pub(crate) fn overlay_demo_targets(snapshot: Arc<Snapshot>) -> Arc<Snapshot> {
+    if !snapshot.targets.is_empty() {
         return snapshot;
     }
     let Ok(raw) = std::env::var(DEMO_TARGETS_ENV) else {
@@ -1434,16 +1441,16 @@ async fn render_lcd(
             title: format!(
                 "{} · {}",
                 snapshot.user_name,
-                if snapshot.on_air {
-                    "ON AIR"
-                } else {
-                    snapshot.connection.label()
-                }
+                snapshot
+                    .tally_label()
+                    .unwrap_or_else(|| snapshot.connection.label())
             ),
             volume: if snapshot.talking { 1.0 } else { 0.0 },
             muted: false,
             background: if snapshot.on_air {
                 palette::ON_AIR
+            } else if snapshot.preview {
+                palette::PREVIEW
             } else {
                 palette::STATUS_OK
             },

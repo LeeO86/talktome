@@ -118,6 +118,7 @@ const defaultClientLeftHand = document.getElementById('default-client-left-hand'
 const defaultClientLockMultiple = document.getElementById('default-client-lock-multiple');
 const adminImageLightbox = document.getElementById('admin-image-lightbox');
 const adminImageLightboxClose = document.getElementById('admin-image-lightbox-close');
+const adminImageLightboxTitle = document.getElementById('admin-image-lightbox-title');
 const adminImageLightboxImage = document.getElementById('admin-image-lightbox-image');
 const adminImageLightboxDownloadButton = document.getElementById('admin-image-lightbox-download');
 const adminActionDialog = document.getElementById('admin-action-dialog');
@@ -366,6 +367,7 @@ const collapsibleAdminSections = {
 const ADMIN_SECTION_COLLAPSED_STORAGE_PREFIX = 'talktome:admin-section-collapsed:';
 
 let currentMediaNetworkQrState = null;
+let currentAdminImageLightboxState = null;
 let currentBridgeRegistry = [];
 let currentAdminCatalog = { users: [], conferences: [], feeds: [] };
 const targetAssignmentsByUser = new Map();
@@ -1114,6 +1116,7 @@ function buildRenderedQrImageDataUrl({ qrCodeDataUrl, qrUrl, mdnsHostLabel }) {
 function closeAdminImageLightbox() {
   if (!adminImageLightbox) return;
   adminImageLightbox.classList.add('is-hidden');
+  currentAdminImageLightboxState = null;
   document.body.style.removeProperty('overflow');
 }
 
@@ -1168,13 +1171,41 @@ async function downloadMediaNetworkQrImage() {
   }
 }
 
-function openAdminImageLightbox() {
-  if (!adminImageLightbox || !currentMediaNetworkQrState?.renderedQrDataUrl) return;
+async function downloadAdminImageLightboxImage() {
+  const state = currentAdminImageLightboxState;
+  if (!state?.dataUrl) return;
+  try {
+    const blob = await rasterizeQrDataUrlToPngBlob(state.dataUrl);
+    triggerDownload(blob, state.filename || 'talktome-login-qr.png');
+  } catch (error) {
+    console.error('Failed to download QR image:', error);
+    showMessage('❌ Failed to download QR image', 'error', state.messageSection || 'user');
+  }
+}
+
+function openAdminImageLightbox({ dataUrl, title, alt, filename, messageSection } = {}) {
+  if (!adminImageLightbox || !dataUrl) return;
+  currentAdminImageLightboxState = { dataUrl, filename, messageSection };
+  if (adminImageLightboxTitle) {
+    adminImageLightboxTitle.textContent = title || 'QR Code';
+  }
   if (adminImageLightboxImage) {
-    adminImageLightboxImage.src = currentMediaNetworkQrState.renderedQrDataUrl;
+    adminImageLightboxImage.src = dataUrl;
+    adminImageLightboxImage.alt = alt || title || 'QR Code';
   }
   adminImageLightbox.classList.remove('is-hidden');
   document.body.style.overflow = 'hidden';
+}
+
+function openMediaNetworkQrLightbox() {
+  if (!currentMediaNetworkQrState?.renderedQrDataUrl) return;
+  openAdminImageLightbox({
+    dataUrl: currentMediaNetworkQrState.renderedQrDataUrl,
+    title: 'Connection QR Code',
+    alt: 'Large connection QR code',
+    filename: buildMediaNetworkQrFilename('png'),
+    messageSection: 'config',
+  });
 }
 
 function renderMediaNetworkQr(payload = null) {
@@ -1356,15 +1387,28 @@ function statusTimeHtml(value, { suffix = true, empty = 'Never' } = {}) {
   return `<span title="${escapeHtml(exact)}">${escapeHtml(formatStatusElapsed(value, { suffix }))}</span>`;
 }
 
-function statusIndicatorHtml({ online, talking = false, warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning' }) {
-  const label = talking ? 'Talking' : warning ? warningLabel : online ? onlineLabel : offlineLabel;
+const STATUS_TALKING_PULSE_MS = 1350;
+
+function statusIndicatorHtml({ online, talking = false, talkingLabel = 'Talking', warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning' }) {
+  const label = talking ? talkingLabel : warning ? warningLabel : online ? onlineLabel : offlineLabel;
   const stateClass = talking ? 'is-talking' : warning ? 'is-warning' : online ? 'is-online' : '';
+  const animationPhase = talking
+    ? ` style="--status-talking-animation-delay: -${Date.now() % STATUS_TALKING_PULSE_MS}ms"`
+    : '';
   return `
     <span class="status-indicator">
-      <span class="status-indicator__dot ${stateClass}" aria-hidden="true"></span>
-      <span>${escapeHtml(label)}</span>
+      <span class="status-indicator__dot ${stateClass}"${animationPhase} aria-hidden="true"></span>
+      <span title="${escapeHtml(label)}">${escapeHtml(label)}</span>
     </span>
   `;
+}
+
+function formatStatusTalkTargetLabel(user) {
+  const targets = Array.isArray(user?.talkTargets) ? user.talkTargets : [];
+  const names = targets
+    .map((target) => String(target?.name || '').trim())
+    .filter(Boolean);
+  return `→ ${names.length > 0 ? names.join(', ') : 'Target'}`;
 }
 
 function setServerReachability(online) {
@@ -1445,6 +1489,7 @@ function syncStopTransmissionButtons(users = latestAdminStatus?.users || []) {
 
 function renderAdminStatus(payload = {}) {
   const canRestartServer = Boolean(adminState.isSuperAdmin && payload.restartSupported);
+  const showProductionColumn = payload.multipleProductionsEnabled === true;
   containerRestartPanel?.classList.toggle('is-hidden', !canRestartServer);
   latestAdminStatus = payload;
   const users = Array.isArray(payload.users) ? [...payload.users] : [];
@@ -1474,6 +1519,13 @@ function renderAdminStatus(payload = {}) {
   setStatusText('status-bridges-count', `${summary.bridgesOnline || 0} online of ${summary.bridgesTotal || 0}`);
   setStatusText('status-companions-count', `${summary.companionsOnline || 0} online of ${companions.length}`);
 
+  document.querySelectorAll('#status-section .status-table').forEach((table) => {
+    table.classList.toggle('status-table--with-production', showProductionColumn);
+    table.querySelectorAll('[data-status-production-column]').forEach((element) => {
+      element.hidden = !showProductionColumn;
+    });
+  });
+
   if (statusUsersBody) {
     statusUsersBody.innerHTML = users.length
       ? users.map((user) => {
@@ -1486,10 +1538,17 @@ function renderAdminStatus(payload = {}) {
             : user.configuredAsBridge
               ? 'Bridge configured'
               : '-';
+          const productionLabel = user.online
+            ? user.activeProduction?.name || (user.connectionType === 'bridge' ? 'Global' : '-')
+            : '-';
           return `
             <tr>
-              <td>${statusIndicatorHtml(user)}</td>
+              <td>${statusIndicatorHtml({
+                ...user,
+                talkingLabel: formatStatusTalkTargetLabel(user),
+              })}</td>
               <td>${userNameHtml}</td>
+              ${showProductionColumn ? `<td title="${escapeHtml(productionLabel)}">${escapeHtml(productionLabel)}</td>` : ''}
               <td>${escapeHtml(clientLabel)}</td>
               <td>${escapeHtml(user.remoteAddress || '-')}</td>
               <td title="WebRTC round-trip time from this browser">${formatStatusLatency(user.networkStats)}</td>
@@ -1499,7 +1558,7 @@ function renderAdminStatus(payload = {}) {
             </tr>
           `;
         }).join('')
-      : '<tr><td colspan="8" class="status-empty">No users configured.</td></tr>';
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No users configured.</td></tr>`;
   }
 
   if (statusFeedsBody) {
@@ -1514,6 +1573,7 @@ function renderAdminStatus(payload = {}) {
             <tr>
               <td>${statusIndicatorHtml(feed)}</td>
               <td><span class="status-primary">${escapeHtml(feed.name)}</span></td>
+              ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
               <td>${escapeHtml(clientLabel)}</td>
               <td>${escapeHtml(feed.remoteAddress || '-')}</td>
               <td title="WebRTC round-trip time from this browser">${formatStatusLatency(feed.networkStats)}</td>
@@ -1523,7 +1583,7 @@ function renderAdminStatus(payload = {}) {
             </tr>
           `;
         }).join('')
-      : '<tr><td colspan="8" class="status-empty">No feeds configured.</td></tr>';
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No feeds configured.</td></tr>`;
   }
 
   if (statusBridgesBody) {
@@ -1538,6 +1598,7 @@ function renderAdminStatus(payload = {}) {
                 warningLabel: 'Device missing',
               })}</td>
               <td><span class="status-primary">${escapeHtml(bridge.name)}</span></td>
+              ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
               <td>${escapeHtml(bridge.client || 'Bridge')}</td>
               <td>${escapeHtml(bridge.remoteAddress || '-')}</td>
               <td>-</td>
@@ -1546,7 +1607,7 @@ function renderAdminStatus(payload = {}) {
               <td>${bridge.online ? 'Now' : statusTimeHtml(bridge.lastSeenAt)}</td>
             </tr>
           `).join('')
-      : '<tr><td colspan="8" class="status-empty">No bridge announced.</td></tr>';
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No bridge announced.</td></tr>`;
   }
 
   if (statusCompanionsBody) {
@@ -1562,6 +1623,7 @@ function renderAdminStatus(payload = {}) {
             <tr>
               <td>${statusIndicatorHtml({ online: companion.online, onlineLabel: 'Online', offlineLabel: 'Stale' })}</td>
               <td><span class="status-primary">${escapeHtml(companion.name)}</span></td>
+              ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
               <td>${escapeHtml(companion.client || '-')}</td>
               <td>${escapeHtml(companion.remoteAddress || '-')}</td>
               <td>-</td>
@@ -1571,7 +1633,7 @@ function renderAdminStatus(payload = {}) {
             </tr>
           `;
         }).join('')
-      : '<tr><td colspan="8" class="status-empty">No Companion instance connected.</td></tr>';
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No Companion instance connected.</td></tr>`;
   }
 
   setStatusText('status-version', `Server version ${payload.appVersion || 'unknown'}`);
@@ -2543,12 +2605,12 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
         : `<button type="button" class="small admin-role-toggle ${isAdmin ? 'warning' : ''}" onclick="toggleAdminRole(${user.id}, ${isAdmin ? 'false' : 'true'})">${isAdmin ? 'Remove admin' : 'Make admin'}</button>`
       : '';
     const passwordAttrs = isGuestProfile ? 'disabled title="Guest profile does not use a password"' : '';
-    const loginLinkAttrs = isGuestProfile
-        ? 'disabled title="Guest profile does not use a login URL"'
-        : '';
     const copyLoginButton = isSuperadmin
       ? ''
-      : `<button type="button" class="small" onclick='copyUserLoginUrl(${user.id}, ${JSON.stringify(user.name)}, this)' ${loginLinkAttrs}>Copy Login URL</button>`;
+      : `<button type="button" class="small copy-login-url-button" onclick='copyEntityLoginUrl("${isGuestProfile ? 'guest' : 'user'}", ${user.id}, ${JSON.stringify(user.name)}, this)'>Copy Login URL</button>`;
+    const loginQrButton = isSuperadmin
+      ? ''
+      : `<button type="button" class="small" onclick='openEntityLoginQr("${isGuestProfile ? 'guest' : 'user'}", ${user.id}, ${JSON.stringify(user.name)}, this)'>QR Code</button>`;
     const deleteAttrs = isGuestProfile
       ? 'disabled title="Guest profile cannot be deleted"'
       : isAdmin ? 'disabled title="Admin accounts cannot be deleted"' : '';
@@ -2668,6 +2730,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
         </div>
         <div class="inline-controls" onclick="event.stopPropagation()">
           ${copyLoginButton}
+          ${loginQrButton}
           <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
           ${stopTransmissionButton}
@@ -2723,6 +2786,7 @@ async function renderFeedList(feeds) {
           ${bridgeBadge}
         </div>
         <div class="inline-controls" onclick="event.stopPropagation()">
+          <button type="button" class="small" onclick='openEntityLoginQr("feed", ${feed.id}, ${JSON.stringify(feed.name)}, this)'>QR Code</button>
           <button type="button" class="small warning" onclick='editFeed(${feed.id}, ${JSON.stringify(feed.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetFeedPassword(${feed.id}, ${JSON.stringify(feed.name)})'>Reset Password</button>
           <button type="button" class="small danger" onclick="deleteFeed(${feed.id})">Delete</button>
@@ -3734,33 +3798,95 @@ window.toggleAdminRole = async function (userId, shouldMakeAdmin) {
   }
 };
 
-window.copyUserLoginUrl = async function (userId, userName, button) {
+function getAdminLoginLinkPath(kind, entityId, includeQrCode = false) {
+  const collection = kind === 'feed' ? 'feeds' : 'users';
+  return `/admin/${collection}/${entityId}/login-link${includeQrCode ? '?qr=1' : ''}`;
+}
+
+async function requestAdminLoginLink(kind, entityId, includeQrCode = false) {
+  const res = await authedFetch(getAdminLoginLinkPath(kind, entityId, includeQrCode), {
+    method: 'POST'
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || !payload.loginUrl) {
+    throw new Error(payload.error || 'Failed to create login URL');
+  }
+  return payload;
+}
+
+function buildEntityLoginQrFilename(kind, entityName) {
+  const safeName = String(entityName || kind)
+    .trim()
+    .replace(/[^a-z0-9.-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-') || kind;
+  return `talktome-${kind}-${safeName}-login-qr.png`;
+}
+
+function holdButtonWidth(button) {
+  if (!button) return () => {};
+  const originalWidth = button.style.width;
+  const width = button.getBoundingClientRect().width;
+  if (width > 0) button.style.width = `${Math.ceil(width)}px`;
+  return () => {
+    button.style.width = originalWidth;
+  };
+}
+
+window.copyEntityLoginUrl = async function (kind, entityId, entityName, button) {
+  const normalizedKind = kind === 'feed' ? 'feed' : kind === 'guest' ? 'guest' : 'user';
   const originalLabel = button?.textContent || 'Copy Login URL';
+  const releaseButtonWidth = holdButtonWidth(button);
   if (button) button.disabled = true;
   try {
-    const res = await authedFetch(`/admin/users/${userId}/login-link`, {
-      method: 'POST'
-    });
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok || !payload.token) {
-      throw new Error(payload.error || 'Failed to create login URL');
-    }
+    const payload = await requestAdminLoginLink(normalizedKind, entityId);
 
-    const loginUrl = payload.loginUrl
-      || `${window.location.origin}/#login=${encodeURIComponent(payload.token)}`;
-    await copyTextToClipboard(loginUrl);
+    await copyTextToClipboard(payload.loginUrl);
     if (button) button.textContent = 'Copied';
-    showMessage(`✅ Login URL copied for ${userName}`, 'success', 'user');
+    showMessage(`✅ Login URL copied for ${entityName}`, 'success', normalizedKind === 'feed' ? 'feed' : 'user');
     window.setTimeout(() => {
       if (button) {
         button.textContent = originalLabel;
         button.disabled = false;
+        releaseButtonWidth();
       }
     }, 1800);
   } catch (err) {
-    if (button) button.disabled = false;
+    if (button) {
+      button.disabled = false;
+      releaseButtonWidth();
+    }
     showMessage(`❌ ${err.message || 'Failed to copy login URL'}`, 'error', 'user');
     console.error('Failed to copy login URL:', err);
+  }
+};
+
+window.copyUserLoginUrl = function (userId, userName, button) {
+  return window.copyEntityLoginUrl('user', userId, userName, button);
+};
+
+window.openEntityLoginQr = async function (kind, entityId, entityName, button) {
+  const normalizedKind = kind === 'feed' ? 'feed' : kind === 'guest' ? 'guest' : 'user';
+  const messageSection = normalizedKind === 'feed' ? 'feed' : 'user';
+  if (button) button.disabled = true;
+  try {
+    const payload = await requestAdminLoginLink(normalizedKind, entityId, true);
+    if (!payload.qrCodeDataUrl || !payload.loginUrl) {
+      throw new Error('Failed to create login QR code');
+    }
+    const typeLabel = normalizedKind === 'feed' ? 'Feed' : normalizedKind === 'guest' ? 'Guest' : 'User';
+    openAdminImageLightbox({
+      dataUrl: payload.qrCodeDataUrl,
+      title: `Login QR Code · ${entityName}`,
+      alt: `Login QR code for ${typeLabel.toLowerCase()} ${entityName}`,
+      filename: buildEntityLoginQrFilename(normalizedKind, entityName),
+      messageSection,
+    });
+  } catch (err) {
+    showMessage(`❌ ${err.message || 'Failed to create login QR code'}`, 'error', messageSection);
+    console.error('Failed to create login QR code:', err);
+  } finally {
+    if (button) button.disabled = false;
   }
 };
 
@@ -4867,7 +4993,7 @@ setupMatrixInteractions(targetMatrixContainer, '.target-matrix-toggle', handleTa
 setupMatrixInteractions(productionTargetMatrixContainer, '.production-target-toggle', handleProductionTargetToggle);
 
 if (mediaNetworkQrButton) {
-  mediaNetworkQrButton.addEventListener('click', () => openAdminImageLightbox());
+  mediaNetworkQrButton.addEventListener('click', () => openMediaNetworkQrLightbox());
 }
 
 if (mediaNetworkQrDownloadButton) {
@@ -4879,7 +5005,7 @@ if (adminImageLightboxClose) {
 }
 
 if (adminImageLightboxDownloadButton) {
-  adminImageLightboxDownloadButton.addEventListener('click', () => downloadMediaNetworkQrImage());
+  adminImageLightboxDownloadButton.addEventListener('click', () => downloadAdminImageLightboxImage());
 }
 
 if (adminImageLightbox) {

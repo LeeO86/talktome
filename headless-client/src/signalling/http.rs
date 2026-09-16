@@ -106,6 +106,17 @@ impl ServerApi {
         serde_json::from_value(body).context("parsing login response")
     }
 
+    /// `GET /login/options` — public; `appVersion` is the Talktome server version.
+    pub async fn server_app_version(&self) -> Option<String> {
+        let url = self.url("/login/options").ok()?;
+        let response = self.client.get(url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let body: Value = response.json().await.ok()?;
+        parse_server_app_version(&body)
+    }
+
     /// `GET /users/:id/targets?includeMemberships=1[&productionId=..]`.
     pub async fn targets(
         &self,
@@ -138,5 +149,40 @@ impl ServerApi {
             bail!("loading targets failed ({status}): {message}");
         }
         response.json().await.context("parsing targets response")
+    }
+}
+
+fn parse_server_app_version(body: &Value) -> Option<String> {
+    body.get("appVersion")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_server_app_version;
+    use serde_json::json;
+
+    #[test]
+    fn parse_server_app_version_reads_app_version() {
+        assert_eq!(
+            parse_server_app_version(&json!({ "appVersion": "1.5.4" })),
+            Some("1.5.4".into())
+        );
+        assert_eq!(
+            parse_server_app_version(&json!({ "appVersion": "  v1.5.4  " })),
+            Some("v1.5.4".into())
+        );
+        assert_eq!(
+            parse_server_app_version(&json!({ "appVersion": "unknown" })),
+            Some("unknown".into())
+        );
+        assert_eq!(
+            parse_server_app_version(&json!({ "appVersion": "   " })),
+            None
+        );
+        assert_eq!(parse_server_app_version(&json!({})), None);
     }
 }

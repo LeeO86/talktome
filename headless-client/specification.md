@@ -4,7 +4,7 @@
 (Raspberry Pi first) that behaves like a normal Talktome *user* without a
 browser: it talks and listens over the same WebRTC path browsers use, is
 driven from a directly attached Elgato Stream Deck and/or GPIO buttons, and
-drives GPIO outputs for the user's camera tally. It is packaged as a Debian
+drives GPIO outputs for the user's PGM/PRV camera tally. It is packaged as a Debian
 package (`talktome-headless`) for arm64, armhf and amd64.
 
 This document replaces the earlier Node-oriented draft. Decisions that were
@@ -262,7 +262,8 @@ user-list           [ { socketId, userId, feedId, guestId, kind, name } ]   (onl
 user-targets-updated (no payload; reload targets via REST)
 conference-list     [...]  conference-members-updated  available-productions-updated
 active-production-reset { productionId }
-cut-camera          <bool>   (sent at registration and on every change)
+cut-camera          { productionId, pgm, prv }  (v1.5.4+; older servers send a bool
+                    which is treated as PGM). Sent at registration and on every change.
 session-kicked      { reason, bySocketId }
 api-talk-command    { commandId, action:"press"|"release"|"lock-toggle", targetType, targetId, inputKey }
 api-target-audio-command { commandId, action:"volume-up"|"volume-down"|"mute-toggle",
@@ -275,6 +276,7 @@ REST (with `Authorization: Bearer <token>` where the server checks it):
 
 ```text
 POST /api/v1/companion/auth/login                      { name, password }
+GET  /login/options                                    -> { appVersion, guestLogin, sso }
 GET  /users/:id/targets?includeMemberships=1&productionId=<id>
      -> [ { targetType:"user"|"conference"|"feed", targetId, name, canTalk, members[], ... } ]
         in the admin-defined button order (same order as the browser's number keys)
@@ -514,19 +516,28 @@ levels.
 
 ### 9.2 Camera tally
 
-Server model: a single global on-air user (`POST /cut-camera { user }`);
-each registered user socket receives `cut-camera <bool>` at registration
-and whenever the on-air user changes. The client mirrors this boolean to
-the GPIO `tally` output and the deck status key ("ON AIR"). There is no
-preview tally in the server today (§18). `POST /cut-camera` is
-unauthenticated on the server; that is pre-existing and out of scope.
+From v1.5.4 the server scopes tally to the peer's production and has two
+buses: **PGM** (program / on air) and **PRV** (preview). `POST /cut-camera`
+takes `{ user, bus: "pgm"|"prv", productionId? }`; omitting `bus` keeps
+PGM. Each registered operator socket receives
+`cut-camera { productionId, pgm, prv }` at registration and whenever either
+bus changes. A legacy boolean payload is still accepted as PGM only.
+
+The client mirrors PGM to GPIO `tally` and the deck status key ("ON AIR",
+red). PRV drives GPIO `tally_preview` (optional) and the status key
+("PREVIEW", green). When both buses are set, PGM wins on the status key
+(same as the web client); both GPIO lines can be on together.
+`POST /cut-camera` is unauthenticated on the server; that is pre-existing
+and out of scope.
 
 ### 9.3 Indicators
 
 Derived states available to all surfaces: `connected` (registered and both
 transports connected), `talking`, `locked` (per target), `incoming` (per
 target, from `addressedNow`), `online` (per target, from `user-list`),
-`muted`/`volume` (per target), `on_air`, `conflict`/`kicked`/`no_audio`.
+`muted`/`volume` (per target), `on_air` (PGM), `preview` (PRV),
+`conflict`/`kicked`/`no_audio`. The status page also shows the Talktome
+server version from `GET /login/options`.
 
 ### 9.4 Companion commands
 
@@ -565,7 +576,7 @@ Every command is answered with the matching `-result` event carrying the
   left/middle overridable in `streamdeck.layout` / `pedal_left` /
   `pedal_target`):
   - The **top row** is the command row: status (connection, user name,
-    production, "ON AIR" when tally is on) at the left, **VOL** next to it,
+    production, "ON AIR" / "PREVIEW" when tally is on) at the left, **VOL** next to it,
     a **NEXT** key immediately left of Reply when paging is needed, and
     **Reply** at the far right. Reply shows the conference being talked to
     (same as the web client), not the caller. Tap status: clear locks.
@@ -634,7 +645,8 @@ Every command is answered with the matching `-result` event carrying the
   chip number differs) or `chip` + `offset`. On Raspberry Pi OS the service
   user is added to group `gpio` (which owns `/dev/gpiochip*`); that group is
   not created on other Debian images, and the unit must not require it.
-- **Outputs** (`gpio.outputs`): `tally` (camera on air), `talking`,
+- **Outputs** (`gpio.outputs`): `tally` (PGM / on air), `tally_preview`
+  (PRV), `talking`,
   `incoming`, `connected` (only while registered **and** both media
   transports are up), `locked`; each with `active_low`.
 - **Target outputs** (`gpio.target_outputs`): a list of
@@ -697,6 +709,7 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
                   "devices": [] },
   "gpio": { "enabled": true, "chip": null,
             "outputs": { "tally": { "line": "GPIO17", "active_low": false },
+                         "tally_preview": { "line": "GPIO24" },
                          "talking": { "line": "GPIO27" } },
             "inputs": [ { "line": "GPIO22", "action": "talk", "target": "conference:1",
                           "active_low": true, "debounce_ms": 20 },
@@ -799,14 +812,15 @@ home-screen bookmarks.
   registration age, reconnects, send/receive transport state, consumers,
   producer id, ICE URLs announced by the server and the local webrtc-rs
   façade when TURNS is bridged, ICE RTT and packet loss, receive
-  concealment, tally), talk destinations in a wrapping
-  grid (conference **Members** for per-person hear/mute and level in dB), talk
-  state with press-and-hold Talk, Lock, volume slider (dB) and Mute per target
-  (Talk/Lock disabled when that **user** is offline),
-  incoming callers and reply target, audio devices and input level, GPIO
-  backend with every configured output (driven state) and input (pressed,
-  event count), Stream Deck model / serial / page, and service details
-  (version, uptime, config path, supervisor, ports).
+  concealment, PGM/PRV tally, Talktome server version), audio devices and
+  input level, GPIO backend with every configured output (driven state)
+  and input (pressed, event count), Stream Deck model / serial / page, and
+  service details (version, uptime, config path, supervisor, ports).
+- **Remote Control**: the same destination layout as the browser client
+  (`public/index.html`): wrapping target rows with icon, name, volume
+  slider and mute / hold-to-talk (slide left to lock), a reply bar, and a
+  conference members dialog for per-person hear/mute and level. Talk is
+  disabled when that **user** is offline.
 - **Stream Deck**: the rendered key images of every attached deck (PNG per
   key, cached by content hash), dials with the currently assigned target,
   and touch points; pressing in the browser injects the same input the
@@ -949,7 +963,8 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
 - A network change (LTE ↔ Wi-Fi) recovers automatically within seconds
   without operator action.
 - Stream Deck keys talk/lock/reply and adjust volume/mute per target; GPIO
-  tally follows `cut-camera`.
+  `tally` (PGM) and optional `tally_preview` (PRV) follow production-scoped
+  `cut-camera`.
 - Two instances on one Pi run independently.
 - `.deb` packages for arm64, armhf and amd64 are produced by CI and install
   cleanly on Bookworm and Trixie.
@@ -959,7 +974,7 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
 - Server: `restart-ice` event (`transport.restartIce()` → new
   `iceParameters`) to avoid full transport recreation on handover.
 - Server: long-lived device tokens so the password need not live on the
-  device; authentication for `POST /cut-camera`; a preview (green) tally.
+  device; authentication for `POST /cut-camera`.
 - HTTPS for the web interface (currently plain HTTP, meant for the LAN or a
   reverse proxy).
 - Bridge: deliver `cut-camera` to bridge sessions

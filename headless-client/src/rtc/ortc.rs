@@ -131,8 +131,8 @@ pub fn sending_rtp_parameters(
         }],
         rtcp: Some(RtcpParameters {
             cname: Some(local.cname.clone()),
-            reduced_size: Some(local.rtcp_reduced_size || true),
-            mux: Some(local.rtcp_mux || true),
+            reduced_size: Some(local.rtcp_reduced_size),
+            mux: Some(local.rtcp_mux),
         }),
     })
 }

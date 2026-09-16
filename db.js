@@ -79,7 +79,8 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS feeds (
                                           id INTEGER PRIMARY KEY AUTOINCREMENT,
                                           name TEXT NOT NULL UNIQUE,
-                                          password TEXT NOT NULL
+                                          password TEXT NOT NULL,
+                                          login_token_hash TEXT
     );
 
     CREATE TABLE IF NOT EXISTS user_feed_targets (
@@ -212,6 +213,19 @@ db.exec(`
                                                             created_at   TEXT    NOT NULL,
                                                             updated_at   TEXT    NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS browser_sessions (
+                                                      token_hash  TEXT PRIMARY KEY,
+                                                      kind        TEXT    NOT NULL,
+                                                      identity_id INTEGER NOT NULL,
+                                                      name        TEXT    NOT NULL DEFAULT '',
+                                                      source      TEXT    NOT NULL DEFAULT 'password',
+                                                      created_at  INTEGER NOT NULL,
+                                                      expires_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_browser_sessions_expires_at
+      ON browser_sessions(expires_at);
 
     DROP TABLE IF EXISTS user_global_targets;
 `);
@@ -409,6 +423,7 @@ ensureColumn("users", "is_guest_profile", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("users", "login_token_hash", "TEXT");
 ensureColumn("users", "last_online_at", "TEXT");
 ensureColumn("users", "audio_settings", "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("feeds", "login_token_hash", "TEXT");
 ensureColumn("user_bridge_endpoints", "trigger_mode", "TEXT NOT NULL DEFAULT 'external'");
 ensureColumn("user_bridge_endpoints", "trigger_target_type", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("user_bridge_endpoints", "trigger_target_id", "INTEGER");

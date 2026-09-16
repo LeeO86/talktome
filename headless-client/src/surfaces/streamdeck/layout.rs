@@ -42,6 +42,8 @@ pub mod palette {
     pub const RECEIVING: Rgb = INCOMING;
     pub const MUTED: Rgb = Rgb(150, 40, 40);
     pub const ON_AIR: Rgb = Rgb(200, 30, 30);
+    /// Web client preview tally (`#00875a`).
+    pub const PREVIEW: Rgb = Rgb(0, 135, 90);
     pub const STATUS_OK: Rgb = Rgb(40, 60, 80);
     pub const STATUS_BAD: Rgb = Rgb(120, 60, 20);
     pub const VOLUME: Rgb = Rgb(70, 60, 120);
@@ -615,6 +617,9 @@ fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
         appearance.background = palette::ON_AIR;
         appearance.subtitle = "ON AIR".to_string();
         appearance.badge = Some(Badge::OnAir);
+    } else if snapshot.preview {
+        appearance.background = palette::PREVIEW;
+        appearance.subtitle = "PREVIEW".to_string();
     }
     if snapshot.lock_active {
         appearance.badge = Some(Badge::Lock);
@@ -1318,6 +1323,15 @@ mod tests {
         snapshot.targets[2].muted = true;
         snapshot.on_air = true;
         snapshot.lock_active = true;
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(keys[0].appearance.subtitle, "ON AIR");
+        assert_eq!(keys[0].appearance.background, palette::ON_AIR);
+        snapshot.on_air = false;
+        snapshot.preview = true;
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(keys[0].appearance.subtitle, "PREVIEW");
+        assert_eq!(keys[0].appearance.background, palette::PREVIEW);
+        snapshot.on_air = true;
         let keys = layout(&geometry, &snapshot, &state, &options());
         assert_eq!(keys[0].appearance.subtitle, "ON AIR");
         assert_eq!(keys[0].appearance.background, palette::ON_AIR);

@@ -153,6 +153,7 @@ Back up this directory before upgrades if you need to preserve accounts and rout
 - Feeds log in at `/`, publish their assigned feed, and cannot talk back.
 - Guests are enabled in Admin `Config`.
 - All Guests share the targets and conference memberships of the generated `Guest` profile.
+- The Guest profile in Admin `Users` provides a shareable login URL and QR code; Guests still choose their own display name when opening it.
 - Guest profiles cannot be direct targets, admins, deleted, or password-reset.
 - Online Guests can still be answered through `Reply`.
 - Guest login is passwordless and stored only in browser `sessionStorage`, so page refresh keeps it, but closing the browser session clears it.
@@ -238,8 +239,8 @@ Main endpoints:
 Production-aware Companion clients receive the available Productions in the
 login/config response. Pass `productionId` as a query parameter to the state,
 users, conferences, feeds and targets endpoints, and as Socket.IO auth data for
-a filtered snapshot and event stream. Omitting it keeps the existing global
-Companion behavior.
+a filtered snapshot and event stream. Omitting it selects the primary Production;
+when Multiple Productions is disabled, an explicitly supplied value is ignored.
 
 Socket.IO namespace: `/companion` with `snapshot`, `user-state`, `command-result`, and `cut-camera` events.
 
@@ -262,10 +263,13 @@ page.
 ```bash
 curl -X POST https://<IP>:<PORT>/cut-camera \
   -H "Content-Type: application/json" \
-  -d '{"user":"<USERNAME>"}'
+  -d '{"user":"<USERNAME>","bus":"pgm","productionId":1}'
 ```
 
-The matching user UI turns red while on-air. Also intergrated as action in companion plugin.
+`pgm` turns the matching user UI red and `prv` turns it green. Tally is scoped to
+the selected Production. Omit `bus` for the legacy PGM behavior; omit
+`productionId` to use the primary Production. Send an empty `user` to clear the
+selected bus. The legacy `cutCameraUser` snapshot field remains available for PGM.
 
 ## Shortcuts
 
@@ -306,7 +310,7 @@ requirements are documented in the Bridge client's
 `talktome-headless` turns a Raspberry Pi (arm64/armhf) or a Debian/Ubuntu PC
 (amd64) into a Talktome intercom panel: it logs in as a normal Talktome user
 over WebRTC (including the server's TURN configuration), uses an attached
-Elgato Stream Deck as the key panel, mirrors camera tally and talk state to
+Elgato Stream Deck as the key panel, mirrors PGM/PRV camera tally and talk state to
 GPIO lines and serves a local web interface for status, remote talk control
 and configuration. Several instances can run on one device.
 

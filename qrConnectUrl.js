@@ -34,14 +34,24 @@ function isLocalOnlyConnectUrl(value) {
     || hostname.endsWith(":127.0.0.1");
 }
 
+function isMdnsConnectUrl(value) {
+  const normalized = normalizeConnectUrl(value);
+  if (!normalized) return false;
+
+  const hostname = new URL(normalized).hostname.toLowerCase();
+  return hostname.endsWith(".local");
+}
+
 function selectAdminQrUrl({ configuredUrl, requestUrl, adapterUrl } = {}) {
   const configured = normalizeConnectUrl(configuredUrl);
   const requested = normalizeConnectUrl(requestUrl);
   const adapter = normalizeConnectUrl(adapterUrl);
 
-  if (configured) return configured;
-  if (requested && !isLocalOnlyConnectUrl(requested)) return requested;
-  return adapter || requested;
+  if (configured && !isMdnsConnectUrl(configured)) return configured;
+  if (requested && !isLocalOnlyConnectUrl(requested) && !isMdnsConnectUrl(requested)) {
+    return requested;
+  }
+  return adapter || configured || requested;
 }
 
 function buildLoginUrl(connectUrl, token) {
@@ -51,9 +61,16 @@ function buildLoginUrl(connectUrl, token) {
   return `${normalized}/#login=${encodeURIComponent(normalizedToken)}`;
 }
 
+function buildGuestLoginUrl(connectUrl) {
+  const normalized = normalizeConnectUrl(connectUrl);
+  return normalized ? `${normalized}/#guest` : "";
+}
+
 module.exports = {
+  buildGuestLoginUrl,
   buildLoginUrl,
   isLocalOnlyConnectUrl,
+  isMdnsConnectUrl,
   normalizeConnectUrl,
   selectAdminQrUrl,
 };
