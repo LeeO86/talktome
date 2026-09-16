@@ -448,6 +448,16 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_socketio_packet(r#"2["cut-camera",{"productionId":1,"pgm":true,"prv":false}]"#),
+            Some(Packet::Event {
+                id: None,
+                args: vec![
+                    json!("cut-camera"),
+                    json!({ "productionId": 1, "pgm": true, "prv": false })
+                ]
+            })
+        );
+        assert_eq!(
             parse_socketio_packet(r#"217["new-producer",{"producerId":"p"}]"#),
             Some(Packet::Event {
                 id: Some(17),

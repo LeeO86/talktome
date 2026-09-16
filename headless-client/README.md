@@ -2,8 +2,8 @@
 
 `talktome-headless` turns a Raspberry Pi (or any small Linux board) into a
 Talktome intercom panel. It logs in as a normal Talktome user over WebRTC,
-drives an attached Elgato Stream Deck as the key panel and mirrors camera
-tally and talk state to GPIO lines. It is written in Rust and shipped as a
+drives an attached Elgato Stream Deck as the key panel and mirrors PGM/PRV
+camera tally and talk state to GPIO lines. It is written in Rust and shipped as a
 Debian package for arm64, armhf and amd64.
 
 The design and protocol details are in [specification.md](specification.md).
@@ -118,7 +118,7 @@ desktops:
   written to the configuration file; saving Settings does the same rewrite.
 - **Status**: Talktome connection (state, server, user, production, transports,
   consumers, ICE servers, RTT, packet loss, receive concealment, reconnects,
-  tally), the talk state with press-and-hold Talk, Lock, volume (dB) and mute
+  PGM/PRV tally), the talk state with press-and-hold Talk, Lock, volume (dB) and mute
   controls per target (Talk/Lock disabled when that user is offline), audio
   devices with an input meter, every configured GPIO output (live state) and
   input (pressed, event count), Stream Deck and service details.
@@ -298,7 +298,8 @@ layout = { "0" = "user:4", "1" = "conference:1" }
 
 ## GPIO
 
-Outputs (`gpio.outputs`): `tally` (camera on air), `talking`, `incoming`,
+Outputs (`gpio.outputs`): `tally` (PGM / camera on air), `tally_preview`
+(PRV / preview), `talking`, `incoming`,
 `connected` (only while registered **and** both media transports are up),
 `locked`. Extra `[[gpio.target_outputs]]` rows drive a pin when a chosen
 user, conference or feed is playing audio (`when = "receiving"`) or is

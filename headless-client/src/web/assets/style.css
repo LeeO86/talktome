@@ -291,6 +291,12 @@ main {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
+.badge-preview {
+  background: #00875a;
+  color: #fff;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
 @keyframes pulse {
   50% {
     opacity: 0.55;
@@ -315,6 +321,11 @@ main {
 .led-red {
   background: var(--danger);
   box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+}
+
+.led-preview {
+  background: #00875a;
+  box-shadow: 0 0 8px rgba(0, 135, 90, 0.7);
 }
 
 .led-amber {

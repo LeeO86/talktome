@@ -1434,16 +1434,16 @@ async fn render_lcd(
             title: format!(
                 "{} · {}",
                 snapshot.user_name,
-                if snapshot.on_air {
-                    "ON AIR"
-                } else {
-                    snapshot.connection.label()
-                }
+                snapshot
+                    .tally_label()
+                    .unwrap_or_else(|| snapshot.connection.label())
             ),
             volume: if snapshot.talking { 1.0 } else { 0.0 },
             muted: false,
             background: if snapshot.on_air {
                 palette::ON_AIR
+            } else if snapshot.preview {
+                palette::PREVIEW
             } else {
                 palette::STATUS_OK
             },

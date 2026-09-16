@@ -126,7 +126,13 @@ pub struct Snapshot {
     pub detail: String,
     pub talking: bool,
     pub lock_active: bool,
+    /// Program (PGM) tally — the web client's red on-air state.
     pub on_air: bool,
+    /// Preview (PRV) tally — the web client's green preview state.
+    pub preview: bool,
+    /// Talktome server version from `GET /login/options` (`appVersion`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
     pub audio_ok: bool,
     pub targets: Vec<TargetInfo>,
     pub reply_target: Option<TargetKey>,
@@ -153,6 +159,8 @@ impl Snapshot {
             talking: false,
             lock_active: false,
             on_air: false,
+            preview: false,
+            server_version: None,
             audio_ok: false,
             targets: Vec::new(),
             reply_target: None,
@@ -167,6 +175,17 @@ impl Snapshot {
 
     pub fn target(&self, key: TargetKey) -> Option<&TargetInfo> {
         self.targets.iter().find(|t| t.key == key)
+    }
+
+    /// Status-key / health label. PGM wins over PRV, matching the web client.
+    pub fn tally_label(&self) -> Option<&'static str> {
+        if self.on_air {
+            Some("ON AIR")
+        } else if self.preview {
+            Some("PREVIEW")
+        } else {
+            None
+        }
     }
 
     /// Label for the Reply key: the conference (or target) being talked to,
@@ -215,6 +234,21 @@ impl Snapshot {
         self.incoming
             .iter()
             .find_map(|incoming| incoming.target.and_then(name_of))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Snapshot;
+
+    #[test]
+    fn tally_label_pgm_wins_over_preview() {
+        let mut snapshot = Snapshot::initial("cam", "Cam");
+        assert_eq!(snapshot.tally_label(), None);
+        snapshot.preview = true;
+        assert_eq!(snapshot.tally_label(), Some("PREVIEW"));
+        snapshot.on_air = true;
+        assert_eq!(snapshot.tally_label(), Some("ON AIR"));
     }
 }
 

@@ -112,6 +112,8 @@ pub struct Session {
     incoming: Vec<IncomingInfo>,
     incoming_keys: BTreeSet<TargetKey>,
     on_air: bool,
+    preview: bool,
+    server_version: Option<String>,
     connection: ConnectionState,
     detail: String,
     input_level_db: f32,
@@ -173,6 +175,8 @@ impl Session {
             incoming: Vec::new(),
             incoming_keys: BTreeSet::new(),
             on_air: false,
+            preview: false,
+            server_version: None,
             connection: ConnectionState::Disconnected,
             detail: String::new(),
             input_level_db: -120.0,
@@ -417,6 +421,13 @@ impl Session {
 
     async fn connect(&mut self) -> Result<Connected> {
         let token = self.ensure_token().await?;
+        if let Some(version) = self.api.server_app_version().await {
+            if self.server_version.as_deref() != Some(version.as_str()) {
+                tracing::info!(event = "server-version", version = %version);
+                self.server_version = Some(version);
+                self.snapshot_dirty = true;
+            }
+        }
         let login = self
             .login
             .clone()
@@ -991,10 +1002,11 @@ impl Session {
                 self.snapshot_dirty = true;
             }
             "cut-camera" => {
-                let on_air = payload.as_bool().unwrap_or(false);
-                if on_air != self.on_air {
-                    tracing::info!(event = "tally", on_air);
+                let (on_air, preview) = parse_cut_camera(&payload);
+                if on_air != self.on_air || preview != self.preview {
+                    tracing::info!(event = "tally", on_air, preview);
                     self.on_air = on_air;
+                    self.preview = preview;
                     self.snapshot_dirty = true;
                 }
             }
@@ -1704,6 +1716,8 @@ impl Session {
             talking: self.talk.is_talking(),
             lock_active: !self.talk.locked().is_empty(),
             on_air: self.on_air,
+            preview: self.preview,
+            server_version: self.server_version.clone(),
             audio_ok: audio_status.all_ok(capture_wanted, playback_wanted),
             targets,
             reply_target,
@@ -1759,6 +1773,16 @@ async fn wait_true(rx: &mut watch::Receiver<bool>) {
     }
 }
 
+fn parse_cut_camera(payload: &Value) -> (bool, bool) {
+    if let Some(pgm) = payload.as_bool() {
+        return (pgm, false);
+    }
+    (
+        payload.get("pgm").and_then(Value::as_bool).unwrap_or(false),
+        payload.get("prv").and_then(Value::as_bool).unwrap_or(false),
+    )
+}
+
 fn parse_conference_members(values: &[Value]) -> Vec<(i64, String)> {
     values
         .iter()
@@ -1779,8 +1803,27 @@ fn parse_conference_members(values: &[Value]) -> Vec<(i64, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_conference_members;
+    use super::{parse_conference_members, parse_cut_camera};
     use serde_json::json;
+
+    #[test]
+    fn parse_cut_camera_accepts_legacy_bool_and_pgm_prv_object() {
+        assert_eq!(parse_cut_camera(&json!(true)), (true, false));
+        assert_eq!(parse_cut_camera(&json!(false)), (false, false));
+        assert_eq!(
+            parse_cut_camera(&json!({ "productionId": 3, "pgm": true, "prv": false })),
+            (true, false)
+        );
+        assert_eq!(
+            parse_cut_camera(&json!({ "pgm": false, "prv": true })),
+            (false, true)
+        );
+        assert_eq!(
+            parse_cut_camera(&json!({ "pgm": true, "prv": true })),
+            (true, true)
+        );
+        assert_eq!(parse_cut_camera(&json!(null)), (false, false));
+    }
 
     #[test]
     fn parse_conference_members_accepts_objects_and_ids() {

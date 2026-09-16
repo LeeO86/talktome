@@ -120,6 +120,8 @@ enabled = true
 [gpio.outputs]
 tally = { line = "GPIO17", active_low = false }
 talking = { line = "GPIO27" }
+# Preview (PRV) tally — green in the web client. Omit if the camera has no preview GPI.
+# tally_preview = { line = "GPIO23" }
 # incoming = { line = "GPIO18" }
 # connected = { line = "GPIO25" }
 

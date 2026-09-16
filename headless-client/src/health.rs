@@ -59,8 +59,8 @@ pub fn status_line(snapshot: &Snapshot) -> String {
     if snapshot.talking {
         parts.push("talking".into());
     }
-    if snapshot.on_air {
-        parts.push("ON AIR".into());
+    if let Some(tally) = snapshot.tally_label() {
+        parts.push(tally.into());
     }
     if !snapshot.audio_ok {
         parts.push("no audio device".into());
@@ -82,6 +82,7 @@ pub fn health_body(snapshot: &Snapshot) -> (u16, String) {
         "audio_ok": snapshot.audio_ok,
         "talking": snapshot.talking,
         "on_air": snapshot.on_air,
+        "preview": snapshot.preview,
         "targets": snapshot.targets.len(),
     });
     (if healthy { 200 } else { 503 }, body.to_string())
@@ -140,5 +141,13 @@ mod tests {
         let (status, _) = health_body(&snapshot);
         assert_eq!(status, 200);
         assert_eq!(status_line(&snapshot), "ready as Cam 1, ON AIR");
+        snapshot.on_air = false;
+        snapshot.preview = true;
+        assert_eq!(status_line(&snapshot), "ready as Cam 1, PREVIEW");
+        snapshot.on_air = true;
+        assert_eq!(status_line(&snapshot), "ready as Cam 1, ON AIR");
+        let (_, body) = health_body(&snapshot);
+        assert!(body.contains("\"on_air\":true"));
+        assert!(body.contains("\"preview\":true"));
     }
 }

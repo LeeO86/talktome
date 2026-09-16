@@ -25,11 +25,19 @@ pub const BACKEND_ENV: &str = "TALKTOME_MOCK_GPIO";
 const GPIO_VOLUME_STEP: f32 = 0.1;
 
 /// Output names in the order they appear in `gpio.outputs`.
-pub const OUTPUT_NAMES: &[&str] = &["tally", "talking", "incoming", "connected", "locked"];
+pub const OUTPUT_NAMES: &[&str] = &[
+    "tally",
+    "tally_preview",
+    "talking",
+    "incoming",
+    "connected",
+    "locked",
+];
 
 pub fn output_states(snapshot: &Snapshot) -> HashMap<&'static str, bool> {
     let mut states = HashMap::new();
     states.insert("tally", snapshot.on_air);
+    states.insert("tally_preview", snapshot.preview);
     states.insert("talking", snapshot.talking);
     states.insert("incoming", !snapshot.incoming.is_empty());
     states.insert("connected", snapshot.connection.is_ready());
@@ -610,8 +618,8 @@ fn apply_outputs(
             Ok(()) => {
                 output.current = Some(active);
                 record_output(status, name, Some(active), None);
-                if name == "tally" {
-                    tracing::info!(event = "tally-output", active);
+                if name == "tally" || name == "tally_preview" {
+                    tracing::info!(event = "tally-output", name, active);
                 }
             }
             Err(error) => {
@@ -871,8 +879,17 @@ mod tests {
         snapshot.connection = ConnectionState::Ready;
         let states = output_states(&snapshot);
         assert!(states["tally"]);
+        assert!(!states["tally_preview"]);
         assert!(states["connected"]);
         assert!(!states["talking"]);
+        snapshot.preview = true;
+        snapshot.on_air = false;
+        assert!(output_states(&snapshot)["tally_preview"]);
+        assert!(!output_states(&snapshot)["tally"]);
+        snapshot.on_air = true;
+        let both = output_states(&snapshot);
+        assert!(both["tally"]);
+        assert!(both["tally_preview"]);
         snapshot.connection = ConnectionState::Registered;
         assert!(!output_states(&snapshot)["connected"]);
         snapshot.connection = ConnectionState::Disconnected;

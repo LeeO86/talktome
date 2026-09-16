@@ -73,6 +73,31 @@
     return el('span', { class: `badge${kind ? ` badge-${kind}` : ''}`, text });
   }
 
+  function formatServerVersion(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return '–';
+    if (text === 'unknown') return 'unknown';
+    return text.startsWith('v') || text.startsWith('V') ? text : `v${text}`;
+  }
+
+  function tallyBadges(snap) {
+    const wrap = el('span', { class: 'tally-badges' });
+    if (snap.on_air) wrap.append(badge('ON AIR', 'onair'));
+    if (snap.on_air && snap.preview) wrap.append(' ');
+    if (snap.preview) wrap.append(badge('PREVIEW', 'preview'));
+    if (!snap.on_air && !snap.preview) wrap.append(badge('off'));
+    return wrap;
+  }
+
+  function gpioLedClass(output) {
+    if (output.error) return 'led-amber';
+    if (output.active === null) return 'led-unknown';
+    if (!output.active) return '';
+    if (output.name === 'tally') return 'led-red';
+    if (output.name === 'tally_preview') return 'led-preview';
+    return 'led-on';
+  }
+
   function setBadge(node, text, kind) {
     if (!node) return;
     node.textContent = text;
@@ -416,6 +441,7 @@
     $('#topbar-user').textContent = `${snap.user_name}${snap.user_id != null ? ` (#${snap.user_id})` : ''} · ${snap.server_url}`;
     setBadge($('#badge-connection'), snap.connection, connectionKind(snap.connection));
     $('#badge-onair').classList.toggle('is-hidden', !snap.on_air);
+    $('#badge-preview').classList.toggle('is-hidden', !snap.preview);
     setBadge($('#conn-state'), snap.connection + (snap.detail ? ` · ${snap.detail}` : ''), connectionKind(snap.connection));
 
     const media = snap.media || {};
@@ -435,7 +461,8 @@
       ['RTT', media.rtt_ms != null ? `${media.rtt_ms} ms` : '–'],
       ['Packet loss', media.packet_loss_pct != null ? `${media.packet_loss_pct}%${media.packets_lost != null ? ` (${media.packets_lost} lost / ${media.packets_received || 0} recv)` : ''}` : '–'],
       ['Receive concealment', media.recv_conceal_pct != null ? `${media.recv_conceal_pct}%` : '–'],
-      ['Camera tally', snap.on_air ? badge('ON AIR', 'bad') : badge('off')],
+      ['Camera tally', tallyBadges(snap)],
+      ['Talktome server', snap.server_version ? formatServerVersion(snap.server_version) : '–'],
     ]);
 
     // Talk card
@@ -477,7 +504,7 @@
       outputs.append(el('tr', {}, el('td', { class: 'empty', colspan: 3, text: 'no outputs configured' })));
     }
     for (const output of gpio.outputs || []) {
-      const ledClass = output.error ? 'led-amber' : output.active === null ? 'led-unknown' : output.active ? (output.name === 'tally' ? 'led-red' : 'led-on') : '';
+      const ledClass = gpioLedClass(output);
       outputs.append(
         el('tr', {}, [
           el('td', { text: output.name }),
@@ -546,6 +573,7 @@
     setBadge($('#service-state'), status.restart_pending ? 'restarting' : 'running', status.restart_pending ? 'warn' : 'ok');
     kv($('#service-details'), [
       ['Version', status.version],
+      ['Talktome server', (state.status && state.status.snapshot && state.status.snapshot.server_version) ? formatServerVersion(state.status.snapshot.server_version) : '–'],
       ['Uptime', formatDuration(status.uptime_s)],
       ['Instance', snap.instance],
       ['Configuration', status.config_path ? code(status.config_path) : 'environment only'],
@@ -1046,7 +1074,15 @@
 
   const ACTIONS = ['talk', 'reply', 'lock_toggle', 'clear_locks', 'mute_toggle', 'volume_up', 'volume_down'];
   const DECK_MODELS = [['', 'Real hardware'], ['mk2', 'Stream Deck MK.2 (15 keys)'], ['mini', 'Stream Deck Mini'], ['minimk2', 'Stream Deck Mini MK.2'], ['original', 'Stream Deck Original'], ['originalv2', 'Stream Deck Original V2'], ['xl', 'Stream Deck XL'], ['xlv2', 'Stream Deck XL V2'], ['plus', 'Stream Deck +'], ['plusxl', 'Stream Deck + XL'], ['neo', 'Stream Deck Neo'], ['pedal', 'Stream Deck Pedal']];
-  const OUTPUT_NAMES = ['tally', 'talking', 'incoming', 'connected', 'locked'];
+  const OUTPUT_NAMES = ['tally', 'tally_preview', 'talking', 'incoming', 'connected', 'locked'];
+  const OUTPUT_LABELS = {
+    tally: 'tally (PGM / on air)',
+    tally_preview: 'tally_preview (PRV)',
+    talking: 'talking',
+    incoming: 'incoming',
+    connected: 'connected',
+    locked: 'locked',
+  };
 
   const SECTIONS = [
     {
@@ -1394,7 +1430,7 @@
       const current = outputs[name] || {};
       editor.append(
         el('div', { class: 'list-row', dataset: { output: name } }, [
-          el('label', { class: 'field' }, [el('span', { text: `${name} line` }), el('input', { type: 'text', placeholder: 'GPIO17', dataset: { field: 'line' }, value: current.line || '' })]),
+          el('label', { class: 'field' }, [el('span', { text: `${OUTPUT_LABELS[name] || name} line` }), el('input', { type: 'text', placeholder: 'GPIO17', dataset: { field: 'line' }, value: current.line || '' })]),
           el('label', { class: 'field-check' }, [el('input', { type: 'checkbox', dataset: { field: 'active_low' }, ...(current.active_low ? { checked: '' } : {}) }), el('span', { text: 'active low' })]),
         ])
       );

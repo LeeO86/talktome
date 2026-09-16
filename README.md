@@ -310,7 +310,7 @@ requirements are documented in the Bridge client's
 `talktome-headless` turns a Raspberry Pi (arm64/armhf) or a Debian/Ubuntu PC
 (amd64) into a Talktome intercom panel: it logs in as a normal Talktome user
 over WebRTC (including the server's TURN configuration), uses an attached
-Elgato Stream Deck as the key panel, mirrors camera tally and talk state to
+Elgato Stream Deck as the key panel, mirrors PGM/PRV camera tally and talk state to
 GPIO lines and serves a local web interface for status, remote talk control
 and configuration. Several instances can run on one device.
 

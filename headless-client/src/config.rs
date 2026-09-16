@@ -329,7 +329,8 @@ pub struct GpioConfig {
     pub enabled: bool,
     /// GPIO chip (`gpiochip0`, `/dev/gpiochip4`); `null` = search by line name.
     pub chip: Option<String>,
-    /// Named outputs: `tally`, `talking`, `incoming`, `connected`, `locked`.
+    /// Named outputs: `tally` (PGM), `tally_preview` (PRV), `talking`,
+    /// `incoming`, `connected`, `locked`.
     pub outputs: BTreeMap<String, GpioOutputConfig>,
     /// Extra outputs that follow one target's incoming or receiving audio.
     #[serde(default)]
@@ -952,9 +953,9 @@ impl Config {
         for (name, output) in &self.gpio.outputs {
             if !matches!(
                 name.as_str(),
-                "tally" | "talking" | "incoming" | "connected" | "locked"
+                "tally" | "tally_preview" | "talking" | "incoming" | "connected" | "locked"
             ) {
-                bail!("gpio.outputs.{name} is not a known output (tally, talking, incoming, connected, locked)");
+                bail!("gpio.outputs.{name} is not a known output (tally, tally_preview, talking, incoming, connected, locked)");
             }
             if output.line.trim().is_empty() {
                 bail!("gpio.outputs.{name}.line is required");
@@ -1196,6 +1197,15 @@ mod tests {
             },
         );
         assert!(config.validate().is_err());
+        config.gpio.outputs.clear();
+        config.gpio.outputs.insert(
+            "tally_preview".into(),
+            GpioOutputConfig {
+                line: "GPIO18".into(),
+                active_low: false,
+            },
+        );
+        config.validate().unwrap();
     }
 
     #[test]
