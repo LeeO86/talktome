@@ -1141,6 +1141,14 @@ export class SessionController {
     this.background.focusBluetoothAccessory(deviceId);
   }
 
+  async beginButtonPairing(): Promise<void> {
+    await this.background.beginButtonPairing();
+  }
+
+  async cancelButtonPairing(): Promise<void> {
+    await this.background.cancelButtonPairing();
+  }
+
   async connectBluetoothButton(): Promise<void> {
     await this.background.connectBluetoothButton();
   }

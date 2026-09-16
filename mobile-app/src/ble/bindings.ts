@@ -112,23 +112,33 @@ export function bindingTarget(
   return bindings.find((item) => item.id === id)?.target ?? fallback;
 }
 
+/** Update names of saved accessories from live native state. Pairing must add devices explicitly. */
+export function refreshBindingNames(
+  bindings: readonly BleDeviceBinding[],
+  devices: readonly BleDeviceState[],
+): BleDeviceBinding[] {
+  if (bindings.length === 0) {
+    return [...bindings];
+  }
+  let changed = false;
+  const next = bindings.map((binding) => {
+    const live = devices.find((device) => device.id === binding.id);
+    const name = live?.name?.trim();
+    if (!name || name === binding.name) {
+      return binding;
+    }
+    changed = true;
+    return { ...binding, name };
+  });
+  return changed ? next : [...bindings];
+}
+
 export function mergeLiveBleDevices(
   bindings: readonly BleDeviceBinding[],
   devices: readonly BleDeviceState[],
-  fallbackTarget: BleTargetSelection = DEFAULT_BLE_TARGET,
+  _fallbackTarget: BleTargetSelection = DEFAULT_BLE_TARGET,
 ): BleDeviceBinding[] {
-  let next = [...bindings];
-  for (const device of devices) {
-    if (!device.id) {
-      continue;
-    }
-    next = upsertBleDeviceBinding(
-      next,
-      { id: device.id, name: device.name },
-      fallbackTarget,
-    );
-  }
-  return next;
+  return refreshBindingNames(bindings, devices);
 }
 
 export function aggregateBleKind(
@@ -176,6 +186,23 @@ export function liveDeviceById(
   id: string,
 ): BleDeviceState | undefined {
   return devices.find((device) => device.id === id);
+}
+
+export function describePttDevicesSummary(
+  bindings: readonly BleDeviceBinding[],
+  devices: readonly BleDeviceState[],
+): string {
+  if (bindings.length === 0) {
+    return 'None';
+  }
+  const connected = bindings.filter((binding) => liveDeviceById(devices, binding.id)?.kind === 'connected').length;
+  if (connected === bindings.length) {
+    return bindings.length === 1 ? '1 connected' : `${bindings.length} connected`;
+  }
+  if (connected === 0) {
+    return bindings.length === 1 ? '1 saved' : `${bindings.length} saved`;
+  }
+  return `${connected} of ${bindings.length} connected`;
 }
 
 export function describeBleDeviceStatus(device: BleDeviceState | undefined): string {

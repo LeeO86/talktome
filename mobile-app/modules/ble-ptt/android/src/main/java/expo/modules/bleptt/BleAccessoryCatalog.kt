@@ -25,6 +25,7 @@ data class AccessoryScanProfile(
       characteristicUuid = null,
       discovery = "vendor-notify",
     )
+    val FFE0: UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
   }
 }
 
@@ -88,6 +89,28 @@ object BleAccessoryCatalog {
       val service = profile.serviceUuid ?: return@firstOrNull false
       advertised.any { it.uuid == service }
     }
+  }
+
+  fun shouldSkipPairingName(name: String?): Boolean {
+    val normalized = name?.trim()?.uppercase().orEmpty()
+    if (normalized.isEmpty()) {
+      return false
+    }
+    return PAIRING_SKIP_FRAGMENTS.any { fragment -> normalized.contains(fragment) }
+  }
+
+  fun pairingPriority(
+    profiles: List<AccessoryScanProfile>,
+    name: String?,
+    advertisedServices: List<ParcelUuid>?,
+  ): Int {
+    if (match(profiles, name, advertisedServices) != null) {
+      return 0
+    }
+    if (advertisedServices?.any { it.uuid == AccessoryScanProfile.FFE0 } == true) {
+      return 0
+    }
+    return 1
   }
 
   fun shouldSkipService(uuid: UUID): Boolean {
@@ -159,4 +182,15 @@ object BleAccessoryCatalog {
   }
 
   val DIS_UUID: UUID = UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb")
+  private val PAIRING_SKIP_FRAGMENTS = listOf(
+    "IPHONE",
+    "IPAD",
+    "IPOD",
+    "MACBOOK",
+    "IMAC",
+    "APPLE WATCH",
+    "AIRPODS",
+    "GALAXY BUDS",
+    "PIXEL BUDS",
+  )
 }

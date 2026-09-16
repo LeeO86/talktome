@@ -98,6 +98,9 @@ export type SessionUiState = {
   bleName: string;
   bleMessage: string;
   bleScanning: boolean;
+  blePairingActive: boolean;
+  blePairingMessage: string;
+  blePairingFoundId: string | null;
   bleDevices: BleDeviceState[];
   bleBindings: BleDeviceBinding[];
   bleFocusedDeviceId: string;
@@ -190,6 +193,9 @@ export const initialState: SessionUiState = {
   bleName: '',
   bleMessage: '',
   bleScanning: false,
+  blePairingActive: false,
+  blePairingMessage: '',
+  blePairingFoundId: null,
   bleDevices: [],
   bleBindings: [],
   bleFocusedDeviceId: '',

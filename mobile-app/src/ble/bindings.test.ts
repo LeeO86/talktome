@@ -4,6 +4,7 @@ import {
   aggregateBleKind,
   bindingTarget,
   describeBleReleaseTimeout,
+  describePttDevicesSummary,
   mergeLiveBleDevices,
   nextBleReleaseTimeoutMs,
   parseBleDeviceBindings,
@@ -43,7 +44,7 @@ describe('BLE device bindings', () => {
     expect(removeBleDeviceBinding(next, 'aa')).toEqual([]);
   });
 
-  it('merges live native devices into the My accessories list', () => {
+  it('refreshes saved accessory names without adding unpaired scan results', () => {
     expect(
       mergeLiveBleDevices(
         [{ id: 'aa', name: 'Old', target: { kind: 'reply' } }],
@@ -52,10 +53,26 @@ describe('BLE device bindings', () => {
           { id: 'bb', name: 'PTT-Z01', kind: 'connecting' },
         ],
       ),
-    ).toEqual([
-      { id: 'aa', name: 'HB9800D', target: { kind: 'reply' } },
-      { id: 'bb', name: 'PTT-Z01', target: { kind: 'reply' } },
-    ]);
+    ).toEqual([{ id: 'aa', name: 'HB9800D', target: { kind: 'reply' } }]);
+  });
+
+  it('summarizes saved PTT accessories for the Settings row', () => {
+    expect(describePttDevicesSummary([], [])).toBe('None');
+    expect(
+      describePttDevicesSummary(
+        [{ id: 'aa', name: 'Herda', target: { kind: 'reply' } }],
+        [{ id: 'aa', name: 'Herda', kind: 'connected' }],
+      ),
+    ).toBe('1 connected');
+    expect(
+      describePttDevicesSummary(
+        [
+          { id: 'aa', name: 'Herda', target: { kind: 'reply' } },
+          { id: 'bb', name: 'PTT-Z01', target: { kind: 'reply' } },
+        ],
+        [{ id: 'aa', name: 'Herda', kind: 'connected' }],
+      ),
+    ).toBe('1 of 2 connected');
   });
 
   it('aggregates several links into one Settings status', () => {

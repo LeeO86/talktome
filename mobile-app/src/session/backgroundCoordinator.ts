@@ -44,16 +44,20 @@ import {
   upsertBleDeviceBinding,
 } from '../ble/bindings';
 import {
+  BLE_BUTTON_PAIRING_MS,
   coerceNotifyBytes,
   decodeAccessoryNotify,
   FALLBACK_ACCESSORY_PROFILE,
+  looksLikePttCommand,
   matchAccessoryProfile,
 } from '../ble/catalog';
 import {
+  acceptPairedBleDevice,
+  cancelButtonPairingBle,
   connectBleDevice,
   disconnectBle,
-  scanAndConnectBle,
   startBleNative,
+  startButtonPairingBle,
   subscribeBleNative,
   type BleConnectionState,
   type BleDeviceState,
@@ -245,9 +249,66 @@ export class BackgroundCoordinator {
   }
 
   async connectBluetoothButton(): Promise<void> {
+    await this.beginButtonPairing();
+  }
+
+  async beginButtonPairing(): Promise<void> {
     await requestAndroidBlePermissions();
     await startBleNative();
-    const state = await scanAndConnectBle();
+    const boundIds = useSessionStore.getState().bleBindings.map((item) => item.id);
+    useSessionStore.setState({
+      blePairingActive: true,
+      blePairingFoundId: null,
+      blePairingMessage: 'Hold the PTT button on the accessory.',
+      bleScanning: true,
+      statusMessage: 'Listening for a PTT button…',
+    });
+    const state = await startButtonPairingBle({
+      timeoutMs: BLE_BUTTON_PAIRING_MS,
+      boundIds,
+    });
+    this.publishBleState(state);
+    if (!useSessionStore.getState().blePairingActive) {
+      return;
+    }
+    if (state.kind === 'unavailable' || state.kind === 'failed') {
+      useSessionStore.setState({
+        blePairingActive: false,
+        blePairingMessage: state.message || 'Could not scan for a PTT button.',
+      });
+    }
+  }
+
+  async cancelButtonPairing(): Promise<void> {
+    if (!useSessionStore.getState().blePairingActive) {
+      return;
+    }
+    const state = await cancelButtonPairingBle();
+    useSessionStore.setState({
+      blePairingActive: false,
+      blePairingFoundId: null,
+      blePairingMessage: '',
+    });
+    this.publishBleState(state);
+  }
+
+  async completeButtonPairing(deviceId: string): Promise<void> {
+    const live = useSessionStore.getState().bleDevices.find((device) => device.id === deviceId);
+    const name = live?.name?.trim() || 'PTT accessory';
+    const state = await acceptPairedBleDevice(deviceId);
+    const bindings = upsertBleDeviceBinding(useSessionStore.getState().bleBindings, {
+      id: deviceId,
+      name,
+    });
+    useSessionStore.setState({
+      bleBindings: bindings,
+      bleFocusedDeviceId: deviceId,
+      blePairingActive: false,
+      blePairingFoundId: deviceId,
+      blePairingMessage: `Found ${name}.`,
+      statusMessage: `Added ${name}.`,
+    });
+    this.persistBlePreferences();
     this.publishBleState(state);
   }
 
@@ -457,7 +518,9 @@ export class BackgroundCoordinator {
     const kind = scanning ? 'scanning' : aggregateBleKind(devices, false);
     const keepDiagnostic =
       !state.message &&
-      (scanning || devices.some((device) => device.kind === 'connected' || device.kind === 'connecting'));
+      (scanning ||
+        previous.blePairingActive ||
+        devices.some((device) => device.kind === 'connected' || device.kind === 'connecting'));
     const defaultTarget = bleSelectionFromState(previous);
     const bindings = mergeLiveBleDevices(previous.bleBindings, devices, defaultTarget);
     const focused =
@@ -466,11 +529,32 @@ export class BackgroundCoordinator {
         : bindings[0]?.id) ?? '';
     const focusedTarget = bindingTarget(bindings, focused, defaultTarget);
     this.releaseDroppedDevices(previous.bleDevices, devices);
+    const pairingReported = typeof state.pairing === 'boolean' ? state.pairing : undefined;
+    let pairingActive = previous.blePairingActive;
+    if (pairingReported === false) {
+      pairingActive = false;
+    } else if (
+      previous.blePairingActive &&
+      pairingReported == null &&
+      (state.kind === 'failed' || state.kind === 'unavailable') &&
+      !scanning
+    ) {
+      pairingActive = false;
+    }
+    let pairingMessage = previous.blePairingMessage;
+    const pairingFoundId = previous.blePairingFoundId;
+    if (previous.blePairingActive && !pairingActive && !pairingFoundId) {
+      pairingMessage =
+        state.message || pairingMessage || 'No PTT button was heard. Hold the button and try again.';
+    }
+
     useSessionStore.setState({
       bleKind: kind,
       bleName: connectedBleDeviceNames(devices) || state.name || '',
       bleMessage: keepDiagnostic ? previous.bleMessage : (state.message ?? ''),
       bleScanning: scanning,
+      blePairingActive: pairingActive,
+      blePairingMessage: pairingMessage,
       bleDevices: devices,
       bleBindings: bindings,
       bleFocusedDeviceId: focused,
@@ -517,7 +601,17 @@ export class BackgroundCoordinator {
     const profile =
       matchAccessoryProfile({ profileId: live?.profileId, name: live?.name }) ?? FALLBACK_ACCESSORY_PROFILE;
     const pressed = decodeAccessoryNotify(bytes, profile);
-    if (pressed == null) {
+    const bound = state.bleBindings.some((item) => item.id === id);
+    if (state.blePairingActive && !bound && looksLikePttCommand(bytes, profile)) {
+      const startTalk = pressed === true;
+      void this.completeButtonPairing(id).then(() => {
+        if (startTalk) {
+          void this.handleBleButton(id, true);
+        }
+      });
+      return;
+    }
+    if (!bound || pressed == null) {
       return;
     }
     if (pressed) {

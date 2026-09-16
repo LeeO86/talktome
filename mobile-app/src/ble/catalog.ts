@@ -7,6 +7,21 @@ export const BLE_BUTTON_SERVICE_UUID = 'FFE0';
 export const BLE_BUTTON_CHARACTERISTIC_UUID = 'FFE1';
 export const BLE_SHORT_PRESS_LOCK_MS = 250;
 export const BLE_RELEASE_WATCHDOG_MS = 30_000;
+/** How long Add device listens for a known PTT notify. */
+export const BLE_BUTTON_PAIRING_MS = 20_000;
+export const BLE_BUTTON_PAIRING_MIN_RSSI = -90;
+
+const PAIRING_SKIP_NAME_FRAGMENTS = [
+  'IPHONE',
+  'IPAD',
+  'IPOD',
+  'MACBOOK',
+  'IMAC',
+  'APPLE WATCH',
+  'AIRPODS',
+  'GALAXY BUDS',
+  'PIXEL BUDS',
+] as const;
 
 export const DEFAULT_ZELLO_PTT_KEYCODES = [0x01, 0x04, 0x46, 0x66] as const;
 
@@ -158,6 +173,23 @@ export function matchAccessoryProfile(input: {
 
 export function matchesExpectedBleName(name: string | null | undefined): boolean {
   return matchAccessoryProfile({ name }) != null;
+}
+
+/** Phones, computers, and earbuds we should not probe while listening for a PTT button. */
+export function shouldSkipPairingName(name: string | null | undefined): boolean {
+  const normalized = name?.trim().toUpperCase() ?? '';
+  if (!normalized) {
+    return false;
+  }
+  return PAIRING_SKIP_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
+}
+
+/** True when a GATT notify is a known PTT press or release (Zello two-byte or HM-10). */
+export function looksLikePttCommand(
+  bytes: readonly number[],
+  profile: AccessoryProfile = FALLBACK_ACCESSORY_PROFILE,
+): boolean {
+  return decodeAccessoryNotify(bytes, profile) != null;
 }
 
 export function decodeHm10Byte(byte: number): boolean | null {

@@ -12,6 +12,7 @@ private final class AccessoryLink {
   var enabledNotifyCount = 0
   var didFinishSubscribe = false
   var autoReconnect = true
+  var pairingProbe = false
   var subscribeTimeoutWork: DispatchWorkItem?
 
   init(peripheral: CBPeripheral, profile: AccessoryScanProfile?) {
@@ -19,6 +20,14 @@ private final class AccessoryLink {
     self.peripheral = peripheral
     self.profile = profile
   }
+}
+
+private struct ProbeCandidate {
+  let peripheral: CBPeripheral
+  let name: String?
+  let rssi: Int
+  let advertisedServices: [CBUUID]
+  let priority: Int
 }
 
 /// BLE central for several catalogued PTT accessories at once.
@@ -32,6 +41,10 @@ final class TalkToMeBlePttController: NSObject {
   private var centralManager: CBCentralManager?
   private var links: [UUID: AccessoryLink] = [:]
   private var scanning = false
+  private var pairing = false
+  private var pairingBoundIds = Set<UUID>()
+  private var pairingTimeoutWork: DispatchWorkItem?
+  private var probeQueue: [ProbeCandidate] = []
   private var scanTimeoutWork: DispatchWorkItem?
   private var catalog: [AccessoryScanProfile] = BleAccessoryCatalog.parse(nil)
   private var loggedScanIds = Set<UUID>()
@@ -40,6 +53,9 @@ final class TalkToMeBlePttController: NSObject {
   private static let storedPeripheralIdentifierKey = "talktome.ble.peripheralIdentifier"
   private static let storedPeripheralIdentifiersKey = "talktome.ble.peripheralIdentifiers"
   private static let maxLinks = 8
+  private static let maxConcurrentProbes = 2
+  private static let maxPairingProbes = 4
+  private static let minPairingRssi = -90
 
   init(userDefaults: UserDefaults = .standard) {
     self.userDefaults = userDefaults
@@ -68,6 +84,10 @@ final class TalkToMeBlePttController: NSObject {
   }
 
   func scanAndConnect() {
+    startButtonPairing(timeoutMs: 20_000, boundIdsJSON: "[]")
+  }
+
+  func startButtonPairing(timeoutMs: Int, boundIdsJSON: String) {
     ensureCentralManager()
     guard let centralManager else {
       emit(kindOverride: "unavailable", message: "Bluetooth is currently unavailable.")
@@ -77,7 +97,57 @@ final class TalkToMeBlePttController: NSObject {
       handle(managerState: centralManager.state)
       return
     }
-    startScanning(reason: "add-accessory")
+    pairingBoundIds = parseBoundIds(boundIdsJSON)
+    pairingBoundIds.formUnion(storedIdentifiers())
+    pairing = true
+    probeQueue.removeAll()
+    cancelPairingTimeout()
+    startScanning(reason: "button-pairing", timeout: max(8, Double(timeoutMs) / 1000))
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, self.pairing else {
+        return
+      }
+      self.finishPairingWithoutMatch()
+    }
+    pairingTimeoutWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + max(8, Double(timeoutMs) / 1000), execute: work)
+  }
+
+  func cancelButtonPairing() {
+    guard pairing else {
+      return
+    }
+    pairing = false
+    cancelPairingTimeout()
+    cancelScanTimeout()
+    centralManager?.stopScan()
+    scanning = false
+    dropPairingProbes()
+    emit()
+    emitDiagnostic("PTT button pairing cancelled.")
+  }
+
+  func acceptPairedDevice(id rawId: String) {
+    pairing = false
+    cancelPairingTimeout()
+    cancelScanTimeout()
+    centralManager?.stopScan()
+    scanning = false
+    guard let uuid = UUID(uuidString: rawId) else {
+      dropPairingProbes()
+      emit()
+      return
+    }
+    if let link = links[uuid] {
+      link.pairingProbe = false
+      link.autoReconnect = true
+      remember(uuid)
+    } else {
+      connectStored(id: rawId)
+    }
+    dropPairingProbes(keeping: uuid)
+    emit()
+    emitDiagnostic("PTT button pairing accepted \(rawId).")
   }
 
   func connectStored(id rawId: String) {
@@ -98,7 +168,7 @@ final class TalkToMeBlePttController: NSObject {
     }
     let peripherals = centralManager.retrievePeripherals(withIdentifiers: [uuid])
     if let peripheral = peripherals.first {
-      connect(to: peripheral, reason: "stored-id", requireCatalogMatch: false, autoReconnect: true)
+      connect(to: peripheral, reason: "stored-id", persist: true, autoReconnect: true)
       return
     }
     startScanning(reason: "reconnect")
@@ -186,7 +256,7 @@ final class TalkToMeBlePttController: NSObject {
       }
       let peripherals = centralManager.retrievePeripherals(withIdentifiers: [identifier])
       if let peripheral = peripherals.first {
-        connect(to: peripheral, reason: "stored-identifier", requireCatalogMatch: false, autoReconnect: true)
+        connect(to: peripheral, reason: "stored-identifier", persist: true, autoReconnect: true)
       }
     }
     let knownServices = catalog.compactMap(\.serviceUUID)
@@ -194,14 +264,14 @@ final class TalkToMeBlePttController: NSObject {
       let connected = centralManager.retrieveConnectedPeripherals(withServices: knownServices)
       for peripheral in connected where links[peripheral.identifier] == nil {
         if BleAccessoryCatalog.match(catalog, name: peripheral.name, advertisedServices: knownServices) != nil {
-          connect(to: peripheral, reason: "connected-peripheral", requireCatalogMatch: false, autoReconnect: true)
+          connect(to: peripheral, reason: "connected-peripheral", persist: true, autoReconnect: true)
         }
       }
     }
     emit()
   }
 
-  private func startScanning(reason: String) {
+  private func startScanning(reason: String, timeout: TimeInterval = 8) {
     guard let centralManager else {
       emit()
       return
@@ -222,6 +292,11 @@ final class TalkToMeBlePttController: NSObject {
       }
       self.centralManager?.stopScan()
       self.scanning = false
+      if self.pairing {
+        self.emit()
+        self.emitDiagnostic("PTT button scan finished; still listening for a press.")
+        return
+      }
       if self.links.isEmpty {
         self.emit(kindOverride: "failed", message: "No compatible Bluetooth accessory found.")
         self.emitDiagnostic("Bluetooth accessory scan timed out without a matching peripheral.")
@@ -231,14 +306,15 @@ final class TalkToMeBlePttController: NSObject {
       self.emitDiagnostic("Bluetooth accessory scan finished.")
     }
     scanTimeoutWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
+    DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
   }
 
   private func connect(
     to peripheral: CBPeripheral,
     reason: String,
-    requireCatalogMatch: Bool,
+    persist: Bool,
     autoReconnect: Bool,
+    pairingProbe: Bool = false,
     advertisedName: String? = nil,
     advertisedServices: [CBUUID] = []
   ) {
@@ -250,11 +326,9 @@ final class TalkToMeBlePttController: NSObject {
       name: advertisedName ?? peripheral.name,
       advertisedServices: advertisedServices
     )
-    if requireCatalogMatch && profile == nil && links[peripheral.identifier] == nil {
-      return
-    }
     if let existing = links[peripheral.identifier] {
       existing.autoReconnect = autoReconnect
+      existing.pairingProbe = pairingProbe
       existing.peripheral = peripheral
       existing.profile = profile ?? existing.profile ?? .vendorNotifyFallback
       peripheral.delegate = self
@@ -264,7 +338,9 @@ final class TalkToMeBlePttController: NSObject {
       }
       existing.kind = "connecting"
       existing.message = nil
-      remember(existing.id)
+      if persist {
+        remember(existing.id)
+      }
       emit()
       emitDiagnostic("Bluetooth accessory connecting (\(reason)) to \(displayName(for: existing)).")
       centralManager.connect(peripheral, options: nil)
@@ -276,8 +352,11 @@ final class TalkToMeBlePttController: NSObject {
     }
     let link = AccessoryLink(peripheral: peripheral, profile: profile ?? .vendorNotifyFallback)
     link.autoReconnect = autoReconnect
+    link.pairingProbe = pairingProbe
     links[link.id] = link
-    remember(link.id)
+    if persist {
+      remember(link.id)
+    }
     peripheral.delegate = self
     emit()
     emitDiagnostic("Bluetooth accessory connecting (\(reason)) to \(displayName(for: link)).")
@@ -350,6 +429,7 @@ final class TalkToMeBlePttController: NSObject {
     var payload: [String: Any] = [
       "kind": kind,
       "scanning": scanning,
+      "pairing": pairing,
       "devices": links.values.map { deviceSnapshot($0) },
     ]
     if connectedNames.isEmpty == false {
@@ -461,6 +541,105 @@ final class TalkToMeBlePttController: NSObject {
     scanTimeoutWork = nil
   }
 
+  private func cancelPairingTimeout() {
+    pairingTimeoutWork?.cancel()
+    pairingTimeoutWork = nil
+  }
+
+  private func parseBoundIds(_ json: String) -> Set<UUID> {
+    guard let data = json.data(using: .utf8),
+          let parsed = try? JSONSerialization.jsonObject(with: data) as? [String] else {
+      return []
+    }
+    return Set(parsed.compactMap(UUID.init(uuidString:)))
+  }
+
+  private func finishPairingWithoutMatch() {
+    pairing = false
+    cancelPairingTimeout()
+    cancelScanTimeout()
+    centralManager?.stopScan()
+    scanning = false
+    dropPairingProbes()
+    emit(kindOverride: "failed", message: "No PTT button was heard. Hold the button and try again.")
+    emitDiagnostic("PTT button pairing timed out without a press command.")
+  }
+
+  private func dropPairingProbes(keeping: UUID? = nil) {
+    for link in Array(links.values) where link.pairingProbe && link.id != keeping {
+      link.autoReconnect = false
+      cancelSubscribeTimeout(link)
+      centralManager?.cancelPeripheralConnection(link.peripheral)
+      links.removeValue(forKey: link.id)
+    }
+    probeQueue.removeAll()
+  }
+
+  private func enqueueProbe(
+    _ peripheral: CBPeripheral,
+    name: String?,
+    rssi: Int,
+    advertisedServices: [CBUUID]
+  ) {
+    if pairingBoundIds.contains(peripheral.identifier) || links[peripheral.identifier] != nil {
+      return
+    }
+    if BleAccessoryCatalog.shouldSkipPairingName(name) {
+      return
+    }
+    if rssi < Self.minPairingRssi {
+      return
+    }
+    if probeQueue.contains(where: { $0.peripheral.identifier == peripheral.identifier }) {
+      return
+    }
+    let priority = BleAccessoryCatalog.pairingPriority(catalog, name: name, advertisedServices: advertisedServices)
+    probeQueue.append(
+      ProbeCandidate(
+        peripheral: peripheral,
+        name: name,
+        rssi: rssi,
+        advertisedServices: advertisedServices,
+        priority: priority
+      )
+    )
+    probeQueue.sort {
+      if $0.priority != $1.priority {
+        return $0.priority < $1.priority
+      }
+      return $0.rssi > $1.rssi
+    }
+    pumpProbes()
+  }
+
+  private func pumpProbes() {
+    guard pairing else {
+      return
+    }
+    let activeProbes = links.values.filter(\.pairingProbe)
+    if activeProbes.count >= Self.maxPairingProbes {
+      return
+    }
+    let connecting = activeProbes.filter { $0.kind == "connecting" }.count
+    var slots = min(Self.maxConcurrentProbes - connecting, Self.maxPairingProbes - activeProbes.count)
+    while slots > 0, probeQueue.isEmpty == false {
+      let candidate = probeQueue.removeFirst()
+      if pairingBoundIds.contains(candidate.peripheral.identifier) || links[candidate.peripheral.identifier] != nil {
+        continue
+      }
+      slots -= 1
+      connect(
+        to: candidate.peripheral,
+        reason: "pairing-probe",
+        persist: false,
+        autoReconnect: false,
+        pairingProbe: true,
+        advertisedName: candidate.name,
+        advertisedServices: candidate.advertisedServices
+      )
+    }
+  }
+
   private func cancelSubscribeTimeout(_ link: AccessoryLink) {
     link.subscribeTimeoutWork?.cancel()
     link.subscribeTimeoutWork = nil
@@ -498,6 +677,15 @@ final class TalkToMeBlePttController: NSObject {
       emitDiagnostic("Bluetooth accessory notifications enabled on \(displayName(for: link)) (\(link.enabledNotifyCount)).")
       return
     }
+    if link.pairingProbe {
+      emitDiagnostic("Pairing probe dropped \(displayName(for: link)); no PTT notify characteristic.")
+      link.autoReconnect = false
+      centralManager?.cancelPeripheralConnection(link.peripheral)
+      links.removeValue(forKey: link.id)
+      pumpProbes()
+      emit()
+      return
+    }
     link.kind = "failed"
     link.message = "The connected accessory does not expose a vendor PTT notify characteristic."
     emit()
@@ -513,7 +701,7 @@ extension TalkToMeBlePttController: CBCentralManagerDelegate {
     if let restoredPeripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
       for peripheral in restoredPeripherals {
         peripheral.delegate = self
-        connect(to: peripheral, reason: "restore", requireCatalogMatch: false, autoReconnect: true)
+        connect(to: peripheral, reason: "restore", persist: true, autoReconnect: true)
       }
     }
   }
@@ -524,7 +712,6 @@ extension TalkToMeBlePttController: CBCentralManagerDelegate {
     advertisementData: [String: Any],
     rssi RSSI: NSNumber
   ) {
-    _ = RSSI
     let name = advertisedName(advertisementData, peripheral: peripheral)
     let services = advertisedServices(advertisementData)
     if loggedScanIds.contains(peripheral.identifier) == false {
@@ -534,27 +721,29 @@ extension TalkToMeBlePttController: CBCentralManagerDelegate {
         emitDiagnostic("Scan saw \(name) services=\(serviceList)")
       }
     }
-    guard BleAccessoryCatalog.match(catalog, name: name, advertisedServices: services) != nil else {
+    if pairing {
+      enqueueProbe(
+        peripheral,
+        name: name,
+        rssi: RSSI.intValue,
+        advertisedServices: services
+      )
+      return
+    }
+    guard storedIdentifiers().contains(peripheral.identifier) else {
       return
     }
     connect(
       to: peripheral,
-      reason: "scan",
-      requireCatalogMatch: true,
+      reason: "scan-stored",
+      persist: true,
       autoReconnect: true,
       advertisedName: name,
       advertisedServices: services
     )
-    if links.count >= Self.maxLinks {
-      cancelScanTimeout()
-      centralManager?.stopScan()
-      scanning = false
-      emit()
-    }
   }
 
   func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-    remember(peripheral.identifier)
     peripheral.delegate = self
     if link(for: peripheral) == nil, links.count >= Self.maxLinks {
       central.cancelPeripheralConnection(peripheral)
@@ -566,9 +755,14 @@ extension TalkToMeBlePttController: CBCentralManagerDelegate {
         peripheral: peripheral,
         profile: BleAccessoryCatalog.match(catalog, name: peripheral.name, advertisedServices: []) ?? .vendorNotifyFallback
       )
+      created.pairingProbe = pairing
+      created.autoReconnect = pairing == false
       links[created.id] = created
       return created
     }()
+    if link.pairingProbe == false {
+      remember(peripheral.identifier)
+    }
     link.peripheral = peripheral
     link.kind = "connecting"
     emitDiagnostic("Bluetooth accessory connected to \(displayName(for: link)).")
@@ -583,7 +777,10 @@ extension TalkToMeBlePttController: CBCentralManagerDelegate {
       link.message = "Bluetooth accessory connection failed: \(message)"
       emit()
       if link.autoReconnect {
-        connect(to: peripheral, reason: "retry", requireCatalogMatch: false, autoReconnect: true)
+        connect(to: peripheral, reason: "retry", persist: link.pairingProbe == false, autoReconnect: true, pairingProbe: link.pairingProbe)
+      } else if link.pairingProbe {
+        links.removeValue(forKey: link.id)
+        pumpProbes()
       }
     }
     emitDiagnostic("Bluetooth accessory failed to connect: \(message)")
@@ -602,10 +799,13 @@ extension TalkToMeBlePttController: CBCentralManagerDelegate {
       link.message = nil
       emit()
       emitDiagnostic("Bluetooth accessory disconnected from \(name). Reconnecting.")
-      connect(to: peripheral, reason: "auto-reconnect", requireCatalogMatch: false, autoReconnect: true)
+      connect(to: peripheral, reason: "auto-reconnect", persist: true, autoReconnect: true)
       return
     }
     links.removeValue(forKey: link.id)
+    if pairing, link.pairingProbe {
+      pumpProbes()
+    }
     emit()
     emitDiagnostic("Bluetooth accessory disconnected from \(name).")
   }

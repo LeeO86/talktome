@@ -24,6 +24,10 @@ struct AccessoryScanProfile {
 }
 
 enum BleAccessoryCatalog {
+  static let ffe0 = CBUUID(string: "FFE0")
+  static let pairingSkipFragments = [
+    "IPHONE", "IPAD", "IPOD", "MACBOOK", "IMAC", "APPLE WATCH", "AIRPODS", "GALAXY BUDS", "PIXEL BUDS",
+  ]
   static let defaultJSON = """
   [{"id":"ptt-z01","names":["PTT-Z01"],"nameIncludes":[],"serviceUuid":"FFE0","characteristicUuid":"FFE1","discovery":"fixed"},{"id":"herda-hb980-plus","names":["HB9800D","HB980D","HB980-PLUS","HB980PLUS","HB980D-Zello","Herdt980D-Zello","Herda PTT"],"nameIncludes":["HB980","HERDA PTT","HERDAPTT","HERDA-PTT","HERDT980","HERDA980"],"serviceUuid":"","characteristicUuid":"","discovery":"vendor-notify"}]
   """
@@ -82,6 +86,28 @@ enum BleAccessoryCatalog {
       }
       return advertisedServices.contains(service)
     }
+  }
+
+  static func shouldSkipPairingName(_ name: String?) -> Bool {
+    let normalized = name?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
+    if normalized.isEmpty {
+      return false
+    }
+    return pairingSkipFragments.contains { normalized.contains($0) }
+  }
+
+  static func pairingPriority(
+    _ profiles: [AccessoryScanProfile],
+    name: String?,
+    advertisedServices: [CBUUID]
+  ) -> Int {
+    if match(profiles, name: name, advertisedServices: advertisedServices) != nil {
+      return 0
+    }
+    if advertisedServices.contains(ffe0) {
+      return 0
+    }
+    return 1
   }
 
   static func shouldSkipService(_ uuid: CBUUID) -> Bool {

@@ -57,6 +57,37 @@ class TalkToMeBlePttModule : Module() {
       }
     }
 
+    AsyncFunction("startButtonPairing") { catalogJson: String, timeoutMs: Int, boundIdsJson: String ->
+      try {
+        val current = controller() ?: return@AsyncFunction mapOf(
+          "kind" to "unavailable",
+          "message" to "Bluetooth is currently unavailable.",
+          "devices" to emptyList<Map<String, Any?>>(),
+        )
+        current.setCatalogJson(catalogJson)
+        current.startButtonPairing(timeoutMs, boundIdsJson)
+        current.currentState()
+      } catch (_: SecurityException) {
+        mapOf(
+          "kind" to "unavailable",
+          "message" to "Bluetooth permission is required to scan for a PTT accessory.",
+          "devices" to emptyList<Map<String, Any?>>(),
+        )
+      }
+    }
+
+    AsyncFunction("cancelButtonPairing") {
+      val current = controller() ?: return@AsyncFunction mapOf("kind" to "idle", "devices" to emptyList<Map<String, Any?>>())
+      current.cancelButtonPairing()
+      current.currentState()
+    }
+
+    AsyncFunction("acceptPairedDevice") { deviceId: String ->
+      val current = controller() ?: return@AsyncFunction mapOf("kind" to "idle", "devices" to emptyList<Map<String, Any?>>())
+      current.acceptPairedDevice(deviceId)
+      current.currentState()
+    }
+
     AsyncFunction("connectDevice") { deviceId: String, catalogJson: String ->
       try {
         val current = controller() ?: return@AsyncFunction mapOf(

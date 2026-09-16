@@ -48,6 +48,22 @@ public final class TalkToMeBlePttModule: Module {
       return self.controller.currentState()
     }
 
+    AsyncFunction("startButtonPairing") { (catalogJson: String, timeoutMs: Int, boundIdsJson: String) in
+      self.controller.setCatalogJSON(catalogJson)
+      self.controller.startButtonPairing(timeoutMs: timeoutMs, boundIdsJSON: boundIdsJson)
+      return self.controller.currentState()
+    }
+
+    AsyncFunction("cancelButtonPairing") {
+      self.controller.cancelButtonPairing()
+      return self.controller.currentState()
+    }
+
+    AsyncFunction("acceptPairedDevice") { (deviceId: String) in
+      self.controller.acceptPairedDevice(id: deviceId)
+      return self.controller.currentState()
+    }
+
     AsyncFunction("connectDevice") { (deviceId: String, catalogJson: String) in
       self.controller.setCatalogJSON(catalogJson)
       self.controller.connectStored(id: deviceId)

@@ -25,6 +25,7 @@ export type BleConnectionState = {
   message?: string;
   profileId?: string;
   scanning?: boolean;
+  pairing?: boolean;
   devices?: BleDeviceState[];
 };
 
@@ -45,6 +46,13 @@ type NativeBlePtt = {
   getState?: () => BleConnectionState;
   start?: (catalogJson?: string) => Promise<BleConnectionState>;
   scanAndConnect?: (catalogJson?: string) => Promise<BleConnectionState>;
+  startButtonPairing?: (
+    catalogJson?: string,
+    timeoutMs?: number,
+    boundIdsJson?: string,
+  ) => Promise<BleConnectionState>;
+  cancelButtonPairing?: () => Promise<BleConnectionState>;
+  acceptPairedDevice?: (deviceId: string) => Promise<BleConnectionState>;
   connectDevice?: (deviceId: string, catalogJson?: string) => Promise<BleConnectionState>;
   disconnect?: (deviceId?: string) => Promise<BleConnectionState>;
   addListener?: {
@@ -114,6 +122,51 @@ export async function scanAndConnectBle(): Promise<BleConnectionState> {
     return coerceDevices(await native.scanAndConnect(catalogJson()));
   } catch {
     return { kind: 'unavailable', message: 'Bluetooth permission is required to scan for a PTT accessory.', devices: [] };
+  }
+}
+
+export async function startButtonPairingBle(input: {
+  timeoutMs: number;
+  boundIds: readonly string[];
+}): Promise<BleConnectionState> {
+  const native = loadNative();
+  if (!native?.startButtonPairing) {
+    return scanAndConnectBle();
+  }
+  try {
+    return coerceDevices(
+      await native.startButtonPairing(catalogJson(), input.timeoutMs, JSON.stringify(input.boundIds)),
+    );
+  } catch {
+    return {
+      kind: 'unavailable',
+      message: 'Bluetooth permission is required to scan for a PTT accessory.',
+      devices: [],
+    };
+  }
+}
+
+export async function cancelButtonPairingBle(): Promise<BleConnectionState> {
+  const native = loadNative();
+  if (!native?.cancelButtonPairing) {
+    return bleNativeState();
+  }
+  try {
+    return coerceDevices(await native.cancelButtonPairing());
+  } catch {
+    return bleNativeState();
+  }
+}
+
+export async function acceptPairedBleDevice(deviceId: string): Promise<BleConnectionState> {
+  const native = loadNative();
+  if (!native?.acceptPairedDevice) {
+    return connectBleDevice(deviceId);
+  }
+  try {
+    return coerceDevices(await native.acceptPairedDevice(deviceId));
+  } catch {
+    return connectBleDevice(deviceId);
   }
 }
 

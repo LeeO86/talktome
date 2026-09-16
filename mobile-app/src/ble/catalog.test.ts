@@ -9,6 +9,8 @@ import {
   decodeZelloTwoByte,
   matchAccessoryProfile,
   matchesExpectedBleName,
+  looksLikePttCommand,
+  shouldSkipPairingName,
   normalizeBluetoothUuid,
 } from './catalog';
 
@@ -45,6 +47,13 @@ describe('BLE accessory catalog', () => {
     expect(matchAccessoryProfile({ profileId: 'herda-hb980-plus' })?.kind).toBe('speaker-mic');
   });
 
+  it('does not treat phones and earbuds as pairing candidates', () => {
+    expect(shouldSkipPairingName('iPhone')).toBe(true);
+    expect(shouldSkipPairingName('AirPods Pro')).toBe(true);
+    expect(shouldSkipPairingName('Herda PTT')).toBe(false);
+    expect(shouldSkipPairingName('')).toBe(false);
+  });
+
   it('normalizes 16-bit and 128-bit Bluetooth UUIDs', () => {
     expect(normalizeBluetoothUuid('FFE0')).toBe('0000FFE000001000800000805F9B34FB');
     expect(bluetoothUuidsEqual('ffe0', '0000FFE0-0000-1000-8000-00805F9B34FB')).toBe(true);
@@ -68,6 +77,14 @@ describe('accessory notify codecs', () => {
     expect(decodeZelloTwoByte([0x46, 0x02])).toBe(false);
     expect(decodeZelloTwoByte([0x56, 0x01])).toBeNull();
     expect(decodeZelloTwoByte([0x02, 0x01])).toBeNull();
+  });
+
+  it('treats Zello and HM-10 notifies as a pairing button command', () => {
+    expect(looksLikePttCommand([0x01, 0x01])).toBe(true);
+    expect(looksLikePttCommand([0x01, 0x00])).toBe(true);
+    expect(looksLikePttCommand([0x01])).toBe(true);
+    expect(looksLikePttCommand([0x56, 0x01])).toBe(false);
+    expect(looksLikePttCommand([0x02])).toBe(false);
   });
 
   it('coerces native notify payloads into bytes', () => {

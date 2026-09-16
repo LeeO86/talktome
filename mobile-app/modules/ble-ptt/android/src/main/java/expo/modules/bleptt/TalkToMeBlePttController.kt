@@ -21,6 +21,7 @@ import android.os.Looper
 import android.os.ParcelUuid
 import java.util.ArrayDeque
 import java.util.UUID
+import org.json.JSONArray
 
 @SuppressLint("MissingPermission")
 class TalkToMeBlePttController(private val context: Context) {
@@ -44,6 +45,7 @@ class TalkToMeBlePttController(private val context: Context) {
     var writingCccd: Boolean = false,
     var enabledNotifyCount: Int = 0,
     var autoReconnect: Boolean = true,
+    var pairingProbe: Boolean = false,
     var subscribeTimeout: Runnable? = null,
   )
 
@@ -52,6 +54,10 @@ class TalkToMeBlePttController(private val context: Context) {
   private var adapter: BluetoothAdapter? = null
   private val links = mutableMapOf<String, AccessoryLink>()
   private var scanning = false
+  private var pairing = false
+  private var pairingBoundIds = mutableSetOf<String>()
+  private var pairingTimeout: Runnable? = null
+  private val probeQueue = mutableListOf<ProbeCandidate>()
   private var catalog: List<AccessoryScanProfile> = BleAccessoryCatalog.parse(null)
   private val loggedScanAddresses = mutableSetOf<String>()
   private val scanTimeout = Runnable {
@@ -59,6 +65,11 @@ class TalkToMeBlePttController(private val context: Context) {
       return@Runnable
     }
     stopScan()
+    if (pairing) {
+      emit()
+      emitDiagnostic("PTT button scan finished; still listening for a press.")
+      return@Runnable
+    }
     if (links.isEmpty()) {
       emit(kindOverride = "failed", message = "No compatible Bluetooth accessory found.")
       emitDiagnostic("Bluetooth accessory scan timed out without a matching peripheral.")
@@ -67,6 +78,14 @@ class TalkToMeBlePttController(private val context: Context) {
       emitDiagnostic("Bluetooth accessory scan finished.")
     }
   }
+
+  private data class ProbeCandidate(
+    val device: BluetoothDevice,
+    val name: String?,
+    val rssi: Int,
+    val advertisedServices: List<ParcelUuid>?,
+    val priority: Int,
+  )
 
   fun setCatalogJson(json: String?) {
     val parsed = BleAccessoryCatalog.parse(json)
@@ -97,6 +116,10 @@ class TalkToMeBlePttController(private val context: Context) {
   }
 
   fun scanAndConnect() {
+    startButtonPairing(20_000, "[]")
+  }
+
+  fun startButtonPairing(timeoutMs: Int, boundIdsJson: String) {
     val bluetoothAdapter = bluetoothAdapter()
     if (bluetoothAdapter == null) {
       emit(kindOverride = "unavailable", message = "This device does not support Bluetooth LE.")
@@ -111,8 +134,53 @@ class TalkToMeBlePttController(private val context: Context) {
       return
     }
     adapter = bluetoothAdapter
-    connectBondedMatches()
-    startScanning(reason = "add-accessory")
+    pairingBoundIds = parseBoundIds(boundIdsJson)
+    pairingBoundIds.addAll(storedAddresses())
+    pairing = true
+    probeQueue.clear()
+    cancelPairingTimeout()
+    enqueueBondedProbes()
+    if (!startScanning(reason = "button-pairing", timeoutMs = timeoutMs.coerceAtLeast(8_000).toLong())) {
+      pairing = false
+      return
+    }
+    val timeout = Runnable {
+      if (!pairing) {
+        return@Runnable
+      }
+      finishPairingWithoutMatch()
+    }
+    pairingTimeout = timeout
+    handler.postDelayed(timeout, timeoutMs.coerceAtLeast(8_000).toLong())
+  }
+
+  fun cancelButtonPairing() {
+    if (!pairing) {
+      return
+    }
+    pairing = false
+    cancelPairingTimeout()
+    stopScan()
+    dropPairingProbes()
+    emit()
+    emitDiagnostic("PTT button pairing cancelled.")
+  }
+
+  fun acceptPairedDevice(id: String) {
+    pairing = false
+    cancelPairingTimeout()
+    stopScan()
+    val link = links[id]
+    if (link != null) {
+      link.pairingProbe = false
+      link.autoReconnect = true
+      remember(id)
+    } else {
+      connectStored(id)
+    }
+    dropPairingProbes(keeping = id)
+    emit()
+    emitDiagnostic("PTT button pairing accepted $id.")
   }
 
   fun connectStored(id: String) {
@@ -132,7 +200,7 @@ class TalkToMeBlePttController(private val context: Context) {
       connect(
         bluetoothAdapter.getRemoteDevice(id),
         reason = "stored-id",
-        requireCatalogMatch = false,
+        persist = true,
         autoReconnect = true,
       )
     } catch (_: IllegalArgumentException) {
@@ -197,7 +265,7 @@ class TalkToMeBlePttController(private val context: Context) {
         connect(
           bluetoothAdapter.getRemoteDevice(address),
           reason = "stored-address",
-          requireCatalogMatch = false,
+          persist = true,
           autoReconnect = true,
         )
       } catch (_: IllegalArgumentException) {
@@ -207,35 +275,11 @@ class TalkToMeBlePttController(private val context: Context) {
     emit()
   }
 
-  private fun connectBondedMatches() {
-    if (!hasConnectPermission()) {
-      return
-    }
-    val bonded = try {
-      adapter?.bondedDevices ?: return
-    } catch (_: SecurityException) {
-      return
-    }
-    for (device in bonded) {
-      val name = safeName(device)
-      if (BleAccessoryCatalog.match(catalog, name, null) == null) {
-        continue
-      }
-      connect(
-        device,
-        reason = "bonded",
-        requireCatalogMatch = true,
-        autoReconnect = true,
-        advertisedName = name,
-      )
-    }
-  }
-
-  private fun startScanning(reason: String) {
+  private fun startScanning(reason: String, timeoutMs: Long = 8_000): Boolean {
     val scanner = adapter?.bluetoothLeScanner
     if (scanner == null) {
       emit(kindOverride = "unavailable", message = "Bluetooth scanning is unavailable.")
-      return
+      return false
     }
     stopScan()
     loggedScanAddresses.clear()
@@ -250,10 +294,11 @@ class TalkToMeBlePttController(private val context: Context) {
     } catch (error: SecurityException) {
       scanning = false
       emit(kindOverride = "unavailable", message = "Bluetooth permission is required to scan for a PTT accessory.")
-      return
+      return false
     }
     handler.removeCallbacks(scanTimeout)
-    handler.postDelayed(scanTimeout, 8_000)
+    handler.postDelayed(scanTimeout, timeoutMs)
+    return true
   }
 
   private fun stopScan() {
@@ -272,8 +317,9 @@ class TalkToMeBlePttController(private val context: Context) {
   private fun connect(
     device: BluetoothDevice,
     reason: String,
-    requireCatalogMatch: Boolean,
+    persist: Boolean,
     autoReconnect: Boolean,
+    pairingProbe: Boolean = false,
     advertisedName: String? = null,
     advertisedServices: List<ParcelUuid>? = null,
   ) {
@@ -283,11 +329,10 @@ class TalkToMeBlePttController(private val context: Context) {
     }
     val id = device.address
     val profile = BleAccessoryCatalog.match(catalog, advertisedName ?: safeName(device), advertisedServices)
-    if (requireCatalogMatch && profile == null && !links.containsKey(id)) {
-      return
-    }
     val existing = links[id]
     if (existing != null && (existing.kind == "connected" || existing.kind == "connecting") && existing.gatt != null) {
+      existing.autoReconnect = autoReconnect
+      existing.pairingProbe = pairingProbe
       return
     }
     if (existing == null && links.size >= MAX_LINKS) {
@@ -298,11 +343,14 @@ class TalkToMeBlePttController(private val context: Context) {
     link.device = device
     link.profile = profile ?: link.profile ?: AccessoryScanProfile.vendorNotifyFallback
     link.autoReconnect = autoReconnect
+    link.pairingProbe = pairingProbe
     link.kind = "connecting"
     link.message = null
     resetSubscribe(link)
     links[id] = link
-    remember(id)
+    if (persist) {
+      remember(id)
+    }
     emit()
     emitDiagnostic("Bluetooth accessory connecting ($reason) to ${displayName(link)}.")
     try {
@@ -410,6 +458,7 @@ class TalkToMeBlePttController(private val context: Context) {
     val payload = mutableMapOf<String, Any?>(
       "kind" to (kindOverride ?: aggregateKind()),
       "scanning" to scanning,
+      "pairing" to pairing,
       "devices" to links.values.map { deviceSnapshot(it) },
     )
     if (connectedNames.isNotEmpty()) {
@@ -483,6 +532,11 @@ class TalkToMeBlePttController(private val context: Context) {
         current.message = null
         emit()
         emitDiagnostic("Bluetooth accessory notifications enabled on ${displayName(current)} (${current.enabledNotifyCount}).")
+      } else if (current.pairingProbe) {
+        emitDiagnostic("Pairing probe dropped ${displayName(current)}; no PTT notify characteristic.")
+        dropProbe(current)
+        pumpProbes()
+        emit()
       } else {
         current.kind = "failed"
         current.message = "The connected accessory does not expose a vendor PTT notify characteristic."
@@ -509,6 +563,11 @@ class TalkToMeBlePttController(private val context: Context) {
         link.message = null
         emit()
         emitDiagnostic("Bluetooth accessory notifications enabled on ${displayName(link)} (${link.enabledNotifyCount}).")
+      } else if (link.pairingProbe) {
+        emitDiagnostic("Pairing probe dropped ${displayName(link)}; no PTT notify characteristic.")
+        dropProbe(link)
+        pumpProbes()
+        emit()
       } else {
         link.kind = "failed"
         link.message = "The connected accessory does not expose a vendor PTT notify characteristic."
@@ -564,19 +623,21 @@ class TalkToMeBlePttController(private val context: Context) {
         val serviceList = services?.joinToString(",") { it.uuid.toString() }.orEmpty()
         emitDiagnostic("Scan saw $name services=$serviceList")
       }
-      val profile = BleAccessoryCatalog.match(catalog, name, services) ?: return
+      if (pairing) {
+        enqueueProbe(result.device, name, result.rssi, services)
+        return
+      }
+      if (!storedAddresses().contains(address)) {
+        return
+      }
       connect(
         result.device,
-        reason = "scan",
-        requireCatalogMatch = true,
+        reason = "scan-stored",
+        persist = true,
         autoReconnect = true,
         advertisedName = name,
         advertisedServices = services,
       )
-      if (links.size >= MAX_LINKS) {
-        stopScan()
-        emit()
-      }
     }
 
     override fun onScanFailed(errorCode: Int) {
@@ -598,11 +659,17 @@ class TalkToMeBlePttController(private val context: Context) {
           emitDiagnostic("Bluetooth accessory limit reached ($MAX_LINKS).")
           return@post
         }
-        val link = links[id] ?: AccessoryLink(id = id, device = gatt.device).also { links[id] = it }
+        val link = links[id] ?: AccessoryLink(id = id, device = gatt.device).also {
+          it.pairingProbe = pairing
+          it.autoReconnect = !pairing
+          links[id] = it
+        }
         link.device = gatt.device
         link.gatt = gatt
         if (newState == BluetoothProfile.STATE_CONNECTED) {
-          remember(id)
+          if (!link.pairingProbe) {
+            remember(id)
+          }
           link.kind = "connecting"
           emitDiagnostic("Bluetooth accessory connected to ${displayName(link)}.")
           try {
@@ -627,9 +694,12 @@ class TalkToMeBlePttController(private val context: Context) {
             link.kind = "disconnected"
             emit()
             emitDiagnostic("Bluetooth accessory disconnected from $name. Reconnecting.")
-            connect(link.device, reason = "auto-reconnect", requireCatalogMatch = false, autoReconnect = true)
+            connect(link.device, reason = "auto-reconnect", persist = true, autoReconnect = true)
           } else {
             links.remove(id)
+            if (pairing && link.pairingProbe) {
+              pumpProbes()
+            }
             emit()
             emitDiagnostic("Bluetooth accessory disconnected from $name.")
           }
@@ -641,6 +711,13 @@ class TalkToMeBlePttController(private val context: Context) {
       handler.post {
         val link = links[gatt.device.address] ?: return@post
         if (status != BluetoothGatt.GATT_SUCCESS) {
+          if (link.pairingProbe) {
+            emitDiagnostic("Pairing probe dropped ${displayName(link)}; service discovery failed.")
+            dropProbe(link)
+            pumpProbes()
+            emit()
+            return@post
+          }
           link.kind = "failed"
           link.message = "Bluetooth services could not be discovered."
           emit()
@@ -706,6 +783,13 @@ class TalkToMeBlePttController(private val context: Context) {
         }
         if (link.cccdQueue.isEmpty()) {
           cancelSubscribeTimeout(link)
+          if (link.pairingProbe) {
+            emitDiagnostic("Pairing probe dropped ${displayName(link)}; no PTT notify characteristic.")
+            dropProbe(link)
+            pumpProbes()
+            emit()
+            return@post
+          }
           link.kind = "failed"
           link.message = "The connected accessory does not expose a vendor PTT notify characteristic."
           emit()
@@ -783,11 +867,141 @@ class TalkToMeBlePttController(private val context: Context) {
     }
   }
 
+  private fun cancelPairingTimeout() {
+    pairingTimeout?.let { handler.removeCallbacks(it) }
+    pairingTimeout = null
+  }
+
+  private fun parseBoundIds(json: String): MutableSet<String> {
+    return try {
+      val array = JSONArray(json)
+      buildSet {
+        for (index in 0 until array.length()) {
+          val id = array.optString(index).trim()
+          if (id.isNotEmpty()) {
+            add(id)
+          }
+        }
+      }.toMutableSet()
+    } catch (_: Exception) {
+      mutableSetOf()
+    }
+  }
+
+  private fun enqueueBondedProbes() {
+    if (!hasConnectPermission()) {
+      return
+    }
+    val bonded = try {
+      adapter?.bondedDevices ?: return
+    } catch (_: SecurityException) {
+      return
+    }
+    for (device in bonded) {
+      enqueueProbe(device, safeName(device), rssi = 0, advertisedServices = null)
+    }
+  }
+
+  private fun finishPairingWithoutMatch() {
+    pairing = false
+    cancelPairingTimeout()
+    stopScan()
+    dropPairingProbes()
+    emit(kindOverride = "failed", message = "No PTT button was heard. Hold the button and try again.")
+    emitDiagnostic("PTT button pairing timed out without a press command.")
+  }
+
+  private fun dropPairingProbes(keeping: String? = null) {
+    for (link in links.values.toList()) {
+      if (link.pairingProbe && link.id != keeping) {
+        dropProbe(link)
+      }
+    }
+    probeQueue.clear()
+  }
+
+  private fun dropProbe(link: AccessoryLink) {
+    link.autoReconnect = false
+    cancelSubscribeTimeout(link)
+    try {
+      link.gatt?.disconnect()
+      link.gatt?.close()
+    } catch (_: SecurityException) {
+      // Permission was revoked while dropping a pairing probe.
+    }
+    link.gatt = null
+    links.remove(link.id)
+  }
+
+  private fun enqueueProbe(
+    device: BluetoothDevice,
+    name: String?,
+    rssi: Int,
+    advertisedServices: List<ParcelUuid>?,
+  ) {
+    val id = device.address
+    if (pairingBoundIds.contains(id) || links.containsKey(id)) {
+      return
+    }
+    if (BleAccessoryCatalog.shouldSkipPairingName(name)) {
+      return
+    }
+    if (rssi < MIN_PAIRING_RSSI) {
+      return
+    }
+    if (probeQueue.any { it.device.address == id }) {
+      return
+    }
+    val priority = BleAccessoryCatalog.pairingPriority(catalog, name, advertisedServices)
+    probeQueue.add(
+      ProbeCandidate(
+        device = device,
+        name = name,
+        rssi = rssi,
+        advertisedServices = advertisedServices,
+        priority = priority,
+      ),
+    )
+    probeQueue.sortWith(compareBy<ProbeCandidate> { it.priority }.thenByDescending { it.rssi })
+    pumpProbes()
+  }
+
+  private fun pumpProbes() {
+    if (!pairing) {
+      return
+    }
+    val activeProbes = links.values.filter { it.pairingProbe }
+    if (activeProbes.size >= MAX_PAIRING_PROBES) {
+      return
+    }
+    val connecting = activeProbes.count { it.kind == "connecting" }
+    var slots = minOf(MAX_CONCURRENT_PROBES - connecting, MAX_PAIRING_PROBES - activeProbes.size)
+    while (slots > 0 && probeQueue.isNotEmpty()) {
+      val candidate = probeQueue.removeAt(0)
+      if (pairingBoundIds.contains(candidate.device.address) || links.containsKey(candidate.device.address)) {
+        continue
+      }
+      slots -= 1
+      connect(
+        candidate.device,
+        reason = "pairing-probe",
+        persist = false,
+        autoReconnect = false,
+        pairingProbe = true,
+        advertisedName = candidate.name,
+        advertisedServices = candidate.advertisedServices,
+      )
+    }
+  }
+
   companion object {
     private const val PREFS = "talktome.ble"
     private const val STORED_ADDRESS = "peripheralAddress"
     private const val STORED_ADDRESSES = "peripheralAddresses"
     private const val MAX_LINKS = 8
+    private const val MAX_CONCURRENT_PROBES = 2
+    private const val MAX_PAIRING_PROBES = 4
+    private const val MIN_PAIRING_RSSI = -90
     private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private val MANUFACTURER_UUID: UUID = UUID.fromString("00002a29-0000-1000-8000-00805f9b34fb")
   }
