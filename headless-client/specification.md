@@ -3,7 +3,8 @@
 `headless-client/` is a **Rust** Talktome endpoint for small Linux boards
 (Raspberry Pi first) that behaves like a normal Talktome *user* without a
 browser: it talks and listens over the same WebRTC path browsers use, is
-driven from a directly attached Elgato Stream Deck and/or GPIO buttons, and
+driven from a directly attached Elgato Stream Deck and/or GPIO buttons, can
+attach a custom display or rotary panel over a local JSON-lines socket, and
 drives GPIO outputs for the user's PGM/PRV camera tally. It is packaged as a Debian
 package (`talktome-headless`) for arm64, armhf and amd64.
 
@@ -49,6 +50,9 @@ intercom panel / beltpack** that is a first-class Talktome user. It must:
 7. Be built and released by CI as **`.deb` packages** for the Raspberry Pi
    OS variants in use (arm64, armhf) plus amd64 for testing on a PC.
 8. Require **no Talktome server changes** for the first release.
+9. Expose a **local JSON-lines Unix socket** so a custom display, rotary
+   encoder board or MCU can attach to the same talk/volume bus as the Stream
+   Deck and GPIO (optional loopback TCP for development).
 
 ## 2. Non-goals
 
@@ -77,8 +81,9 @@ intercom panel / beltpack** that is a first-class Talktome user. It must:
                  |                                                  |
    Stream Deck   |  surfaces::streamdeck ----+                      |
    (USB HID) <-->|  surfaces::gpio ----------+--> talk (targets,    |
-   GPIO in/out<->|                           |    hold/lock/reply,  |
-                 |                           |    per-target audio) |
+   GPIO in/out<->|  surfaces::local_api -----+    hold/lock/reply,  |
+   OLED/rotary   |                           |    per-target audio) |
+   (Unix/TCP) <--+                           |        |      |      |
                  |                           |        |      |      |
                  |     signalling <----------+--------+      |      |
                  |     (Socket.IO v4 client,                 |      |
@@ -131,6 +136,7 @@ headless-client/
       mod.rs                       # Surface trait + event bus
       streamdeck/{mod,layout,render}.rs
       gpio.rs
+      local_api.rs                 # JSON-lines Unix/TCP control socket
       mock.rs                      # test backends (PNG keys / in-memory lines)
     health.rs                      # sd_notify + watchdog, /healthz, structured logging
     web/                           # admin web interface (axum): auth, status, config, deck view
@@ -141,6 +147,8 @@ headless-client/
     udev/60-talktome-streamdeck.rules
     config.example.json
     config.example.toml
+  examples/
+    socket_panel.py                # display + rotary integration example
   debian/
     postinst prerm                 # system user, groups, udev reload
 ```
@@ -669,6 +677,43 @@ Every command is answered with the matching `-result` event carrying the
 
 ---
 
+## 11.1 Local control socket
+
+A thin JSON-lines view of the same command bus and snapshot watch that the
+Stream Deck, GPIO and web Remote Control tab use. Intended for a custom
+OLED, volume rotary encoders, or an MCU on the same machine — not for
+remote/Companion HTTP (that still goes through the Talktome server).
+
+- **Transport**: Unix socket, mode `0660`. Default path is
+  `$RUNTIME_DIRECTORY/control.sock` (`/run/talktome-headless/<instance>/control.sock`
+  with the packaged unit). Without systemd:
+  `/tmp/talktome-headless-<instance>-control.sock`. Override with
+  `socket.path`. Optional `socket.tcp` binds **loopback only**
+  (`127.0.0.1`, `::1`, `localhost`); other addresses fail validation.
+  Disable with `socket.enabled = false`. Env: `TALKTOME_SOCKET_ENABLED`,
+  `TALKTOME_SOCKET_PATH`, `TALKTOME_SOCKET_TCP`.
+- **Framing**: one UTF-8 JSON object per line, max 64 KiB. Protocol version
+  advertised in `hello` (`protocol: 1`). Several clients may connect; each
+  gets its own `hello` + current `snapshot` and then push updates.
+- **Snapshot**: string target keys (`user:1`, `conference:2`, `feed:3`),
+  `kind`, talk flags (`held`, `locked`, `incoming`, `receiving`, `muted`,
+  `can_talk`, `online`), linear `volume` and `volume_db`, conference
+  `members` with the same fields, `reply`, PGM/PRV (`on_air` / `preview`),
+  connection, instance, user.
+- **Commands**: `press` / `release` / `lock` / `clear-locks` / `reply` /
+  `mute` / `volume` (0–1) / `volume-db` / `volume-step` (`delta_db`,
+  default `streamdeck.volume_step_db`) / `member-mute` /
+  `member-volume` / `member-volume-db` / `member-volume-step` / `ping` /
+  `get`. Talk is attributed as `InputSource::Companion("socket:<client>")`
+  so it does not release a Stream Deck or GPIO hold on the same target.
+  Optional `id` is echoed on `ack` / `pong`. Unknown ops and bad targets
+  return `{ "op": "error", "error": "…" }`.
+- **Example**: `examples/socket_panel.py` (packaged under
+  `/usr/share/talktome-headless/examples/`) paints a text display from
+  snapshots and maps `+`/`−` to `volume-step` for a rotary.
+
+---
+
 ## 12. Configuration
 
 One schema, loaded from `/etc/talktome-headless/<instance>.json` **or**
@@ -715,6 +760,7 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
                           "active_low": true, "debounce_ms": 20 },
                         { "line": "GPIO23", "action": "reply", "active_low": true } ],
             "target_outputs": [ { "line": "GPIO18", "target": "conference:1", "when": "receiving" } ] },
+  "socket": { "enabled": true, "path": null, "tcp": null },  // Unix JSONL; tcp is loopback-only
   "web": { "enabled": true, "bind": "0.0.0.0", "port": 8080, "password": "admin" },
   "health": { "port": null },               // optional /healthz listener
   "log": { "level": "info", "format": "auto" } // auto = JSON when under systemd
@@ -786,7 +832,8 @@ until the package is upgraded.
   `consumer-created`, `consumer-closed`, `talk-start`, `talk-stop`,
   `lock-on`, `lock-off`, `incoming`, `tally`, `audio-device-lost`,
   `audio-device-restored`, `streamdeck-connected`,
-  `streamdeck-disconnected`, `gpio-input`, `companion-command`,
+  `streamdeck-disconnected`, `gpio-input`, `socket-listening`,
+  `socket-connected`, `companion-command`,
   `client-error`.
 
 ### 13.1 Web interface
@@ -814,7 +861,8 @@ home-screen bookmarks.
   façade when TURNS is bridged, ICE RTT and packet loss, receive
   concealment, PGM/PRV tally, Talktome server version), audio devices and
   input level, GPIO backend with every configured output (driven state)
-  and input (pressed, event count), Stream Deck model / serial / page, and
+  and input (pressed, event count), local control socket (Unix path,
+  optional loopback TCP, client count), Stream Deck model / serial / page, and
   service details (version, uptime, config path, supervisor, ports).
 - **Remote Control**: the same destination layout as the browser client
   (`public/index.html`): wrapping target rows with icon, name, volume
@@ -999,6 +1047,9 @@ derived as: release `1.2.5` → `1.2.5`; development `1.2.5-dev.3` →
 - Web interface added after review: fixed `admin` login with forced
   password change, status incl. GPIO, live Stream Deck view, settings saved
   to the TOML/JSON file, restart.
+- Local JSON-lines Unix socket for custom OLED / rotary / MCU panels (same
+  command bus as Stream Deck and GPIO). Optional loopback TCP for
+  development; no Companion HTTP endpoint on the device.
 - Dropped from the earlier draft: Companion HTTP trigger endpoint, radio
   TX/RX echo state machine, references to a gateway design document that is
   not in this repository.

@@ -402,11 +402,12 @@ fn unix_now() -> u64 {
 async fn status(State(state): State<Shared>) -> Response {
     let snapshot =
         crate::surfaces::streamdeck::overlay_demo_targets(state.ctx.bus.snapshots.borrow().clone());
-    let (gpio, decks, audio) = match state.ctx.bus.hardware.read() {
+    let (gpio, decks, audio, socket) = match state.ctx.bus.hardware.read() {
         Ok(hardware) => (
             hardware.gpio.clone(),
             hardware.decks.clone(),
             hardware.audio.clone(),
+            hardware.socket.clone(),
         ),
         Err(_) => Default::default(),
     };
@@ -430,6 +431,7 @@ async fn status(State(state): State<Shared>) -> Response {
         },
         "snapshot": *snapshot,
         "gpio": gpio,
+        "socket": socket,
         "deck": deck,
         "decks": decks,
         "audio": audio,

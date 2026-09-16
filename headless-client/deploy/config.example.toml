@@ -144,6 +144,13 @@ line = "GPIO23"
 action = "reply"
 active_low = true
 
+[socket]
+# JSON-lines control socket for a display, volume rotaries or MCU panel.
+# Same talk/volume bus as Stream Deck and GPIO. See examples/socket_panel.py.
+enabled = true
+# path = "/run/talktome-headless/cam1/control.sock"   # default: $RUNTIME_DIRECTORY/control.sock
+# tcp = "127.0.0.1:9876"    # optional loopback TCP for development (rejected unless loopback)
+
 [web]
 # Local administration web interface (status, Stream Deck view, settings).
 # Login is always "admin"; the default password must be changed on first login.

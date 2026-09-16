@@ -98,6 +98,11 @@
       }
     ]
   },
+  "socket": {
+    "enabled": true,
+    "path": null,
+    "tcp": null
+  },
   "web": {
     "enabled": true,
     "bind": "0.0.0.0",

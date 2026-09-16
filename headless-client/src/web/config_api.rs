@@ -55,6 +55,7 @@ fn env_overrides() -> Vec<String> {
                                 | "network"
                                 | "streamdeck"
                                 | "gpio"
+                                | "socket"
                                 | "health"
                                 | "log"
                                 | "web"

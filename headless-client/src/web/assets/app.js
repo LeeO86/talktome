@@ -519,6 +519,16 @@
       );
     }
 
+    const socket = status.socket || {};
+    const socketKind = !socket.enabled ? '' : socket.error ? 'bad' : 'ok';
+    setBadge($('#socket-state'), !socket.enabled ? 'disabled' : socket.error ? 'error' : 'listening', socketKind);
+    $('#socket-error').textContent = socket.error || '';
+    kv($('#socket-details'), [
+      ['Unix socket', socket.unix_path ? code(socket.unix_path) : '–'],
+      ['TCP (loopback)', socket.tcp ? code(socket.tcp) : 'off'],
+      ['Clients', socket.clients != null ? socket.clients : 0],
+    ]);
+
     // Stream Deck card
     const decks = status.decks && status.decks.length ? status.decks : status.deck ? [status.deck] : [];
     const anyEnabled = decks.some((deck) => deck.enabled);
@@ -1349,6 +1359,16 @@
         { type: 'gpio-outputs' },
         { type: 'gpio-target-outputs' },
         { type: 'gpio-inputs' },
+      ],
+    },
+    {
+      key: 'socket',
+      title: 'Local socket',
+      desc: 'JSON-lines API for a display, rotary encoders or MCU panel',
+      fields: [
+        { path: 'socket.enabled', label: 'Listen for a local panel', type: 'bool', help: 'Unix socket for an OLED, volume rotaries or other MCU. Same talk/volume bus as Stream Deck and GPIO.' },
+        { path: 'socket.path', label: 'Unix socket path', type: 'text', nullable: true, help: 'Empty: $RUNTIME_DIRECTORY/control.sock under systemd, otherwise /tmp/talktome-headless-<instance>-control.sock' },
+        { path: 'socket.tcp', label: 'Loopback TCP bind', type: 'text', nullable: true, help: 'Optional development bind, e.g. 127.0.0.1:9876. Non-loopback addresses are rejected. Empty: Unix socket only.' },
       ],
     },
     {
