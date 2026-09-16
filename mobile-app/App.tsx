@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 import { session, useSessionStore } from './src/session/store';
+import { cameraTallyColor } from './src/protocol';
 import { androidSafeArea } from './src/ui/androidSafeArea';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { OperatorScreen } from './src/ui/OperatorScreen';
@@ -20,6 +21,7 @@ export default function App() {
   const paused = useSessionStore((state) => state.paused);
   const addingProfile = useSessionStore((state) => state.addingProfile);
   const profiles = useSessionStore((state) => state.profiles);
+  const tallyColor = useSessionStore((state) => cameraTallyColor(state.cameraTally));
 
   useEffect(() => {
     void session.hydrate();
@@ -64,7 +66,7 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={[styles.root, androidSafeArea]}>
+    <SafeAreaView style={[styles.root, androidSafeArea, tallyColor ? { backgroundColor: tallyColor } : null]}>
       <StatusBar style="light" />
       {body}
     </SafeAreaView>

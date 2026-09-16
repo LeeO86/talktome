@@ -10,6 +10,7 @@ import type {
   TargetAudioPreference,
   TalkTarget,
 } from '../protocol';
+import { EMPTY_CAMERA_TALLY, type CameraTallyState } from '../protocol';
 import { EMPTY_CONFERENCE_LISTEN, type ConferenceListenState } from './conferenceListen';
 import { DEFAULT_OPERATOR_AUDIO, type OperatorAudioSettings } from './operatorAudio';
 import { emptyAudioRouteSnapshot, type AudioRoute } from '../audio/routes';
@@ -38,6 +39,8 @@ export type SessionUiState = {
   productions: Production[];
   productionId: number | null;
   productionName: string | null;
+  cameraTally: CameraTallyState;
+  serverAppVersion: string | null;
   profiles: SavedProfile[];
   activeProfileId: string | null;
   paused: boolean;
@@ -129,6 +132,8 @@ export const initialState: SessionUiState = {
   productions: [],
   productionId: null,
   productionName: null,
+  cameraTally: EMPTY_CAMERA_TALLY,
+  serverAppVersion: null,
   profiles: [],
   activeProfileId: null,
   paused: false,

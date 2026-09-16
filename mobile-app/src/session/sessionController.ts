@@ -3,14 +3,15 @@ import type { CookieMap } from '../auth/cookieJar';
 import { SessionConflictError, SessionCookieUnavailableError, TlsUntrustedError } from '../auth/errors';
 import { TalkToMeHttp } from '../auth/http';
 import { hasSessionCookie, readNativeCookies } from '../auth/nativeCookies';
-import { requiresBrowserSessionCookie } from '../auth/serverCapabilities';
+import { requiresBrowserSessionCookie, supportsActiveProduction } from '../auth/serverCapabilities';
 import type { MediaEngine } from '../media/engine';
-import type {
-  ActiveProducer,
-  OperatorIdentity,
-  Production,
-  TargetAudioPreference,
-  TalkTarget,
+import {
+  EMPTY_CAMERA_TALLY,
+  type ActiveProducer,
+  type OperatorIdentity,
+  type Production,
+  type TargetAudioPreference,
+  type TalkTarget,
 } from '../protocol';
 import { audioSessionAvailable } from '../audio/session';
 import { isLikelyLocalHost, parseServerAddress } from '../servers/parseServerAddress';
@@ -264,8 +265,31 @@ export class SessionController {
       useSessionStore.setState({
         status: 'choose-production',
         operatorReady: false,
+        cameraTally: EMPTY_CAMERA_TALLY,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Tell TalkToMe 1.5+ which production this socket hears. Older servers ignore
+   * the extra register field; unknown versions get a short ack timeout.
+   */
+  async announceActiveProduction(productionId: number | null): Promise<void> {
+    const signaling = this.signaling;
+    if (!signaling) {
+      return;
+    }
+    const supported = supportsActiveProduction(this.serverAppVersion);
+    if (supported === false) {
+      return;
+    }
+    try {
+      await signaling.setActiveProduction(productionId);
+    } catch (error) {
+      if (supported === true) {
+        throw error;
+      }
     }
   }
 
@@ -687,13 +711,7 @@ export class SessionController {
       },
       onProducerStarted: (producer) => {
         this.mediaCoordinator.rememberLiveProducer(producer);
-        void this.media?.consumeProducer(producer, this.mediaCoordinator.consumerContext())
-          .then(() => {
-            this.mediaCoordinator.publishMediaSnapshot();
-          })
-          .catch(() => {
-            this.mediaCoordinator.publishMediaSnapshot();
-          });
+        void this.mediaCoordinator.consumeIfVisible(producer);
       },
       onProducerClosed: (producer) => {
         this.mediaCoordinator.forgetLiveProducer(producer.producerId);
@@ -706,7 +724,49 @@ export class SessionController {
           this.mediaCoordinator.publishMediaSnapshot();
         });
       },
+      onCameraTally: (tally) => {
+        useSessionStore.setState({ cameraTally: tally });
+      },
+      onActiveProductionReset: (productionId) => {
+        void this.handleActiveProductionReset(productionId);
+      },
+      onAvailableProductionsUpdated: (productions) => {
+        const currentId = useSessionStore.getState().productionId;
+        const active = productions.find((item) => item.id === currentId);
+        useSessionStore.setState({
+          productions,
+          productionName: active?.name ?? useSessionStore.getState().productionName,
+        });
+      },
     };
+  }
+
+  private async handleActiveProductionReset(productionId: number | null): Promise<void> {
+    const productions = useSessionStore.getState().productions;
+    const production =
+      productionId == null ? null : (productions.find((item) => item.id === productionId) ?? {
+        id: productionId,
+        name: 'Production',
+      });
+    if (!useSessionStore.getState().operatorReady) {
+      useSessionStore.setState({
+        productionId,
+        productionName: production?.name ?? (productions.length > 0 ? 'Default' : null),
+        cameraTally: EMPTY_CAMERA_TALLY,
+      });
+      return;
+    }
+    try {
+      await this.talk.unlockTalk();
+      await this.mediaCoordinator.enterOperator(production);
+    } catch (error) {
+      useSessionStore.setState({
+        status: 'choose-production',
+        operatorReady: false,
+        cameraTally: EMPTY_CAMERA_TALLY,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async handleReconnect(): Promise<void> {
@@ -720,7 +780,11 @@ export class SessionController {
       if (!identity || !this.signaling) {
         return;
       }
-      let register = await this.signaling.register(identity, false);
+      let register = await this.signaling.register(
+        identity,
+        false,
+        useSessionStore.getState().productionId,
+      );
       if (isRegisterConflict(register)) {
         const sameStaleSocket =
           Boolean(this.lastSocketId) && register.existing?.socketId === this.lastSocketId;
@@ -728,7 +792,11 @@ export class SessionController {
           await this.logout('Could not re-register after reconnect.');
           return;
         }
-        register = await this.signaling.register(identity, true);
+        register = await this.signaling.register(
+          identity,
+          true,
+          useSessionStore.getState().productionId,
+        );
       }
       if (!isRegisterOk(register) && identity.kind === 'user' && this.pendingPassword) {
         await this.reauthenticateUser();
@@ -738,6 +806,7 @@ export class SessionController {
         await this.logout('Could not re-register after reconnect.');
         return;
       }
+      await this.announceActiveProduction(useSessionStore.getState().productionId);
       await this.mediaCoordinator.rebuildMediaAfterReconnect();
     } catch (error) {
       if (useSessionStore.getState().identity?.kind === 'user' && this.pendingPassword) {
@@ -804,6 +873,7 @@ export class SessionController {
     const parsed = parseServerAddress(serverAddress);
     this.cookies = {};
     this.serverAppVersion = undefined;
+    useSessionStore.setState({ serverAppVersion: null });
     this.http = new TalkToMeHttp({
       baseUrl: parsed.baseUrl,
       getCookies: () => this.cookies,
@@ -821,6 +891,7 @@ export class SessionController {
     try {
       const health = await this.requireApi().health();
       this.serverAppVersion = health.appVersion;
+      useSessionStore.setState({ serverAppVersion: health.appVersion ?? null });
     } catch (error) {
       if (!looksLikeTlsFailure(error)) {
         useSessionStore.setState({
@@ -867,7 +938,14 @@ export class SessionController {
 
     useSessionStore.setState({ statusMessage: 'Connecting signaling…' });
     await this.signaling.connect();
-    const register = await this.signaling.register(identity, force);
+    const productions = Array.isArray(identity.productions) ? identity.productions : [];
+    const rememberedProductionId = useSessionStore.getState().productionId;
+    const rememberedProductionName = useSessionStore.getState().productionName;
+    const registerProductionId =
+      productions.length === 0 || productions.some((item) => item.id === rememberedProductionId)
+        ? rememberedProductionId
+        : null;
+    const register = await this.signaling.register(identity, force, registerProductionId);
 
     if (isRegisterConflict(register)) {
       this.signaling.disconnect();
@@ -889,9 +967,6 @@ export class SessionController {
 
     this.lastSocketId = this.signaling.socketId;
     await this.refreshServerClientDefaults();
-    const productions = Array.isArray(identity.productions) ? identity.productions : [];
-    const rememberedProductionId = useSessionStore.getState().productionId;
-    const rememberedProductionName = useSessionStore.getState().productionName;
     useSessionStore.setState({
       identity,
       productions,

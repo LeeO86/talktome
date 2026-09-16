@@ -12,5 +12,9 @@ describe('SocketEvent', () => {
     expect(SocketEvent.requestApplePttBootstrap).toBe('request-apple-ptt-bootstrap');
     expect(SocketEvent.registerApplePttPushToken).toBe('register-apple-ptt-push-token');
     expect(SocketEvent.unregisterApplePttPushToken).toBe('unregister-apple-ptt-push-token');
+    expect(SocketEvent.setActiveProduction).toBe('set-active-production');
+    expect(SocketEvent.activeProductionReset).toBe('active-production-reset');
+    expect(SocketEvent.availableProductionsUpdated).toBe('available-productions-updated');
+    expect(SocketEvent.cutCamera).toBe('cut-camera');
   });
 });

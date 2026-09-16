@@ -5,4 +5,5 @@ export * from './incomingTalk';
 export * from './producers';
 export * from './productions';
 export * from './talkTargets';
+export * from './tally';
 export * from './types';

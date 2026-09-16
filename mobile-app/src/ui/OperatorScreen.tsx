@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react';
 import { Pressable, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { iosPttEnabled } from '../audio/policy';
-import { visibleProductionName, talkTargetIdentity, type TalkTarget } from '../protocol';
+import {
+  cameraTallyColor,
+  cameraTallyLabel,
+  visibleProductionName,
+  talkTargetIdentity,
+  type TalkTarget,
+} from '../protocol';
 import { shouldShowPttJoinBanner } from '../ptt/policy';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { session, useSessionStore } from '../session/store';
@@ -43,6 +49,8 @@ export function OperatorScreen() {
 
   const productionLabel = visibleProductionName(store.productionName);
   const connection = connectionHealthFromSession(store);
+  const tallyColor = cameraTallyColor(store.cameraTally);
+  const tallyLabel = cameraTallyLabel(store.cameraTally);
   const replyLocked =
     Boolean(store.replyTarget) && store.lockedTargetKeys.includes(talkTargetIdentity(store.replyTarget!));
   const selectedLocked =
@@ -110,6 +118,14 @@ export function OperatorScreen() {
 
   return (
     <View style={[styles.screen, landscape && styles.screenLandscape]}>
+      {tallyColor ? (
+        <View
+          pointerEvents="none"
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          style={[styles.tallyFrame, { borderColor: tallyColor }]}
+        />
+      ) : null}
       <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
@@ -127,6 +143,14 @@ export function OperatorScreen() {
           {productionLabel ? (
             <Text style={styles.production} numberOfLines={1}>
               {productionLabel}
+            </Text>
+          ) : null}
+          {tallyLabel && tallyColor ? (
+            <Text
+              accessibilityLabel={tallyLabel === 'PGM' ? 'On program' : 'On preview'}
+              style={[styles.tallyChip, { color: tallyColor }]}
+            >
+              {tallyLabel}
             </Text>
           ) : null}
         </Pressable>
@@ -240,6 +264,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     marginTop: 2,
+  },
+  tallyChip: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+  },
+  tallyFrame: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    borderWidth: 6,
+    zIndex: 20,
   },
   headerActions: {
     flexDirection: 'row',

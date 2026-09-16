@@ -418,6 +418,14 @@ export function SettingsScreen({ visible, onClose }: Props) {
               <Text style={styles.rowLabel}>Talk lock</Text>
               <Text style={styles.rowValue}>Slide to lock</Text>
             </View>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Server version</Text>
+              <Text style={styles.rowValue}>{store.serverAppVersion || 'Unknown'}</Text>
+            </View>
+            <Text style={styles.footnote}>
+              Camera tally uses a red PGM frame or a green preview frame, same as the web
+              client. Incoming audio follows the selected production.
+            </Text>
             <Text style={styles.footnote}>{store.capabilityReason}</Text>
             {store.pttDiagnostic ? <Text style={styles.footnote}>{store.pttDiagnostic}</Text> : null}
             <View style={styles.row}>

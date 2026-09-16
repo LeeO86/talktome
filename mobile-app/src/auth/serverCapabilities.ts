@@ -1,6 +1,7 @@
 /** TalkToMe v1.2.1 tied Socket.IO register-user to HttpOnly `talktome_session`.
  * v1.1.3 and earlier authenticate register-user from the login JSON body only. */
 export const BROWSER_SESSION_SINCE = '1.2.1';
+export const ACTIVE_PRODUCTION_SINCE = '1.5.0';
 
 export function parseAppVersion(value: string | null | undefined): [number, number, number] | null {
   const match = String(value ?? '')
@@ -31,4 +32,12 @@ export function compareAppVersion(left: string, right: string): number | null {
 export function requiresBrowserSessionCookie(appVersion?: string | null): boolean {
   const cmp = compareAppVersion(appVersion ?? '', BROWSER_SESSION_SINCE);
   return cmp != null && cmp >= 0;
+}
+
+export function supportsActiveProduction(appVersion?: string | null): boolean | null {
+  const cmp = compareAppVersion(appVersion ?? '', ACTIVE_PRODUCTION_SINCE);
+  if (cmp == null) {
+    return null;
+  }
+  return cmp >= 0;
 }

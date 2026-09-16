@@ -3,8 +3,13 @@ import { AppState, Platform } from 'react-native';
 import { MediaEngine } from '../media/engine';
 import { talkOpusProfile } from '../media/opus';
 import {
+  filterProducersToVisibleTargets,
+  producerMatchesVisibleTargets,
+} from '../media/visibleProducers';
+import {
   activeFeedKeysFromProducers,
   defaultAudioPreference,
+  EMPTY_CAMERA_TALLY,
   normalizeAudioPreference,
   talkTargetIdentity,
   type ActiveProducer,
@@ -50,12 +55,19 @@ export class MediaCoordinator {
     useSessionStore.setState({
       status: 'connecting',
       statusMessage: 'Loading targets…',
-      productionId: production?.id ?? null,
-      productionName: production?.name ?? (useSessionStore.getState().productions.length > 0 ? 'Default' : null),
       error: null,
+      cameraTally: EMPTY_CAMERA_TALLY,
     });
 
+    await this.c.talk.unlockTalk();
+    await this.c.announceActiveProduction(production?.id ?? null);
+
     const targets = await this.loadTargets(identity, production?.id ?? null);
+    useSessionStore.setState({
+      productionId: production?.id ?? null,
+      productionName: production?.name ?? (useSessionStore.getState().productions.length > 0 ? 'Default' : null),
+      targets,
+    });
 
     if (!this.c.media) {
       this.c.media = new MediaEngine(signaling);
@@ -85,14 +97,11 @@ export class MediaCoordinator {
     }
 
     const producers = await signaling.requestActiveProducers();
-    this.replaceLiveProducers(producers);
-    await this.c.media.syncProducers(producers, this.consumerContext());
-    this.publishMediaSnapshot();
+    await this.syncHeardAudio(producers);
 
     useSessionStore.setState({
       status: 'ready',
       operatorReady: true,
-      targets,
       talking: false,
       talkLocked: false,
       talkingTargetKey: null,
@@ -131,10 +140,7 @@ export class MediaCoordinator {
     await this.prepareAudioForMedia();
     await this.c.media.start();
     await this.c.media.warmTalkProducer();
-    const producers = await signaling.requestActiveProducers();
-    this.replaceLiveProducers(producers);
-    await this.c.media.syncProducers(producers, this.consumerContext());
-    this.publishMediaSnapshot();
+    await this.refreshTargets();
     await this.c.background.syncAudioSession(AppState.currentState);
     await this.c.background.syncForegroundService();
     await this.c.background.syncSystemPtt();
@@ -159,6 +165,7 @@ export class MediaCoordinator {
     useSessionStore.setState({ targets });
     this.c.talk.refreshReplyTarget();
     this.c.talk.refreshSelectedTalkTarget(targets);
+    await this.resyncHeardAudio();
   }
 
   private async loadTargets(identity: OperatorIdentity, productionId: number | null): Promise<TalkTarget[]> {
@@ -305,6 +312,20 @@ export class MediaCoordinator {
     this.publishActiveFeeds();
   }
 
+  async consumeIfVisible(producer: ActiveProducer): Promise<void> {
+    if (!producerMatchesVisibleTargets(producer, useSessionStore.getState().targets)) {
+      this.publishMediaSnapshot();
+      return;
+    }
+    try {
+      await this.c.media?.consumeProducer(producer, this.consumerContext());
+    } catch {
+      // Keep the session; the next producer event or resync will retry.
+    } finally {
+      this.publishMediaSnapshot();
+    }
+  }
+
   forgetLiveProducer(producerId: string): void {
     this.c.liveProducers.delete(producerId);
     this.publishActiveFeeds();
@@ -315,9 +336,34 @@ export class MediaCoordinator {
     this.publishActiveFeeds();
   }
 
+  heardProducers(producers = [...this.c.liveProducers.values()]): ActiveProducer[] {
+    return filterProducersToVisibleTargets(producers, useSessionStore.getState().targets);
+  }
+
+  async syncHeardAudio(producers: ActiveProducer[]): Promise<void> {
+    this.replaceLiveProducers(producers);
+    await this.c.media?.syncProducers(this.heardProducers(producers), this.consumerContext());
+    this.publishMediaSnapshot();
+  }
+
+  async resyncHeardAudio(): Promise<void> {
+    const signaling = this.c.signaling;
+    if (signaling) {
+      try {
+        const producers = await signaling.requestActiveProducers();
+        await this.syncHeardAudio(producers);
+        return;
+      } catch {
+        // Fall through and filter whatever we already track.
+      }
+    }
+    await this.c.media?.syncProducers(this.heardProducers(), this.consumerContext());
+    this.publishMediaSnapshot();
+  }
+
   private publishActiveFeeds(): void {
     useSessionStore.setState({
-      activeFeedKeys: activeFeedKeysFromProducers([...this.c.liveProducers.values()]),
+      activeFeedKeys: activeFeedKeysFromProducers(this.heardProducers()),
     });
     this.c.background.syncPresence();
   }
@@ -338,9 +384,7 @@ export class MediaCoordinator {
     }
     try {
       const producers = await signaling.requestActiveProducers();
-      this.replaceLiveProducers(producers);
-      await media.syncProducers(producers, this.consumerContext());
-      this.publishMediaSnapshot();
+      await this.syncHeardAudio(producers);
     } catch {
       // Keep the channel; media will retry on the next event.
     }

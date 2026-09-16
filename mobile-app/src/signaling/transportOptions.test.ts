@@ -58,6 +58,7 @@ describe('signaling handshake', () => {
       name: 'adi',
       kind: 'user',
       guestProfileUserId: null,
+      productionId: null,
       force: false,
     });
   });
@@ -79,7 +80,14 @@ describe('signaling handshake', () => {
       name: 'Visitor',
       kind: 'guest',
       guestProfileUserId: 9,
+      productionId: null,
       force: false,
     });
+  });
+
+  it('registers the selected production like the web client', () => {
+    expect(
+      registerUserPayload({ id: 5, name: 'adi', kind: 'user' }, false, 4),
+    ).toMatchObject({ productionId: 4 });
   });
 });

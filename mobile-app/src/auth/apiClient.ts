@@ -5,7 +5,7 @@ import {
   parseDefaultClientSettingsScript,
   type ServerClientDefaults,
 } from '../protocol/clientDefaults';
-import type { Production } from '../protocol/productions';
+import { parseProductions } from '../protocol/productions';
 import {
   talkTargetFromResponse,
   type HealthResponse,
@@ -130,7 +130,7 @@ export class ApiClient {
       kind: 'guest',
       guestId: payload.guestId,
       guestProfileUserId,
-      productions: normalizeProductions(payload.productions),
+      productions: parseProductions(payload.productions),
     };
   }
 
@@ -196,23 +196,6 @@ function decodeUserIdentity(payload: OperatorIdentity | null): OperatorIdentity 
   }
   return {
     ...payload,
-    productions: normalizeProductions(payload.productions),
+    productions: parseProductions(payload.productions),
   };
-}
-
-function normalizeProductions(value: unknown): Production[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    if (!item || typeof item !== 'object') {
-      return [];
-    }
-    const row = item as { id?: unknown; name?: unknown };
-    const id = Number(row.id);
-    if (!Number.isFinite(id) || typeof row.name !== 'string') {
-      return [];
-    }
-    return [{ id, name: row.name }];
-  });
 }

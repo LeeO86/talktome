@@ -8,6 +8,8 @@ import { cookieHeader, type CookieMap } from '../auth/cookieJar';
 import { parseIncomingTalkState } from '../protocol/incomingTalk';
 import { SocketEvent } from '../protocol/events';
 import { parseActiveProducer, parseActiveProducers } from '../protocol/producers';
+import { parseProductionId, parseProductions, type Production } from '../protocol/productions';
+import { parseCameraTally, type CameraTallyState } from '../protocol/tally';
 import { normalizeTalkTargets } from '../protocol/talkTargets';
 import type {
   ActiveProducer,
@@ -36,6 +38,9 @@ export type SignalingHandlers = {
   onProducerStarted?: (producer: ActiveProducer) => void;
   onProducerClosed?: (producer: ActiveProducer) => void;
   onConsumerClosed?: (consumerId: string) => void;
+  onCameraTally?: (tally: CameraTallyState) => void;
+  onActiveProductionReset?: (productionId: number | null) => void;
+  onAvailableProductionsUpdated?: (productions: Production[]) => void;
 };
 
 export type SignalingConnectionState =
@@ -45,6 +50,8 @@ export type SignalingConnectionState =
   | { status: 'failed'; message: string };
 
 const ACK_TIMEOUT_MS = 8000;
+/** TalkToMe 1.5.0+ `set-active-production`. Short so unknown servers fail fast. */
+export const SET_ACTIVE_PRODUCTION_ACK_MS = 2500;
 
 export function cookieExtraHeaders(cookies: CookieMap): Record<string, string> {
   const cookie = cookieHeader(cookies);
@@ -74,12 +81,17 @@ export function signalingSocketOptions(cookies: CookieMap) {
   };
 }
 
-export function registerUserPayload(identity: OperatorIdentity, force = false) {
+export function registerUserPayload(
+  identity: OperatorIdentity,
+  force = false,
+  productionId?: number | null,
+) {
   return {
     id: String(identity.kind === 'guest' ? (identity.guestId ?? identity.id) : identity.id),
     name: identity.name,
     kind: identity.kind,
     guestProfileUserId: identity.guestProfileUserId ?? null,
+    productionId: productionId ?? null,
     force,
   };
 }
@@ -153,11 +165,35 @@ export class SignalingClient {
     this.handlers.onStateChange?.({ status: 'disconnected' });
   }
 
-  async register(identity: OperatorIdentity, force = false): Promise<RegisterUserResponse> {
+  async register(
+    identity: OperatorIdentity,
+    force = false,
+    productionId?: number | null,
+  ): Promise<RegisterUserResponse> {
     return this.emitAck<RegisterUserResponse>(
       SocketEvent.registerUser,
-      registerUserPayload(identity, force),
+      registerUserPayload(identity, force, productionId),
     );
+  }
+
+  async setActiveProduction(productionId: number | null): Promise<number | null> {
+    const payload = await this.emitAck<{ ok?: boolean; productionId?: unknown; error?: string }>(
+      SocketEvent.setActiveProduction,
+      { productionId },
+      SET_ACTIVE_PRODUCTION_ACK_MS,
+    );
+    if (payload && payload.ok === false) {
+      throw new Error(payload.error || 'Unable to change production');
+    }
+    const next = payload?.productionId;
+    if (typeof next === 'number' && Number.isFinite(next)) {
+      return next;
+    }
+    if (typeof next === 'string' && next.trim() !== '') {
+      const parsed = Number(next);
+      return Number.isFinite(parsed) ? parsed : productionId;
+    }
+    return productionId;
   }
 
   async requestApplePttBootstrap(): Promise<unknown> {
@@ -344,20 +380,40 @@ export class SignalingClient {
       const record = payload && typeof payload === 'object' ? (payload as SessionKickInfo) : {};
       this.handlers.onSessionKicked?.(record);
     });
+    socket.on(SocketEvent.cutCamera, (payload) => {
+      this.handlers.onCameraTally?.(parseCameraTally(payload));
+    });
+    socket.on(SocketEvent.activeProductionReset, (payload) => {
+      const record = payload && typeof payload === 'object' ? (payload as { productionId?: unknown }) : {};
+      this.handlers.onActiveProductionReset?.(parseProductionId(record.productionId));
+    });
+    socket.on(SocketEvent.availableProductionsUpdated, (payload) => {
+      const record = payload && typeof payload === 'object' ? (payload as { productions?: unknown }) : {};
+      this.handlers.onAvailableProductionsUpdated?.(parseProductions(record.productions));
+    });
   }
 
-  private emitAck<T>(event: string, payload?: unknown): Promise<T> {
+  private emitAck<T>(event: string, payload?: unknown, timeoutMs = ACK_TIMEOUT_MS): Promise<T> {
     const socket = this.socket;
     if (!socket?.connected) {
       return Promise.reject(new Error('Socket.IO is not connected yet.'));
     }
 
     return new Promise((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         reject(new Error(`${event} timed out.`));
-      }, ACK_TIMEOUT_MS);
+      }, timeoutMs);
 
       const ack = (response: T) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         clearTimeout(timer);
         if (response && typeof response === 'object' && 'error' in response && (response as { error?: string }).error) {
           reject(new Error(String((response as { error?: string }).error)));

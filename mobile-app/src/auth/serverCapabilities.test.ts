@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { compareAppVersion, requiresBrowserSessionCookie } from './serverCapabilities';
+import { compareAppVersion, requiresBrowserSessionCookie, supportsActiveProduction } from './serverCapabilities';
 
 describe('serverCapabilities', () => {
   it('does not require a session cookie on v1.1.3', () => {
@@ -12,5 +12,12 @@ describe('serverCapabilities', () => {
     expect(requiresBrowserSessionCookie('1.2.1')).toBe(true);
     expect(requiresBrowserSessionCookie('1.2.5')).toBe(true);
     expect(compareAppVersion('1.2.0', '1.2.1')).toBeLessThan(0);
+  });
+
+  it('announces active production from v1.5.0', () => {
+    expect(supportsActiveProduction('1.4.4')).toBe(false);
+    expect(supportsActiveProduction('1.5.0')).toBe(true);
+    expect(supportsActiveProduction('1.5.4')).toBe(true);
+    expect(supportsActiveProduction(undefined)).toBeNull();
   });
 });

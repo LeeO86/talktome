@@ -12,6 +12,8 @@ export const colors = {
   speaking: '#75F2B8',
   mute: '#B23833',
   danger: '#FFB8B8',
+  tallyPgm: '#e00000',
+  tallyPrv: '#00875a',
   target: 'rgba(255,255,255,0.05)',
   targetSelected: 'rgba(122,71,199,0.20)',
   reply: 'rgba(61,214,245,0.20)',

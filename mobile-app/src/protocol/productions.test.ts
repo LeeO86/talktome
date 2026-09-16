@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_PRODUCTION, productionChoices, resolveProduction, visibleProductionName } from './productions';
+import { DEFAULT_PRODUCTION, parseProductionId, parseProductions, productionChoices, resolveProduction, visibleProductionName } from './productions';
 
 describe('productionChoices', () => {
   it('offers a synthetic Default first when the server does not announce one', () => {
@@ -42,5 +42,20 @@ describe('visibleProductionName', () => {
     expect(visibleProductionName('default')).toBeNull();
     expect(visibleProductionName(null)).toBeNull();
     expect(visibleProductionName('Studio 2')).toBe('Studio 2');
+  });
+});
+
+describe('parseProductions', () => {
+  it('keeps numeric ids and names', () => {
+    expect(parseProductions([{ id: '4', name: 'Studio' }, { id: 1 }])).toEqual([{ id: 4, name: 'Studio' }]);
+  });
+});
+
+describe('parseProductionId', () => {
+  it('accepts numbers and numeric strings', () => {
+    expect(parseProductionId(4)).toBe(4);
+    expect(parseProductionId('4')).toBe(4);
+    expect(parseProductionId(null)).toBeNull();
+    expect(parseProductionId('')).toBeNull();
   });
 });
