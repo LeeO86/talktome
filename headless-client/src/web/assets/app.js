@@ -614,6 +614,18 @@
     let active = false;
     let startX = 0;
     let lockedBySlide = false;
+    const rowOf = () => options.row || element;
+    const isReply = element.id === 'reply';
+    const paintPress = (on) => {
+      const row = rowOf();
+      row.classList.toggle('ptt-pressing', on);
+      if (isReply) {
+        element.classList.toggle('active', on || (options.isLocked && options.isLocked()));
+        return;
+      }
+      if (on || row.classList.contains('talk-locked')) row.classList.add('talking-to');
+      else row.classList.remove('talking-to');
+    };
     const begin = (event) => {
       if (ignore && event.target.closest(ignore)) return;
       if (element.disabled) return;
@@ -628,7 +640,7 @@
       lockedBySlide = false;
       startX = event.clientX;
       state.pressed.add(target);
-      (options.row || element).classList.add('ptt-pressing');
+      paintPress(true);
       try {
         element.setPointerCapture(event.pointerId);
       } catch {
@@ -643,17 +655,17 @@
         const target = getTarget();
         if (target) {
           state.locks.add(target);
+          rowOf().classList.add('talk-locked', 'talking-to');
           postTalk('lock', target);
-          if (state.status && state.status.snapshot) renderRemote(state.status.snapshot);
         }
       }
     };
     const end = (event) => {
       if (!active) return;
       active = false;
-      (options.row || element).classList.remove('ptt-pressing');
       const target = getTarget();
       if (target) state.pressed.delete(target);
+      paintPress(false);
       if (!lockedBySlide && target) postTalk('release', target);
       try {
         element.releasePointerCapture(event.pointerId);
