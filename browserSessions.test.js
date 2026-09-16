@@ -24,3 +24,27 @@ test("expires browser sessions", () => {
 
   assert.equal(store.get("expiring-token"), null);
 });
+
+test("restores a persisted browser session after recreating the store", () => {
+  const records = new Map();
+  const persistence = {
+    read: (token) => records.get(token) || null,
+    write: (token, session) => records.set(token, { ...session }),
+    remove: (token) => records.delete(token),
+    purgeExpired: (currentTime) => {
+      for (const [token, session] of records) {
+        if (session.expiresAt <= currentTime) records.delete(token);
+      }
+    },
+  };
+  const firstStore = createBrowserSessionStore({
+    createToken: () => "restart-token",
+    persistence,
+  });
+  firstStore.create({ kind: "user", userId: 17, name: "Adi" });
+
+  const restartedStore = createBrowserSessionStore({ persistence });
+  assert.equal(restartedStore.get("restart-token").session.userId, 17);
+  assert.equal(restartedStore.revoke("restart-token"), true);
+  assert.equal(firstStore.get("restart-token"), null);
+});

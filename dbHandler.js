@@ -8,6 +8,79 @@ const BRIDGE_TRIGGER_DEFAULT_THRESHOLD_DB = -45;
 const BRIDGE_TRIGGER_MIN_THRESHOLD_DB = -120;
 const BRIDGE_TRIGGER_MAX_THRESHOLD_DB = -10;
 
+function hashBrowserSessionToken(token) {
+  const normalized = typeof token === 'string' ? token.trim() : '';
+  if (!normalized) return null;
+  return crypto.createHash('sha256').update(normalized).digest('hex');
+}
+
+function saveBrowserSession(token, session = {}) {
+  const tokenHash = hashBrowserSessionToken(token);
+  const kind = session.kind === 'feed' ? 'feed' : session.kind === 'user' ? 'user' : null;
+  const identityId = Number(kind === 'user' ? session.userId : session.feedId);
+  const createdAt = Number(session.createdAt);
+  const expiresAt = Number(session.expiresAt);
+  if (!tokenHash || !kind || !Number.isInteger(identityId) || identityId < 1) {
+    throw new Error('Invalid browser session identity');
+  }
+  if (!Number.isFinite(createdAt) || !Number.isFinite(expiresAt) || expiresAt <= createdAt) {
+    throw new Error('Invalid browser session lifetime');
+  }
+
+  db.prepare(`
+    INSERT INTO browser_sessions
+      (token_hash, kind, identity_id, name, source, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(token_hash) DO UPDATE SET
+      kind = excluded.kind,
+      identity_id = excluded.identity_id,
+      name = excluded.name,
+      source = excluded.source,
+      created_at = excluded.created_at,
+      expires_at = excluded.expires_at
+  `).run(
+    tokenHash,
+    kind,
+    identityId,
+    String(session.name || ''),
+    String(session.source || 'password'),
+    createdAt,
+    expiresAt
+  );
+}
+
+function getBrowserSessionByToken(token) {
+  const tokenHash = hashBrowserSessionToken(token);
+  if (!tokenHash) return null;
+  const row = db.prepare(`
+    SELECT kind, identity_id, name, source, created_at, expires_at
+    FROM browser_sessions
+    WHERE token_hash = ?
+  `).get(tokenHash);
+  if (!row) return null;
+  return {
+    kind: row.kind,
+    userId: row.kind === 'user' ? Number(row.identity_id) : undefined,
+    feedId: row.kind === 'feed' ? Number(row.identity_id) : undefined,
+    name: row.name,
+    source: row.source,
+    createdAt: Number(row.created_at),
+    expiresAt: Number(row.expires_at),
+  };
+}
+
+function deleteBrowserSession(token) {
+  const tokenHash = hashBrowserSessionToken(token);
+  if (!tokenHash) return false;
+  return db.prepare('DELETE FROM browser_sessions WHERE token_hash = ?')
+    .run(tokenHash).changes > 0;
+}
+
+function purgeExpiredBrowserSessions(now = Date.now()) {
+  return db.prepare('DELETE FROM browser_sessions WHERE expires_at <= ?')
+    .run(Number(now)).changes;
+}
+
 function normalizeBridgeText(value) {
   if (value === null || value === undefined) return '';
   return String(value).trim().slice(0, BRIDGE_ENDPOINT_TEXT_LIMIT);
@@ -893,7 +966,7 @@ function exportDatabaseSnapshot() {
       ORDER BY id
     `).all(),
     feeds: db.prepare(`
-      SELECT id, name, password
+      SELECT id, name, password, login_token_hash
       FROM feeds
       ORDER BY id
     `).all(),
@@ -1009,6 +1082,7 @@ function importDatabaseSnapshot(snapshot) {
   }
 
   const restore = db.transaction(() => {
+    db.prepare('DELETE FROM browser_sessions').run();
     db.prepare('DELETE FROM user_bridge_endpoints').run();
     db.prepare('DELETE FROM feed_bridge_endpoints').run();
     db.prepare('DELETE FROM production_user_conference').run();
@@ -1045,8 +1119,8 @@ function importDatabaseSnapshot(snapshot) {
       VALUES (?, ?)
     `);
     const insertFeed = db.prepare(`
-      INSERT INTO feeds (id, name, password)
-      VALUES (?, ?, ?)
+      INSERT INTO feeds (id, name, password, login_token_hash)
+      VALUES (?, ?, ?, ?)
     `);
     const insertMembership = db.prepare(`
       INSERT INTO user_conference (user_id, conference_id)
@@ -1165,7 +1239,12 @@ function importDatabaseSnapshot(snapshot) {
     });
 
     feeds.forEach((row) => {
-      insertFeed.run(Number(row.id), String(row.name), String(row.password));
+      insertFeed.run(
+        Number(row.id),
+        String(row.name),
+        String(row.password),
+        row.login_token_hash ? String(row.login_token_hash) : null
+      );
     });
 
     userConference.forEach((row) => {
@@ -1566,6 +1645,34 @@ function getUserByLoginToken(token) {
   `).get(tokenHash) || null;
 }
 
+function createFeedLoginToken(id) {
+  const feedId = Number(id);
+  if (!Number.isInteger(feedId) || feedId < 1) {
+    throw new Error('Invalid feed id');
+  }
+
+  const feed = db.prepare('SELECT id FROM feeds WHERE id = ?').get(feedId);
+  if (!feed) throw new Error('Feed not found');
+
+  const token = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  db.prepare('UPDATE feeds SET login_token_hash = ? WHERE id = ?').run(tokenHash, feedId);
+  return token;
+}
+
+function getFeedByLoginToken(token) {
+  if (typeof token !== 'string') return null;
+  const normalizedToken = token.trim();
+  if (normalizedToken.length < 32 || normalizedToken.length > 256) return null;
+
+  const tokenHash = crypto.createHash('sha256').update(normalizedToken).digest('hex');
+  return db.prepare(`
+    SELECT id, name
+    FROM feeds
+    WHERE login_token_hash = ?
+  `).get(tokenHash) || null;
+}
+
 function updateAdminPassword(id, password) {
   const hash = bcrypt.hashSync(password, 10);
   const stmt = db.prepare('UPDATE users SET password = ?, admin_must_change = 0 WHERE id = ?');
@@ -1715,7 +1822,7 @@ function updateFeedName(id, name) {
 
 function updateFeedPassword(id, password) {
   const hash = bcrypt.hashSync(password, 10);
-  const stmt = db.prepare('UPDATE feeds SET password = ? WHERE id = ?');
+  const stmt = db.prepare('UPDATE feeds SET password = ?, login_token_hash = NULL WHERE id = ?');
   const result = stmt.run(hash, id);
   return result.changes > 0;
 }
@@ -2183,6 +2290,10 @@ ensureDefaultAdmin();
 
 
 module.exports = {
+  saveBrowserSession,
+  getBrowserSessionByToken,
+  deleteBrowserSession,
+  purgeExpiredBrowserSessions,
   getAllUsers,
   getUserById,
   getUserAudioSettings,
@@ -2237,6 +2348,8 @@ module.exports = {
   updateUserPassword,
   createUserLoginToken,
   getUserByLoginToken,
+  createFeedLoginToken,
+  getFeedByLoginToken,
   updateAdminPassword,
   updateFeedName,
   updateFeedPassword,

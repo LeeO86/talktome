@@ -94,7 +94,8 @@
         font-weight: 650;
         line-height: 1.25;
       }
-      .user-audio-settings-dialog button.user-audio-settings-dialog__close {
+      .user-audio-settings-dialog button.user-audio-settings-dialog__close,
+      button.image-lightbox__close {
         display: grid;
         place-items: center;
         width: 2.2rem;
@@ -774,6 +775,11 @@
       }
 
       .badge.guest-profile {
+        display: inline-flex;
+        align-items: center;
+        flex: 0 0 auto;
+        white-space: nowrap;
+        line-height: 1.2;
         background: rgba(14, 165, 233, 0.18);
         color: #bae6fd;
       }
@@ -1119,7 +1125,8 @@
 
       .config-panel button:not(.media-network-qr-button),
       .admin-action-dialog__actions button,
-      .user-audio-settings-dialog__close {
+      .user-audio-settings-dialog__close,
+      .image-lightbox__close {
         height: 2.2rem;
         min-height: 0;
         padding: 0.4rem 0.75rem;
@@ -1132,7 +1139,8 @@
 
       .config-panel button:not(.media-network-qr-button):hover,
       .admin-action-dialog__actions button:hover,
-      .user-audio-settings-dialog__close:hover {
+      .user-audio-settings-dialog__close:hover,
+      .image-lightbox__close:hover {
         border-color: rgba(59, 130, 246, 0.58);
         background: rgba(37, 99, 235, 0.3);
       }
@@ -1454,9 +1462,11 @@
       }
 
       .image-lightbox__download {
-        width: 4.25rem;
-        min-width: 4.25rem;
+        width: auto;
+        min-width: 7rem;
         min-height: 2.7rem !important;
+        gap: 0.45rem;
+        padding: 0.55rem 0.9rem;
       }
 
       .image-lightbox {
@@ -1489,14 +1499,6 @@
         position: absolute;
         top: 0.85rem;
         right: 0.85rem;
-        width: 2.4rem;
-        height: 2.4rem;
-        border: 1px solid rgba(148, 163, 184, 0.24);
-        border-radius: 999px;
-        background: rgba(30, 41, 59, 0.84);
-        color: var(--text);
-        font-size: 1.1rem;
-        cursor: pointer;
       }
 
       .image-lightbox__title {
@@ -2590,11 +2592,33 @@
 
       .status-table {
         width: 100%;
-        min-width: 52rem;
+        min-width: 59.5rem;
         table-layout: fixed;
         border-collapse: collapse;
         font-size: 0.84rem;
       }
+
+      .status-table.status-table--with-production {
+        min-width: 67.5rem;
+      }
+
+      .status-col--status { width: 20%; }
+      .status-col--name { width: 10%; }
+      .status-col--production { width: 10%; }
+      .status-col--client { width: 16%; }
+      .status-col--address { width: 16%; }
+      .status-col--rtt { width: 7%; }
+      .status-col--loss { width: 7%; }
+      .status-col--connected { width: 12%; }
+      .status-col--last-seen { width: 12%; }
+
+      .status-table--with-production .status-col--name { width: 9%; }
+      .status-table--with-production .status-col--client { width: 14%; }
+      .status-table--with-production .status-col--address { width: 14%; }
+      .status-table--with-production .status-col--rtt { width: 6%; }
+      .status-table--with-production .status-col--loss { width: 6%; }
+      .status-table--with-production .status-col--connected { width: 10.5%; }
+      .status-table--with-production .status-col--last-seen { width: 10.5%; }
 
       .status-table th,
       .status-table td {
@@ -2643,21 +2667,22 @@
         background: #64748b;
       }
 
-      @keyframes statusTalkingLedBlink {
+      @keyframes statusTalkingLedPulse {
         0%,
-        49% {
-          background: var(--success);
+        100% {
+          opacity: 0.72;
+          transform: scale(0.82);
           box-shadow:
-            0 0 0 3px rgba(34, 197, 94, 0.14),
-            0 0 10px rgba(34, 197, 94, 0.4);
+            0 0 0 2px rgba(139, 92, 246, 0.12),
+            0 0 5px rgba(139, 92, 246, 0.28);
         }
 
-        50%,
-        100% {
-          background: #8b5cf6;
+        50% {
+          opacity: 1;
+          transform: scale(1);
           box-shadow:
-            0 0 0 3px rgba(139, 92, 246, 0.18),
-            0 0 10px rgba(139, 92, 246, 0.35);
+            0 0 0 4px rgba(139, 92, 246, 0.2),
+            0 0 12px rgba(139, 92, 246, 0.55);
         }
       }
 
@@ -2677,8 +2702,9 @@
       }
 
       .status-indicator__dot.is-talking {
-        background: var(--success);
-        animation: statusTalkingLedBlink 1.6s steps(1, end) infinite;
+        background: #8b5cf6;
+        animation: statusTalkingLedPulse 1.35s ease-in-out infinite;
+        animation-delay: var(--status-talking-animation-delay, 0ms);
       }
 
       @media (prefers-reduced-motion: reduce) {
@@ -2929,6 +2955,10 @@
           display: block;
         }
 
+        .status-table.status-table--with-production {
+          min-width: 0;
+        }
+
         .status-table colgroup,
         .status-table thead {
           display: none;
@@ -2976,6 +3006,18 @@
         .status-table td:nth-child(6)::before { content: 'Loss'; }
         .status-table td:nth-child(7)::before { content: 'Connected since'; }
         .status-table td:nth-child(8)::before { content: 'Last seen'; }
+
+        .status-table--with-production td:nth-child(3)::before { content: 'Production'; }
+        .status-table--with-production td:nth-child(4)::before { content: 'Client'; }
+        .status-table--with-production td:nth-child(5)::before { content: 'Address'; }
+        .status-table--with-production td:nth-child(6)::before { content: 'RTT'; }
+        .status-table--with-production td:nth-child(7)::before { content: 'Loss'; }
+        .status-table--with-production td:nth-child(8)::before { content: 'Connected since'; }
+        .status-table--with-production td:nth-child(9)::before { content: 'Last seen'; }
+
+        .status-table--with-production .status-production-spacer {
+          display: none;
+        }
 
         .status-table tbody tr:has(.status-empty) {
           grid-template-columns: 1fr;
@@ -3376,19 +3418,21 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--users">
                 <colgroup>
-                  <col style="width: 9.8rem;">
-                  <col style="width: 16rem;">
-                  <col style="width: 16%;">
-                  <col style="width: 18%;">
-                  <col style="width: 7rem;">
-                  <col style="width: 6rem;">
-                  <col style="width: 15%;">
-                  <col style="width: 15%;">
+                  <col class="status-col--status">
+                  <col class="status-col--name">
+                  <col class="status-col--production" data-status-production-column hidden>
+                  <col class="status-col--client">
+                  <col class="status-col--address">
+                  <col class="status-col--rtt">
+                  <col class="status-col--loss">
+                  <col class="status-col--connected">
+                  <col class="status-col--last-seen">
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
+                    <th data-status-production-column hidden>Production</th>
                     <th>Client</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>
@@ -3412,19 +3456,21 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--feeds">
                 <colgroup>
-                  <col style="width: 9.8rem;">
-                  <col style="width: 16rem;">
-                  <col style="width: 16%;">
-                  <col style="width: 18%;">
-                  <col style="width: 7rem;">
-                  <col style="width: 6rem;">
-                  <col style="width: 15%;">
-                  <col style="width: 15%;">
+                  <col class="status-col--status">
+                  <col class="status-col--name">
+                  <col class="status-col--production" data-status-production-column hidden>
+                  <col class="status-col--client">
+                  <col class="status-col--address">
+                  <col class="status-col--rtt">
+                  <col class="status-col--loss">
+                  <col class="status-col--connected">
+                  <col class="status-col--last-seen">
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
+                    <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>
@@ -3448,19 +3494,21 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--bridges">
                 <colgroup>
-                  <col style="width: 9.8rem;">
-                  <col style="width: 16rem;">
-                  <col style="width: 16%;">
-                  <col style="width: 18%;">
-                  <col style="width: 7rem;">
-                  <col style="width: 6rem;">
-                  <col style="width: 15%;">
-                  <col style="width: 15%;">
+                  <col class="status-col--status">
+                  <col class="status-col--name">
+                  <col class="status-col--production" data-status-production-column hidden>
+                  <col class="status-col--client">
+                  <col class="status-col--address">
+                  <col class="status-col--rtt">
+                  <col class="status-col--loss">
+                  <col class="status-col--connected">
+                  <col class="status-col--last-seen">
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
+                    <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>
@@ -3484,19 +3532,21 @@
             <div class="status-table-wrap">
               <table class="status-table status-table--companions">
                 <colgroup>
-                  <col style="width: 9.8rem;">
-                  <col style="width: 16rem;">
-                  <col style="width: 16%;">
-                  <col style="width: 18%;">
-                  <col style="width: 7rem;">
-                  <col style="width: 6rem;">
-                  <col style="width: 15%;">
-                  <col style="width: 15%;">
+                  <col class="status-col--status">
+                  <col class="status-col--name">
+                  <col class="status-col--production" data-status-production-column hidden>
+                  <col class="status-col--client">
+                  <col class="status-col--address">
+                  <col class="status-col--rtt">
+                  <col class="status-col--loss">
+                  <col class="status-col--connected">
+                  <col class="status-col--last-seen">
                 </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
+                    <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>
@@ -4013,12 +4063,13 @@
           <img id="admin-image-lightbox-image" class="image-lightbox__image" alt="Large connection QR code" />
         </div>
         <div class="image-lightbox__actions">
-          <button type="button" id="admin-image-lightbox-download" class="small icon-button image-lightbox__download" aria-label="Download connection QR code" title="Download QR code">
+          <button type="button" id="admin-image-lightbox-download" class="small icon-button image-lightbox__download" aria-label="Download QR code" title="Download QR code">
             <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M10 3.5V11.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M6.75 8.5L10 11.75L13.25 8.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M4 14.25H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             </svg>
+            <span>Download</span>
           </button>
         </div>
       </div>

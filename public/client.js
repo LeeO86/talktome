@@ -7,6 +7,14 @@ const socket = io({
   timeout: 10000,
 });
 
+const USER_AGENT = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+const isTouchMacUA = typeof navigator !== 'undefined'
+  ? navigator.maxTouchPoints > 1 && /Macintosh/.test(USER_AGENT)
+  : false;
+const isiOS = typeof navigator !== 'undefined'
+  ? /iPad|iPhone|iPod/.test(USER_AGENT) || isTouchMacUA
+  : false;
+
 function setupPasswordVisibilityToggles(root = document) {
   root.querySelectorAll('[data-password-toggle]').forEach((button) => {
     if (button.dataset.passwordToggleReady === 'true') return;
@@ -47,7 +55,29 @@ function setupPasswordVisibilityToggles(root = document) {
 setupPasswordVisibilityToggles();
 
 socket.on("cut-camera", (value) => {
-  document.body.classList.toggle("cut-camera", value);
+  const pgm = typeof value === "boolean" ? value : Boolean(value?.pgm);
+  const prv = typeof value === "object" && value !== null ? Boolean(value.prv) : false;
+  // A user may be on both buses. PGM has visual priority, so expose exactly
+  // one color state to Safari instead of leaving both classes active.
+  const visiblePrv = prv && !pgm;
+  const themeColor = pgm ? "#e00000" : visiblePrv ? "#00875a" : "#0b1120";
+  const browserThemeColor = isiOS ? "#0b1120" : themeColor;
+  const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+
+  document.documentElement.classList.remove("preview-camera", "cut-camera");
+  document.body.classList.remove("preview-camera", "cut-camera");
+  if (pgm) document.body.classList.add("cut-camera");
+  else if (visiblePrv) document.body.classList.add("preview-camera");
+
+  // iOS Safari caches the lower browser chrome color independently. Keep the
+  // browser surface neutral there and render tally only in the application.
+  if (!isiOS) {
+    if (pgm) document.documentElement.classList.add("cut-camera");
+    else if (visiblePrv) document.documentElement.classList.add("preview-camera");
+  }
+  document.documentElement.style.backgroundColor = browserThemeColor;
+  document.body.style.backgroundColor = browserThemeColor;
+  themeColorMeta?.setAttribute("content", browserThemeColor);
 });
 
 const BASE_REPLY_LABEL = "REPLY";
@@ -294,16 +324,9 @@ function didReachSlideToLockThreshold(currentX, startX) {
   return leftHandModeEnabled ? delta >= 42 : delta <= -42;
 }
 
-const USER_AGENT = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-const isTouchMacUA = typeof navigator !== 'undefined'
-  ? navigator.maxTouchPoints > 1 && /Macintosh/.test(USER_AGENT)
-  : false;
 const isAndroidBrowser = /Android/i.test(USER_AGENT);
 const isMobileBrowser = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobi/i.test(USER_AGENT)
   || isTouchMacUA;
-const isiOS = typeof navigator !== 'undefined'
-  ? /iPad|iPhone|iPod/.test(USER_AGENT) || isTouchMacUA
-  : false;
 const isSafariBrowser = typeof navigator !== 'undefined'
   ? /Safari/i.test(USER_AGENT) && !/Chrome|CriOS|Edg|OPR|Firefox|FxiOS/i.test(USER_AGENT)
   : false;
@@ -3471,6 +3494,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const guestLoginPanel = document.getElementById("guest-login-panel");
   const guestLoginButton = document.getElementById("guest-login-button");
   const guestDisplayNameInput = document.getElementById("guest-display-name");
+  const settingsServerVersion = document.getElementById('settings-server-version');
   const productionLoginPanel = document.getElementById('production-login-panel');
   const productionLoginOptions = document.getElementById('production-login-options');
   const bridgeLoginPanel = document.getElementById('bridge-login-panel');
@@ -3696,6 +3720,10 @@ document.addEventListener("DOMContentLoaded", () => {
   );
   const focusLoginNameField = () => {
     if (!loginUsernameInput || session.name) return;
+    if (guestLoginRequested && guestLoginEnabled && guestDisplayNameInput) {
+      window.requestAnimationFrame(() => guestDisplayNameInput.focus());
+      return;
+    }
     if (guestLoginEnabled && isMobileLoginViewport()) return;
     window.requestAnimationFrame(() => {
       try {
@@ -3770,6 +3798,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch('/login/options');
       if (!res.ok) throw new Error(`Login options failed: ${res.status}`);
       const payload = await res.json();
+      const appVersion = String(payload?.appVersion || '').trim();
+      if (settingsServerVersion && appVersion) {
+        const displayVersion = appVersion === 'unknown'
+          ? 'unknown'
+          : `v${appVersion.replace(/^v/i, '')}`;
+        settingsServerVersion.textContent = `Server ${displayVersion}`;
+        settingsServerVersion.hidden = false;
+      }
       const guestLogin = payload?.guestLogin || {};
       const enabled = guestLogin.enabled === true;
       guestLoginEnabled = enabled;
@@ -6753,6 +6789,14 @@ let cachedOperatorTargets = null;
 
   const loginToken = consumeLoginTokenFromHash();
 
+  function consumeGuestLoginIntentFromHash() {
+    if (window.location.hash !== '#guest') return false;
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    return true;
+  }
+
+  const guestLoginRequested = consumeGuestLoginIntentFromHash();
+
   function clearStoredCredentialIdentity() {
     localStorage.removeItem("userId");
     localStorage.removeItem(FEED_ID_STORAGE_KEY);
@@ -6789,6 +6833,14 @@ let cachedOperatorTargets = null;
 
   async function bootstrapLogin() {
     await loadLoginOptions();
+
+    if (guestLoginRequested) {
+      clearStoredIdentity();
+      if (!guestLoginEnabled) {
+        setLoginError('Guest login is not available');
+      }
+      return;
+    }
 
     if (loginToken) {
       clearStoredIdentity();
@@ -7131,7 +7183,7 @@ let cachedOperatorTargets = null;
         && Number(target.targetId) === numericConferenceId
       ));
     if (!conferenceIsVisible) return;
-    await renderTargetList(cachedUsers);
+    await renderTargetList(cachedUsers, { membershipUpdateOnly: true });
   });
 
   function resolveApiUserTargetSocketId(rawTargetId) {
@@ -8427,7 +8479,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         li.classList.toggle('is-offline', !activeFeedKeys.has(key));
       }
       if (statusEl) {
-        statusEl.textContent = getSpeakerStatusText(key, isSpeaking);
+        renderSpeakerStatus(statusEl, key, isSpeaking);
       }
 
       applyMuteVisualState(li, mutedPeers.has(key));
@@ -8853,6 +8905,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   function renderConferenceMembersModal(target, users = cachedUsers) {
     if (!conferenceMembersModalDescription || !conferenceMembersModalList) return;
     const conferenceId = Number(target?.targetId);
+    conferenceMembersModal.dataset.conferenceId = String(conferenceId);
     const members = normalizeConferenceTargetMembers(target);
     const usersById = new Map();
     (Array.isArray(users) ? users : []).forEach((user) => {
@@ -8987,7 +9040,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     event.stopPropagation();
   });
 
-  async function renderTargetList(users) {
+  async function renderTargetList(users, { membershipUpdateOnly = false } = {}) {
     if (!isOperatorSession()) return;
     const dbUserId = getOperatorProfileUserId();
     if (!dbUserId) return;
@@ -9005,7 +9058,23 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       return;
     }
 
-    cachedOperatorTargets = Array.isArray(targets) ? targets.map((target) => ({ ...target })) : [];
+    // Membership notifications also reach other participants. Preserve their
+    // buttons, held keys and icon nodes when only the member data changed.
+    const withoutMembers = (items) => items.map(({ members, ...target }) => target);
+    if (membershipUpdateOnly && Array.isArray(targets) && Array.isArray(cachedOperatorTargets)
+      && JSON.stringify(withoutMembers(targets)) === JSON.stringify(withoutMembers(cachedOperatorTargets))) {
+      targets.forEach((target, index) => {
+        cachedOperatorTargets[index].members = target.members;
+      });
+      if (conferenceMembersModal && !conferenceMembersModal.hidden) {
+        const target = cachedOperatorTargets.find((item) => item.targetType === 'conference'
+          && String(item.targetId) === conferenceMembersModal.dataset.conferenceId);
+        if (target) renderConferenceMembersModal(target, users);
+      }
+      return;
+    }
+
+    cachedOperatorTargets = Array.isArray(targets) ? targets : [];
 
     const list = document.getElementById('targets-list');
     if (!list) return;
@@ -10488,8 +10557,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       speakerNames.push(normalizedName);
     });
 
-    if (!speakerNames.length) return 'Speaking';
-    return `${speakerNames.join(', ')} speaking`;
+    return speakerNames.join(', ');
   }
 
   function getSpeakerStatusText(targetKey, isSpeaking) {
@@ -10501,6 +10569,26 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       return getConferenceSpeakerStatusText(targetKey);
     }
     return '';
+  }
+
+  function renderSpeakerStatus(statusEl, targetKey, isSpeaking) {
+    const text = getSpeakerStatusText(targetKey, isSpeaking);
+    const showTalkIcon = isSpeaking && targetKey.startsWith('conf-');
+    const signature = JSON.stringify([showTalkIcon, text]);
+    if (statusEl.dataset.speakerStatus === signature) return;
+    statusEl.dataset.speakerStatus = signature;
+    statusEl.replaceChildren();
+    statusEl.removeAttribute('aria-label');
+    if (showTalkIcon) {
+      const icon = document.createElement('img');
+      icon.className = 'speaker-status-icon';
+      icon.src = UI_ICONS.talk;
+      icon.alt = '';
+      icon.setAttribute('aria-hidden', 'true');
+      statusEl.appendChild(icon);
+      statusEl.setAttribute('aria-label', text ? `${text} speaking` : 'Speaking');
+    }
+    if (text) statusEl.appendChild(document.createTextNode(text));
   }
 
   function updateSpeakerHighlight(targetKey, isSpeaking) {
@@ -10530,7 +10618,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       }
       icon?.classList.add("speaking");
       if (statusEl) {
-        statusEl.textContent = getSpeakerStatusText(targetKey, true);
+        renderSpeakerStatus(statusEl, targetKey, true);
       }
 
       applyFeedDucking();
@@ -10548,7 +10636,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     }
     icon?.classList.remove("speaking");
     if (statusEl) {
-      statusEl.textContent = '';
+      renderSpeakerStatus(statusEl, targetKey, false);
     }
     if (lockTargetMatches) {
       el?.classList.add("talking-to");

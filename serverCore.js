@@ -14,7 +14,7 @@ const { createBrowserSessionStore } = require("./browserSessions");
 const { loadProxySsoConfig, resolveProxySsoIdentity } = require("./proxySso");
 const { getDataDir } = require("./dataPaths");
 const { ApplePttPushService } = require("./applePttPushService");
-const { buildLoginUrl, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
+const { buildGuestLoginUrl, buildLoginUrl, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
 const { installHttpRedirectOnHttpsPort } = require("./httpsRedirect");
 const {
@@ -39,6 +39,7 @@ const {
 } = require("./defaultClientSettings");
 const { stopPeerTransmission } = require("./transmissionControl");
 const { resolveActiveProductionSelection } = require("./productionSelection");
+const { createTallyStateStore, normalizeTallyBus } = require("./tallyState");
 const {
   arePeersInSameActiveProduction: arePeersInSameActiveProductionScope,
   canRouteTargetBetweenPeers,
@@ -139,11 +140,13 @@ const {
   createUser,
   createConference,
   createFeed,
+  createFeedLoginToken,
   updateUserName,
   updateConferenceName,
   updateUserPassword,
   createUserLoginToken,
   getUserByLoginToken,
+  getFeedByLoginToken,
   updateAdminPassword,
   updateFeedName,
   updateFeedPassword,
@@ -213,7 +216,11 @@ const {
   setUserAdminRole,
   updateUserBridgeEndpoint,
   exportDatabaseSnapshot,
-  importDatabaseSnapshot
+  importDatabaseSnapshot,
+  saveBrowserSession,
+  getBrowserSessionByToken,
+  deleteBrowserSession,
+  purgeExpiredBrowserSessions,
 } = require("./dbHandler");
 
 const app = express();
@@ -737,7 +744,15 @@ const ADMIN_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const BROWSER_SESSION_COOKIE = "talktome_session";
 const BROWSER_SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const adminSessions = new Map();
-const browserSessions = createBrowserSessionStore({ ttlMs: BROWSER_SESSION_TTL_MS });
+const browserSessions = createBrowserSessionStore({
+  ttlMs: BROWSER_SESSION_TTL_MS,
+  persistence: {
+    read: getBrowserSessionByToken,
+    write: saveBrowserSession,
+    remove: deleteBrowserSession,
+    purgeExpired: purgeExpiredBrowserSessions,
+  },
+});
 const adminStatusStreams = new Set();
 let adminStatusBroadcastTimer = null;
 let pendingAdminStatusReason = "status-changed";
@@ -814,12 +829,12 @@ function createUserBrowserSession(res, user, source = "password") {
   setBrowserSessionCookie(res, token);
 }
 
-function createFeedBrowserSession(res, feed) {
+function createFeedBrowserSession(res, feed, source = "password") {
   const { token } = browserSessions.create({
     kind: "feed",
     feedId: Number(feed.id),
     name: feed.name,
-    source: "password",
+    source,
   });
   setBrowserSessionCookie(res, token);
 }
@@ -2368,7 +2383,7 @@ function ensureCompanionUserState(userId, fallbackName = null) {
   return state;
 }
 
-function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot = null) {
+function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot = null, productionId = null) {
   const base = ensureCompanionUserState(userId, fallbackName);
   const found = findUserPeerByUserId(userId);
   const peer = found?.peer || null;
@@ -2383,6 +2398,7 @@ function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot =
   const lastTargets = normalizeCompanionVisibleRuntimeTalkTargets(base.lastTargets);
   const lastTarget = normalizeCompanionVisibleRuntimeTalkTarget(base.lastTarget) || lastTargets[0] || currentTarget || null;
   const incomingTalkState = sanitizeCompanionIncomingTalkState(buildIncomingTalkStateForUser(userId, incomingSnapshot));
+  const tally = getTallyState(productionId);
 
   return {
     userId,
@@ -2396,7 +2412,8 @@ function buildCompanionUserState(userId, fallbackName = null, incomingSnapshot =
     lastTarget,
     lastTargets: lastTargets.length > 0 ? lastTargets : (lastTarget ? [lastTarget] : []),
     lastSpokeAt: base.lastSpokeAt || null,
-    cutCamera: Boolean(resolvedName && cutCameraUser && resolvedName === cutCameraUser),
+    cutCamera: Boolean(resolvedName && tally.pgmUser === resolvedName),
+    previewCamera: Boolean(resolvedName && tally.prvUser === resolvedName),
     lastCommandId: base.lastCommandId || null,
     lastCommandResult: base.lastCommandResult || null,
     targetAudioStates: normalizeCompanionTargetAudioStates(base.targetAudioStates),
@@ -2473,13 +2490,18 @@ function buildCompanionSnapshot(productionId = null) {
     .map((user) => ({
     id: user.id,
     name: user.name,
-    state: buildCompanionUserState(user.id, user.name, incomingSnapshot),
+    state: buildCompanionUserState(user.id, user.name, incomingSnapshot, productionId),
   }));
 
   return {
     version: 1,
     serverTime: new Date().toISOString(),
-    cutCameraUser,
+    cutCameraUser: getTallyState(productionId).pgmUser,
+    previewCameraUser: getTallyState(productionId).prvUser,
+    tally: {
+      productionId,
+      ...getTallyState(productionId),
+    },
     users,
     conferences: productionId === null ? getAllConferences() : getProductionConferences(productionId),
     feeds: productionId === null ? getAllFeeds() : getProductionFeeds(productionId),
@@ -2510,12 +2532,16 @@ function emitCompanionEvent(event, payload = {}) {
 
 function emitCompanionUserState(userId, reason = "state-updated", fallbackName = null, incomingSnapshot = null) {
   if (!isCompanionAddressableUserId(userId)) return;
-  const state = buildCompanionUserState(userId, fallbackName, incomingSnapshot);
-  emitCompanionEvent("user-state", {
-    reason,
-    at: new Date().toISOString(),
-    state,
-  });
+  if (!companionNamespace) return;
+  for (const socket of companionNamespace.sockets.values()) {
+    const productionId = socket.data?.productionId ?? getDefaultTallyProductionId();
+    if (productionId !== null && !isUserInProduction(userId, productionId)) continue;
+    socket.emit("user-state", {
+      reason,
+      at: new Date().toISOString(),
+      state: buildCompanionUserState(userId, fallbackName, incomingSnapshot, productionId),
+    });
+  }
 }
 
 function updateCompanionUserState(userId, patch = {}, { reason = "state-updated", fallbackName = null } = {}) {
@@ -2726,8 +2752,48 @@ const HTTP_PORT = (() => {
 const httpPortSource = process.env.HTTP_PORT ? "explicit" : (HTTP_PORT !== null ? "auto" : "disabled");
 const RTC_PORT_RANGE = resolveActiveRtcPortRange(loadRuntimeConfig() || {});
 
-// Track the user whose camera is currently "cut"
-let cutCameraUser = null;
+// Tally is transient and scoped to the active production.
+const tallyState = createTallyStateStore();
+
+function getDefaultTallyProductionId() {
+  return getPrimaryProduction()?.id ?? null;
+}
+
+function getTallyState(productionId = null) {
+  return tallyState.get(productionId ?? getDefaultTallyProductionId());
+}
+
+function buildPeerTallyState(peer) {
+  const productionId = peer?.productionId ?? getDefaultTallyProductionId();
+  const state = getTallyState(productionId);
+  return {
+    productionId,
+    pgm: Boolean(peer?.name && peer.name === state.pgmUser),
+    prv: Boolean(peer?.name && peer.name === state.prvUser),
+  };
+}
+
+function emitPeerTallyState(peer) {
+  if (peer?.socket && isOperatorPeer(peer)) {
+    peer.socket.emit("cut-camera", buildPeerTallyState(peer));
+  }
+}
+
+function emitProductionTallyState(productionId) {
+  for (const peer of peers.values()) {
+    if (!isOperatorPeer(peer)) continue;
+    if (String(peer.productionId ?? "") !== String(productionId ?? "")) continue;
+    emitPeerTallyState(peer);
+  }
+}
+
+function emitCompanionTallyEvent(productionId, payload) {
+  if (!companionNamespace) return;
+  for (const socket of companionNamespace.sockets.values()) {
+    if (String(socket.data?.productionId ?? "") !== String(productionId ?? "")) continue;
+    socket.emit("cut-camera", payload);
+  }
+}
 
 // === GET ===
 app.get("/users", requireAdmin, (req, res) => {
@@ -2905,6 +2971,7 @@ app.get("/login/options", (req, res) => {
   try {
     const settings = resolveGuestLoginSettings(loadRuntimeConfig() || {}, { createProfile: false });
     res.json({
+      appVersion: SERVER_APP_VERSION,
       guestLogin: {
         enabled: settings.enabled,
         label: settings.profileName || "Guest",
@@ -2916,6 +2983,7 @@ app.get("/login/options", (req, res) => {
   } catch (err) {
     console.error("Login options error:", err);
     res.json({
+      appVersion: SERVER_APP_VERSION,
       guestLogin: { enabled: false, label: "Guest" },
       sso: { enabled: PROXY_SSO_CONFIG.enabled },
     });
@@ -2994,13 +3062,19 @@ app.post("/login", (req, res) => {
 app.post("/login/token", (req, res) => {
   try {
     const user = getUserByLoginToken(req.body?.token);
-    if (!user) {
-      return res.status(401).json({ error: "Invalid or expired login link" });
+    if (user) {
+      console.log("Login URL used for user:", user.name);
+      res.setHeader("Cache-Control", "no-store");
+      createUserBrowserSession(res, user, "login-token");
+      return res.json(buildLoginIdentity(user));
     }
-    console.log("Login URL used for user:", user.name);
+
+    const feed = getFeedByLoginToken(req.body?.token);
+    if (!feed) return res.status(401).json({ error: "Invalid or expired login link" });
+    console.log("Login URL used for feed:", feed.name);
     res.setHeader("Cache-Control", "no-store");
-    createUserBrowserSession(res, user, "login-token");
-    return res.json(buildLoginIdentity(user));
+    createFeedBrowserSession(res, feed, "login-token");
+    return res.json(buildLoginIdentity(feed, "feed"));
   } catch (err) {
     console.error("Login URL error:", err);
     return res.status(500).json({ error: "Login link failed" });
@@ -3263,6 +3337,7 @@ app.delete("/admin/productions/:productionId", requireAdmin, (req, res) => {
     if (!deleteProduction(req.params.productionId)) {
       return res.status(404).json({ error: "Production not found" });
     }
+    tallyState.remove(req.params.productionId);
     resetPeersUsingProduction(req.params.productionId);
     notifyAvailableProductionsChanged();
     res.sendStatus(204);
@@ -3645,10 +3720,41 @@ function getFreshBrowserMediaStats(peer, now = Date.now()) {
   };
 }
 
+function buildAdminStatusTalkTargets(targets, usersById, conferencesById) {
+  return normalizeRuntimeTalkTargets(targets).map((target) => {
+    if (target.type === "user") {
+      return {
+        ...target,
+        name: usersById.get(String(target.id))?.name || `User ${target.id}`,
+      };
+    }
+    if (target.type === "conference") {
+      return {
+        ...target,
+        name: conferencesById.get(String(target.id))?.name || `Conference ${target.id}`,
+      };
+    }
+    if (target.type === "guest") {
+      return {
+        ...target,
+        name: findGuestPeerByGuestId(target.id)?.peer?.name || "Guest",
+      };
+    }
+    return target;
+  });
+}
+
 function buildAdminStatusSnapshot() {
   const now = Date.now();
+  const multipleProductionsEnabled = areMultipleProductionsEnabled();
   const allUsers = getAllUsers();
   const allFeeds = getAllFeeds();
+  const allConferences = getAllConferences();
+  const productionsById = multipleProductionsEnabled
+    ? new Map(getAllProductions().map((production) => [String(production.id), production]))
+    : new Map();
+  const usersById = new Map(allUsers.map((user) => [String(user.id), user]));
+  const conferencesById = new Map(allConferences.map((conference) => [String(conference.id), conference]));
   const users = allUsers
     .filter((user) => !user.is_superadmin && !user.is_guest_profile)
     .map((user) => {
@@ -3657,6 +3763,10 @@ function buildAdminStatusSnapshot() {
       const online = Boolean(peer);
       const isBridge = Boolean(peer?.isBridgePeer);
       const activeTargets = peer ? getPeerActiveTalkTargets(peer) : [];
+      const talkTargets = buildAdminStatusTalkTargets(activeTargets, usersById, conferencesById);
+      const activeProduction = online && multipleProductionsEnabled && peer.productionId != null
+        ? productionsById.get(String(peer.productionId)) || null
+        : null;
       const bridge = isBridge
         ? bridgeRegistry.get(String(peer.bridgeId)) || null
         : null;
@@ -3667,6 +3777,10 @@ function buildAdminStatusSnapshot() {
         name: user.name,
         online,
         talking: online && activeTargets.length > 0,
+        talkTargets,
+        activeProduction: activeProduction
+          ? { id: Number(activeProduction.id), name: activeProduction.name }
+          : null,
         connectionType: online ? (isBridge ? "bridge" : "browser") : null,
         configuredAsBridge: Boolean(user.bridge_enabled),
         bridgeName: bridge?.name || (isBridge ? peer.bridgeId : null),
@@ -3762,6 +3876,7 @@ function buildAdminStatusSnapshot() {
     serverStartedAt: statusIsoTimestamp(SERVER_STARTED_AT),
     runningInContainer: isRunningInContainer(),
     restartSupported: isServerRestartSupported(),
+    multipleProductionsEnabled,
     users,
     feeds,
     bridges,
@@ -4310,6 +4425,7 @@ app.put("/admin/settings/multiple-productions", requireAdmin, (req, res) => {
         peer.socket.emit("user-targets-updated");
         peer.socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
         peer.socket.emit("conference-members-updated", { conferenceId: null });
+        emitPeerTallyState(peer);
       }
       reconcileAllProducerRecipients();
       broadcastRuntimeUserStates("multiple-productions-disabled");
@@ -4549,16 +4665,75 @@ app.put("/admin/users/:id/admin", requireAdmin, (req, res) => {
   }
 });
 
-app.post("/admin/users/:id/login-link", requireAdmin, (req, res) => {
+async function createAdminLoginLinkPayload(kind, id, req, includeQrCode = false) {
+  const active = resolveTransportAnnouncedAddress();
+  const connectUrl = resolveAdminConnectUrl(active.announcedAddress, req);
+  let token = null;
+  let loginUrl = "";
+
+  if (kind === "feed") {
+    token = createFeedLoginToken(id);
+    loginUrl = buildLoginUrl(connectUrl, token);
+  } else {
+    const user = getUserById(id);
+    if (!user) throw new Error("User not found");
+
+    if (user.is_guest_profile) {
+      const guestSettings = resolveGuestLoginSettings(loadRuntimeConfig() || {}, { createProfile: false });
+      if (!guestSettings.enabled || String(guestSettings.profileUserId) !== String(user.id)) {
+        throw new Error("Guest login is disabled");
+      }
+      loginUrl = buildGuestLoginUrl(connectUrl);
+    } else {
+      token = createUserLoginToken(id);
+      loginUrl = buildLoginUrl(connectUrl, token);
+    }
+  }
+  let qrCodeDataUrl = null;
+
+  if (includeQrCode && loginUrl) {
+    qrCodeDataUrl = await QRCode.toDataURL(loginUrl, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 640,
+      color: {
+        dark: "#0f172a",
+        light: "#ffffff",
+      },
+    });
+  }
+
+  return { token, loginUrl: loginUrl || null, qrCodeDataUrl };
+}
+
+app.post("/admin/users/:id/login-link", requireAdmin, async (req, res) => {
   try {
-    const token = createUserLoginToken(req.params.id);
-    const active = resolveTransportAnnouncedAddress();
-    const connectUrl = resolveAdminConnectUrl(active.announcedAddress, req);
-    const loginUrl = buildLoginUrl(connectUrl, token);
+    const payload = await createAdminLoginLinkPayload(
+      "user",
+      req.params.id,
+      req,
+      req.query?.qr === "1"
+    );
     res.setHeader("Cache-Control", "no-store");
-    return res.json({ token, loginUrl: loginUrl || null });
+    return res.json(payload);
   } catch (err) {
     const status = err.message === "User not found" ? 404 : 400;
+    return res.status(status).json({ error: err.message || "Failed to create login link" });
+  }
+});
+
+app.post("/admin/feeds/:id/login-link", requireAdmin, async (req, res) => {
+  try {
+    const payload = await createAdminLoginLinkPayload(
+      "feed",
+      req.params.id,
+      req,
+      req.query?.qr === "1"
+    );
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(payload);
+  } catch (err) {
+    const status = err.message === "Feed not found" ? 404 : 400;
     return res.status(status).json({ error: err.message || "Failed to create login link" });
   }
 });
@@ -4723,7 +4898,7 @@ app.get("/api/v1/companion/users", requireCompanionApiKey, (req, res) => {
     .map((user) => ({
       id: user.id,
       name: user.name,
-      state: buildCompanionUserState(user.id, user.name),
+      state: buildCompanionUserState(user.id, user.name, null, productionId),
     }));
 
   if (!hasCompanionGlobalAccess(req.companionAuth)) {
@@ -5910,6 +6085,7 @@ function resetPeersUsingProduction(productionId, userId = null) {
     peer.socket.emit("user-targets-updated");
     peer.socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
     peer.socket.emit("conference-members-updated", { conferenceId: null });
+    emitPeerTallyState(peer);
   }
   reconcileAllProducerRecipients();
 }
@@ -6083,34 +6259,54 @@ app.post("/cut-camera", (req, res) => {
     return res.status(400).json({ error: "user must be provided" });
   }
 
-  console.log(`[CUT-CAMERA] Request for user: ${user}`);
-  const previousCutCameraUser = cutCameraUser;
-  // empty string disables all highlights
-  cutCameraUser = user.trim() || null;
-
-  for (const peer of peers.values()) {
-    peer.socket.emit("cut-camera", peer.name === cutCameraUser);
+  let bus;
+  let productionId;
+  try {
+    bus = normalizeTallyBus(req.body?.bus);
+    productionId = resolveCompanionProduction({ type: "api-key" }, req.body?.productionId);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
   }
 
-  emitCompanionEvent("cut-camera", {
-    at: new Date().toISOString(),
-    previousUser: previousCutCameraUser,
-    user: cutCameraUser,
-  });
+  const nextUser = user.trim() || null;
+  if (nextUser) {
+    const matchedUser = getUserByName(nextUser);
+    if (!isCompanionAddressableUser(matchedUser)) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (productionId !== null && !isUserInProduction(matchedUser.id, productionId)) {
+      return res.status(400).json({ error: "User is not a member of this production" });
+    }
+  }
 
-  if (previousCutCameraUser !== cutCameraUser) {
-    const touchedNames = new Set([previousCutCameraUser, cutCameraUser].filter(Boolean));
+  console.log(`[TALLY] ${bus.toUpperCase()} request for ${nextUser || "off"} in production ${productionId}`);
+  const updated = tallyState.set(productionId, bus, nextUser);
+  emitProductionTallyState(productionId);
+
+  const payload = {
+    at: new Date().toISOString(),
+    productionId,
+    bus,
+    previousUser: updated.previousUser,
+    user: updated.user,
+    pgmUser: updated.pgmUser,
+    prvUser: updated.prvUser,
+  };
+  emitCompanionTallyEvent(productionId, payload);
+
+  if (updated.previousUser !== updated.user) {
+    const touchedNames = new Set([updated.previousUser, updated.user].filter(Boolean));
     if (touchedNames.size) {
       const allUsers = getAllUsers();
       allUsers.forEach((u) => {
-        if (touchedNames.has(u.name)) {
+        if (touchedNames.has(u.name) && (productionId === null || isUserInProduction(u.id, productionId))) {
           emitCompanionUserState(u.id, "cut-camera-changed", u.name);
         }
       });
     }
   }
 
-  res.json({ user: cutCameraUser });
+  res.json(payload);
 });
 
 
@@ -7503,7 +7699,7 @@ io.on("connection", (socket) => {
       peer.guestProfileUserId = null;
       peer.productionId = activeProductionId;
       console.log(`[USER] Registered operator ${effectiveName} (${effectiveId}) on socket ${socket.id}`);
-      socket.emit("cut-camera", effectiveName === cutCameraUser);
+      emitPeerTallyState(peer);
     } else if (normalizedKind === "feed") {
       const existingFeed = Array.from(peers.entries()).find(([sid, p]) => (
         sid !== socket.id
@@ -7614,6 +7810,7 @@ io.on("connection", (socket) => {
     const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
     try {
       peer.productionId = normalizeActiveProductionId(productionId, userId);
+      emitPeerTallyState(peer);
       socket.emit("conference-list", getEffectiveConferencesForPeer(peer));
       socket.emit("conference-members-updated", { conferenceId: null });
       reconcileAllProducerRecipients({ forceAnnounce: true });
