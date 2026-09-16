@@ -543,7 +543,9 @@ body[data-view='remote'] #flash {
   box-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
 }
 
-#targets-list li.target-item.talking-to {
+#targets-list li.target-item.talking-to,
+#targets-list li.target-item.ptt-pressing:not(.is-offline),
+#targets-list li.target-item:has(.talk-btn:active):not(.is-offline) {
   border-color: rgba(139, 92, 246, 0.8);
   background: rgba(139, 92, 246, 0.12);
   box-shadow: 0 0 12px rgba(139, 92, 246, 0.35);

@@ -636,6 +636,7 @@
         toggleLock(target);
         return;
       }
+      if (active) return;
       active = true;
       lockedBySlide = false;
       startX = event.clientX;
@@ -677,6 +678,12 @@
     element.addEventListener('pointermove', move);
     element.addEventListener('pointerup', end);
     element.addEventListener('pointercancel', end);
+    element.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      begin(event);
+    });
+    element.addEventListener('mousemove', move);
+    element.addEventListener('mouseup', end);
     element.addEventListener('contextmenu', (event) => event.preventDefault());
   }
 
