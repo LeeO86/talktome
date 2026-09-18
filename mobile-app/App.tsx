@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 import { session, useSessionStore } from './src/session/store';
-import { cameraTallyColor } from './src/protocol';
+import { cameraTallyColor, TALLY_FRAME_WIDTH } from './src/protocol';
 import { androidSafeArea } from './src/ui/androidSafeArea';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { OperatorScreen } from './src/ui/OperatorScreen';
@@ -76,7 +76,7 @@ export default function App() {
           pointerEvents="none"
           accessible={false}
           importantForAccessibility="no-hide-descendants"
-          style={[styles.tallyFrame, { borderColor: tallyColor }]}
+          style={[styles.tallyFrame, { borderColor: tallyColor, borderWidth: TALLY_FRAME_WIDTH }]}
         />
       ) : null}
     </View>
@@ -94,7 +94,6 @@ const styles = StyleSheet.create({
   },
   tallyFrame: {
     ...StyleSheet.absoluteFill,
-    borderWidth: 8,
     zIndex: 40,
   },
 });
