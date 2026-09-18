@@ -1,5 +1,53 @@
-import { type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import {
+  Pressable,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
+
+import { settingsPalette, settingsScheme, type SettingsPalette, type SettingsScheme } from './settingsTheme';
+
+type SettingsStyles = ReturnType<typeof makeSettingsStyles>;
+
+type SettingsThemeValue = {
+  scheme: SettingsScheme;
+  palette: SettingsPalette;
+  styles: SettingsStyles;
+};
+
+const SettingsThemeContext = createContext<SettingsThemeValue | null>(null);
+
+export function SettingsThemeProvider({
+  scheme,
+  children,
+}: {
+  scheme: string | null | undefined;
+  children: ReactNode;
+}) {
+  const value = useMemo(() => {
+    const resolved = settingsScheme(scheme);
+    const palette = settingsPalette(resolved);
+    return { scheme: resolved, palette, styles: makeSettingsStyles(palette) };
+  }, [scheme]);
+  return <SettingsThemeContext.Provider value={value}>{children}</SettingsThemeContext.Provider>;
+}
+
+export function useSettingsTheme(): SettingsThemeValue {
+  const value = useContext(SettingsThemeContext);
+  if (!value) {
+    const palette = settingsPalette('light');
+    return { scheme: 'light', palette, styles: makeSettingsStyles(palette) };
+  }
+  return value;
+}
+
+export function useSettingsStyles(): SettingsStyles {
+  return useSettingsTheme().styles;
+}
 
 type HeaderProps = {
   title: string;
@@ -9,22 +57,27 @@ type HeaderProps = {
 };
 
 export function SettingsHeader({ title, backLabel = 'Settings', onBack, onDone }: HeaderProps) {
+  const styles = useSettingsStyles();
   return (
-    <View style={settingsStyles.header}>
+    <View style={styles.header}>
       {onBack ? (
         <Pressable onPress={onBack} accessibilityRole="button" hitSlop={8}>
-          <Text style={settingsStyles.navLink}>‹ {backLabel}</Text>
+          <Text style={styles.navLink}>‹ {backLabel}</Text>
         </Pressable>
       ) : (
-        <Text style={settingsStyles.title}>{title}</Text>
+        <Text style={styles.title}>{title}</Text>
       )}
-      {onBack ? <Text style={settingsStyles.nestedTitle} numberOfLines={1}>{title}</Text> : null}
+      {onBack ? (
+        <Text style={styles.nestedTitle} numberOfLines={1}>
+          {title}
+        </Text>
+      ) : null}
       {onDone ? (
         <Pressable onPress={onDone} accessibilityRole="button">
-          <Text style={settingsStyles.done}>Done</Text>
+          <Text style={styles.done}>Done</Text>
         </Pressable>
       ) : (
-        <View style={settingsStyles.doneSpacer} />
+        <View style={styles.doneSpacer} />
       )}
     </View>
   );
@@ -39,9 +92,10 @@ export function SettingsSection({
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
+  const styles = useSettingsStyles();
   return (
-    <View style={[settingsStyles.section, style]}>
-      {title ? <Text style={settingsStyles.sectionTitle}>{title}</Text> : null}
+    <View style={[styles.section, style]}>
+      {title ? <Text style={styles.sectionTitle}>{title}</Text> : null}
       {children}
     </View>
   );
@@ -58,16 +112,17 @@ export function SettingsRow({
   selected?: boolean;
   onPress?: () => void;
 }) {
+  const styles = useSettingsStyles();
   const content = (
     <>
-      <Text style={settingsStyles.rowLabel}>{label}</Text>
-      {value ? <Text style={settingsStyles.rowValue}>{value}</Text> : null}
+      <Text style={styles.rowLabel}>{label}</Text>
+      {value ? <Text style={styles.rowValue}>{value}</Text> : null}
     </>
   );
   if (onPress) {
     return (
       <Pressable
-        style={[settingsStyles.row, selected && settingsStyles.rowSelected]}
+        style={[styles.row, selected && styles.rowSelected]}
         onPress={onPress}
         accessibilityRole="button"
       >
@@ -75,7 +130,7 @@ export function SettingsRow({
       </Pressable>
     );
   }
-  return <View style={[settingsStyles.row, selected && settingsStyles.rowSelected]}>{content}</View>;
+  return <View style={[styles.row, selected && styles.rowSelected]}>{content}</View>;
 }
 
 export function SettingsNavRow({
@@ -89,14 +144,15 @@ export function SettingsNavRow({
   subtitle?: string;
   onPress: () => void;
 }) {
+  const styles = useSettingsStyles();
   return (
-    <Pressable style={settingsStyles.row} onPress={onPress} accessibilityRole="button">
-      <View style={settingsStyles.rowText}>
-        <Text style={settingsStyles.navLabel}>{label}</Text>
-        {subtitle ? <Text style={settingsStyles.rowSubtitle}>{subtitle}</Text> : null}
+    <Pressable style={styles.row} onPress={onPress} accessibilityRole="button">
+      <View style={styles.rowText}>
+        <Text style={styles.navLabel}>{label}</Text>
+        {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
       </View>
-      {value ? <Text style={settingsStyles.rowValue}>{value}</Text> : null}
-      <Text style={settingsStyles.chevron}>›</Text>
+      {value ? <Text style={styles.rowValue}>{value}</Text> : null}
+      <Text style={styles.chevron}>›</Text>
     </Pressable>
   );
 }
@@ -112,18 +168,14 @@ export function SettingsActionRow({
   destructive?: boolean;
   disabled?: boolean;
 }) {
+  const styles = useSettingsStyles();
   return (
-    <Pressable
-      style={settingsStyles.row}
-      onPress={onPress}
-      disabled={disabled}
-      accessibilityRole="button"
-    >
+    <Pressable style={styles.row} onPress={onPress} disabled={disabled} accessibilityRole="button">
       <Text
         style={[
-          settingsStyles.actionLabel,
-          destructive && settingsStyles.destructiveLabel,
-          disabled && settingsStyles.disabledLabel,
+          styles.actionLabel,
+          destructive && styles.destructiveLabel,
+          disabled && styles.disabledLabel,
         ]}
       >
         {label}
@@ -133,180 +185,210 @@ export function SettingsActionRow({
 }
 
 export function SettingsFootnote({ children }: { children: ReactNode }) {
-  return <Text style={settingsStyles.footnote}>{children}</Text>;
+  const styles = useSettingsStyles();
+  return <Text style={styles.footnote}>{children}</Text>;
 }
 
-export const settingsStyles = StyleSheet.create({
-  sheet: {
-    flex: 1,
-    backgroundColor: '#F2F2F7',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 12,
-    gap: 12,
-  },
-  title: {
-    fontSize: 34,
-    fontWeight: '700',
-    color: '#111',
-    flex: 1,
-  },
-  nestedTitle: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#111',
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  navLink: {
-    color: '#007AFF',
-    fontSize: 17,
-    fontWeight: '400',
-    marginBottom: 4,
-    minWidth: 72,
-  },
-  done: {
-    color: '#007AFF',
-    fontSize: 17,
-    fontWeight: '600',
-    marginBottom: 6,
-    minWidth: 48,
-    textAlign: 'right',
-  },
-  doneSpacer: {
-    minWidth: 48,
-    marginBottom: 6,
-  },
-  body: {
-    padding: 16,
-    gap: 18,
-  },
-  section: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    overflow: 'hidden',
-    paddingBottom: 8,
-  },
-  sectionTitle: {
-    color: '#6D6D72',
-    fontSize: 13,
-    fontWeight: '600',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 6,
-    textTransform: 'uppercase',
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  rowSelected: {
-    backgroundColor: '#E8F7FF',
-  },
-  rowText: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  rowLabel: {
-    color: '#111',
-    fontSize: 16,
-    flex: 1,
-    paddingRight: 12,
-  },
-  navLabel: {
-    color: '#111',
-    fontSize: 16,
-  },
-  rowSubtitle: {
-    color: '#6D6D72',
-    fontSize: 13,
-    paddingTop: 2,
-  },
-  rowValue: {
-    color: '#6D6D72',
-    fontSize: 16,
-    flexShrink: 1,
-    textAlign: 'right',
-    marginLeft: 12,
-  },
-  chevron: {
-    color: '#C7C7CC',
-    fontSize: 22,
-    fontWeight: '500',
-    marginLeft: 6,
-    marginTop: -1,
-  },
-  sliderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingBottom: 10,
-  },
-  sliderHint: {
-    color: '#6D6D72',
-    fontSize: 13,
-    fontVariant: ['tabular-nums'],
-    width: 32,
-  },
-  actionLabel: {
-    color: '#007AFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  destructiveLabel: {
-    color: '#FF3B30',
-  },
-  disabledLabel: {
-    color: '#C7C7CC',
-  },
-  footnote: {
-    color: '#6D6D72',
-    fontSize: 13,
-    paddingHorizontal: 16,
-    paddingBottom: 10,
-  },
-  signOut: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  signOutText: {
-    color: '#FF3B30',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  pairingHero: {
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 36,
-    gap: 12,
-  },
-  pairingTitle: {
-    color: '#111',
-    fontSize: 22,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  pairingBody: {
-    color: '#6D6D72',
-    fontSize: 16,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  pairingTimer: {
-    color: '#111',
-    fontSize: 34,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    paddingTop: 8,
-  },
-});
+export function SettingsSwitchRow({
+  label,
+  value,
+  onValueChange,
+  trackColor = '#3DD6F5',
+}: {
+  label: string;
+  value: boolean;
+  onValueChange: (value: boolean) => void;
+  trackColor?: string;
+}) {
+  const styles = useSettingsStyles();
+  return (
+    <View style={styles.row}>
+      <Text style={styles.rowLabel}>{label}</Text>
+      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: trackColor }} />
+    </View>
+  );
+}
+
+function makeSettingsStyles(palette: SettingsPalette) {
+  return StyleSheet.create({
+    sheet: {
+      flex: 1,
+      backgroundColor: palette.sheet,
+    },
+    header: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-end',
+      paddingHorizontal: 20,
+      paddingTop: 20,
+      paddingBottom: 12,
+      gap: 12,
+    },
+    title: {
+      fontSize: 34,
+      fontWeight: '700',
+      color: palette.text,
+      flex: 1,
+    },
+    nestedTitle: {
+      flex: 1,
+      fontSize: 17,
+      fontWeight: '600',
+      color: palette.text,
+      textAlign: 'center',
+      marginBottom: 4,
+    },
+    navLink: {
+      color: palette.link,
+      fontSize: 17,
+      fontWeight: '400',
+      marginBottom: 4,
+      minWidth: 72,
+    },
+    done: {
+      color: palette.link,
+      fontSize: 17,
+      fontWeight: '600',
+      marginBottom: 6,
+      minWidth: 48,
+      textAlign: 'right',
+    },
+    doneSpacer: {
+      minWidth: 48,
+      marginBottom: 6,
+    },
+    body: {
+      padding: 16,
+      gap: 18,
+    },
+    section: {
+      backgroundColor: palette.card,
+      borderRadius: 12,
+      overflow: 'hidden',
+      paddingBottom: 8,
+    },
+    sectionTitle: {
+      color: palette.muted,
+      fontSize: 13,
+      fontWeight: '600',
+      paddingHorizontal: 16,
+      paddingTop: 12,
+      paddingBottom: 6,
+      textTransform: 'uppercase',
+    },
+    row: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    rowSelected: {
+      backgroundColor: palette.selected,
+    },
+    rowText: {
+      flex: 1,
+      paddingRight: 12,
+    },
+    rowLabel: {
+      color: palette.text,
+      fontSize: 16,
+      flex: 1,
+      paddingRight: 12,
+    },
+    navLabel: {
+      color: palette.text,
+      fontSize: 16,
+    },
+    rowSubtitle: {
+      color: palette.muted,
+      fontSize: 13,
+      paddingTop: 2,
+    },
+    rowValue: {
+      color: palette.muted,
+      fontSize: 16,
+      flexShrink: 1,
+      textAlign: 'right',
+      marginLeft: 12,
+    },
+    chevron: {
+      color: palette.chevron,
+      fontSize: 22,
+      fontWeight: '500',
+      marginLeft: 6,
+      marginTop: -1,
+    },
+    sliderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 16,
+      paddingBottom: 10,
+    },
+    sliderHint: {
+      color: palette.muted,
+      fontSize: 13,
+      fontVariant: ['tabular-nums'],
+      width: 32,
+    },
+    actionLabel: {
+      color: palette.link,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    destructiveLabel: {
+      color: palette.danger,
+    },
+    disabledLabel: {
+      color: palette.disabled,
+    },
+    footnote: {
+      color: palette.muted,
+      fontSize: 13,
+      paddingHorizontal: 16,
+      paddingBottom: 10,
+    },
+    signOut: {
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+    },
+    signOutText: {
+      color: palette.danger,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    pairingHero: {
+      alignItems: 'center',
+      paddingHorizontal: 24,
+      paddingVertical: 36,
+      gap: 12,
+    },
+    pairingTitle: {
+      color: palette.text,
+      fontSize: 22,
+      fontWeight: '700',
+      textAlign: 'center',
+    },
+    pairingBody: {
+      color: palette.muted,
+      fontSize: 16,
+      textAlign: 'center',
+      lineHeight: 22,
+    },
+    pairingTimer: {
+      color: palette.text,
+      fontSize: 34,
+      fontWeight: '700',
+      fontVariant: ['tabular-nums'],
+      paddingTop: 8,
+    },
+    actionDivider: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: palette.separator,
+    },
+  });
+}
+
+/** Light-mode layout fallback for callers that cannot use the theme hook. */
+export const settingsStyles = makeSettingsStyles(settingsPalette('light'));

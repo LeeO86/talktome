@@ -1,4 +1,5 @@
-import { Modal, Platform, Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, Text, View, useColorScheme } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
 
 import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
@@ -18,7 +19,10 @@ import {
   SettingsNavRow,
   SettingsRow,
   SettingsSection,
-  settingsStyles,
+  SettingsSwitchRow,
+  SettingsThemeProvider,
+  useSettingsStyles,
+  useSettingsTheme,
 } from './settingsChrome';
 import { VolumeSlider } from './VolumeSlider';
 
@@ -29,6 +33,8 @@ type Props = {
 
 type SettingsPage =
   | { kind: 'root' }
+  | { kind: 'layout' }
+  | { kind: 'audio' }
   | { kind: 'ptt' }
   | { kind: 'ptt-add' }
   | { kind: 'ptt-device'; id: string }
@@ -36,7 +42,7 @@ type SettingsPage =
 
 export function SettingsScreen({ visible, onClose }: Props) {
   const store = useSessionStore();
-  const audio = store.operatorAudio;
+  const scheme = useColorScheme();
   const [page, setPage] = useState<SettingsPage>({ kind: 'root' });
   const showPttList = useCallback(() => setPage({ kind: 'ptt' }), []);
 
@@ -49,7 +55,10 @@ export function SettingsScreen({ visible, onClose }: Props) {
     void session.cancelButtonPairing();
   }, [visible]);
 
-  const header = headerForPage(page, store.bleBindings.find((item) => page.kind === 'ptt-device' && item.id === page.id)?.name);
+  const header = headerForPage(
+    page,
+    store.bleBindings.find((item) => page.kind === 'ptt-device' && item.id === page.id)?.name,
+  );
 
   const goBack = () => {
     if (page.kind === 'ptt-add' || page.kind === 'ptt-device') {
@@ -61,249 +70,125 @@ export function SettingsScreen({ visible, onClose }: Props) {
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={[settingsStyles.sheet, androidSafeArea]}>
-        <SettingsHeader
-          title={header.title}
-          backLabel={header.backLabel}
+      <SettingsThemeProvider scheme={scheme}>
+        <SettingsSheet
+          header={header}
+          page={page}
           onBack={page.kind === 'root' ? undefined : goBack}
-          onDone={onClose}
+          onClose={onClose}
+          onOpenLayout={() => setPage({ kind: 'layout' })}
+          onOpenAudio={() => setPage({ kind: 'audio' })}
+          onOpenAccessories={() => setPage({ kind: 'ptt' })}
+          onOpenDebug={() => setPage({ kind: 'debug' })}
+          onAddDevice={() => setPage({ kind: 'ptt-add' })}
+          onOpenDevice={(id) => setPage({ kind: 'ptt-device', id })}
+          showPttList={showPttList}
         />
-
-        <ScrollView contentContainerStyle={settingsStyles.body}>
-          {page.kind === 'root' ? (
-            <>
-              <SettingsSection title="Layout">
-                <View style={settingsStyles.row}>
-                  <Text style={settingsStyles.rowLabel}>Left-handed</Text>
-                  <Switch
-                    value={store.leftHanded}
-                    onValueChange={(value) => session.setLeftHanded(value)}
-                    trackColor={{ true: '#3DD6F5' }}
-                  />
-                </View>
-                <SettingsFootnote>
-                  Moves the volume ring and the landscape Reply column to the left, and slides right to
-                  lock — same as the web client.
-                </SettingsFootnote>
-                <View style={settingsStyles.row}>
-                  <Text style={settingsStyles.rowLabel}>Talk & select</Text>
-                  <Switch
-                    value={store.talkSelectMode}
-                    onValueChange={(value) => session.setTalkSelectMode(value)}
-                    trackColor={{ true: '#E23B4A' }}
-                  />
-                </View>
-                <SettingsFootnote>
-                  Reply becomes a red Talk button. Cards only choose the destination. Tap the volume
-                  ring to set level in dB and mute. Double-tap a ring to mute. Tap a conference icon to set who you hear.
-                </SettingsFootnote>
-                <View style={settingsStyles.row}>
-                  <Text style={settingsStyles.rowLabel}>Lock multiple targets</Text>
-                  <Switch
-                    value={store.lockMultipleTargets}
-                    onValueChange={(value) => session.setLockMultipleTargets(value)}
-                    trackColor={{ true: '#3DD6F5' }}
-                  />
-                </View>
-                <SettingsFootnote>
-                  Slide-to-lock adds targets to the locked set instead of replacing it. Tap a locked
-                  card to drop just that target — same as the web client.
-                </SettingsFootnote>
-                <View style={settingsStyles.row}>
-                  <Text style={settingsStyles.rowLabel}>Horizontal volume fader</Text>
-                  <Switch
-                    value={audio.volumeFader}
-                    onValueChange={(value) => session.setOperatorAudio({ volumeFader: value })}
-                    trackColor={{ true: '#3DD6F5' }}
-                  />
-                </View>
-                <SettingsFootnote>
-                  Replaces the plus/minus buttons in the volume overlay and conference member list with
-                  a slider.
-                </SettingsFootnote>
-              </SettingsSection>
-
-              <SettingsSection title="Incoming audio">
-                <View style={settingsStyles.row}>
-                  <Text style={settingsStyles.rowLabel}>Dim feeds when addressed</Text>
-                  <Switch
-                    value={audio.feedDimIncoming}
-                    onValueChange={(value) => session.setOperatorAudio({ feedDimIncoming: value })}
-                    trackColor={{ true: '#3DD6F5' }}
-                  />
-                </View>
-                <View style={settingsStyles.row}>
-                  <Text style={settingsStyles.rowLabel}>Dim feeds while speaking</Text>
-                  <Switch
-                    value={audio.feedDimSelf}
-                    onValueChange={(value) => session.setOperatorAudio({ feedDimSelf: value })}
-                    trackColor={{ true: '#3DD6F5' }}
-                  />
-                </View>
-                <View style={settingsStyles.row}>
-                  <Text style={settingsStyles.rowLabel}>Dim amount</Text>
-                  <Text style={settingsStyles.rowValue}>{audio.feedDimDb} dB</Text>
-                </View>
-                <View style={settingsStyles.sliderRow}>
-                  <Text style={settingsStyles.sliderHint}>{FEED_DIM_DB_OPTIONS[0]}</Text>
-                  <VolumeSlider
-                    light
-                    flex
-                    accessibilityLabel="Dim amount"
-                    value={sliderPositionFromDimDb(audio.feedDimDb)}
-                    quantize={(position) => sliderPositionFromDimDb(dimDbFromSliderPosition(position))}
-                    onChange={(position) => session.setOperatorAudio({ feedDimDb: dimDbFromSliderPosition(position) })}
-                  />
-                  <Text style={settingsStyles.sliderHint}>{FEED_DIM_DB_OPTIONS[FEED_DIM_DB_OPTIONS.length - 1]}</Text>
-                </View>
-                <SettingsFootnote>
-                  Same defaults as the web client: dim when someone calls you, not while you talk, by
-                  14 dB.
-                </SettingsFootnote>
-              </SettingsSection>
-
-              <SettingsSection title="Microphone and speaker">
-                {store.audioRoutes.map((route) => (
-                  <SettingsRow
-                    key={route.id}
-                    label={route.label}
-                    value={route.selected ? 'Selected' : describeAudioRouteKind(route.kind)}
-                    selected={route.selected}
-                    onPress={() => void session.selectAudioDevice(route.id)}
-                  />
-                ))}
-                <SettingsFootnote>
-                  In-call style combos: phone earpiece, speaker, or a connected headset. Audio stays in
-                  communication mode so echo cancellation can run.
-                </SettingsFootnote>
-              </SettingsSection>
-
-              <SettingsSection title="Accessories">
-                <SettingsNavRow
-                  label="Push-to-talk devices"
-                  value={describePttDevicesSummary(store.bleBindings, store.bleDevices)}
-                  onPress={() => setPage({ kind: 'ptt' })}
-                />
-              </SettingsSection>
-
-              {Platform.OS === 'ios' ? (
-                <SettingsSection title="Apple Watch">
-                  <SettingsRow label="Remote" value={watchRemoteShortStatus(watchRemoteStatus())} />
-                  <SettingsFootnote>
-                    {describeWatchRemoteStatus(watchRemoteStatus())} The watch lists Reply, then the
-                    same online talk targets as the phone. Hold a row to talk; release to stop. Audio
-                    stays on the iPhone.
-                  </SettingsFootnote>
-                </SettingsSection>
-              ) : null}
-
-              <SettingsSection title="Session">
-                <SettingsRow
-                  label="Background"
-                  value={
-                    Platform.OS === 'ios'
-                      ? audioSessionStatusLabel({
-                          platform: 'ios',
-                          available: store.audioSessionAvailable,
-                          active: store.audioSessionActive,
-                          keepalive: store.audioKeepalive,
-                          pttEnabled: iosPttEnabled(),
-                          pttJoined: store.pttJoined,
-                        })
-                      : fgsStatusLabel({
-                          available: store.fgsAvailable,
-                          running: store.fgsRunning,
-                          platform: Platform.OS,
-                        })
-                  }
-                />
-                {Platform.OS === 'ios' ? (
-                  <>
-                    <SettingsRow
-                      label="PushToTalk"
-                      value={pttStatusLabel({
-                        enabledInBuild: iosPttEnabled(),
-                        nativeAvailable: store.pttAvailable,
-                        bootstrapEnabled: store.pttBootstrapEnabled,
-                        joined: store.pttJoined,
-                        verified: store.pttVerified,
-                      })}
-                    />
-                    {shouldShowPttJoinBanner({
-                      platform: Platform.OS,
-                      pttEnabled: iosPttEnabled(),
-                      bootstrapEnabled: store.pttBootstrapEnabled,
-                      joined: store.pttJoined,
-                    }) ? (
-                      <SettingsActionRow
-                        label="Join PushToTalk channel"
-                        onPress={() => {
-                          void session.joinSystemPttChannel();
-                          onClose();
-                        }}
-                      />
-                    ) : null}
-                    <SettingsFootnote>
-                      Lock Screen, Dynamic Island, and the home widget have Reply lock (toggle locked
-                      reply) and Disconnect. On iOS 18, add those same controls to Control Center or the
-                      Action Button.
-                    </SettingsFootnote>
-                  </>
-                ) : null}
-                {Platform.OS === 'android' ? (
-                  <>
-                    <SettingsActionRow
-                      label="Battery settings"
-                      onPress={() => void session.openBatteryEducation()}
-                    />
-                    <SettingsFootnote>
-                      Set TalkToMe to Unrestricted (Samsung: Device care) if the session dies after
-                      Home or screen-off. This does not promise every OEM.
-                    </SettingsFootnote>
-                  </>
-                ) : null}
-                <SettingsNavRow label="Debug" onPress={() => setPage({ kind: 'debug' })} />
-                <Pressable
-                  style={settingsStyles.signOut}
-                  onPress={() => {
-                    onClose();
-                    void session.leaveToProfiles();
-                  }}
-                >
-                  <Text style={settingsStyles.signOutText}>Sign Out</Text>
-                </Pressable>
-              </SettingsSection>
-            </>
-          ) : null}
-
-          {page.kind === 'ptt' ? (
-            <PttDevicesPage
-              onAddDevice={() => setPage({ kind: 'ptt-add' })}
-              onOpenDevice={(id) => setPage({ kind: 'ptt-device', id })}
-            />
-          ) : null}
-
-          {page.kind === 'ptt-add' ? <PttAddDevicePage onBound={showPttList} /> : null}
-
-          {page.kind === 'ptt-device' ? (
-            <PttDeviceDetailPage deviceId={page.id} onDeleted={showPttList} />
-          ) : null}
-
-          {page.kind === 'debug' ? <DebugSettingsPage /> : null}
-        </ScrollView>
-      </View>
+      </SettingsThemeProvider>
     </Modal>
+  );
+}
+
+function SettingsSheet({
+  header,
+  page,
+  onBack,
+  onClose,
+  onOpenLayout,
+  onOpenAudio,
+  onOpenAccessories,
+  onOpenDebug,
+  onAddDevice,
+  onOpenDevice,
+  showPttList,
+}: {
+  header: { title: string; backLabel: string };
+  page: SettingsPage;
+  onBack?: () => void;
+  onClose: () => void;
+  onOpenLayout: () => void;
+  onOpenAudio: () => void;
+  onOpenAccessories: () => void;
+  onOpenDebug: () => void;
+  onAddDevice: () => void;
+  onOpenDevice: (id: string) => void;
+  showPttList: () => void;
+}) {
+  const store = useSessionStore();
+  const styles = useSettingsStyles();
+  const { scheme } = useSettingsTheme();
+
+  return (
+    <View style={[styles.sheet, androidSafeArea]}>
+      {Platform.OS === 'android' ? <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} /> : null}
+      <SettingsHeader
+        title={header.title}
+        backLabel={header.backLabel}
+        onBack={onBack}
+        onDone={onClose}
+      />
+
+      <ScrollView contentContainerStyle={styles.body}>
+        {page.kind === 'root' ? (
+          <>
+            <SettingsSection>
+              <SettingsNavRow label="Layout" onPress={onOpenLayout} />
+              <SettingsNavRow label="Audio" onPress={onOpenAudio} />
+              <SettingsNavRow
+                label="Accessories"
+                value={describePttDevicesSummary(store.bleBindings, store.bleDevices)}
+                onPress={onOpenAccessories}
+              />
+              <SettingsNavRow label="Debug" onPress={onOpenDebug} />
+            </SettingsSection>
+            <SettingsSection>
+              <Pressable
+                style={styles.signOut}
+                onPress={() => {
+                  onClose();
+                  void session.leaveToProfiles();
+                }}
+              >
+                <Text style={styles.signOutText}>Sign Out</Text>
+              </Pressable>
+            </SettingsSection>
+          </>
+        ) : null}
+
+        {page.kind === 'layout' ? <LayoutSettingsPage /> : null}
+        {page.kind === 'audio' ? <AudioSettingsPage /> : null}
+
+        {page.kind === 'ptt' ? (
+          <>
+            <PttDevicesPage onAddDevice={onAddDevice} onOpenDevice={onOpenDevice} />
+            {Platform.OS === 'ios' ? <WatchSettingsSection /> : null}
+          </>
+        ) : null}
+
+        {page.kind === 'ptt-add' ? <PttAddDevicePage onBound={showPttList} /> : null}
+
+        {page.kind === 'ptt-device' ? (
+          <PttDeviceDetailPage deviceId={page.id} onDeleted={showPttList} />
+        ) : null}
+
+        {page.kind === 'debug' ? <DebugSettingsPage onClose={onClose} /> : null}
+      </ScrollView>
+    </View>
   );
 }
 
 function headerForPage(page: SettingsPage, deviceName?: string): { title: string; backLabel: string } {
   switch (page.kind) {
+    case 'layout':
+      return { title: 'Layout', backLabel: 'Settings' };
+    case 'audio':
+      return { title: 'Audio', backLabel: 'Settings' };
     case 'ptt':
-      return { title: 'PTT devices', backLabel: 'Settings' };
+      return { title: 'Accessories', backLabel: 'Settings' };
     case 'ptt-add':
-      return { title: 'Add a device', backLabel: 'Devices' };
+      return { title: 'Add a device', backLabel: 'Accessories' };
     case 'ptt-device':
-      return { title: deviceName || 'Accessory', backLabel: 'Devices' };
+      return { title: deviceName || 'Accessory', backLabel: 'Accessories' };
     case 'debug':
       return { title: 'Debug', backLabel: 'Settings' };
     default:
@@ -311,66 +196,255 @@ function headerForPage(page: SettingsPage, deviceName?: string): { title: string
   }
 }
 
-function DebugSettingsPage() {
+function LayoutSettingsPage() {
   const store = useSessionStore();
   const audio = store.operatorAudio;
 
   return (
     <>
-      <SettingsSection title="Audio">
-        <SettingsRow label="Used mic" value={store.audioInputLabel || store.captureMicLabel} />
-        <SettingsRow label="Used speaker" value={store.audioOutputLabel} />
-        <View style={settingsStyles.row}>
-          <Text style={settingsStyles.rowLabel}>Echo cancellation</Text>
-          <Switch
-            value={audio.echoCancellation}
-            onValueChange={(value) => session.setOperatorAudio({ echoCancellation: value })}
-            trackColor={{ true: '#3DD6F5' }}
-          />
+      <SettingsSection>
+        <SettingsSwitchRow
+          label="Left-handed"
+          value={store.leftHanded}
+          onValueChange={(value) => session.setLeftHanded(value)}
+        />
+        <SettingsFootnote>
+          Moves the volume ring and the landscape Reply column to the left, and slides right to lock —
+          same as the web client.
+        </SettingsFootnote>
+        <SettingsSwitchRow
+          label="Talk & select"
+          value={store.talkSelectMode}
+          onValueChange={(value) => session.setTalkSelectMode(value)}
+          trackColor="#E23B4A"
+        />
+        <SettingsFootnote>
+          Reply becomes a red Talk button. Cards only choose the destination. Tap the volume ring to
+          set level in dB and mute. Double-tap a ring to mute. Tap a conference icon to set who you hear.
+        </SettingsFootnote>
+        <SettingsSwitchRow
+          label="Lock multiple targets"
+          value={store.lockMultipleTargets}
+          onValueChange={(value) => session.setLockMultipleTargets(value)}
+        />
+        <SettingsFootnote>
+          Slide-to-lock adds targets to the locked set instead of replacing it. Tap a locked card to
+          drop just that target — same as the web client.
+        </SettingsFootnote>
+        <SettingsSwitchRow
+          label="Horizontal volume fader"
+          value={audio.volumeFader}
+          onValueChange={(value) => session.setOperatorAudio({ volumeFader: value })}
+        />
+        <SettingsFootnote>
+          Replaces the plus/minus buttons in the volume overlay and conference member list with a
+          slider.
+        </SettingsFootnote>
+        <SettingsSwitchRow
+          label="Thumb-edge talk control"
+          value={store.edgeTalkAffordance}
+          onValueChange={(value) => session.setEdgeTalkAffordance(value)}
+        />
+        <SettingsFootnote>
+          Adds a walkie-talkie past the volume ring so you can hit targets from the phone’s edge. In
+          Talk & select it becomes a checkmark. Hidden in landscape, where cards use two columns.
+        </SettingsFootnote>
+      </SettingsSection>
+    </>
+  );
+}
+
+function AudioSettingsPage() {
+  const store = useSessionStore();
+  const audio = store.operatorAudio;
+  const styles = useSettingsStyles();
+  const { scheme } = useSettingsTheme();
+
+  return (
+    <>
+      <SettingsSection title="Incoming audio">
+        <SettingsSwitchRow
+          label="Dim feeds when addressed"
+          value={audio.feedDimIncoming}
+          onValueChange={(value) => session.setOperatorAudio({ feedDimIncoming: value })}
+        />
+        <SettingsSwitchRow
+          label="Dim feeds while speaking"
+          value={audio.feedDimSelf}
+          onValueChange={(value) => session.setOperatorAudio({ feedDimSelf: value })}
+        />
+        <View style={styles.row}>
+          <Text style={styles.rowLabel}>Dim amount</Text>
+          <Text style={styles.rowValue}>{audio.feedDimDb} dB</Text>
         </View>
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderHint}>{FEED_DIM_DB_OPTIONS[0]}</Text>
+          <VolumeSlider
+            light={scheme === 'light'}
+            flex
+            accessibilityLabel="Dim amount"
+            value={sliderPositionFromDimDb(audio.feedDimDb)}
+            quantize={(position) => sliderPositionFromDimDb(dimDbFromSliderPosition(position))}
+            onChange={(position) => session.setOperatorAudio({ feedDimDb: dimDbFromSliderPosition(position) })}
+          />
+          <Text style={styles.sliderHint}>{FEED_DIM_DB_OPTIONS[FEED_DIM_DB_OPTIONS.length - 1]}</Text>
+        </View>
+        <SettingsFootnote>
+          Same defaults as the web client: dim when someone calls you, not while you talk, by 14 dB.
+        </SettingsFootnote>
+      </SettingsSection>
+
+      <SettingsSection title="Microphone and speaker">
+        {store.audioRoutes.map((route) => (
+          <SettingsRow
+            key={route.id}
+            label={route.label}
+            value={route.selected ? 'Selected' : describeAudioRouteKind(route.kind)}
+            selected={route.selected}
+            onPress={() => void session.selectAudioDevice(route.id)}
+          />
+        ))}
+        <SettingsFootnote>
+          In-call style combos: phone earpiece, speaker, or a connected headset. Audio stays in
+          communication mode so echo cancellation can run.
+        </SettingsFootnote>
+      </SettingsSection>
+
+      <SettingsSection title="Voice processing">
+        <SettingsSwitchRow
+          label="Echo cancellation"
+          value={audio.echoCancellation}
+          onValueChange={(value) => session.setOperatorAudio({ echoCancellation: value })}
+        />
         <SettingsFootnote>
           {processingLine('Echo cancellation', audio.echoCancellation, store.captureEchoCancellation, store.audioVoiceProcessing)}
         </SettingsFootnote>
-        <View style={settingsStyles.row}>
-          <Text style={settingsStyles.rowLabel}>Noise suppression</Text>
-          <Switch
-            value={audio.noiseSuppression}
-            onValueChange={(value) => session.setOperatorAudio({ noiseSuppression: value })}
-            trackColor={{ true: '#3DD6F5' }}
-          />
-        </View>
+        <SettingsSwitchRow
+          label="Noise suppression"
+          value={audio.noiseSuppression}
+          onValueChange={(value) => session.setOperatorAudio({ noiseSuppression: value })}
+        />
         <SettingsFootnote>
           {processingLine('Noise suppression', audio.noiseSuppression, store.captureNoiseSuppression, store.audioVoiceProcessing)}
         </SettingsFootnote>
-        <View style={settingsStyles.row}>
-          <Text style={settingsStyles.rowLabel}>Auto gain</Text>
-          <Switch
-            value={audio.autoGainControl}
-            onValueChange={(value) => session.setOperatorAudio({ autoGainControl: value })}
-            trackColor={{ true: '#3DD6F5' }}
-          />
-        </View>
+        <SettingsSwitchRow
+          label="Auto gain"
+          value={audio.autoGainControl}
+          onValueChange={(value) => session.setOperatorAudio({ autoGainControl: value })}
+        />
         <SettingsFootnote>
           {processingLine('Auto gain', audio.autoGainControl, store.captureAutoGainControl, store.audioVoiceProcessing)}
           {store.audioVoiceProcessing ? ' Voice-processing session is on.' : ' Voice-processing session is off.'}
         </SettingsFootnote>
       </SettingsSection>
+    </>
+  );
+}
 
+function WatchSettingsSection() {
+  return (
+    <SettingsSection title="Apple Watch">
+      <SettingsRow label="Remote" value={watchRemoteShortStatus(watchRemoteStatus())} />
+      <SettingsFootnote>
+        {describeWatchRemoteStatus(watchRemoteStatus())} The watch lists Reply, then the same online
+        talk targets as the phone. Hold a row to talk; release to stop. Audio stays on the iPhone.
+      </SettingsFootnote>
+    </SettingsSection>
+  );
+}
+
+function DebugSettingsPage({ onClose }: { onClose: () => void }) {
+  const store = useSessionStore();
+
+  return (
+    <>
       <SettingsSection title="Session">
+        <SettingsRow
+          label="Background"
+          value={
+            Platform.OS === 'ios'
+              ? audioSessionStatusLabel({
+                  platform: 'ios',
+                  available: store.audioSessionAvailable,
+                  active: store.audioSessionActive,
+                  keepalive: store.audioKeepalive,
+                  pttEnabled: iosPttEnabled(),
+                  pttJoined: store.pttJoined,
+                })
+              : fgsStatusLabel({
+                  available: store.fgsAvailable,
+                  running: store.fgsRunning,
+                  platform: Platform.OS,
+                })
+          }
+        />
         <SettingsRow label="Talk lock" value="Slide to lock" />
         <SettingsRow label="Server version" value={store.serverAppVersion || 'Unknown'} />
         <SettingsRow
           label="Incoming audio"
           value={`${store.activeRemoteCount} live / ${store.overBudget ? 'over budget' : 'ok'}`}
         />
+        <SettingsRow label="Used mic" value={store.audioInputLabel || store.captureMicLabel} />
+        <SettingsRow label="Used speaker" value={store.audioOutputLabel} />
         {store.capabilityReason ? <SettingsFootnote>{store.capabilityReason}</SettingsFootnote> : null}
-        {store.pttDiagnostic ? <SettingsFootnote>{store.pttDiagnostic}</SettingsFootnote> : null}
         {store.mediaDebug ? <SettingsFootnote>{store.mediaDebug}</SettingsFootnote> : null}
         <SettingsFootnote>
           Camera tally uses a red PGM frame or a green preview frame, same as the web client.
           Incoming audio follows the selected production.
         </SettingsFootnote>
       </SettingsSection>
+
+      <SettingsSection title="PushToTalk">
+        {Platform.OS === 'ios' ? (
+          <>
+            <SettingsRow
+              label="PushToTalk"
+              value={pttStatusLabel({
+                enabledInBuild: iosPttEnabled(),
+                nativeAvailable: store.pttAvailable,
+                bootstrapEnabled: store.pttBootstrapEnabled,
+                joined: store.pttJoined,
+                verified: store.pttVerified,
+              })}
+            />
+            {shouldShowPttJoinBanner({
+              platform: Platform.OS,
+              pttEnabled: iosPttEnabled(),
+              bootstrapEnabled: store.pttBootstrapEnabled,
+              joined: store.pttJoined,
+            }) ? (
+              <SettingsActionRow
+                label="Join PushToTalk channel"
+                onPress={() => {
+                  void session.joinSystemPttChannel();
+                  onClose();
+                }}
+              />
+            ) : null}
+            <SettingsFootnote>
+              Lock Screen, Dynamic Island, and the home widget have Reply lock (toggle locked reply)
+              and Disconnect. On iOS 18, add those same controls to Control Center or the Action Button.
+            </SettingsFootnote>
+          </>
+        ) : (
+          <SettingsFootnote>
+            Android hardware PTT uses BLE, Classic serial, USB-C, and onboard keys. Pair accessories
+            under Accessories.
+          </SettingsFootnote>
+        )}
+        {store.pttDiagnostic ? <SettingsFootnote>{store.pttDiagnostic}</SettingsFootnote> : null}
+      </SettingsSection>
+
+      {Platform.OS === 'android' ? (
+        <SettingsSection title="Battery">
+          <SettingsActionRow label="Battery settings" onPress={() => void session.openBatteryEducation()} />
+          <SettingsFootnote>
+            Set TalkToMe to Unrestricted (Samsung: Device care) if the session dies after Home or
+            screen-off. This does not promise every OEM.
+          </SettingsFootnote>
+        </SettingsSection>
+      ) : null}
+
       {store.pttHardwareLog.length > 0 ? (
         <SettingsSection title="PTT hardware">
           {store.pttHardwareLog.slice(-12).map((line, index) => (

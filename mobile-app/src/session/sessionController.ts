@@ -125,6 +125,7 @@ export class SessionController {
       leftHanded: bundle.leftHanded ?? false,
       talkSelectMode: bundle.talkSelectMode,
       lockMultipleTargets: bundle.lockMultipleTargets ?? false,
+      edgeTalkAffordance: bundle.edgeTalkAffordance !== false,
       audioSessionAvailable: audioSessionAvailable(),
       pttAvailable: pttNativeAvailable(),
       capabilityReason: this.background.capabilityReason({
@@ -546,6 +547,7 @@ export class SessionController {
       leftHanded: next.leftHanded,
       talkSelectMode: next.talkSelectMode,
       lockMultipleTargets: next.lockMultipleTargets,
+      edgeTalkAffordance: next.edgeTalkAffordance,
       productionId: next.productionId,
       productionName: next.productionName,
       profiles: next.profiles,
@@ -634,6 +636,7 @@ export class SessionController {
       leftHanded: this.leftHandedExplicit ? state.leftHanded : undefined,
       talkSelectMode: state.talkSelectMode,
       lockMultipleTargets: this.lockMultipleTargetsExplicit ? state.lockMultipleTargets : undefined,
+      edgeTalkAffordance: state.edgeTalkAffordance,
     };
   }
 
@@ -649,6 +652,11 @@ export class SessionController {
     if (!lockMultipleTargets) {
       void this.talk.collapseToSingleLock();
     }
+    this.persistLayout();
+  }
+
+  setEdgeTalkAffordance(edgeTalkAffordance: boolean): void {
+    useSessionStore.setState({ edgeTalkAffordance });
     this.persistLayout();
   }
 

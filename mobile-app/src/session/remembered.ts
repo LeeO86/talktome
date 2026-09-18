@@ -47,6 +47,8 @@ export async function loadProfileBundle(): Promise<ProfileBundle> {
         talkSelectMode: Boolean(parsed.talkSelectMode),
         lockMultipleTargets:
           typeof parsed.lockMultipleTargets === 'boolean' ? parsed.lockMultipleTargets : undefined,
+        edgeTalkAffordance:
+          typeof parsed.edgeTalkAffordance === 'boolean' ? parsed.edgeTalkAffordance : undefined,
       };
     } catch {
       // fall through to legacy

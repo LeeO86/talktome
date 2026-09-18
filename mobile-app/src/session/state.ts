@@ -31,6 +31,7 @@ export type SessionUiState = {
   leftHanded: boolean;
   talkSelectMode: boolean;
   lockMultipleTargets: boolean;
+  edgeTalkAffordance: boolean;
   selectedTalkTarget: TalkTarget | null;
   replyTarget: TalkTarget | null;
   loginOptions: LoginOptions | null;
@@ -129,6 +130,7 @@ export const initialState: SessionUiState = {
   leftHanded: false,
   talkSelectMode: false,
   lockMultipleTargets: false,
+  edgeTalkAffordance: true,
   selectedTalkTarget: null,
   replyTarget: null,
   loginOptions: null,

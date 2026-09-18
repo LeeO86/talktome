@@ -8,7 +8,7 @@ const config: ExpoConfig = {
   version: '0.1.0',
   orientation: 'default',
   icon: './assets/icon.png',
-  userInterfaceStyle: 'dark',
+  userInterfaceStyle: 'automatic',
   scheme: 'talktome',
   ios: {
     supportsTablet: true,

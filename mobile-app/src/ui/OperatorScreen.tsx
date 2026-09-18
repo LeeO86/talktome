@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Pressable, Platform, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { iosPttEnabled } from '../audio/policy';
 import {
@@ -16,9 +16,17 @@ import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
 import { AudioRouteButton } from './AudioRouteButton';
 import { ConnectionStatusBadge } from './ConnectionStatusBadge';
-import { LockIcon, MicIcon, ReplyArrowIcon } from './icons';
+import { ChevronIcon, LockIcon, MicIcon, ReplyArrowIcon } from './icons';
 import { HoldToTalk } from './HoldToTalk';
-import { targetLayerCount, visibleTargets } from './layers';
+import {
+  chunkTargets,
+  COLLAPSED_HEADER_HEIGHT,
+  estimateTargetListHeight,
+  operatorLayout,
+  shouldOfferHeaderCollapse,
+  targetLayerCount,
+  visibleTargets,
+} from './layers';
 import { SessionSheet } from './SessionSheet';
 import { SettingsScreen } from './SettingsScreen';
 import { TargetRow } from './TargetRow';
@@ -31,11 +39,31 @@ export function OperatorScreen() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [conferenceTarget, setConferenceTarget] = useState<TalkTarget | null>(null);
+  const [headerCollapsed, setHeaderCollapsed] = useState(false);
+  const [headerHeight, setHeaderHeight] = useState(96);
+  const [listHeight, setListHeight] = useState(0);
   const reply = store.replyTarget;
   const selected = store.selectedTalkTarget;
   const landscape = width > height;
-  const layers = targetLayerCount(store.targets.length, width, height);
-  const page = visibleTargets(store.targets, layerIndex, width, height);
+  const availableHeight = listHeight || estimateTargetListHeight(width, height, headerCollapsed);
+  const layout = operatorLayout({
+    width,
+    height,
+    availableHeight,
+    headerCollapsed,
+  });
+  const layers = targetLayerCount(store.targets.length, width, height, availableHeight, headerCollapsed);
+  const safeLayerIndex = Math.min(layerIndex, layers - 1);
+  const page = visibleTargets(store.targets, safeLayerIndex, width, height, availableHeight, headerCollapsed);
+  const grid = chunkTargets(page, layout.columns);
+  const offerCollapse =
+    headerCollapsed ||
+    shouldOfferHeaderCollapse({
+      rows: layout.rows,
+      availableHeight,
+      headerHeight,
+      maxRows: layout.maxRows,
+    });
 
   useEffect(() => {
     setLayerIndex(0);
@@ -56,6 +84,19 @@ export function OperatorScreen() {
   const selectedLocked =
     Boolean(store.selectedTalkTarget) &&
     store.lockedTargetKeys.includes(talkTargetIdentity(store.selectedTalkTarget!));
+
+  const layerButton =
+    layers > 1 ? (
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => setLayerIndex((current) => (current + 1) % layers)}
+        style={styles.layer}
+      >
+        <Text style={styles.layerText}>
+          Layer {(safeLayerIndex % layers) + 1}/{layers}
+        </Text>
+      </Pressable>
+    ) : null;
 
   const replyButton = store.talkSelectMode ? (
     <HoldToTalk
@@ -126,49 +167,81 @@ export function OperatorScreen() {
           style={[styles.tallyFrame, { borderColor: tallyColor }]}
         />
       ) : null}
-      <View style={styles.header}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Session, ${connection.label}`}
-          accessibilityHint="Server, settings, disconnect, and profiles"
-          onPress={() => setSessionOpen(true)}
-          style={styles.identity}
-        >
-          <View style={styles.nameRow}>
-            <Text style={styles.name} numberOfLines={1}>
+      {headerCollapsed ? (
+        <View style={styles.collapsedHeader}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show top bar"
+            onPress={() => setHeaderCollapsed(false)}
+            style={styles.collapseButton}
+          >
+            <ChevronIcon color={colors.text} direction="down" />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Session, ${connection.label}`}
+            onPress={() => setSessionOpen(true)}
+            style={styles.collapsedIdentity}
+          >
+            <Text style={styles.collapsedName} numberOfLines={1}>
               {store.identity?.name ?? 'talktome'}
             </Text>
             <ConnectionStatusBadge health={connection} />
+          </Pressable>
+          <View style={styles.headerActions}>
+            <AudioRouteButton />
+            {layerButton}
           </View>
-          {productionLabel ? (
-            <Text style={styles.production} numberOfLines={1}>
-              {productionLabel}
-            </Text>
-          ) : null}
-          {tallyLabel && tallyColor ? (
-            <Text
-              accessibilityLabel={tallyLabel === 'PGM' ? 'On program' : 'On preview'}
-              style={[styles.tallyChip, { color: tallyColor }]}
-            >
-              {tallyLabel}
-            </Text>
-          ) : null}
-        </Pressable>
-        <View style={styles.headerActions}>
-          <AudioRouteButton />
-          {layers > 1 ? (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setLayerIndex((current) => (current + 1) % layers)}
-              style={styles.layer}
-            >
-              <Text style={styles.layerText}>
-                Layer {(layerIndex % layers) + 1}/{layers}
-              </Text>
-            </Pressable>
-          ) : null}
         </View>
-      </View>
+      ) : (
+        <View
+          style={styles.header}
+          onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Session, ${connection.label}`}
+            accessibilityHint="Server, settings, disconnect, and profiles"
+            onPress={() => setSessionOpen(true)}
+            style={styles.identity}
+          >
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={1}>
+                {store.identity?.name ?? 'talktome'}
+              </Text>
+              <ConnectionStatusBadge health={connection} />
+            </View>
+            {productionLabel ? (
+              <Text style={styles.production} numberOfLines={1}>
+                {productionLabel}
+              </Text>
+            ) : null}
+            {tallyLabel && tallyColor ? (
+              <Text
+                accessibilityLabel={tallyLabel === 'PGM' ? 'On program' : 'On preview'}
+                style={[styles.tallyChip, { color: tallyColor }]}
+              >
+                {tallyLabel}
+              </Text>
+            ) : null}
+          </Pressable>
+          <View style={styles.headerActions}>
+            {offerCollapse ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Hide top bar"
+                accessibilityHint="Gives the target cards more room on small screens"
+                onPress={() => setHeaderCollapsed(true)}
+                style={styles.collapseButton}
+              >
+                <ChevronIcon color={colors.text} direction="up" />
+              </Pressable>
+            ) : null}
+            <AudioRouteButton />
+            {layerButton}
+          </View>
+        </View>
+      )}
 
       {store.overBudget ? (
         <Text style={styles.warn}>Too many incoming streams — some feeds paused.</Text>
@@ -199,16 +272,31 @@ export function OperatorScreen() {
           landscape && store.leftHanded && styles.bodyLandscapeLeft,
         ]}
       >
-        <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-          {page.map((target) => (
-            <TargetRow
-              key={`${target.type}-${target.id}`}
-              target={target}
-              compact={landscape}
-              onOpenConferenceMembers={setConferenceTarget}
-            />
+        <View
+          style={styles.list}
+          onLayout={(event) => setListHeight(event.nativeEvent.layout.height)}
+        >
+          {grid.map((row, rowIndex) => (
+            <View key={`row-${rowIndex}`} style={[styles.gridRow, { height: layout.cardHeight, gap: layout.gap }]}>
+              {row.map((target) => (
+                <View key={`${target.type}-${target.id}`} style={styles.gridCell}>
+                  <TargetRow
+                    target={target}
+                    compact={landscape}
+                    height={layout.cardHeight}
+                    edgeTalkAffordance={!landscape && store.edgeTalkAffordance}
+                    onOpenConferenceMembers={setConferenceTarget}
+                  />
+                </View>
+              ))}
+              {row.length < layout.columns
+                ? Array.from({ length: layout.columns - row.length }, (_, index) => (
+                    <View key={`pad-${rowIndex}-${index}`} style={styles.gridCell} />
+                  ))
+                : null}
+            </View>
           ))}
-        </ScrollView>
+        </View>
         {replyButton}
       </View>
 
@@ -241,6 +329,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 12,
+  },
+  collapsedHeader: {
+    minHeight: COLLAPSED_HEADER_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  collapsedIdentity: {
+    flexGrow: 1,
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+  },
+  collapsedName: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: '700',
+    flexShrink: 1,
   },
   identity: {
     flexGrow: 1,
@@ -286,6 +395,14 @@ const styles = StyleSheet.create({
     gap: 8,
     flexShrink: 0,
   },
+  collapseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
   layer: {
     backgroundColor: 'rgba(255,255,255,0.08)',
     borderRadius: 14,
@@ -327,6 +444,8 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
+    minHeight: 0,
+    gap: 8,
   },
   bodyLandscape: {
     flexDirection: 'row',
@@ -337,10 +456,19 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
-  },
-  listContent: {
+    minWidth: 0,
+    minHeight: 0,
+    justifyContent: 'flex-end',
     gap: 8,
-    paddingBottom: 12,
+    overflow: 'hidden',
+  },
+  gridRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  gridCell: {
+    flex: 1,
+    minWidth: 0,
   },
   reply: {
     flexDirection: 'row',
@@ -354,14 +482,14 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(61,214,245,0.42)',
   },
   replyLandscape: {
-    width: 132,
-    minWidth: 120,
-    maxWidth: 168,
+    width: 96,
+    minWidth: 88,
+    maxWidth: 108,
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'stretch',
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
     minHeight: 0,
   },
   replyActive: {
@@ -386,7 +514,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   replyTextLandscape: {
-    fontSize: 16,
+    fontSize: 14,
     textAlign: 'center',
   },
   replyMuted: {

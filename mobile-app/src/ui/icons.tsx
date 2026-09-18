@@ -209,6 +209,109 @@ export function ReplyArrowIcon({ color = colors.text, size = 18 }: IconProps) {
   );
 }
 
+export function WalkieTalkieIcon({ color = colors.text, size = 22 }: IconProps) {
+  const bodyWidth = size * 0.58;
+  const bodyHeight = size * 0.68;
+  return (
+    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
+      <View
+        style={[
+          styles.walkieAntenna,
+          {
+            backgroundColor: color,
+            height: size * 0.28,
+            left: size * 0.62,
+          },
+        ]}
+      />
+      <View
+        style={[
+          styles.walkieTip,
+          {
+            backgroundColor: color,
+            left: size * 0.62 - 1.5,
+          },
+        ]}
+      />
+      <View
+        style={[
+          styles.walkieBody,
+          {
+            borderColor: color,
+            width: bodyWidth,
+            height: bodyHeight,
+          },
+        ]}
+      />
+      <View style={[styles.walkieGrill, { backgroundColor: color, top: size * 0.42 }]} />
+      <View style={[styles.walkieGrill, { backgroundColor: color, top: size * 0.54 }]} />
+      <View style={[styles.walkieGrill, { backgroundColor: color, top: size * 0.66 }]} />
+    </View>
+  );
+}
+
+export function CheckIcon({
+  color = colors.text,
+  size = 22,
+  checked = false,
+}: IconProps & { checked?: boolean }) {
+  return (
+    <View
+      style={[
+        styles.checkBox,
+        {
+          width: size,
+          height: size,
+          borderColor: color,
+          backgroundColor: checked ? color : 'transparent',
+        },
+      ]}
+      {...iconEvents}
+    >
+      {checked ? (
+        <View
+          style={[
+            styles.checkMark,
+            {
+              width: size * 0.42,
+              height: size * 0.22,
+              borderColor: '#142033',
+            },
+          ]}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+export function ChevronIcon({
+  color = colors.text,
+  size = 16,
+  direction = 'up',
+}: IconProps & { direction?: 'up' | 'down' }) {
+  return (
+    <View
+      style={[
+        styles.box,
+        { width: size, height: size, transform: [{ rotate: direction === 'down' ? '180deg' : '0deg' }] },
+      ]}
+      {...iconEvents}
+    >
+      <View
+        style={[
+          styles.chevron,
+          {
+            borderBottomColor: color,
+            borderLeftWidth: size * 0.38,
+            borderRightWidth: size * 0.38,
+            borderBottomWidth: size * 0.42,
+          },
+        ]}
+      />
+    </View>
+  );
+}
+
 export function QrIcon({ color = colors.text, size = 20 }: IconProps) {
   const inset = size * 0.16;
   const finder = size * 0.28;
@@ -430,5 +533,49 @@ const styles = StyleSheet.create({
     position: 'absolute',
     borderWidth: 2,
     borderRadius: 1,
+  },
+  walkieAntenna: {
+    position: 'absolute',
+    top: 1,
+    width: 2,
+    borderRadius: 1,
+  },
+  walkieTip: {
+    position: 'absolute',
+    top: 0,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  walkieBody: {
+    position: 'absolute',
+    bottom: 0,
+    borderWidth: 2,
+    borderRadius: 5,
+  },
+  walkieGrill: {
+    position: 'absolute',
+    width: 8,
+    height: 1.5,
+    borderRadius: 1,
+  },
+  checkBox: {
+    borderWidth: 2,
+    borderRadius: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkMark: {
+    borderLeftWidth: 2.5,
+    borderBottomWidth: 2.5,
+    marginTop: -2,
+    transform: [{ rotate: '-45deg' }],
+  },
+  chevron: {
+    width: 0,
+    height: 0,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    marginBottom: 1,
   },
 });

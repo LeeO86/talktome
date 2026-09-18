@@ -21,7 +21,7 @@ import {
   SettingsNavRow,
   SettingsRow,
   SettingsSection,
-  settingsStyles,
+  useSettingsStyles,
 } from './settingsChrome';
 
 export function PttDevicesPage({
@@ -32,6 +32,7 @@ export function PttDevicesPage({
   onOpenDevice: (id: string) => void;
 }) {
   const store = useSessionStore();
+  const styles = useSettingsStyles();
   const atLimit = store.bleBindings.length >= BLE_MAX_ACCESSORIES;
 
   return (
@@ -66,8 +67,8 @@ export function PttDevicesPage({
       </SettingsSection>
 
       <SettingsSection title="Button behavior">
-        <View style={settingsStyles.row}>
-          <Text style={settingsStyles.rowLabel}>Short press locks</Text>
+        <View style={styles.row}>
+          <Text style={styles.rowLabel}>Short press locks</Text>
           <Switch
             value={store.bleShortPressLocks}
             onValueChange={(value) => session.setBluetoothButtonShortPressLocks(value)}
@@ -90,6 +91,7 @@ export function PttDevicesPage({
 
 export function PttAddDevicePage({ onBound }: { onBound: () => void }) {
   const store = useSessionStore();
+  const styles = useSettingsStyles();
   const [remaining, setRemaining] = useState(Math.round(BLE_BUTTON_PAIRING_MS / 1000));
   const [armed, setArmed] = useState(false);
   const serial = store.bondedSerialDevices.filter(
@@ -134,12 +136,12 @@ export function PttAddDevicePage({ onBound }: { onBound: () => void }) {
   return (
     <>
       <SettingsSection>
-        <View style={settingsStyles.pairingHero}>
-          <Text style={settingsStyles.pairingTitle}>
+        <View style={styles.pairingHero}>
+          <Text style={styles.pairingTitle}>
             {listening ? 'Hold the PTT button' : store.blePairingFoundId ? 'Device added' : 'No button heard'}
           </Text>
-          <Text style={settingsStyles.pairingBody}>{message}</Text>
-          {listening ? <Text style={settingsStyles.pairingTimer}>{remaining}s</Text> : null}
+          <Text style={styles.pairingBody}>{message}</Text>
+          {listening ? <Text style={styles.pairingTimer}>{remaining}s</Text> : null}
         </View>
         {listening ? (
           <SettingsFootnote>
@@ -178,6 +180,7 @@ export function PttDeviceDetailPage({
   onDeleted: () => void;
 }) {
   const store = useSessionStore();
+  const styles = useSettingsStyles();
   const binding = store.bleBindings.find((item) => item.id === deviceId);
   const live = liveDeviceById(store.bleDevices, deviceId, binding);
   const connected = live?.kind === 'connected' || live?.kind === 'connecting' || binding?.kind === 'onboard';
@@ -229,8 +232,8 @@ export function PttDeviceDetailPage({
 
       {hasChannel ? (
         <SettingsSection title="Channel knob / up-down">
-          <View style={settingsStyles.row}>
-            <Text style={settingsStyles.rowLabel}>Change PTT 1 target</Text>
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>Change PTT 1 target</Text>
             <Switch
               value={binding.rotaryRetargetsPtt1}
               onValueChange={(value) => session.setRotaryRetargetsPtt1(deviceId, value)}
