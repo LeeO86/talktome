@@ -28,6 +28,7 @@ import { stopForegroundService } from '../background/foregroundService';
 import { startBleNative } from '../ble/native';
 import { loadBlePreferences } from '../ble/preferences';
 import type { BleTargetSelection } from '../ble/target';
+import type { PttButton } from '../hardware/events';
 import { slideToLockHint } from '../talk/slideToLock';
 import { loadAudioPreferences } from './audioPrefs';
 import { loadConferenceListen } from './conferenceListen';
@@ -147,6 +148,7 @@ export class SessionController {
       .catch(() => {
         this.background.publishBleState({ kind: 'idle' });
       });
+    void this.background.startPttHardwareTransports();
     if (last?.serverAddress) {
       void this.refreshLoginOptions(last.serverAddress);
     }
@@ -566,6 +568,8 @@ export class SessionController {
       bleTargetType: next.bleTargetType,
       bleTargetId: next.bleTargetId,
       bleTargetLabel: next.bleTargetLabel,
+      pttHardwareLog: next.pttHardwareLog,
+      bondedSerialDevices: next.bondedSerialDevices,
       fgsAvailable: next.fgsAvailable,
       audioSessionAvailable: next.audioSessionAvailable,
       pttAvailable: next.pttAvailable,
@@ -1121,12 +1125,16 @@ export class SessionController {
     return this.background.bluetoothButtonCandidates();
   }
 
-  bluetoothButtonSelection(deviceId?: string): BleTargetSelection {
-    return this.background.bluetoothButtonSelection(deviceId);
+  bluetoothButtonSelection(deviceId?: string, button?: PttButton): BleTargetSelection {
+    return this.background.bluetoothButtonSelection(deviceId, button);
   }
 
-  setBluetoothButtonTarget(selection: BleTargetSelection, deviceId?: string): void {
-    this.background.setBluetoothButtonTarget(selection, deviceId);
+  setBluetoothButtonTarget(selection: BleTargetSelection, deviceId?: string, button?: PttButton): void {
+    this.background.setBluetoothButtonTarget(selection, deviceId, button);
+  }
+
+  setRotaryRetargetsPtt1(deviceId: string, enabled: boolean): void {
+    this.background.setRotaryRetargetsPtt1(deviceId, enabled);
   }
 
   setBluetoothButtonShortPressLocks(enabled: boolean): void {
@@ -1159,6 +1167,10 @@ export class SessionController {
 
   async disconnectBluetoothButton(deviceId?: string): Promise<void> {
     await this.background.disconnectBluetoothButton(deviceId);
+  }
+
+  async probeSerialAccessory(deviceId: string): Promise<void> {
+    await this.background.probeSerialAccessory(deviceId);
   }
 
   removeBluetoothAccessory(deviceId: string): void {

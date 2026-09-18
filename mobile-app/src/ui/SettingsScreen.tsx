@@ -371,6 +371,13 @@ function DebugSettingsPage() {
           Incoming audio follows the selected production.
         </SettingsFootnote>
       </SettingsSection>
+      {store.pttHardwareLog.length > 0 ? (
+        <SettingsSection title="PTT hardware">
+          {store.pttHardwareLog.slice(-12).map((line, index) => (
+            <SettingsFootnote key={`${index}-${line}`}>{line}</SettingsFootnote>
+          ))}
+        </SettingsSection>
+      ) : null}
     </>
   );
 }

@@ -18,6 +18,7 @@ class TalkToMeForegroundService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    attachPttHardware()
     when (intent?.action) {
       ACTION_STOP -> {
         Holder.listener?.onStopRequested()
@@ -68,6 +69,7 @@ class TalkToMeForegroundService : Service() {
   }
 
   override fun onDestroy() {
+    detachPttHardware()
     Holder.running = false
     Holder.listener?.onStopped()
     super.onDestroy()
@@ -214,6 +216,24 @@ class TalkToMeForegroundService : Service() {
       return fromApp
     }
     return R.drawable.ic_stat_talktome
+  }
+
+  private fun attachPttHardware() {
+    try {
+      val host = Class.forName("expo.modules.ptthardware.PttHardwareHost")
+      host.getMethod("attachService", Service::class.java).invoke(null, this)
+    } catch (_: Throwable) {
+      // Hardware module is optional at runtime until the native client is rebuilt.
+    }
+  }
+
+  private fun detachPttHardware() {
+    try {
+      val host = Class.forName("expo.modules.ptthardware.PttHardwareHost")
+      host.getMethod("detachService", Service::class.java).invoke(null, this)
+    } catch (_: Throwable) {
+      // Ignore missing hardware module.
+    }
   }
 
   private fun immutableFlag(): Int {

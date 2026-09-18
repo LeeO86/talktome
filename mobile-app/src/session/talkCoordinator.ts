@@ -1,4 +1,5 @@
 import { canTalkToTarget, talkTargetIdentity, type TalkTarget } from '../protocol';
+import { nextTalkableTarget, talkableAtKnob } from '../hardware/rotary';
 import {
   saveConferenceListen,
   setConferenceMemberLevel as nextConferenceMemberLevel,
@@ -203,6 +204,34 @@ export class TalkCoordinator {
       void this.retargetTalk(target);
     }
     this.c.background.syncPresence();
+  }
+
+  cycleSelectedTalkTarget(delta: number): TalkTarget | null {
+    const state = useSessionStore.getState();
+    const candidates = state.targets.filter((target) => this.canTalkTo(target));
+    const next = nextTalkableTarget(candidates, state.selectedTalkTarget, delta);
+    if (!next) {
+      return null;
+    }
+    this.selectTalkTarget(next);
+    useSessionStore.setState({
+      statusMessage: `Talk & select: ${next.label}`,
+    });
+    return next;
+  }
+
+  selectTalkableByKnob(position: number): TalkTarget | null {
+    const state = useSessionStore.getState();
+    const candidates = state.targets.filter((target) => this.canTalkTo(target));
+    const next = talkableAtKnob(candidates, position);
+    if (!next) {
+      return null;
+    }
+    this.selectTalkTarget(next);
+    useSessionStore.setState({
+      statusMessage: `Talk & select: ${next.label}`,
+    });
+    return next;
   }
 
   firstTalkableTarget(): TalkTarget | null {

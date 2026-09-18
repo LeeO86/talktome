@@ -110,6 +110,8 @@ export type SessionUiState = {
   bleTargetType: string;
   bleTargetId: string;
   bleTargetLabel: string;
+  pttHardwareLog: string[];
+  bondedSerialDevices: { id: string; name: string; pttHint: boolean }[];
 };
 
 export const FOREGROUND_REASON =
@@ -205,6 +207,8 @@ export const initialState: SessionUiState = {
   bleTargetType: '',
   bleTargetId: '',
   bleTargetLabel: '',
+  pttHardwareLog: [],
+  bondedSerialDevices: [],
 };
 
 type SessionStore = SessionUiState & {

@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   aggregateBleKind,
+  bindingControlTarget,
   bindingTarget,
+  describeBindingTargets,
   describeBleReleaseTimeout,
   describePttDevicesSummary,
   mergeLiveBleDevices,
@@ -16,21 +18,26 @@ import { BleReleaseWatchdog } from './watchdog';
 
 describe('BLE device bindings', () => {
   it('parses stored accessories and ignores duplicates', () => {
-    expect(
-      parseBleDeviceBindings([
-        { id: 'aa', name: 'HB9800D', target: { kind: 'reply' } },
-        { id: 'aa', name: 'dup' },
-        { id: '', name: 'bad' },
-        { id: 'bb', name: 'PTT-Z01', target: { kind: 'target', type: 'user', id: 9, label: 'beni' } },
-      ]),
-    ).toEqual([
+    const parsed = parseBleDeviceBindings([
       { id: 'aa', name: 'HB9800D', target: { kind: 'reply' } },
-      {
-        id: 'bb',
-        name: 'PTT-Z01',
-        target: { kind: 'target', type: 'user', id: 9, label: 'beni' },
-      },
+      { id: 'aa', name: 'dup' },
+      { id: '', name: 'bad' },
+      { id: 'bb', name: 'PTT-Z01', target: { kind: 'target', type: 'user', id: 9, label: 'beni' } },
     ]);
+    expect(parsed.map((item) => item.id)).toEqual(['aa', 'bb']);
+    expect(parsed[0]).toMatchObject({
+      id: 'aa',
+      name: 'HB9800D',
+      kind: 'ble',
+      target: { kind: 'reply' },
+    });
+    expect(parsed[1]?.target).toEqual({ kind: 'target', type: 'user', id: 9, label: 'beni' });
+    expect(parsed[1]?.controls.ptt?.target).toEqual({
+      kind: 'target',
+      type: 'user',
+      id: 9,
+      label: 'beni',
+    });
   });
 
   it('upserts a new accessory with Reply and keeps a per-device target', () => {
@@ -44,35 +51,66 @@ describe('BLE device bindings', () => {
     expect(removeBleDeviceBinding(next, 'aa')).toEqual([]);
   });
 
+  it('stores independent targets per PTT button and locks SOS to Reply', () => {
+    let bindings = upsertBleDeviceBinding([], { id: 'onboard', name: 'This phone', kind: 'onboard' });
+    bindings = upsertBleDeviceBinding(bindings, {
+      id: 'onboard',
+      button: 'ptt',
+      target: { kind: 'target', type: 'conference', id: 4, label: 'All' },
+    });
+    bindings = upsertBleDeviceBinding(bindings, {
+      id: 'onboard',
+      button: 'ptt2',
+      target: { kind: 'target', type: 'user', id: 9, label: 'beni' },
+    });
+    bindings = upsertBleDeviceBinding(bindings, {
+      id: 'onboard',
+      button: 'sos',
+      target: { kind: 'target', type: 'conference', id: 4, label: 'All' },
+    });
+    const phone = bindings[0];
+    expect(bindingControlTarget(phone, 'ptt')).toEqual({
+      kind: 'target',
+      type: 'conference',
+      id: 4,
+      label: 'All',
+    });
+    expect(bindingControlTarget(phone, 'ptt2')).toEqual({
+      kind: 'target',
+      type: 'user',
+      id: 9,
+      label: 'beni',
+    });
+    expect(bindingControlTarget(phone, 'sos')).toEqual({ kind: 'reply' });
+    expect(describeBindingTargets(phone!)).toContain('PTT 1 → All');
+    expect(describeBindingTargets(phone!)).toContain('SOS → Reply');
+  });
+
   it('refreshes saved accessory names without adding unpaired scan results', () => {
+    const saved = parseBleDeviceBindings([{ id: 'aa', name: 'Old', target: { kind: 'reply' } }]);
     expect(
-      mergeLiveBleDevices(
-        [{ id: 'aa', name: 'Old', target: { kind: 'reply' } }],
-        [
-          { id: 'aa', name: 'HB9800D', kind: 'connected' },
-          { id: 'bb', name: 'PTT-Z01', kind: 'connecting' },
-        ],
-      ),
-    ).toEqual([{ id: 'aa', name: 'HB9800D', target: { kind: 'reply' } }]);
+      mergeLiveBleDevices(saved, [
+        { id: 'aa', name: 'HB9800D', kind: 'connected' },
+        { id: 'bb', name: 'PTT-Z01', kind: 'connecting' },
+      ]).map((item) => ({ id: item.id, name: item.name })),
+    ).toEqual([{ id: 'aa', name: 'HB9800D' }]);
   });
 
   it('summarizes saved PTT accessories for the Settings row', () => {
     expect(describePttDevicesSummary([], [])).toBe('None');
-    expect(
-      describePttDevicesSummary(
-        [{ id: 'aa', name: 'Herda', target: { kind: 'reply' } }],
-        [{ id: 'aa', name: 'Herda', kind: 'connected' }],
-      ),
-    ).toBe('1 connected');
-    expect(
-      describePttDevicesSummary(
-        [
-          { id: 'aa', name: 'Herda', target: { kind: 'reply' } },
-          { id: 'bb', name: 'PTT-Z01', target: { kind: 'reply' } },
-        ],
-        [{ id: 'aa', name: 'Herda', kind: 'connected' }],
-      ),
-    ).toBe('1 of 2 connected');
+    const herda = parseBleDeviceBindings([{ id: 'aa', name: 'Herda', target: { kind: 'reply' } }]);
+    expect(describePttDevicesSummary(herda, [{ id: 'aa', name: 'Herda', kind: 'connected' }])).toBe(
+      '1 connected',
+    );
+    const two = parseBleDeviceBindings([
+      { id: 'aa', name: 'Herda', target: { kind: 'reply' } },
+      { id: 'bb', name: 'PTT-Z01', target: { kind: 'reply' } },
+    ]);
+    expect(describePttDevicesSummary(two, [{ id: 'aa', name: 'Herda', kind: 'connected' }])).toBe(
+      '1 of 2 connected',
+    );
+    const phone = parseBleDeviceBindings([{ id: 'onboard', name: 'This phone' }]);
+    expect(describePttDevicesSummary(phone, [])).toBe('1 connected');
   });
 
   it('aggregates several links into one Settings status', () => {
