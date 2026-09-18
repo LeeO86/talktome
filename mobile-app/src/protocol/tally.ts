@@ -26,7 +26,7 @@ export function parseCameraTally(value: unknown): CameraTallyState {
   };
 }
 
-/** Border/tint color for the operator chrome. PGM (red) wins over preview (green). */
+/** Screen-frame color for operator tally. PGM (red) wins over preview (green). */
 export function cameraTallyColor(tally: CameraTallyState): string | null {
   if (tally.pgm) {
     return TALLY_PGM_COLOR;

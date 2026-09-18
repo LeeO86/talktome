@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { ActivityIndicator, Linking, SafeAreaView, StyleSheet } from 'react-native';
+import { ActivityIndicator, Linking, SafeAreaView, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
@@ -66,10 +66,20 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={[styles.root, androidSafeArea, tallyColor ? { backgroundColor: tallyColor } : null]}>
-      <StatusBar style="light" />
-      {body}
-    </SafeAreaView>
+    <View style={styles.root}>
+      <SafeAreaView style={[styles.safe, androidSafeArea]}>
+        <StatusBar style="light" />
+        {body}
+      </SafeAreaView>
+      {identity && operatorReady && tallyColor ? (
+        <View
+          pointerEvents="none"
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          style={[styles.tallyFrame, { borderColor: tallyColor }]}
+        />
+      ) : null}
+    </View>
   );
 }
 
@@ -77,5 +87,14 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.bgBottom,
+  },
+  safe: {
+    flex: 1,
+    backgroundColor: colors.bgBottom,
+  },
+  tallyFrame: {
+    ...StyleSheet.absoluteFill,
+    borderWidth: 8,
+    zIndex: 40,
   },
 });

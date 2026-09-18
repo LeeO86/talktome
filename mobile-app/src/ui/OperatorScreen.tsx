@@ -118,14 +118,6 @@ export function OperatorScreen() {
 
   return (
     <View style={[styles.screen, landscape && styles.screenLandscape]}>
-      {tallyColor ? (
-        <View
-          pointerEvents="none"
-          accessible={false}
-          importantForAccessibility="no-hide-descendants"
-          style={[styles.tallyFrame, { borderColor: tallyColor }]}
-        />
-      ) : null}
       <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
@@ -270,15 +262,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 1.2,
-  },
-  tallyFrame: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    borderWidth: 6,
-    zIndex: 20,
   },
   headerActions: {
     flexDirection: 'row',
