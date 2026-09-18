@@ -139,7 +139,7 @@ const GUEST_SESSION_STORAGE_KEY = 'guestSession';
 const FEED_DUCKING_DB_STORAGE_KEY = 'feedDimDb';
 const FEED_INPUT_PROCESSING_STORAGE_KEY = 'feedInputProcessingEnabled';
 const FEED_PTIME_STORAGE_KEY = 'feedPtimeMs';
-const DEFAULT_FEED_DUCKING_DB = -14;
+const DEFAULT_FEED_DUCKING_DB = -15;
 const DEFAULT_FEED_PTIME_MS = 20;
 const FEED_DUCKING_DB_MIN = -60;
 const FEED_DUCKING_DB_MAX = -6;
@@ -1039,6 +1039,7 @@ function attachPlaybackAudioDiagnostics(audioEl, label) {
 }
 
 function clampFeedDuckingDb(value) {
+  if (value === -14) return -15;
   if (!Number.isFinite(value)) return DEFAULT_FEED_DUCKING_DB;
   return Math.min(FEED_DUCKING_DB_MAX, Math.max(FEED_DUCKING_DB_MIN, value));
 }
@@ -5497,7 +5498,62 @@ let cachedOperatorTargets = null;
     }
   };
 
+  function getMainButtonStorageKey() {
+    const profileId = getOperatorProfileUserId();
+    return profileId == null ? null
+      : `mainButtonTarget:${session.kind}:${profileId}:${session.productionId || 'default'}`;
+  }
+
+  function getConfiguredMainButtonIdentity() {
+    const key = getMainButtonStorageKey();
+    try { return key ? localStorage.getItem(key) || '' : ''; } catch { return ''; }
+  }
+
+  function getMainButtonTarget() {
+    const identity = getConfiguredMainButtonIdentity();
+    if (!identity) return lastTarget;
+    const descriptor = buildTalkTargetDescriptors().find(entry =>
+      entry.kind === 'target' && entry.identity === identity);
+    return descriptor ? { ...descriptor.target, label: descriptor.label } : null;
+  }
+
+  function updateMainButtonOptions() {
+    const select = document.getElementById('main-button-target');
+    if (!select) return;
+    const identity = getConfiguredMainButtonIdentity();
+    const options = [new Option('Reply', '')];
+    for (const entry of buildTalkTargetDescriptors()) {
+      if (entry.kind === 'target') {
+        options.push(new Option(`${entry.label} (${entry.kindLabel})`, entry.identity));
+      }
+    }
+    // Keep unavailable selections explicit; never silently send to a different target.
+    if (identity && !options.some(option => option.value === identity)) {
+      options.push(new Option('Unavailable target', identity));
+    }
+    select.replaceChildren(...options);
+    select.value = identity;
+    updateReplyButtonState();
+  }
+
+  document.getElementById('main-button-target')?.addEventListener('change', event => {
+    const key = getMainButtonStorageKey();
+    try {
+      if (key) {
+        if (event.target.value) localStorage.setItem(key, event.target.value);
+        else localStorage.removeItem(key);
+      }
+    } catch {}
+    updateReplyButtonState();
+  });
+
   function renderReplyButtonLabel() {
+    if (getConfiguredMainButtonIdentity()) {
+      const target = getMainButtonTarget();
+      btnReply.setAttribute('data-label', target?.label || 'Unavailable target');
+      btnReply.setAttribute('aria-label', target ? `Talk to ${target.label}` : 'Unavailable target');
+      return;
+    }
     const suffix = lastTarget?.label ? ` (${lastTarget.label})` : "";
     btnReply.setAttribute("data-label", `${BASE_REPLY_LABEL}${suffix}`);
     const aria = lastTarget?.label ? `Reply to ${lastTarget.label}` : "Reply";
@@ -5533,8 +5589,7 @@ let cachedOperatorTargets = null;
 
   function clearReplyTarget() {
     lastTarget = null;
-    btnReply.disabled = true;
-    renderReplyButtonLabel();
+    updateReplyButtonState();
   }
 
   function resolveReplyUserSocketId(target) {
@@ -5545,14 +5600,11 @@ let cachedOperatorTargets = null;
   }
 
   function updateReplyButtonState() {
-    if (!lastTarget) {
-      clearReplyTarget();
-      return;
-    }
-
     refreshLastTargetLabel();
-    const replyUserSocketId = resolveReplyUserSocketId(lastTarget);
-    btnReply.disabled = lastTarget.type === 'user' ? !replyUserSocketId : false;
+    const target = getMainButtonTarget();
+    const replyUserSocketId = resolveReplyUserSocketId(target);
+    btnReply.disabled = !socket.connected || !isOperatorSession() || !target
+      || (target.type === 'user' && !replyUserSocketId);
     renderReplyButtonLabel();
   }
 
@@ -7816,6 +7868,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   }
 
   function updateVoiceTriggerTargetOptions(users = cachedUsers) {
+    updateMainButtonOptions();
     if (!voiceTriggerTargetSelect) return;
     if (!Array.isArray(cachedOperatorTargets)) {
       updateVoiceTriggerControlsState();
@@ -11367,10 +11420,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     btnReply.addEventListener("pointerdown", e => {
       e.preventDefault();
       if (!isOperatorSession()) return;
-    if (!lastTarget) return;
+    const target = getMainButtonTarget();
+    if (!target || btnReply.disabled) return;
     setReplyButtonActive(true);
     try { btnReply.setPointerCapture(e.pointerId); } catch {}
-    handleTalk(e, { type: lastTarget.type, id: lastTarget.id });
+    handleTalk(e, { type: target.type, id: target.id });
   });
 
   const handleReplyPointerEnd = (e) => {

@@ -4,10 +4,10 @@
   if (root) root.TalktomeUserAudioSettings = api;
 }(typeof globalThis !== 'undefined' ? globalThis : this, function createUserAudioSettingsApi() {
   const AUDIO_PROFILES = Object.freeze(['ultra-low', 'low', 'standard']);
-  const DIM_AMOUNT_DB_OPTIONS = Object.freeze([-6, -12, -14, -18, -24]);
+  const DIM_AMOUNT_DB_OPTIONS = Object.freeze([-6, -12, -15, -18, -24]);
   const DEFAULTS = Object.freeze({
     audioProfile: 'ultra-low',
-    dimAmountDb: -14,
+    dimAmountDb: -15,
     dimFeedsWhileSpeaking: false,
     dimWhenAddressed: true,
     audioAutoProcessing: false,
@@ -35,7 +35,7 @@
       else reject('Invalid audio profile.');
     }
     if (has('dimAmountDb')) {
-      const number = Number(value.dimAmountDb);
+      const number = Number(value.dimAmountDb) === -14 ? -15 : Number(value.dimAmountDb);
       if (DIM_AMOUNT_DB_OPTIONS.includes(number)) output.dimAmountDb = number;
       else reject('Invalid dim amount.');
     }

@@ -1,9 +1,9 @@
 const AUDIO_PROFILES = Object.freeze(["ultra-low", "low", "standard"]);
-const DIM_AMOUNT_DB_OPTIONS = Object.freeze([-6, -12, -14, -18, -24]);
+const DIM_AMOUNT_DB_OPTIONS = Object.freeze([-6, -12, -15, -18, -24]);
 
 const BUILTIN_DEFAULT_CLIENT_SETTINGS = Object.freeze({
   audioProfile: "ultra-low",
-  dimAmountDb: -14,
+  dimAmountDb: -15,
   dimFeedsWhileSpeaking: false,
   dimWhenAddressed: true,
   audioAutoProcessing: false,
@@ -31,7 +31,7 @@ function normalizeConfiguredDefaultClientSettings(value, { strict = false } = {}
   }
 
   if (Object.prototype.hasOwnProperty.call(value, "dimAmountDb")) {
-    const dimAmountDb = Number(value.dimAmountDb);
+    const dimAmountDb = Number(value.dimAmountDb) === -14 ? -15 : Number(value.dimAmountDb);
     if (DIM_AMOUNT_DB_OPTIONS.includes(dimAmountDb)) normalized.dimAmountDb = dimAmountDb;
     else reject("Invalid default dim amount.");
   }

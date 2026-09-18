@@ -3068,7 +3068,7 @@ async function loadDefaultClientSettings() {
   const payload = await fetchJSON('/admin/settings/default-client');
   const settings = payload?.settings || {};
   if (defaultClientAudioProfile) defaultClientAudioProfile.value = settings.audioProfile || 'ultra-low';
-  if (defaultClientDimAmount) defaultClientDimAmount.value = String(settings.dimAmountDb ?? -14);
+  if (defaultClientDimAmount) defaultClientDimAmount.value = String(settings.dimAmountDb ?? -15);
   if (defaultClientDimSelf) defaultClientDimSelf.checked = settings.dimFeedsWhileSpeaking === true;
   if (defaultClientDimIncoming) defaultClientDimIncoming.checked = settings.dimWhenAddressed === true;
   if (defaultClientAudioProcessing) defaultClientAudioProcessing.checked = settings.audioAutoProcessing === true;
@@ -4264,7 +4264,7 @@ if (defaultClientSettingsForm) {
     const submitButton = defaultClientSettingsForm.querySelector('button[type="submit"]');
     const settings = {
       audioProfile: defaultClientAudioProfile?.value || 'ultra-low',
-      dimAmountDb: Number(defaultClientDimAmount?.value ?? -14),
+      dimAmountDb: Number(defaultClientDimAmount?.value ?? -15),
       dimFeedsWhileSpeaking: Boolean(defaultClientDimSelf?.checked),
       dimWhenAddressed: Boolean(defaultClientDimIncoming?.checked),
       audioAutoProcessing: Boolean(defaultClientAudioProcessing?.checked),
