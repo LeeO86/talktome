@@ -7759,6 +7759,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     });
 
     const descriptors = [{
+      identity: 'main',
+      kind: 'main',
+      label: 'Main button',
+      kindLabel: 'Action',
+    }, {
       identity: REPLY_HOTKEY_IDENTITY,
       kind: 'reply',
       label: 'Reply',
@@ -8215,11 +8220,18 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     let defaultIndex = 0;
     descriptors.forEach((descriptor) => {
       if (targetHotkeysByTarget.has(descriptor.identity)) return;
-      if (descriptor.kind === 'reply') {
-        if (claimedBindingIds.has(DEFAULT_REPLY_HOTKEY_BINDING.id)) return;
+      if (descriptor.kind === 'reply' || descriptor.kind === 'main') {
+        if (claimedBindingIds.has(DEFAULT_REPLY_HOTKEY_BINDING.id)) {
+          const existing = targetHotkeys.get(DEFAULT_REPLY_HOTKEY_BINDING.id);
+          if (descriptor.kind === 'reply' && existing?.kind === 'main'
+            && !customTargetHotkeys.has('main')) {
+            targetHotkeysByTarget.set(descriptor.identity, DEFAULT_REPLY_HOTKEY_BINDING);
+          }
+          return;
+        }
         claimedBindingIds.add(DEFAULT_REPLY_HOTKEY_BINDING.id);
         targetHotkeys.set(DEFAULT_REPLY_HOTKEY_BINDING.id, {
-          kind: 'reply',
+          kind: descriptor.kind,
           target: null,
           binding: DEFAULT_REPLY_HOTKEY_BINDING,
           identity: descriptor.identity,
@@ -10868,6 +10880,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   function resolveHotkeyAssignmentTarget(assignment) {
     if (!assignment || typeof assignment !== 'object') return null;
+    if (assignment.kind === 'main') return getMainButtonTarget();
     if (assignment.kind === 'reply') {
       if (!lastTarget) return null;
       return { type: lastTarget.type, id: lastTarget.id };
@@ -10877,7 +10890,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   function setHotkeyAssignmentActiveState(assignment, isActive) {
     if (!assignment || typeof assignment !== 'object') return;
-    if (assignment.kind === 'reply') {
+    if (assignment.kind === 'main' || (assignment.kind === 'reply' && !getConfiguredMainButtonIdentity())) {
       setReplyButtonActive(isActive);
       return;
     }
