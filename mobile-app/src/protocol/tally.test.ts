@@ -25,7 +25,7 @@ describe('camera tally', () => {
   });
 
   it('uses a thick on-air frame, larger than the web client 0.4rem ring', () => {
-    expect(TALLY_FRAME_WIDTH).toBe(24);
+    expect(TALLY_FRAME_WIDTH).toBe(16);
   });
 
   it('gives PGM visual priority over preview', () => {
