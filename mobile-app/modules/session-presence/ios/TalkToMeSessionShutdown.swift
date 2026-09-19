@@ -7,7 +7,7 @@ import ActivityKit
 #endif
 
 /// Lock-screen and widget leftovers that outlive JS (Live Activities, App Group
-/// snapshot, Now Playing). Swipe-killing a suspended app does not run JS
+/// snapshot). Swipe-killing a suspended app does not run JS
 /// `disconnect()`, so native code has to drop these surfaces itself.
 enum TalkToMeSessionShutdown {
   static func clearLockScreenSurfaces() {

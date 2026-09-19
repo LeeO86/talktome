@@ -15,13 +15,13 @@ final class TalkToMeAudioSessionController {
   private var wantsBackgroundReceiveKeepalive = false
   private var backgroundTask = UIBackgroundTaskIdentifier.invalid
   private var preferredRouteId = "speaker"
-  private var remoteCommandsReady = false
   var onRouteChange: (() -> Void)?
 
   init(notificationCenter: NotificationCenter = .default) {
     self.notificationCenter = notificationCenter
     claimManualAudio()
     installObservers()
+    clearNowPlaying()
   }
 
   deinit {
@@ -51,7 +51,7 @@ final class TalkToMeAudioSessionController {
     activeProfile = "intercom"
     Thread.sleep(forTimeInterval: 0.02)
     setWebRTCAudioEnabled(true)
-    updateNowPlaying(title: "TalkToMe", detail: "Intercom", active: true)
+    clearNowPlaying()
   }
 
   func startBackgroundKeepalive() throws {
@@ -64,7 +64,7 @@ final class TalkToMeAudioSessionController {
       setWebRTCAudioEnabled(true)
       wantsBackgroundReceiveKeepalive = true
       activeProfile = "keepalive"
-      updateNowPlaying(title: "TalkToMe", detail: "Intercom", active: true)
+      clearNowPlaying()
     } catch {
       endBackgroundTask()
       throw error
@@ -85,7 +85,7 @@ final class TalkToMeAudioSessionController {
     try applyPreferredRoute(session)
     setWebRTCAudioEnabled(true)
     activeProfile = "intercom"
-    updateNowPlaying(title: "TalkToMe", detail: "Intercom", active: true)
+    clearNowPlaying()
   }
 
   func deactivate() {
@@ -95,7 +95,7 @@ final class TalkToMeAudioSessionController {
     try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     notifyWebRTCDeactivated()
     activeProfile = "idle"
-    updateNowPlaying(title: "TalkToMe", detail: "", active: false)
+    clearNowPlaying()
   }
 
   func setPreferredRouteId(_ id: String) {
@@ -167,9 +167,7 @@ final class TalkToMeAudioSessionController {
     notifyWebRTCActivated()
     setWebRTCAudioEnabled(true)
     activeProfile = profile
-    if profile != "idle" {
-      updateNowPlaying(title: "TalkToMe", detail: "Intercom", active: true)
-    }
+    clearNowPlaying()
   }
 
   private func configureIntercom(_ session: AVAudioSession) throws {
@@ -279,54 +277,31 @@ final class TalkToMeAudioSessionController {
     ["id": id, "label": label, "kind": kind, "selected": selected]
   }
 
-  func updateNowPlaying(title: String, detail: String, active: Bool) {
-    if !active {
-      MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-      return
-    }
-    if activeProfile == "idle" {
-      return
-    }
-    ensureRemoteCommands()
-    var info: [String: Any] = [
-      MPMediaItemPropertyTitle: title.isEmpty ? "TalkToMe" : title,
-      MPMediaItemPropertyArtist: "TalkToMe",
-      MPMediaItemPropertyAlbumTitle: detail,
-      MPNowPlayingInfoPropertyIsLiveStream: true,
-      MPNowPlayingInfoPropertyPlaybackRate: 1.0,
-    ]
-    if let image = appIconImage() {
-      let size = image.size
-      info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
-    }
-    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+  /// Kept as a no-op publisher: TalkToMe is not a media player. Setting
+  /// `nowPlayingInfo` (and enabling `MPRemoteCommandCenter`) puts a useless
+  /// Now Playing card on Lock Screen / Control Center. Speaker selection uses
+  /// `AVRoutePickerView` + `AVAudioSession` and does not need that card.
+  /// Callers still invoke this so a previous build's Now Playing is cleared.
+  func updateNowPlaying(title _: String, detail _: String, active _: Bool) {
+    clearNowPlaying()
   }
 
-  private func ensureRemoteCommands() {
-    guard !remoteCommandsReady else {
-      return
+  private func clearNowPlaying() {
+    let commands = MPRemoteCommandCenter.shared()
+    commands.playCommand.isEnabled = false
+    commands.pauseCommand.isEnabled = false
+    commands.stopCommand.isEnabled = false
+    commands.nextTrackCommand.isEnabled = false
+    commands.previousTrackCommand.isEnabled = false
+    commands.togglePlayPauseCommand.isEnabled = false
+    commands.playCommand.removeTarget(nil)
+    commands.pauseCommand.removeTarget(nil)
+    commands.stopCommand.removeTarget(nil)
+    commands.togglePlayPauseCommand.removeTarget(nil)
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    if #available(iOS 13.0, *) {
+      MPNowPlayingInfoCenter.default().playbackState = .stopped
     }
-    remoteCommandsReady = true
-    let center = MPRemoteCommandCenter.shared()
-    center.playCommand.isEnabled = true
-    center.playCommand.addTarget { _ in .success }
-    center.pauseCommand.isEnabled = false
-    center.stopCommand.isEnabled = false
-    center.nextTrackCommand.isEnabled = false
-    center.previousTrackCommand.isEnabled = false
-  }
-
-  private func appIconImage() -> UIImage? {
-    if let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-       let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-       let files = primary["CFBundleIconFiles"] as? [String] {
-      for name in files.reversed() {
-        if let image = UIImage(named: name) {
-          return image
-        }
-      }
-    }
-    return UIImage(named: "AppIcon")
   }
 
   private func notifyWebRTCActivated() {

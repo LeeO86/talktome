@@ -71,10 +71,7 @@ export async function setWebRTCAudioEnabled(enabled: boolean): Promise<boolean> 
   return (await loadNative()?.setWebRTCAudioEnabled?.(enabled)) === true;
 }
 
-export async function updateNowPlaying(input: {
-  title: string;
-  detail: string;
-  active: boolean;
-}): Promise<boolean> {
-  return (await loadNative()?.updateNowPlaying?.(input.title, input.detail, input.active)) === true;
+/** Clears leftover iOS Now Playing. TalkToMe does not register as a media player. */
+export async function clearNowPlaying(): Promise<boolean> {
+  return (await loadNative()?.updateNowPlaying?.('', '', false)) === true;
 }

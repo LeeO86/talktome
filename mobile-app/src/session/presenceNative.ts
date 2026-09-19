@@ -1,6 +1,6 @@
 import { requireNativeModule } from 'expo-modules-core';
 
-import { updateNowPlaying } from '../audio/session';
+import { clearNowPlaying } from '../audio/session';
 import {
   PRESENCE_DISCONNECT_LABEL,
   presenceTalkButtonLabel,
@@ -62,11 +62,8 @@ export function publishSessionPresence(snapshot: PresenceSnapshot): void {
     disconnectLabel: PRESENCE_DISCONNECT_LABEL,
   };
   void loadNative()?.update?.(payload);
-  void updateNowPlaying({
-    title: payload.title || 'TalkToMe',
-    detail: payload.detail,
-    active: snapshot.connected,
-  });
+  // Live Activity / widget stay on Lock Screen. Do not register Now Playing.
+  void clearNowPlaying();
 }
 
 export function subscribeTalkShortcut(onTalk: () => void): () => void {
