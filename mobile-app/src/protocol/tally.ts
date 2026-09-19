@@ -4,6 +4,9 @@
 
 export const TALLY_PGM_COLOR = '#e00000';
 export const TALLY_PRV_COLOR = '#00875a';
+/** On-air frame around the operator screen. The web client uses 0.4rem (~6px) plus
+ * an 0.5rem dark-container inset; phones need a thicker ring to read from a distance. */
+export const TALLY_FRAME_WIDTH = 24;
 
 export type CameraTallyState = {
   pgm: boolean;
@@ -26,7 +29,7 @@ export function parseCameraTally(value: unknown): CameraTallyState {
   };
 }
 
-/** Border/tint color for the operator chrome. PGM (red) wins over preview (green). */
+/** Screen-frame color for operator tally. PGM (red) wins over preview (green). */
 export function cameraTallyColor(tally: CameraTallyState): string | null {
   if (tally.pgm) {
     return TALLY_PGM_COLOR;

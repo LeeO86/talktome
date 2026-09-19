@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   EMPTY_CAMERA_TALLY,
+  TALLY_FRAME_WIDTH,
   TALLY_PGM_COLOR,
   TALLY_PRV_COLOR,
   cameraTallyColor,
@@ -21,6 +22,10 @@ describe('camera tally', () => {
       prv: true,
     });
     expect(parseCameraTally({ pgm: true, prv: true })).toEqual({ pgm: true, prv: true });
+  });
+
+  it('uses a thick on-air frame, larger than the web client 0.4rem ring', () => {
+    expect(TALLY_FRAME_WIDTH).toBe(24);
   });
 
   it('gives PGM visual priority over preview', () => {

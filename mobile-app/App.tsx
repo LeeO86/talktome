@@ -1,10 +1,10 @@
 import { useEffect } from 'react';
-import { ActivityIndicator, Linking, SafeAreaView, StyleSheet } from 'react-native';
+import { ActivityIndicator, Linking, SafeAreaView, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 import { session, useSessionStore } from './src/session/store';
-import { cameraTallyColor } from './src/protocol';
+import { cameraTallyColor, TALLY_FRAME_WIDTH } from './src/protocol';
 import { androidSafeArea } from './src/ui/androidSafeArea';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { OperatorScreen } from './src/ui/OperatorScreen';
@@ -66,10 +66,20 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={[styles.root, androidSafeArea, tallyColor ? { backgroundColor: tallyColor } : null]}>
-      <StatusBar style="light" />
-      {body}
-    </SafeAreaView>
+    <View style={styles.root}>
+      <SafeAreaView style={[styles.safe, androidSafeArea]}>
+        <StatusBar style="light" />
+        {body}
+      </SafeAreaView>
+      {identity && operatorReady && tallyColor ? (
+        <View
+          pointerEvents="none"
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          style={[styles.tallyFrame, { borderColor: tallyColor, borderWidth: TALLY_FRAME_WIDTH }]}
+        />
+      ) : null}
+    </View>
   );
 }
 
@@ -77,5 +87,13 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.bgBottom,
+  },
+  safe: {
+    flex: 1,
+    backgroundColor: colors.bgBottom,
+  },
+  tallyFrame: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 40,
   },
 });
