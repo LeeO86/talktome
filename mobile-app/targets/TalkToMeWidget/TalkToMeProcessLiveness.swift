@@ -157,5 +157,31 @@ enum TalkToMeWidgetPresence {
     var audioActive: Bool
     var talking: Bool
     var listening: Bool
+
+    init(
+      connected: Bool,
+      title: String,
+      detail: String,
+      audioActive: Bool,
+      talking: Bool,
+      listening: Bool
+    ) {
+      self.connected = connected
+      self.title = title
+      self.detail = detail
+      self.audioActive = audioActive
+      self.talking = talking
+      self.listening = listening
+    }
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      connected = try container.decode(Bool.self, forKey: .connected)
+      title = try container.decodeIfPresent(String.self, forKey: .title) ?? "talktome"
+      detail = try container.decodeIfPresent(String.self, forKey: .detail) ?? "Not connected"
+      audioActive = try container.decodeIfPresent(Bool.self, forKey: .audioActive) ?? false
+      talking = try container.decodeIfPresent(Bool.self, forKey: .talking) ?? false
+      listening = try container.decodeIfPresent(Bool.self, forKey: .listening) ?? false
+    }
   }
 }
