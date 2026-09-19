@@ -86,7 +86,7 @@ class TalkToMePttHardwareModule : Module() {
     }
 
     Function("listBondedSerial") {
-      controller()?.listBondedSerial() ?: emptyList()
+      controller()?.listBondedSerial() ?: emptyList<Map<String, Any?>>()
     }
   }
 
