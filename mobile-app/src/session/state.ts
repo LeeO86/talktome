@@ -31,6 +31,7 @@ export type SessionUiState = {
   leftHanded: boolean;
   talkSelectMode: boolean;
   lockMultipleTargets: boolean;
+  edgeTalkAffordance: boolean;
   selectedTalkTarget: TalkTarget | null;
   replyTarget: TalkTarget | null;
   loginOptions: LoginOptions | null;
@@ -110,6 +111,8 @@ export type SessionUiState = {
   bleTargetType: string;
   bleTargetId: string;
   bleTargetLabel: string;
+  pttHardwareLog: string[];
+  bondedSerialDevices: { id: string; name: string; pttHint: boolean }[];
 };
 
 export const FOREGROUND_REASON =
@@ -127,6 +130,7 @@ export const initialState: SessionUiState = {
   leftHanded: false,
   talkSelectMode: false,
   lockMultipleTargets: false,
+  edgeTalkAffordance: true,
   selectedTalkTarget: null,
   replyTarget: null,
   loginOptions: null,
@@ -205,6 +209,8 @@ export const initialState: SessionUiState = {
   bleTargetType: '',
   bleTargetId: '',
   bleTargetLabel: '',
+  pttHardwareLog: [],
+  bondedSerialDevices: [],
 };
 
 type SessionStore = SessionUiState & {

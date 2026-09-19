@@ -14,10 +14,22 @@ const KIND_COLOR: Record<ConnectionHealthKind, string> = {
 type Props = {
   health: ConnectionHealth;
   light?: boolean;
+  compact?: boolean;
 };
 
-export function ConnectionStatusBadge({ health, light = false }: Props) {
+export function ConnectionStatusBadge({ health, light = false, compact = false }: Props) {
   const color = KIND_COLOR[health.kind];
+  if (compact) {
+    return (
+      <View
+        accessible={false}
+        importantForAccessibility="no-hide-descendants"
+        style={[styles.dotOnly, health.kind === 'failed' && styles.dotOnlyFailed]}
+      >
+        <View style={[styles.dot, { backgroundColor: color, shadowColor: color }]} />
+      </View>
+    );
+  }
   return (
     <View
       accessible={false}
@@ -48,6 +60,20 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(60, 60, 67, 0.18)',
   },
   badgeFailed: {
+    borderColor: 'rgba(255, 90, 90, 0.4)',
+  },
+  dotOnly: {
+    width: 12,
+    height: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  dotOnlyFailed: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1,
     borderColor: 'rgba(255, 90, 90, 0.4)',
   },
   dot: {

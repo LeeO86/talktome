@@ -9,6 +9,7 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -18,12 +19,15 @@ import { formatFingerprint } from '../servers/fingerprint';
 import { session, useSessionStore } from '../session/store';
 import { QrIcon } from './icons';
 import { QrScannerModal } from './QrScannerModal';
+import { isCompactOperatorScreen } from './layers';
 import { colors } from './theme';
 
 type LoginMethod = 'account' | 'link';
 
 export function LoginScreen() {
   const store = useSessionStore();
+  const { width, height } = useWindowDimensions();
+  const compact = isCompactOperatorScreen(width, height);
   const [method, setMethod] = useState<LoginMethod>('account');
   const [password, setPassword] = useState('');
   const [loginLink, setLoginLink] = useState('');
@@ -184,24 +188,33 @@ export function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.screen}
+      style={[styles.screen, compact && styles.screenCompact]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        style={styles.scrollFill}
+        contentContainerStyle={[styles.scroll, compact && styles.scrollCompact]}
+        keyboardShouldPersistTaps="handled"
+      >
         {canGoBack ? (
           <Pressable accessibilityRole="button" onPress={() => session.cancelAddProfile()} style={styles.back}>
             <Text style={styles.backText}>Profiles</Text>
           </Pressable>
         ) : null}
-        <View style={styles.intro}>
+        <View style={[styles.intro, compact && styles.introCompact]}>
           <View style={styles.brandRow}>
-            <Image source={require('../../assets/talktome-mark.png')} style={styles.brandIcon} />
-            <Text style={styles.brand}>talktome</Text>
+            <Image
+              source={require('../../assets/talktome-mark.png')}
+              style={[styles.brandIcon, compact && styles.brandIconCompact]}
+            />
+            <Text style={[styles.brand, compact && styles.brandCompact]}>talktome</Text>
           </View>
-          <Text style={styles.subtitle}>Connect with an operator account or a login link.</Text>
+          <Text style={[styles.subtitle, compact && styles.subtitleCompact]}>
+            Connect with an operator account or a login link.
+          </Text>
         </View>
 
-        <View style={styles.card}>
+        <View style={[styles.card, compact && styles.cardCompact]}>
           <View style={styles.segment} accessibilityRole="tablist">
             <Pressable
               accessibilityRole="tab"
@@ -295,8 +308,9 @@ export function LoginScreen() {
             />
           </View>
           <Text style={styles.hint}>
-            When a local certificate is not in the system store, TalkToMe can pin its SHA-256
-            fingerprint. This never disables TLS checks for every host.
+            {compact
+              ? 'Pin a local certificate fingerprint. TLS stays on.'
+              : 'When a local certificate is not in the system store, TalkToMe can pin its SHA-256 fingerprint. This never disables TLS checks for every host.'}
           </Text>
 
           {store.pendingCertificate ? (
@@ -428,13 +442,24 @@ function ScanField({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    justifyContent: 'space-between',
     paddingHorizontal: 24,
     paddingTop: 12,
     paddingBottom: 16,
   },
+  screenCompact: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  scrollFill: {
+    flex: 1,
+    minHeight: 0,
+  },
   scroll: {
     paddingBottom: 16,
+  },
+  scrollCompact: {
+    paddingBottom: 8,
   },
   back: {
     alignSelf: 'flex-start',
@@ -450,6 +475,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 16,
   },
+  introCompact: {
+    marginTop: 0,
+    marginBottom: 10,
+  },
   brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -460,15 +489,27 @@ const styles = StyleSheet.create({
     height: 38,
     borderRadius: 10,
   },
+  brandIconCompact: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+  },
   brand: {
     color: colors.text,
     fontSize: 34,
     fontWeight: '700',
   },
+  brandCompact: {
+    fontSize: 26,
+  },
   subtitle: {
     color: colors.muted,
     marginTop: 6,
     fontSize: 16,
+  },
+  subtitleCompact: {
+    fontSize: 13,
+    marginTop: 4,
   },
   card: {
     backgroundColor: 'rgba(255,255,255,0.08)',
@@ -476,6 +517,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 24,
     padding: 20,
+  },
+  cardCompact: {
+    padding: 14,
+    borderRadius: 18,
   },
   segment: {
     flexDirection: 'row',

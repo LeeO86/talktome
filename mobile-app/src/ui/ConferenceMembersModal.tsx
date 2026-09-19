@@ -1,4 +1,4 @@
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import {
   excludeSelfConferenceMembers,
@@ -12,6 +12,7 @@ import { conferenceMemberExcluded, conferenceMemberLevel } from '../session/conf
 import { session, useSessionStore } from '../session/store';
 import { NudgeButton } from './NudgeButton';
 import { colors } from './theme';
+import { isCompactOperatorScreen } from './layers';
 import { VolumeRing } from './VolumeRing';
 import { VolumeSlider } from './VolumeSlider';
 
@@ -25,6 +26,10 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
   const identityId = useSessionStore((state) => state.identity?.id);
   const listen = useSessionStore((state) => state.conferenceListen);
   const volumeFader = useSessionStore((state) => state.operatorAudio.volumeFader);
+  const { width, height } = useWindowDimensions();
+  const compact = isCompactOperatorScreen(width, height);
+  const cardMaxHeight = Math.round(height * (compact ? 0.92 : 0.8));
+  const listMaxHeight = Math.max(120, cardMaxHeight - (compact ? 108 : 128));
   const onlineIds = onlineUserIdsFromPeers(peers);
   const members = sortConferenceMembers(
     excludeSelfConferenceMembers(target?.members, identityId),
@@ -43,11 +48,13 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
     <Modal visible={Boolean(target)} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={styles.card}>
-          <Text style={styles.description}>
-            Choose who you hear in {target?.label ?? 'this conference'}.
+        <View style={[styles.card, { maxHeight: cardMaxHeight, height: compact ? cardMaxHeight : undefined }]}>
+          <Text style={[styles.description, compact && styles.descriptionCompact]}>
+            {compact
+              ? `Who you hear in ${target?.label ?? 'this conference'}.`
+              : `Choose who you hear in ${target?.label ?? 'this conference'}.`}
           </Text>
-          <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+          <ScrollView style={[styles.list, { maxHeight: listMaxHeight }]} contentContainerStyle={styles.listContent}>
             {members.length === 0 ? (
               <Text style={styles.empty}>No other members</Text>
             ) : (
@@ -99,6 +106,7 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
                       muted={!listening}
                       dimmed={!online}
                       compact
+                      variant={compact ? 'readout' : 'ring'}
                       accessibilityLabel={`Volume ${formatLinearLevelDb(listening ? level : 0)}`}
                       onDoublePress={() =>
                         target
@@ -152,9 +160,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 8,
+    flexShrink: 0,
+  },
+  descriptionCompact: {
+    fontSize: 13,
+    paddingTop: 12,
+    paddingBottom: 6,
   },
   list: {
-    maxHeight: 420,
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
   },
   listContent: {
     paddingHorizontal: 12,
@@ -235,6 +251,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   doneText: {
     color: colors.text,

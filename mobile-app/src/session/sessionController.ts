@@ -28,6 +28,7 @@ import { stopForegroundService } from '../background/foregroundService';
 import { startBleNative } from '../ble/native';
 import { loadBlePreferences } from '../ble/preferences';
 import type { BleTargetSelection } from '../ble/target';
+import type { PttButton } from '../hardware/events';
 import { slideToLockHint } from '../talk/slideToLock';
 import { loadAudioPreferences } from './audioPrefs';
 import { loadConferenceListen } from './conferenceListen';
@@ -124,6 +125,7 @@ export class SessionController {
       leftHanded: bundle.leftHanded ?? false,
       talkSelectMode: bundle.talkSelectMode,
       lockMultipleTargets: bundle.lockMultipleTargets ?? false,
+      edgeTalkAffordance: bundle.edgeTalkAffordance !== false,
       audioSessionAvailable: audioSessionAvailable(),
       pttAvailable: pttNativeAvailable(),
       capabilityReason: this.background.capabilityReason({
@@ -147,6 +149,7 @@ export class SessionController {
       .catch(() => {
         this.background.publishBleState({ kind: 'idle' });
       });
+    void this.background.startPttHardwareTransports();
     if (last?.serverAddress) {
       void this.refreshLoginOptions(last.serverAddress);
     }
@@ -544,6 +547,7 @@ export class SessionController {
       leftHanded: next.leftHanded,
       talkSelectMode: next.talkSelectMode,
       lockMultipleTargets: next.lockMultipleTargets,
+      edgeTalkAffordance: next.edgeTalkAffordance,
       productionId: next.productionId,
       productionName: next.productionName,
       profiles: next.profiles,
@@ -566,6 +570,8 @@ export class SessionController {
       bleTargetType: next.bleTargetType,
       bleTargetId: next.bleTargetId,
       bleTargetLabel: next.bleTargetLabel,
+      pttHardwareLog: next.pttHardwareLog,
+      bondedSerialDevices: next.bondedSerialDevices,
       fgsAvailable: next.fgsAvailable,
       audioSessionAvailable: next.audioSessionAvailable,
       pttAvailable: next.pttAvailable,
@@ -630,6 +636,7 @@ export class SessionController {
       leftHanded: this.leftHandedExplicit ? state.leftHanded : undefined,
       talkSelectMode: state.talkSelectMode,
       lockMultipleTargets: this.lockMultipleTargetsExplicit ? state.lockMultipleTargets : undefined,
+      edgeTalkAffordance: state.edgeTalkAffordance,
     };
   }
 
@@ -645,6 +652,11 @@ export class SessionController {
     if (!lockMultipleTargets) {
       void this.talk.collapseToSingleLock();
     }
+    this.persistLayout();
+  }
+
+  setEdgeTalkAffordance(edgeTalkAffordance: boolean): void {
+    useSessionStore.setState({ edgeTalkAffordance });
     this.persistLayout();
   }
 
@@ -1121,12 +1133,16 @@ export class SessionController {
     return this.background.bluetoothButtonCandidates();
   }
 
-  bluetoothButtonSelection(deviceId?: string): BleTargetSelection {
-    return this.background.bluetoothButtonSelection(deviceId);
+  bluetoothButtonSelection(deviceId?: string, button?: PttButton): BleTargetSelection {
+    return this.background.bluetoothButtonSelection(deviceId, button);
   }
 
-  setBluetoothButtonTarget(selection: BleTargetSelection, deviceId?: string): void {
-    this.background.setBluetoothButtonTarget(selection, deviceId);
+  setBluetoothButtonTarget(selection: BleTargetSelection, deviceId?: string, button?: PttButton): void {
+    this.background.setBluetoothButtonTarget(selection, deviceId, button);
+  }
+
+  setRotaryRetargetsPtt1(deviceId: string, enabled: boolean): void {
+    this.background.setRotaryRetargetsPtt1(deviceId, enabled);
   }
 
   setBluetoothButtonShortPressLocks(enabled: boolean): void {
@@ -1159,6 +1175,10 @@ export class SessionController {
 
   async disconnectBluetoothButton(deviceId?: string): Promise<void> {
     await this.background.disconnectBluetoothButton(deviceId);
+  }
+
+  async probeSerialAccessory(deviceId: string): Promise<void> {
+    await this.background.probeSerialAccessory(deviceId);
   }
 
   removeBluetoothAccessory(deviceId: string): void {

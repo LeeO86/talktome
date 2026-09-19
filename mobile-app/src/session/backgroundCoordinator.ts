@@ -35,6 +35,7 @@ import { BleButtonPolicy } from '../ble/button';
 import {
   aggregateBleKind,
   anyBleDeviceActive,
+  bindingControlTarget,
   bindingTarget,
   connectedBleDeviceNames,
   describeBleReleaseTimeout,
@@ -46,7 +47,6 @@ import {
 import {
   BLE_BUTTON_PAIRING_MS,
   coerceNotifyBytes,
-  decodeAccessoryNotify,
   FALLBACK_ACCESSORY_PROFILE,
   looksLikePttCommand,
   matchAccessoryProfile,
@@ -70,6 +70,32 @@ import {
   resolveBleTalkTarget,
   type BleTargetSelection,
 } from '../ble/target';
+import { AccessoryNotifySession, decodeUsbBytes, SppTokenParser } from '../hardware/codecs';
+import { PttEventDeduper } from '../hardware/dedup';
+import {
+  ONBOARD_DEVICE_ID,
+  describePttButton,
+  hardwareDeviceId,
+    isTalkButton,
+    type PttButton,
+  type PttDeviceKind,
+  type PttEvent,
+  type PttTransport,
+} from '../hardware/events';
+import {
+  acceptHardwareDevice,
+  cancelHardwarePairing,
+  connectHardwareDevice,
+  disconnectHardwareDevice,
+  listBondedSerialDevices,
+  startHardwarePairing,
+  startPttHardware,
+  subscribePttHardware,
+  type HardwareBytesEvent,
+  type HardwareNativeEvent,
+  type HardwareNativeState,
+} from '../hardware/native';
+import { nextTalkableTarget, selectionFromTalkTarget, talkableAtKnob } from '../hardware/rotary';
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
 import { canJoinCachedSystemPtt, isHexPushToken, parseApplePttBootstrap, shouldUseSystemPtt } from '../ptt/policy';
 import {
@@ -96,6 +122,12 @@ export class BackgroundCoordinator {
   private pendingPttRegistration: { token: string; channelUUID: string } | null = null;
   private readonly blePolicies = new Map<string, BleButtonPolicy>();
   private readonly bleWatchdogs = new Map<string, BleReleaseWatchdog>();
+  private readonly notifySessions = new Map<string, AccessoryNotifySession>();
+  private readonly sppParsers = new Map<string, SppTokenParser>();
+  private readonly eventDeduper = new PttEventDeduper();
+  private hardwareLiveDevices: BleDeviceState[] = [];
+  private unsubscribeHardware: (() => void) | null = null;
+  private pairingTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly c: SessionController) {}
 
@@ -187,13 +219,13 @@ export class BackgroundCoordinator {
     return bleTalkCandidates(useSessionStore.getState().targets);
   }
 
-  bluetoothButtonSelection(deviceId?: string): BleTargetSelection {
+  bluetoothButtonSelection(deviceId?: string, button: PttButton = 'ptt'): BleTargetSelection {
     const state = useSessionStore.getState();
     const id = deviceId || state.bleFocusedDeviceId;
-    return bindingTarget(state.bleBindings, id, bleSelectionFromState(state));
+    return bindingTarget(state.bleBindings, id, bleSelectionFromState(state), button);
   }
 
-  setBluetoothButtonTarget(selection: BleTargetSelection, deviceId?: string): void {
+  setBluetoothButtonTarget(selection: BleTargetSelection, deviceId?: string, button: PttButton = 'ptt'): void {
     const state = useSessionStore.getState();
     const id = deviceId || state.bleFocusedDeviceId;
     if (!id) {
@@ -204,12 +236,26 @@ export class BackgroundCoordinator {
       this.persistBlePreferences();
       return;
     }
-    const bindings = upsertBleDeviceBinding(state.bleBindings, { id, target: selection });
+    const bindings = upsertBleDeviceBinding(state.bleBindings, { id, target: selection, button });
     useSessionStore.setState({
       bleBindings: bindings,
       bleFocusedDeviceId: id,
-      ...bleFieldsFromSelection(selection, state.bleShortPressLocks),
-      statusMessage: `${this.accessoryLabel(id)} target set to ${describeBleTarget(selection)}.`,
+      ...(button === 'ptt' ? bleFieldsFromSelection(selection, state.bleShortPressLocks) : {}),
+      statusMessage: `${this.accessoryLabel(id)} ${describePttButton(button)} set to ${describeBleTarget(selection)}.`,
+    });
+    this.persistBlePreferences();
+  }
+
+  setRotaryRetargetsPtt1(deviceId: string, enabled: boolean): void {
+    const bindings = upsertBleDeviceBinding(useSessionStore.getState().bleBindings, {
+      id: deviceId,
+      rotaryRetargetsPtt1: enabled,
+    });
+    useSessionStore.setState({
+      bleBindings: bindings,
+      statusMessage: enabled
+        ? 'Channel knob / up-down can change PTT 1 when Talk & select is off.'
+        : 'Channel knob / up-down only changes the Talk & select card.',
     });
     this.persistBlePreferences();
   }
@@ -255,14 +301,18 @@ export class BackgroundCoordinator {
   async beginButtonPairing(): Promise<void> {
     await requestAndroidBlePermissions();
     await startBleNative();
+    await this.startPttHardwareTransports();
     const boundIds = useSessionStore.getState().bleBindings.map((item) => item.id);
     useSessionStore.setState({
       blePairingActive: true,
       blePairingFoundId: null,
-      blePairingMessage: 'Hold the PTT button on the accessory.',
+      blePairingMessage: 'Hold a PTT button, SOS, or turn the channel knob.',
       bleScanning: true,
+      bondedSerialDevices: listBondedSerialDevices(),
       statusMessage: 'Listening for a PTT button…',
     });
+    void startHardwarePairing({ timeoutMs: BLE_BUTTON_PAIRING_MS, boundIds });
+    this.armPairingTimer();
     const state = await startButtonPairingBle({
       timeoutMs: BLE_BUTTON_PAIRING_MS,
       boundIds,
@@ -273,17 +323,20 @@ export class BackgroundCoordinator {
     }
     if (state.kind === 'unavailable' || state.kind === 'failed') {
       useSessionStore.setState({
-        blePairingActive: false,
-        blePairingMessage: state.message || 'Could not scan for a PTT button.',
+        blePairingMessage:
+          state.message ||
+          'Bluetooth LE scan failed. Phone keys and serial buttons are still listening.',
       });
     }
   }
 
   async cancelButtonPairing(): Promise<void> {
+    this.clearPairingTimer();
     if (!useSessionStore.getState().blePairingActive) {
       return;
     }
     const state = await cancelButtonPairingBle();
+    await cancelHardwarePairing();
     useSessionStore.setState({
       blePairingActive: false,
       blePairingFoundId: null,
@@ -292,13 +345,27 @@ export class BackgroundCoordinator {
     this.publishBleState(state);
   }
 
-  async completeButtonPairing(deviceId: string): Promise<void> {
+  async completeButtonPairing(
+    deviceId: string,
+    input: { name?: string; kind?: PttDeviceKind } = {},
+  ): Promise<void> {
     const live = useSessionStore.getState().bleDevices.find((device) => device.id === deviceId);
-    const name = live?.name?.trim() || 'PTT accessory';
-    const state = await acceptPairedBleDevice(deviceId);
+    const kind = input.kind ?? this.kindForId(deviceId);
+    const name =
+      input.name?.trim() ||
+      live?.name?.trim() ||
+      (kind === 'onboard' ? 'This phone' : 'PTT accessory');
+    if (kind === 'ble') {
+      const state = await acceptPairedBleDevice(deviceId);
+      this.publishBleState(state);
+    } else {
+      await acceptHardwareDevice(deviceId);
+    }
+    this.clearPairingTimer();
     const bindings = upsertBleDeviceBinding(useSessionStore.getState().bleBindings, {
       id: deviceId,
       name,
+      kind,
     });
     useSessionStore.setState({
       bleBindings: bindings,
@@ -309,14 +376,21 @@ export class BackgroundCoordinator {
       statusMessage: `Added ${name}.`,
     });
     this.persistBlePreferences();
-    this.publishBleState(state);
   }
 
   async connectKnownBluetoothAccessory(deviceId: string): Promise<void> {
     await requestAndroidBlePermissions();
     this.focusBluetoothAccessory(deviceId);
-    const state = await connectBleDevice(deviceId);
-    this.publishBleState(state);
+    const kind = this.kindForId(deviceId);
+    if (kind === 'onboard') {
+      return;
+    }
+    if (kind === 'ble') {
+      const state = await connectBleDevice(deviceId);
+      this.publishBleState(state);
+      return;
+    }
+    await connectHardwareDevice(deviceId);
   }
 
   async disconnectBluetoothButton(deviceId?: string): Promise<void> {
@@ -325,19 +399,39 @@ export class BackgroundCoordinator {
     } else {
       this.resetBleAccessorySession();
     }
-    const state = await disconnectBle(deviceId);
-    this.publishBleState(state);
+    const kind = deviceId ? this.kindForId(deviceId) : 'ble';
+    if (!deviceId || kind === 'ble') {
+      const state = await disconnectBle(deviceId);
+      this.publishBleState(state);
+    }
+    if (!deviceId || kind === 'spp' || kind === 'usb') {
+      await disconnectHardwareDevice(deviceId);
+    }
     await this.syncForegroundService();
+  }
+
+  async probeSerialAccessory(deviceId: string): Promise<void> {
+    await requestAndroidBlePermissions();
+    await this.startPttHardwareTransports();
+    useSessionStore.setState({
+      blePairingActive: true,
+      blePairingFoundId: null,
+      blePairingMessage: 'Hold the button on that serial accessory.',
+    });
+    await connectHardwareDevice(deviceId);
   }
 
   removeBluetoothAccessory(deviceId: string): void {
     this.forceBleRelease(deviceId);
-    void disconnectBle(deviceId).then((state) => this.publishBleState(state));
+    const kind = this.kindForId(deviceId);
+    if (kind === 'ble') {
+      void disconnectBle(deviceId).then((state) => this.publishBleState(state));
+    } else if (kind === 'spp' || kind === 'usb') {
+      void disconnectHardwareDevice(deviceId);
+    }
     const state = useSessionStore.getState();
     const bindings = removeBleDeviceBinding(state.bleBindings, deviceId);
-    this.blePolicies.delete(deviceId);
-    this.bleWatchdogs.get(deviceId)?.clear();
-    this.bleWatchdogs.delete(deviceId);
+    this.clearDeviceMaps(deviceId);
     useSessionStore.setState({
       bleBindings: bindings,
       bleFocusedDeviceId: state.bleFocusedDeviceId === deviceId ? (bindings[0]?.id ?? '') : state.bleFocusedDeviceId,
@@ -352,6 +446,9 @@ export class BackgroundCoordinator {
     }
     this.bleWatchdogs.clear();
     this.blePolicies.clear();
+    this.notifySessions.clear();
+    this.sppParsers.clear();
+    this.eventDeduper.reset();
   }
 
   async openBatteryEducation(): Promise<void> {
@@ -411,21 +508,28 @@ export class BackgroundCoordinator {
       onButton: (event) => {
         const deviceId = event.deviceId || useSessionStore.getState().bleFocusedDeviceId;
         if (!event.pressed) {
+          const extras = this.notifySessionFor(deviceId).reset({
+            source: 'ble',
+            deviceId,
+            timestamp: Date.now(),
+            raw: 'disconnect',
+          });
+          for (const item of extras) {
+            this.dispatchPttEvent(item);
+          }
           this.forceBleRelease(deviceId);
-          return;
         }
-        if (!deviceId) {
-          return;
-        }
-        this.watchdogFor(deviceId).notePressed();
-        void this.handleBleButton(deviceId, true);
       },
       onDiagnostic: (message) => {
-        const state = useSessionStore.getState();
-        if (state.bleScanning || anyBleDeviceActive(state.bleDevices, state.bleScanning)) {
-          useSessionStore.setState({ bleMessage: message });
-        }
+        this.noteHardwareLog(message);
       },
+    });
+    this.unsubscribeHardware?.();
+    this.unsubscribeHardware = subscribePttHardware({
+      onEvent: (event) => this.handleNativeHardwareEvent(event),
+      onBytes: (event) => this.handleHardwareBytes(event),
+      onState: (state) => this.publishHardwareState(state),
+      onDiagnostic: (message) => this.noteHardwareLog(message),
     });
     this.c.mediaCoordinator.publishAudioDevices();
     subscribeAudioRoutes((snapshot) => {
@@ -513,7 +617,8 @@ export class BackgroundCoordinator {
 
   publishBleState(state: BleConnectionState): void {
     const previous = useSessionStore.getState();
-    const devices = this.normalizeDevices(state);
+    const bleDevices = this.normalizeDevices(state);
+    const devices = this.mergeLiveDevices(bleDevices);
     const scanning = Boolean(state.scanning) || state.kind === 'scanning';
     const kind = scanning ? 'scanning' : aggregateBleKind(devices, false);
     const keepDiagnostic =
@@ -529,32 +634,12 @@ export class BackgroundCoordinator {
         : bindings[0]?.id) ?? '';
     const focusedTarget = bindingTarget(bindings, focused, defaultTarget);
     this.releaseDroppedDevices(previous.bleDevices, devices);
-    const pairingReported = typeof state.pairing === 'boolean' ? state.pairing : undefined;
-    let pairingActive = previous.blePairingActive;
-    if (pairingReported === false) {
-      pairingActive = false;
-    } else if (
-      previous.blePairingActive &&
-      pairingReported == null &&
-      (state.kind === 'failed' || state.kind === 'unavailable') &&
-      !scanning
-    ) {
-      pairingActive = false;
-    }
-    let pairingMessage = previous.blePairingMessage;
-    const pairingFoundId = previous.blePairingFoundId;
-    if (previous.blePairingActive && !pairingActive && !pairingFoundId) {
-      pairingMessage =
-        state.message || pairingMessage || 'No PTT button was heard. Hold the button and try again.';
-    }
 
     useSessionStore.setState({
       bleKind: kind,
       bleName: connectedBleDeviceNames(devices) || state.name || '',
       bleMessage: keepDiagnostic ? previous.bleMessage : (state.message ?? ''),
       bleScanning: scanning,
-      blePairingActive: pairingActive,
-      blePairingMessage: pairingMessage,
       bleDevices: devices,
       bleBindings: bindings,
       bleFocusedDeviceId: focused,
@@ -563,6 +648,27 @@ export class BackgroundCoordinator {
     if (bindings !== previous.bleBindings && JSON.stringify(bindings) !== JSON.stringify(previous.bleBindings)) {
       this.persistBlePreferences();
     }
+  }
+
+  private mergeLiveDevices(bleDevices: BleDeviceState[]): BleDeviceState[] {
+    const merged = new Map<string, BleDeviceState>();
+    for (const device of bleDevices) {
+      merged.set(device.id, device);
+    }
+    for (const device of this.hardwareLiveDevices) {
+      merged.set(device.id, device);
+    }
+    for (const binding of useSessionStore.getState().bleBindings) {
+      if (binding.kind === 'onboard' && !merged.has(binding.id)) {
+        merged.set(binding.id, {
+          id: binding.id,
+          kind: 'connected',
+          name: binding.name,
+          profileId: 'onboard',
+        });
+      }
+    }
+    return [...merged.values()];
   }
 
   private normalizeDevices(state: BleConnectionState): BleDeviceState[] {
@@ -600,78 +706,361 @@ export class BackgroundCoordinator {
     const bytes = coerceNotifyBytes(data);
     const profile =
       matchAccessoryProfile({ profileId: live?.profileId, name: live?.name }) ?? FALLBACK_ACCESSORY_PROFILE;
-    const pressed = decodeAccessoryNotify(bytes, profile);
-    const bound = state.bleBindings.some((item) => item.id === id);
-    if (state.blePairingActive && !bound && looksLikePttCommand(bytes, profile)) {
-      const startTalk = pressed === true;
-      void this.completeButtonPairing(id).then(() => {
-        if (startTalk) {
-          void this.handleBleButton(id, true);
-        }
+    if (bytes.length === 0) {
+      return;
+    }
+    const events = this.notifySessionFor(id).apply(bytes, profile, {
+      source: 'ble',
+      deviceId: id,
+      deviceName: live?.name,
+      timestamp: Date.now(),
+      raw: bytes.map((value) => value.toString(16).padStart(2, '0')).join(' '),
+    });
+    if (events.length === 0 && looksLikePttCommand(bytes, profile) && state.blePairingActive) {
+      void this.completeButtonPairing(id, { kind: 'ble', name: live?.name });
+      return;
+    }
+    for (const event of events) {
+      this.dispatchPttEvent(event);
+    }
+  }
+
+  private handleNativeHardwareEvent(event: HardwareNativeEvent): void {
+    const button = event.button;
+    if (!button) {
+      return;
+    }
+    this.dispatchPttEvent({
+      button,
+      pressed: event.pressed,
+      channel: event.channel,
+      source: event.source,
+      deviceId: hardwareDeviceId(event.source, event.deviceId),
+      deviceName: event.deviceName,
+      timestamp: Date.now(),
+      raw: event.raw,
+    });
+  }
+
+  private handleHardwareBytes(event: HardwareBytesEvent): void {
+    const deviceId = hardwareDeviceId(event.source, event.deviceId);
+    const timestamp = Date.now();
+    if (event.source === 'spp') {
+      const parser = this.sppParserFor(deviceId);
+      const events = parser.push(event.text ?? '', {
+        source: 'spp',
+        deviceId,
+        deviceName: event.deviceName,
+        timestamp,
+        raw: event.text,
+      });
+      for (const item of events) {
+        this.dispatchPttEvent(item);
+      }
+      return;
+    }
+    if (event.source === 'usb') {
+      const events = decodeUsbBytes(coerceNotifyBytes(event.data), {
+        source: 'usb',
+        deviceId,
+        deviceName: event.deviceName,
+        timestamp,
+      });
+      for (const item of events) {
+        this.dispatchPttEvent(item);
+      }
+    }
+  }
+
+  private publishHardwareState(state: HardwareNativeState): void {
+    this.hardwareLiveDevices = (state.devices ?? []).map((device) => ({
+      id: device.id,
+      kind:
+        device.status === 'connected'
+          ? 'connected'
+          : device.status === 'connecting'
+            ? 'connecting'
+            : device.status === 'failed'
+              ? 'failed'
+              : device.status === 'disconnected'
+                ? 'disconnected'
+                : 'idle',
+      name: device.name,
+      message: device.message,
+      profileId: device.kind,
+    }));
+    this.publishBleState({
+      kind: useSessionStore.getState().bleKind,
+      devices: useSessionStore.getState().bleDevices.filter((device) => !device.id.startsWith('spp:') && !device.id.startsWith('usb:')),
+      scanning: useSessionStore.getState().bleScanning,
+    });
+  }
+
+  async startPttHardwareTransports(): Promise<void> {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+    await startPttHardware();
+    const saved = useSessionStore.getState().bleBindings.filter((item) => item.kind === 'spp' || item.kind === 'usb');
+    for (const binding of saved) {
+      void connectHardwareDevice(binding.id);
+    }
+  }
+
+  private dispatchPttEvent(event: PttEvent): void {
+    if (this.eventDeduper.shouldDrop(event)) {
+      return;
+    }
+    const deviceId = event.deviceId || hardwareDeviceId(event.source, event.deviceId);
+    const kind = this.kindForSource(event.source, deviceId);
+    this.noteHardwareLog(
+      `${event.source} ${event.deviceName || deviceId} ${describePttButton(event.button)} ${event.pressed ? 'down' : 'up'}${
+        event.channel != null ? ` #${event.channel}` : ''
+      }`,
+    );
+    const state = useSessionStore.getState();
+    const bound = state.bleBindings.some((item) => item.id === deviceId);
+    if (state.blePairingActive && !bound) {
+      void this.completeButtonPairing(deviceId, {
+        kind,
+        name: event.deviceName,
+      }).then(() => {
+        this.applyBoundEvent({ ...event, deviceId }, kind);
       });
       return;
     }
-    if (!bound || pressed == null) {
+    if (!bound) {
       return;
     }
-    if (pressed) {
-      this.watchdogFor(id).notePressed();
-    } else {
-      this.watchdogFor(id).noteReleased();
+    this.applyBoundEvent({ ...event, deviceId }, kind);
+  }
+
+  private applyBoundEvent(event: PttEvent, _kind: PttDeviceKind): void {
+    const deviceId = event.deviceId;
+    if (!deviceId) {
+      return;
     }
-    void this.handleBleButton(id, pressed);
+    const bindings = upsertBleDeviceBinding(useSessionStore.getState().bleBindings, {
+      id: deviceId,
+      seenButton: event.button,
+    });
+    if (JSON.stringify(bindings) !== JSON.stringify(useSessionStore.getState().bleBindings)) {
+      useSessionStore.setState({ bleBindings: bindings });
+      this.persistBlePreferences();
+    }
+    if (isTalkButton(event.button)) {
+      if (event.pressed) {
+        this.watchdogFor(deviceId, event.button).notePressed();
+      } else {
+        this.watchdogFor(deviceId, event.button).noteReleased();
+      }
+      void this.handleTalkControl(deviceId, event.button, event.pressed);
+      return;
+    }
+    if (event.button === 'channelUp' || event.button === 'channelDown') {
+      if (event.pressed === false) {
+        return;
+      }
+      this.handleChannelStep(deviceId, event.button === 'channelUp' ? 1 : -1);
+      return;
+    }
+    if (event.button === 'setChannel') {
+      this.handleChannelSet(deviceId, event.channel ?? 0);
+    }
+  }
+
+  private handleChannelStep(deviceId: string, delta: number): void {
+    const state = useSessionStore.getState();
+    if (state.talkSelectMode) {
+      this.c.talk.cycleSelectedTalkTarget(delta);
+      return;
+    }
+    const binding = state.bleBindings.find((item) => item.id === deviceId);
+    if (!binding?.rotaryRetargetsPtt1) {
+      this.noteHardwareLog('Channel step ignored (enable “Change PTT 1 target” or Talk & select).');
+      return;
+    }
+    const candidates = bleTalkCandidates(state.targets);
+    const current = resolveBleTalkTarget({
+      selection: bindingControlTarget(binding, 'ptt'),
+      replyTarget: state.replyTarget,
+      targets: state.targets,
+    });
+    const next = nextTalkableTarget(candidates, current, delta);
+    if (!next) {
+      return;
+    }
+    this.setBluetoothButtonTarget(selectionFromTalkTarget(next), deviceId, 'ptt');
+  }
+
+  private handleChannelSet(deviceId: string, position: number): void {
+    const state = useSessionStore.getState();
+    const candidates = bleTalkCandidates(state.targets);
+    const next = talkableAtKnob(candidates, position);
+    if (!next) {
+      return;
+    }
+    if (state.talkSelectMode) {
+      this.c.talk.selectTalkableByKnob(position);
+      return;
+    }
+    const binding = state.bleBindings.find((item) => item.id === deviceId);
+    if (!binding?.rotaryRetargetsPtt1) {
+      this.noteHardwareLog('Channel knob ignored (enable “Change PTT 1 target” or Talk & select).');
+      return;
+    }
+    this.setBluetoothButtonTarget(selectionFromTalkTarget(next), deviceId, 'ptt');
   }
 
   private forceBleRelease(deviceId?: string): void {
     if (!deviceId) {
-      for (const id of this.blePolicies.keys()) {
+      const ids = new Set<string>();
+      for (const key of this.blePolicies.keys()) {
+        ids.add(key.split(':', 1)[0] ?? key);
+      }
+      for (const id of ids) {
         this.forceBleRelease(id);
       }
       return;
     }
-    this.bleWatchdogs.get(deviceId)?.clear();
-    if (!this.policyFor(deviceId).isHeld()) {
-      return;
+    for (const [key, policy] of this.blePolicies.entries()) {
+      if (key !== deviceId && !key.startsWith(`${deviceId}:`)) {
+        continue;
+      }
+      this.bleWatchdogs.get(key)?.clear();
+      if (!policy.isHeld()) {
+        continue;
+      }
+      const button = (key.includes(':') ? key.slice(key.indexOf(':') + 1) : 'ptt') as PttButton;
+      void this.handleTalkControl(deviceId, button, false);
     }
-    void this.handleBleButton(deviceId, false);
   }
 
-  private policyFor(deviceId: string): BleButtonPolicy {
-    const existing = this.blePolicies.get(deviceId);
+  private policyKey(deviceId: string, button: PttButton = 'ptt'): string {
+    return `${deviceId}:${button}`;
+  }
+
+  private policyFor(deviceId: string, button: PttButton = 'ptt'): BleButtonPolicy {
+    const key = this.policyKey(deviceId, button);
+    const existing = this.blePolicies.get(key);
     if (existing) {
       return existing;
     }
     const created = new BleButtonPolicy();
-    this.blePolicies.set(deviceId, created);
+    this.blePolicies.set(key, created);
     return created;
   }
 
-  private watchdogFor(deviceId: string): BleReleaseWatchdog {
-    const existing = this.bleWatchdogs.get(deviceId);
+  private watchdogFor(deviceId: string, button: PttButton = 'ptt'): BleReleaseWatchdog {
+    const key = this.policyKey(deviceId, button);
+    const existing = this.bleWatchdogs.get(key);
     if (existing) {
       existing.timeoutMs = useSessionStore.getState().bleReleaseTimeoutMs;
       return existing;
     }
     const created = new BleReleaseWatchdog(
-      () => this.forceBleRelease(deviceId),
+      () => {
+        this.bleWatchdogs.get(key)?.clear();
+        void this.handleTalkControl(deviceId, button, false);
+      },
       useSessionStore.getState().bleReleaseTimeoutMs,
     );
-    this.bleWatchdogs.set(deviceId, created);
+    this.bleWatchdogs.set(key, created);
     return created;
+  }
+
+  private notifySessionFor(deviceId: string): AccessoryNotifySession {
+    const existing = this.notifySessions.get(deviceId);
+    if (existing) {
+      return existing;
+    }
+    const created = new AccessoryNotifySession();
+    this.notifySessions.set(deviceId, created);
+    return created;
+  }
+
+  private sppParserFor(deviceId: string): SppTokenParser {
+    const existing = this.sppParsers.get(deviceId);
+    if (existing) {
+      return existing;
+    }
+    const created = new SppTokenParser();
+    this.sppParsers.set(deviceId, created);
+    return created;
+  }
+
+  private clearDeviceMaps(deviceId: string): void {
+    for (const key of [...this.blePolicies.keys()]) {
+      if (key === deviceId || key.startsWith(`${deviceId}:`)) {
+        this.blePolicies.delete(key);
+      }
+    }
+    for (const key of [...this.bleWatchdogs.keys()]) {
+      if (key === deviceId || key.startsWith(`${deviceId}:`)) {
+        this.bleWatchdogs.get(key)?.clear();
+        this.bleWatchdogs.delete(key);
+      }
+    }
+    this.notifySessions.delete(deviceId);
+    this.sppParsers.delete(deviceId);
+  }
+
+  private kindForId(deviceId: string): PttDeviceKind {
+    const binding = useSessionStore.getState().bleBindings.find((item) => item.id === deviceId);
+    if (binding?.kind) {
+      return binding.kind;
+    }
+    if (deviceId === ONBOARD_DEVICE_ID) {
+      return 'onboard';
+    }
+    if (deviceId.startsWith('spp:')) {
+      return 'spp';
+    }
+    if (deviceId.startsWith('usb:')) {
+      return 'usb';
+    }
+    return 'ble';
+  }
+
+  private kindForSource(source: PttTransport, deviceId: string): PttDeviceKind {
+    if (source === 'intent') {
+      return 'onboard';
+    }
+    if (source === 'spp') {
+      return 'spp';
+    }
+    if (source === 'usb') {
+      return 'usb';
+    }
+    return this.kindForId(deviceId);
   }
 
   private accessoryLabel(deviceId: string): string {
     const state = useSessionStore.getState();
     return (
       state.bleBindings.find((item) => item.id === deviceId)?.name ||
-      state.bleDevices.find((item) => item.id === deviceId)?.name ||
-      'Bluetooth accessory'
+      state.bleDevices.find((device) => device.id === deviceId)?.name ||
+      (deviceId === ONBOARD_DEVICE_ID ? 'This phone' : 'PTT accessory')
     );
   }
 
-  private async handleBleButton(deviceId: string, pressed: boolean): Promise<void> {
+  private noteHardwareLog(message: string): void {
+    if (!message.trim()) {
+      return;
+    }
+    const previous = useSessionStore.getState().pttHardwareLog;
+    useSessionStore.setState({
+      pttHardwareLog: [...previous, message].slice(-30),
+      bleMessage: message,
+    });
+  }
+
+  private async handleTalkControl(deviceId: string, button: PttButton, pressed: boolean): Promise<void> {
     const state = useSessionStore.getState();
-    const selection = bindingTarget(state.bleBindings, deviceId, bleSelectionFromState(state));
+    const selection =
+      button === 'sos'
+        ? { kind: 'reply' as const }
+        : bindingTarget(state.bleBindings, deviceId, bleSelectionFromState(state), button);
     const target = resolveBleTalkTarget({
       selection,
       replyTarget: state.replyTarget,
@@ -683,7 +1072,7 @@ export class BackgroundCoordinator {
       });
       return;
     }
-    const action = this.policyFor(deviceId).handle(pressed, {
+    const action = this.policyFor(deviceId, button).handle(pressed, {
       shortPressLocks: state.bleShortPressLocks,
       lockedToTarget: state.talkLocked && state.lockedTargetKeys.includes(talkTargetIdentity(target)),
     });
@@ -703,6 +1092,10 @@ export class BackgroundCoordinator {
       return;
     }
     await this.c.talk.releaseTalk(target);
+  }
+
+  private async handleBleButton(deviceId: string, pressed: boolean): Promise<void> {
+    await this.handleTalkControl(deviceId, 'ptt', pressed);
   }
 
   private async handleWatchTalk(command: WatchRemoteCommand, pressed: boolean): Promise<void> {
@@ -738,6 +1131,30 @@ export class BackgroundCoordinator {
         (target) => target.type === command.targetType && String(target.id) === String(command.targetId),
       ) ?? null
     );
+  }
+
+  private armPairingTimer(): void {
+    this.clearPairingTimer();
+    this.pairingTimer = setTimeout(() => {
+      this.pairingTimer = null;
+      if (!useSessionStore.getState().blePairingActive || useSessionStore.getState().blePairingFoundId) {
+        return;
+      }
+      useSessionStore.setState({
+        blePairingActive: false,
+        blePairingMessage: 'No PTT button was heard. Hold the button and try again.',
+        bleScanning: false,
+      });
+      void cancelButtonPairingBle().then((state) => this.publishBleState(state));
+      void cancelHardwarePairing();
+    }, BLE_BUTTON_PAIRING_MS);
+  }
+
+  private clearPairingTimer(): void {
+    if (this.pairingTimer) {
+      clearTimeout(this.pairingTimer);
+      this.pairingTimer = null;
+    }
   }
 
   private currentPresence() {
@@ -818,7 +1235,10 @@ export class BackgroundCoordinator {
       return;
     }
     await requestAndroidSessionPermissions();
-    const includeConnectedDevice = anyBleDeviceActive(state.bleDevices, state.bleScanning);
+    const includeConnectedDevice = anyBleDeviceActive(
+      state.bleDevices.filter((device) => device.id !== ONBOARD_DEVICE_ID),
+      state.bleScanning,
+    );
     const talking = this.currentPresence().talking || this.currentPresence().talkLocked;
     if (mode === 'update') {
       await updateForegroundService(includeConnectedDevice, notification.title, notification.text, talking);

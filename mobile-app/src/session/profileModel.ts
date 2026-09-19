@@ -42,6 +42,8 @@ export type ProfileBundle = {
   talkSelectMode: boolean;
   /** Undefined until the user toggles it, so a server default can apply. */
   lockMultipleTargets?: boolean;
+  /** Undefined means the default: edge talk affordance on. */
+  edgeTalkAffordance?: boolean;
 };
 
 export function profileIdentity(serverAddress: string, username: string): string {

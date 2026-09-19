@@ -19,6 +19,8 @@ describe('BLE accessory catalog', () => {
     expect(ACCESSORY_CATALOG.map((profile) => profile.id)).toEqual([
       'ptt-z01',
       'herda-hb980-plus',
+      'hm10-generic',
+      'zello-ble-generic',
     ]);
     expect(catalogForNative()[1]).toMatchObject({
       id: 'herda-hb980-plus',
@@ -83,8 +85,8 @@ describe('accessory notify codecs', () => {
     expect(looksLikePttCommand([0x01, 0x01])).toBe(true);
     expect(looksLikePttCommand([0x01, 0x00])).toBe(true);
     expect(looksLikePttCommand([0x01])).toBe(true);
+    expect(looksLikePttCommand([0x02])).toBe(true);
     expect(looksLikePttCommand([0x56, 0x01])).toBe(false);
-    expect(looksLikePttCommand([0x02])).toBe(false);
   });
 
   it('coerces native notify payloads into bytes', () => {

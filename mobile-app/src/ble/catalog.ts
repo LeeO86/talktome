@@ -3,6 +3,15 @@
 // the same list at runtime; codecs stay in JS so a new map does not need a
 // native module. Audio (HFP/HSP) is still paired in system Bluetooth settings.
 
+import {
+  decodeHm10Byte,
+  looksLikeHardwareCommand,
+  peekAccessoryNotify,
+  talkPressedFromFrames,
+} from '../hardware/codecs';
+
+export { decodeHm10Byte, decodeZelloTwoByte } from '../hardware/codecs';
+
 export const BLE_BUTTON_SERVICE_UUID = 'FFE0';
 export const BLE_BUTTON_CHARACTERISTIC_UUID = 'FFE1';
 export const BLE_SHORT_PRESS_LOCK_MS = 250;
@@ -78,6 +87,27 @@ export const ACCESSORY_CATALOG: readonly AccessoryProfile[] = [
       'Herda PTT',
     ],
     nameIncludes: ['HB980', 'HERDA PTT', 'HERDAPTT', 'HERDA-PTT', 'HERDT980', 'HERDA980'],
+    codec: 'auto',
+    discovery: 'vendor-notify',
+    pttKeycodes: DEFAULT_ZELLO_PTT_KEYCODES,
+  },
+  {
+    id: 'hm10-generic',
+    label: 'HM-10 PTT button',
+    kind: 'button',
+    names: ['HMSoft', 'BT05', 'JDY-08', 'JDY-10'],
+    nameIncludes: ['HMSOFT', 'BT05', 'JDY-08', 'JDY-10'],
+    serviceUuid: BLE_BUTTON_SERVICE_UUID,
+    characteristicUuid: BLE_BUTTON_CHARACTERISTIC_UUID,
+    codec: 'hm10-byte',
+    discovery: 'fixed',
+  },
+  {
+    id: 'zello-ble-generic',
+    label: 'Zello BLE PTT accessory',
+    kind: 'button',
+    names: [],
+    nameIncludes: ['ZELLO PTT', 'ANYSECU', 'INRIC B02', 'INRIC B2', 'B02 PTT'],
     codec: 'auto',
     discovery: 'vendor-notify',
     pttKeycodes: DEFAULT_ZELLO_PTT_KEYCODES,
@@ -184,94 +214,21 @@ export function shouldSkipPairingName(name: string | null | undefined): boolean 
   return PAIRING_SKIP_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
 }
 
-/** True when a GATT notify is a known PTT press or release (Zello two-byte or HM-10). */
+export const decodeButtonByte = decodeHm10Byte;
+
+/** True when a GATT notify is a known PTT/SOS/channel command (Zello two-byte, bitmask, or HM-10). */
 export function looksLikePttCommand(
   bytes: readonly number[],
   profile: AccessoryProfile = FALLBACK_ACCESSORY_PROFILE,
 ): boolean {
-  return decodeAccessoryNotify(bytes, profile) != null;
-}
-
-export function decodeHm10Byte(byte: number): boolean | null {
-  switch (byte & 0xff) {
-    case 0x01:
-    case 0xab:
-      return true;
-    case 0x00:
-    case 0xcd:
-      return false;
-    default:
-      return null;
-  }
-}
-
-export const decodeButtonByte = decodeHm10Byte;
-
-export function decodeZelloTwoByte(
-  bytes: readonly number[],
-  pttKeycodes: readonly number[] = DEFAULT_ZELLO_PTT_KEYCODES,
-): boolean | null {
-  if (bytes.length < 2) {
-    return null;
-  }
-  const keycode = bytes[0];
-  const state = bytes[1];
-  if (keycode == null || state == null) {
-    return null;
-  }
-  const key = keycode & 0xff;
-  const value = state & 0xff;
-  if (key === 0x56) {
-    return null;
-  }
-  if (!pttKeycodes.includes(key)) {
-    return null;
-  }
-  return (value & 1) === 1;
-}
-
-export function decodeZelloBleBitmask(byte: number): boolean | null {
-  const value = byte & 0xff;
-  if (value > 0x1f) {
-    return null;
-  }
-  if ((value & 0x01) !== 0 || (value & 0x04) !== 0) {
-    return true;
-  }
-  if (value === 0) {
-    return false;
-  }
-  return null;
+  return looksLikeHardwareCommand(bytes, profile);
 }
 
 export function decodeAccessoryNotify(
   bytes: readonly number[],
   profile: AccessoryProfile = FALLBACK_ACCESSORY_PROFILE,
 ): boolean | null {
-  if (bytes.length === 0) {
-    return null;
-  }
-  const first = bytes[0];
-  if (first == null) {
-    return null;
-  }
-  if (profile.codec === 'hm10-byte') {
-    return decodeHm10Byte(first);
-  }
-  if (profile.codec === 'zello-two-byte') {
-    return decodeZelloTwoByte(bytes, profile.pttKeycodes ?? DEFAULT_ZELLO_PTT_KEYCODES);
-  }
-  if (bytes.length >= 2) {
-    const zello = decodeZelloTwoByte(bytes, profile.pttKeycodes ?? DEFAULT_ZELLO_PTT_KEYCODES);
-    if (zello != null) {
-      return zello;
-    }
-  }
-  const hm10 = decodeHm10Byte(first);
-  if (hm10 != null) {
-    return hm10;
-  }
-  return decodeZelloBleBitmask(first);
+  return talkPressedFromFrames(peekAccessoryNotify(bytes, profile));
 }
 
 export function coerceNotifyBytes(data: unknown): number[] {
