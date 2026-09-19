@@ -4,11 +4,13 @@ import {
   StyleSheet,
   Switch,
   Text,
+  useWindowDimensions,
   View,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 
+import { isCompactOperatorScreen } from './layers';
 import { settingsPalette, settingsScheme, type SettingsPalette, type SettingsScheme } from './settingsTheme';
 
 type SettingsStyles = ReturnType<typeof makeSettingsStyles>;
@@ -58,14 +60,18 @@ type HeaderProps = {
 
 export function SettingsHeader({ title, backLabel = 'Settings', onBack, onDone }: HeaderProps) {
   const styles = useSettingsStyles();
+  const { width, height } = useWindowDimensions();
+  const compact = isCompactOperatorScreen(width, height);
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, compact && styles.headerCompact]}>
       {onBack ? (
         <Pressable onPress={onBack} accessibilityRole="button" hitSlop={8}>
           <Text style={styles.navLink}>‹ {backLabel}</Text>
         </Pressable>
       ) : (
-        <Text style={styles.title}>{title}</Text>
+        <Text style={[styles.title, compact && styles.titleCompact]} numberOfLines={1}>
+          {title}
+        </Text>
       )}
       {onBack ? (
         <Text style={styles.nestedTitle} numberOfLines={1}>
@@ -189,6 +195,13 @@ export function SettingsFootnote({ children }: { children: ReactNode }) {
   return <Text style={styles.footnote}>{children}</Text>;
 }
 
+export function SettingsHint({ full, compact }: { full: string; compact: string }) {
+  const styles = useSettingsStyles();
+  const { width, height } = useWindowDimensions();
+  const short = isCompactOperatorScreen(width, height);
+  return <Text style={[styles.footnote, short && styles.footnoteCompact]}>{short ? compact : full}</Text>;
+}
+
 export function SettingsSwitchRow({
   label,
   value,
@@ -224,11 +237,18 @@ function makeSettingsStyles(palette: SettingsPalette) {
       paddingBottom: 12,
       gap: 12,
     },
+    headerCompact: {
+      paddingTop: 12,
+      paddingBottom: 8,
+    },
     title: {
       fontSize: 34,
       fontWeight: '700',
       color: palette.text,
       flex: 1,
+    },
+    titleCompact: {
+      fontSize: 26,
     },
     nestedTitle: {
       flex: 1,
@@ -256,6 +276,10 @@ function makeSettingsStyles(palette: SettingsPalette) {
     doneSpacer: {
       minWidth: 48,
       marginBottom: 6,
+    },
+    scroll: {
+      flex: 1,
+      minHeight: 0,
     },
     body: {
       padding: 16,
@@ -348,6 +372,10 @@ function makeSettingsStyles(palette: SettingsPalette) {
       fontSize: 13,
       paddingHorizontal: 16,
       paddingBottom: 10,
+    },
+    footnoteCompact: {
+      fontSize: 12,
+      paddingBottom: 8,
     },
     signOut: {
       paddingHorizontal: 16,

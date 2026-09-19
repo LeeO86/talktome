@@ -29,6 +29,7 @@ import { VolumeRing } from './VolumeRing';
 type Props = {
   target: TalkTarget;
   compact?: boolean;
+  volumeReadout?: boolean;
   height?: number;
   edgeTalkAffordance?: boolean;
   onOpenConferenceMembers?: (target: TalkTarget) => void;
@@ -37,6 +38,7 @@ type Props = {
 export function TargetRow({
   target,
   compact = false,
+  volumeReadout = false,
   height,
   edgeTalkAffordance = false,
   onOpenConferenceMembers,
@@ -205,7 +207,13 @@ export function TargetRow({
     <View style={rowStyle}>
       {avatar}
       {talkZone}
-      <View style={[styles.meterCluster, leftHanded && styles.meterClusterLeft]}>
+      <View
+        style={[
+          styles.meterCluster,
+          leftHanded && styles.meterClusterLeft,
+          volumeReadout && styles.meterClusterReadout,
+        ]}
+      >
         {target.type === 'feed' && feedOnline ? (
           <Pressable
             accessibilityRole="button"
@@ -215,7 +223,7 @@ export function TargetRow({
           >
             {feedStopped ? <PlayIcon color={colors.text} /> : <StopIcon color={colors.text} />}
           </Pressable>
-        ) : (
+        ) : volumeReadout ? null : (
           <View style={styles.feedSlot} />
         )}
         <VolumeRing
@@ -223,6 +231,7 @@ export function TargetRow({
           muted={preference.muted}
           dimmed={dimmed}
           compact={tight}
+          variant={volumeReadout ? 'readout' : 'ring'}
           accessibilityLabel={
             preference.muted ? `Volume muted, ${target.label}` : `Volume ${formatLinearLevelDb(preference.volume)}`
           }
@@ -347,6 +356,9 @@ const styles = StyleSheet.create({
   },
   meterClusterLeft: {
     flexDirection: 'row-reverse',
+  },
+  meterClusterReadout: {
+    gap: 4,
   },
   feedSlot: {
     width: 40,

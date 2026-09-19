@@ -71,7 +71,7 @@ function SessionSheetBody({
       {Platform.OS === 'android' ? <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} /> : null}
       <SettingsHeader title="Session" onDone={onClose} />
 
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
         <SettingsSection title="Signed in as">
           <SettingsRow label={store.identity?.name ?? store.username} />
           <View style={styles.row}>

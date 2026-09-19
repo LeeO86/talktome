@@ -16,6 +16,7 @@ import {
   SettingsActionRow,
   SettingsFootnote,
   SettingsHeader,
+  SettingsHint,
   SettingsNavRow,
   SettingsRow,
   SettingsSection,
@@ -128,7 +129,7 @@ function SettingsSheet({
         onDone={onClose}
       />
 
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
         {page.kind === 'root' ? (
           <>
             <SettingsSection>
@@ -208,47 +209,47 @@ function LayoutSettingsPage() {
           value={store.leftHanded}
           onValueChange={(value) => session.setLeftHanded(value)}
         />
-        <SettingsFootnote>
-          Moves the volume ring and the landscape Reply column to the left, and slides right to lock —
-          same as the web client.
-        </SettingsFootnote>
+        <SettingsHint
+          full="Moves the volume ring and the landscape Reply column to the left, and slides right to lock — same as the web client."
+          compact="Volume and landscape Reply move left. Slide right to lock."
+        />
         <SettingsSwitchRow
           label="Talk & select"
           value={store.talkSelectMode}
           onValueChange={(value) => session.setTalkSelectMode(value)}
           trackColor="#E23B4A"
         />
-        <SettingsFootnote>
-          Reply becomes a red Talk button. Cards only choose the destination. Tap the volume ring to
-          set level in dB and mute. Double-tap a ring to mute. Tap a conference icon to set who you hear.
-        </SettingsFootnote>
+        <SettingsHint
+          full="Reply becomes a red Talk button. Cards only choose the destination. Tap the volume ring to set level in dB and mute. Double-tap a ring to mute. Tap a conference icon to set who you hear."
+          compact="Reply becomes Talk. Cards pick the destination. Tap dB to set level."
+        />
         <SettingsSwitchRow
           label="Lock multiple targets"
           value={store.lockMultipleTargets}
           onValueChange={(value) => session.setLockMultipleTargets(value)}
         />
-        <SettingsFootnote>
-          Slide-to-lock adds targets to the locked set instead of replacing it. Tap a locked card to
-          drop just that target — same as the web client.
-        </SettingsFootnote>
+        <SettingsHint
+          full="Slide-to-lock adds targets to the locked set instead of replacing it. Tap a locked card to drop just that target — same as the web client."
+          compact="Slide-to-lock adds targets. Tap a locked card to drop it."
+        />
         <SettingsSwitchRow
           label="Horizontal volume fader"
           value={audio.volumeFader}
           onValueChange={(value) => session.setOperatorAudio({ volumeFader: value })}
         />
-        <SettingsFootnote>
-          Replaces the plus/minus buttons in the volume overlay and conference member list with a
-          slider.
-        </SettingsFootnote>
+        <SettingsHint
+          full="Replaces the plus/minus buttons in the volume overlay and conference member list with a slider."
+          compact="Uses a slider instead of plus/minus."
+        />
         <SettingsSwitchRow
           label="Thumb-edge talk control"
           value={store.edgeTalkAffordance}
           onValueChange={(value) => session.setEdgeTalkAffordance(value)}
         />
-        <SettingsFootnote>
-          Adds a walkie-talkie past the volume ring so you can hit targets from the phone’s edge. In
-          Talk & select it becomes a checkmark. Hidden in landscape, where cards use two columns.
-        </SettingsFootnote>
+        <SettingsHint
+          full="Adds a walkie-talkie past the volume ring so you can hit targets from the phone’s edge. In Talk & select it becomes a checkmark. Hidden in landscape, where cards use two columns."
+          compact="Talk control on the phone edge. Hidden in landscape."
+        />
       </SettingsSection>
     </>
   );
@@ -289,9 +290,10 @@ function AudioSettingsPage() {
           />
           <Text style={styles.sliderHint}>{FEED_DIM_DB_OPTIONS[FEED_DIM_DB_OPTIONS.length - 1]}</Text>
         </View>
-        <SettingsFootnote>
-          Same defaults as the web client: dim when someone calls you, not while you talk, by 14 dB.
-        </SettingsFootnote>
+        <SettingsHint
+          full="Same defaults as the web client: dim when someone calls you, not while you talk, by 14 dB."
+          compact="Dim when called, not while you talk. Default 14 dB."
+        />
       </SettingsSection>
 
       <SettingsSection title="Microphone and speaker">
@@ -304,10 +306,10 @@ function AudioSettingsPage() {
             onPress={() => void session.selectAudioDevice(route.id)}
           />
         ))}
-        <SettingsFootnote>
-          In-call style combos: phone earpiece, speaker, or a connected headset. Audio stays in
-          communication mode so echo cancellation can run.
-        </SettingsFootnote>
+        <SettingsHint
+          full="In-call style combos: phone earpiece, speaker, or a connected headset. Audio stays in communication mode so echo cancellation can run."
+          compact="Earpiece, speaker, or headset. Stays in communication mode."
+        />
       </SettingsSection>
 
       <SettingsSection title="Voice processing">
@@ -345,10 +347,10 @@ function WatchSettingsSection() {
   return (
     <SettingsSection title="Apple Watch">
       <SettingsRow label="Remote" value={watchRemoteShortStatus(watchRemoteStatus())} />
-      <SettingsFootnote>
-        {describeWatchRemoteStatus(watchRemoteStatus())} The watch lists Reply, then the same online
-        talk targets as the phone. Hold a row to talk; release to stop. Audio stays on the iPhone.
-      </SettingsFootnote>
+      <SettingsHint
+        full={`${describeWatchRemoteStatus(watchRemoteStatus())} The watch lists Reply, then the same online talk targets as the phone. Hold a row to talk; release to stop. Audio stays on the iPhone.`}
+        compact={`${describeWatchRemoteStatus(watchRemoteStatus())} Hold a row to talk. Audio stays on the iPhone.`}
+      />
     </SettingsSection>
   );
 }
@@ -388,10 +390,10 @@ function DebugSettingsPage({ onClose }: { onClose: () => void }) {
         <SettingsRow label="Used speaker" value={store.audioOutputLabel} />
         {store.capabilityReason ? <SettingsFootnote>{store.capabilityReason}</SettingsFootnote> : null}
         {store.mediaDebug ? <SettingsFootnote>{store.mediaDebug}</SettingsFootnote> : null}
-        <SettingsFootnote>
-          Camera tally uses a red PGM frame or a green preview frame, same as the web client.
-          Incoming audio follows the selected production.
-        </SettingsFootnote>
+        <SettingsHint
+          full="Camera tally uses a red PGM frame or a green preview frame, same as the web client. Incoming audio follows the selected production."
+          compact="PGM is a red frame, preview is green. Audio follows the production."
+        />
       </SettingsSection>
 
       <SettingsSection title="PushToTalk">
@@ -421,16 +423,16 @@ function DebugSettingsPage({ onClose }: { onClose: () => void }) {
                 }}
               />
             ) : null}
-            <SettingsFootnote>
-              Lock Screen, Dynamic Island, and the home widget have Reply lock (toggle locked reply)
-              and Disconnect. On iOS 18, add those same controls to Control Center or the Action Button.
-            </SettingsFootnote>
+            <SettingsHint
+              full="Lock Screen, Dynamic Island, and the home widget have Reply lock (toggle locked reply) and Disconnect. On iOS 18, add those same controls to Control Center or the Action Button."
+              compact="Lock Screen and widget have Reply lock and Disconnect."
+            />
           </>
         ) : (
-          <SettingsFootnote>
-            Android hardware PTT uses BLE, Classic serial, USB-C, and onboard keys. Pair accessories
-            under Accessories.
-          </SettingsFootnote>
+          <SettingsHint
+            full="Android hardware PTT uses BLE, Classic serial, USB-C, and onboard keys. Pair accessories under Accessories."
+            compact="Hardware PTT: BLE, serial, USB-C, and phone keys."
+          />
         )}
         {store.pttDiagnostic ? <SettingsFootnote>{store.pttDiagnostic}</SettingsFootnote> : null}
       </SettingsSection>
@@ -438,10 +440,10 @@ function DebugSettingsPage({ onClose }: { onClose: () => void }) {
       {Platform.OS === 'android' ? (
         <SettingsSection title="Battery">
           <SettingsActionRow label="Battery settings" onPress={() => void session.openBatteryEducation()} />
-          <SettingsFootnote>
-            Set TalkToMe to Unrestricted (Samsung: Device care) if the session dies after Home or
-            screen-off. This does not promise every OEM.
-          </SettingsFootnote>
+          <SettingsHint
+            full="Set TalkToMe to Unrestricted (Samsung: Device care) if the session dies after Home or screen-off. This does not promise every OEM."
+            compact="Set TalkToMe to Unrestricted if the session dies after Home."
+          />
         </SettingsSection>
       ) : null}
 

@@ -14,6 +14,7 @@ type Props = {
   muted?: boolean;
   dimmed?: boolean;
   compact?: boolean;
+  variant?: 'ring' | 'readout';
   accessibilityLabel: string;
   onPress?: () => void;
   onDoublePress?: () => void;
@@ -24,6 +25,7 @@ export function VolumeRing({
   muted = false,
   dimmed = false,
   compact = false,
+  variant = 'ring',
   accessibilityLabel,
   onPress,
   onDoublePress,
@@ -34,6 +36,7 @@ export function VolumeRing({
   const accent = muted ? colors.danger : dimmed ? 'rgba(255,255,255,0.38)' : colors.accent;
   const track = muted ? 'rgba(255,140,140,0.28)' : 'rgba(255,255,255,0.16)';
   const label = muted ? null : formatLinearLevelDbShort(level);
+  const readout = variant === 'readout';
 
   useEffect(() => {
     return () => {
@@ -60,7 +63,21 @@ export function VolumeRing({
     }, DOUBLE_PRESS_MS);
   };
 
-  const face = (
+  const face = readout ? (
+    <View
+      pointerEvents="none"
+      style={[styles.readout, muted && styles.readoutMuted, dimmed && styles.readoutDimmed]}
+    >
+      {muted ? (
+        <SpeakerIcon muted color={colors.danger} size={14} />
+      ) : (
+        <Text style={[styles.readoutValue, dimmed && styles.dimText]}>
+          {label}
+          <Text style={[styles.readoutUnit, dimmed && styles.dimText]}> dB</Text>
+        </Text>
+      )}
+    </View>
+  ) : (
     <>
       {Array.from({ length: VOLUME_METER_TICKS }, (_, index) => (
         <View
@@ -99,8 +116,10 @@ export function VolumeRing({
     </>
   );
 
+  const box = readout ? styles.readoutHit : [styles.hit, { width: size, height: size }];
+
   if (!onPress && !onDoublePress) {
-    return <View style={[styles.hit, { width: size, height: size }]}>{face}</View>;
+    return <View style={box}>{face}</View>;
   }
 
   return (
@@ -110,7 +129,7 @@ export function VolumeRing({
       accessibilityHint={onDoublePress ? 'Double tap to mute or unmute' : undefined}
       onPress={handlePress}
       hitSlop={6}
-      style={[styles.hit, { width: size, height: size }]}
+      style={box}
     >
       {face}
     </Pressable>
@@ -153,5 +172,38 @@ const styles = StyleSheet.create({
   },
   dimText: {
     color: 'rgba(255,255,255,0.45)',
+  },
+  readoutHit: {
+    minWidth: 44,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readout: {
+    minWidth: 44,
+    minHeight: 28,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readoutMuted: {
+    backgroundColor: 'rgba(255,90,90,0.16)',
+  },
+  readoutDimmed: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  readoutValue: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  readoutUnit: {
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: '600',
   },
 });

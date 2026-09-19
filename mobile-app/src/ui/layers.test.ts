@@ -5,6 +5,7 @@ import {
   CARD_MIN_HEIGHT,
   CARD_PREFERRED_HEIGHT,
   chunkTargets,
+  isCompactOperatorScreen,
   operatorLayout,
   shouldOfferHeaderCollapse,
   targetLayerCount,
@@ -78,6 +79,40 @@ describe('target layers', () => {
     ).toBe(true);
     expect(
       shouldOfferHeaderCollapse({ rows: 8, availableHeight: 636, headerHeight: 96, maxRows: 8 }),
+    ).toBe(false);
+  });
+
+  it('treats RG440-class short sides as compact and iPhone 390 as not', () => {
+    expect(isCompactOperatorScreen(320, 533)).toBe(true);
+    expect(isCompactOperatorScreen(533, 320)).toBe(true);
+    expect(isCompactOperatorScreen(390, 844)).toBe(false);
+    expect(isCompactOperatorScreen(844, 390)).toBe(false);
+  });
+
+  it('always offers header collapse on compact screens', () => {
+    expect(
+      shouldOfferHeaderCollapse({
+        rows: 8,
+        availableHeight: 200,
+        headerHeight: 44,
+        maxRows: 8,
+        compact: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldOfferHeaderCollapse({
+        rows: 2,
+        availableHeight: 160,
+        headerHeight: 48,
+        maxRows: 8,
+        compact: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('still hides collapse on a full iPhone page when recovered height is tiny', () => {
+    expect(
+      shouldOfferHeaderCollapse({ rows: 8, availableHeight: 636, headerHeight: 48, maxRows: 8 }),
     ).toBe(false);
   });
 

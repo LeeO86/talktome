@@ -18,6 +18,7 @@ import { session, useSessionStore } from '../session/store';
 import {
   SettingsActionRow,
   SettingsFootnote,
+  SettingsHint,
   SettingsNavRow,
   SettingsRow,
   SettingsSection,
@@ -59,11 +60,10 @@ export function PttDevicesPage({
           disabled={atLimit}
           onPress={onAddDevice}
         />
-        <SettingsFootnote>
-          Pair speaker-mic audio (HFP/HSP) in system Bluetooth first. Add a device here to bind the
-          PTT button: hold it until TalkToMe hears a known command. Catalog names are only a hint —
-          unknown Zello BLE, Classic serial, USB-C, and rugged-phone keys still bind.
-        </SettingsFootnote>
+        <SettingsHint
+          full="Pair speaker-mic audio (HFP/HSP) in system Bluetooth first. Add a device here to bind the PTT button: hold it until TalkToMe hears a known command. Catalog names are only a hint — unknown Zello BLE, Classic serial, USB-C, and rugged-phone keys still bind."
+          compact="Pair speaker-mic audio in system Bluetooth first. Hold PTT here to bind the button."
+        />
       </SettingsSection>
 
       <SettingsSection title="Button behavior">
@@ -80,10 +80,10 @@ export function PttDevicesPage({
           value={describeBleReleaseTimeout(store.bleReleaseTimeoutMs)}
           onPress={() => session.cycleBluetoothReleaseTimeout()}
         />
-        <SettingsFootnote>
-          If a PTT release is lost, TalkToMe closes the mic after this delay. Off never forces a
-          release (disconnect still does). Tap to cycle 10s / 15s / 30s / 1 min / 2 min / Off.
-        </SettingsFootnote>
+        <SettingsHint
+          full="If a PTT release is lost, TalkToMe closes the mic after this delay. Off never forces a release (disconnect still does). Tap to cycle 10s / 15s / 30s / 1 min / 2 min / Off."
+          compact="Closes the mic if a PTT release is lost. Tap to cycle timeout / Off."
+        />
       </SettingsSection>
     </>
   );
@@ -144,11 +144,10 @@ export function PttAddDevicePage({ onBound }: { onBound: () => void }) {
           {listening ? <Text style={styles.pairingTimer}>{remaining}s</Text> : null}
         </View>
         {listening ? (
-          <SettingsFootnote>
-            TalkToMe listens for Zello BLE notifies, Classic serial tokens, USB-C keycodes, and
-            onboard rugged-phone keys (RG440, Sonim, Inrico, and anything that broadcasts Zello
-            intents). Keep holding until the timer ends or the device appears.
-          </SettingsFootnote>
+          <SettingsHint
+            full="TalkToMe listens for Zello BLE notifies, Classic serial tokens, USB-C keycodes, and onboard rugged-phone keys (RG440, Sonim, Inrico, and anything that broadcasts Zello intents). Keep holding until the timer ends or the device appears."
+            compact="Hold PTT until the timer ends or the device appears."
+          />
         ) : (
           <SettingsActionRow label="Try again" onPress={() => void session.beginButtonPairing()} />
         )}
@@ -162,10 +161,10 @@ export function PttAddDevicePage({ onBound }: { onBound: () => void }) {
               onPress={() => void session.probeSerialAccessory(item.id)}
             />
           ))}
-          <SettingsFootnote>
-            Zello speaker-mics that advertise PTT in the Bluetooth name are probed automatically.
-            Pick any other bonded Classic device if its name does not contain PTT.
-          </SettingsFootnote>
+          <SettingsHint
+            full="Zello speaker-mics that advertise PTT in the Bluetooth name are probed automatically. Pick any other bonded Classic device if its name does not contain PTT."
+            compact="Names with PTT are probed automatically. Pick another bonded device if needed."
+          />
         </SettingsSection>
       ) : null}
     </>
@@ -204,10 +203,10 @@ export function PttDeviceDetailPage({
         <SettingsRow label="Transport" value={describePttDeviceKind(binding.kind)} />
         <SettingsRow label="Status" value={describeBleDeviceStatus(live, binding)} />
         {binding.kind === 'onboard' ? (
-          <SettingsFootnote>
-            Phone keys stay available while TalkToMe is running, including with the screen off.
-            On a RugGear RG440, set CustomKey to PTT so the side key broadcasts Zello intents.
-          </SettingsFootnote>
+          <SettingsHint
+            full="Phone keys stay available while TalkToMe is running, including with the screen off. On a RugGear RG440, set CustomKey to PTT so the side key broadcasts Zello intents."
+            compact="Phone keys work with the screen off. On RG440 set CustomKey to PTT."
+          />
         ) : connected ? (
           <SettingsActionRow
             label="Disconnect"
@@ -240,11 +239,10 @@ export function PttDeviceDetailPage({
               trackColor={{ true: '#3DD6F5' }}
             />
           </View>
-          <SettingsFootnote>
-            In Talk & select, the knob and up/down always move the selected card. With Talk & select
-            off they do nothing unless this is on, in which case they retarget PTT 1. SOS always
-            replies.
-          </SettingsFootnote>
+          <SettingsHint
+            full="In Talk & select, the knob and up/down always move the selected card. With Talk & select off they do nothing unless this is on, in which case they retarget PTT 1. SOS always replies."
+            compact="Knob moves the selected card in Talk & select. SOS always replies."
+          />
         </SettingsSection>
       ) : null}
 
@@ -311,10 +309,10 @@ function TalkTargetSection({
               }
             />
           ))}
-          <SettingsFootnote>
-            Reply follows this production (last incoming, else first talkable card). A fixed target
-            is used only while that card exists here.
-          </SettingsFootnote>
+          <SettingsHint
+            full="Reply follows this production (last incoming, else first talkable card). A fixed target is used only while that card exists here."
+            compact="Reply follows last incoming, else the first talkable card."
+          />
         </>
       )}
     </SettingsSection>

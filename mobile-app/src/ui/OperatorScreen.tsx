@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, Platform, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { iosPttEnabled } from '../audio/policy';
@@ -22,6 +22,7 @@ import {
   chunkTargets,
   COLLAPSED_HEADER_HEIGHT,
   estimateTargetListHeight,
+  isCompactOperatorScreen,
   operatorLayout,
   shouldOfferHeaderCollapse,
   targetLayerCount,
@@ -35,13 +36,15 @@ import { colors } from './theme';
 export function OperatorScreen() {
   const store = useSessionStore();
   const { width, height } = useWindowDimensions();
+  const compact = isCompactOperatorScreen(width, height);
   const [layerIndex, setLayerIndex] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [conferenceTarget, setConferenceTarget] = useState<TalkTarget | null>(null);
-  const [headerCollapsed, setHeaderCollapsed] = useState(false);
+  const [headerCollapsed, setHeaderCollapsed] = useState(compact);
   const [headerHeight, setHeaderHeight] = useState(96);
   const [listHeight, setListHeight] = useState(0);
+  const compactRef = useRef(compact);
   const reply = store.replyTarget;
   const selected = store.selectedTalkTarget;
   const landscape = width > height;
@@ -63,11 +66,27 @@ export function OperatorScreen() {
       availableHeight,
       headerHeight,
       maxRows: layout.maxRows,
+      compact,
     });
 
   useEffect(() => {
     setLayerIndex(0);
   }, [store.productionId, store.targets.length, landscape]);
+
+  useEffect(() => {
+    if (compactRef.current === compact) {
+      return;
+    }
+    compactRef.current = compact;
+    setHeaderCollapsed(compact);
+  }, [compact]);
+
+  const collapseHeader = () => {
+    setHeaderCollapsed(true);
+  };
+  const expandHeader = () => {
+    setHeaderCollapsed(false);
+  };
 
   const replyLabel = reply ? `Reply to ${reply.label}` : 'Reply';
   const selectLabel = selected ? `Talk to ${selected.label}` : 'Talk';
@@ -90,10 +109,10 @@ export function OperatorScreen() {
       <Pressable
         accessibilityRole="button"
         onPress={() => setLayerIndex((current) => (current + 1) % layers)}
-        style={styles.layer}
+        style={[styles.layer, compact && styles.layerCompact]}
       >
         <Text style={styles.layerText}>
-          Layer {(safeLayerIndex % layers) + 1}/{layers}
+          {compact ? `${(safeLayerIndex % layers) + 1}/${layers}` : `Layer ${(safeLayerIndex % layers) + 1}/${layers}`}
         </Text>
       </Pressable>
     ) : null;
@@ -111,6 +130,7 @@ export function OperatorScreen() {
         styles.reply,
         styles.talkSelect,
         landscape && styles.replyLandscape,
+        compact && !landscape && styles.replyCompact,
         mainTalking && styles.talkSelectActive,
         !selected && styles.replyDisabled,
       ]}
@@ -123,7 +143,7 @@ export function OperatorScreen() {
       <Text style={[styles.replyText, landscape && styles.replyTextLandscape, !selected && styles.replyMuted]}>
         {selectLabel}
       </Text>
-      {selected ? (
+      {selected && !compact ? (
         <Text style={styles.replyHint}>{slideToLockHint(store.leftHanded)}</Text>
       ) : null}
     </HoldToTalk>
@@ -139,6 +159,7 @@ export function OperatorScreen() {
       style={[
         styles.reply,
         landscape && styles.replyLandscape,
+        compact && !landscape && styles.replyCompact,
         mainTalking && styles.replyActive,
         !reply && styles.replyDisabled,
       ]}
@@ -151,14 +172,14 @@ export function OperatorScreen() {
       <Text style={[styles.replyText, landscape && styles.replyTextLandscape, !reply && styles.replyMuted]}>
         {replyLabel}
       </Text>
-      {reply ? (
+      {reply && !compact ? (
         <Text style={styles.replyHint}>{slideToLockHint(store.leftHanded)}</Text>
       ) : null}
     </HoldToTalk>
   );
 
   return (
-    <View style={[styles.screen, landscape && styles.screenLandscape]}>
+    <View style={[styles.screen, landscape && styles.screenLandscape, compact && styles.screenCompact]}>
       {tallyColor ? (
         <View
           pointerEvents="none"
@@ -172,8 +193,8 @@ export function OperatorScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Show top bar"
-            onPress={() => setHeaderCollapsed(false)}
-            style={styles.collapseButton}
+            onPress={expandHeader}
+            style={[styles.collapseButton, compact && styles.collapseButtonCompact]}
           >
             <ChevronIcon color={colors.text} direction="down" />
           </Pressable>
@@ -186,7 +207,7 @@ export function OperatorScreen() {
             <Text style={styles.collapsedName} numberOfLines={1}>
               {store.identity?.name ?? 'talktome'}
             </Text>
-            <ConnectionStatusBadge health={connection} />
+            <ConnectionStatusBadge health={connection} compact={compact} />
           </Pressable>
           <View style={styles.headerActions}>
             <AudioRouteButton />
@@ -195,7 +216,7 @@ export function OperatorScreen() {
         </View>
       ) : (
         <View
-          style={styles.header}
+          style={[styles.header, compact && styles.headerCompact]}
           onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
         >
           <Pressable
@@ -206,10 +227,10 @@ export function OperatorScreen() {
             style={styles.identity}
           >
             <View style={styles.nameRow}>
-              <Text style={styles.name} numberOfLines={1}>
+              <Text style={[styles.name, compact && styles.nameCompact]} numberOfLines={1}>
                 {store.identity?.name ?? 'talktome'}
               </Text>
-              <ConnectionStatusBadge health={connection} />
+              <ConnectionStatusBadge health={connection} compact={compact} />
             </View>
             {productionLabel ? (
               <Text style={styles.production} numberOfLines={1}>
@@ -231,8 +252,8 @@ export function OperatorScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Hide top bar"
                 accessibilityHint="Gives the target cards more room on small screens"
-                onPress={() => setHeaderCollapsed(true)}
-                style={styles.collapseButton}
+                onPress={collapseHeader}
+                style={[styles.collapseButton, compact && styles.collapseButtonCompact]}
               >
                 <ChevronIcon color={colors.text} direction="up" />
               </Pressable>
@@ -282,7 +303,8 @@ export function OperatorScreen() {
                 <View key={`${target.type}-${target.id}`} style={styles.gridCell}>
                   <TargetRow
                     target={target}
-                    compact={landscape}
+                    compact={compact || landscape}
+                    volumeReadout={compact}
                     height={layout.cardHeight}
                     edgeTalkAffordance={!landscape && store.edgeTalkAffordance}
                     onOpenConferenceMembers={setConferenceTarget}
@@ -324,11 +346,20 @@ const styles = StyleSheet.create({
   screenLandscape: {
     paddingBottom: 8,
   },
+  screenCompact: {
+    paddingHorizontal: 10,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 12,
+  },
+  headerCompact: {
+    marginBottom: 6,
+    gap: 6,
   },
   collapsedHeader: {
     minHeight: COLLAPSED_HEADER_HEIGHT,
@@ -368,6 +399,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     flexShrink: 1,
   },
+  nameCompact: {
+    fontSize: 22,
+  },
   production: {
     color: colors.muted,
     fontSize: 15,
@@ -403,12 +437,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.08)',
   },
+  collapseButtonCompact: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+  },
   layer: {
     backgroundColor: 'rgba(255,255,255,0.08)',
     borderRadius: 14,
     height: 40,
     paddingHorizontal: 14,
     justifyContent: 'center',
+  },
+  layerCompact: {
+    height: 36,
+    paddingHorizontal: 10,
+    borderRadius: 12,
   },
   layerText: {
     color: colors.text,
@@ -491,6 +535,11 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     paddingHorizontal: 8,
     minHeight: 0,
+  },
+  replyCompact: {
+    minHeight: 52,
+    paddingHorizontal: 12,
+    gap: 8,
   },
   replyActive: {
     backgroundColor: 'rgba(122,71,199,0.28)',

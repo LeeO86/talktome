@@ -11,6 +11,8 @@ export const LANDSCAPE_MAX_ROWS = 4;
 export const LANDSCAPE_COLUMNS = 2;
 export const HEADER_COLLAPSE_ROW_THRESHOLD = 4;
 export const COLLAPSED_HEADER_HEIGHT = 44;
+/** Short side at or below this is RG440-class; iPhone 390 stays above it. */
+export const COMPACT_SHORT_SIDE_MAX = 360;
 
 const ESTIMATED_HEADER_HEIGHT = 96;
 const ESTIMATED_REPLY_HEIGHT = 72;
@@ -35,6 +37,10 @@ export type OperatorLayout = {
 
 export function isLandscape(width: number, height: number): boolean {
   return width > height;
+}
+
+export function isCompactOperatorScreen(width: number, height: number): boolean {
+  return Math.min(width, height) <= COMPACT_SHORT_SIDE_MAX;
 }
 
 export function targetGridColumns(width: number, height: number): number {
@@ -151,7 +157,11 @@ export function shouldOfferHeaderCollapse(input: {
   availableHeight: number;
   headerHeight: number;
   maxRows: number;
+  compact?: boolean;
 }): boolean {
+  if (input.compact) {
+    return true;
+  }
   const recovered = Math.max(0, input.headerHeight - COLLAPSED_HEADER_HEIGHT);
   if (recovered < 8) {
     return false;
