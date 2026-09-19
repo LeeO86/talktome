@@ -15,35 +15,12 @@ struct TalkToMeHomeProvider: TimelineProvider {
   }
 
   func getSnapshot(in context: Context, completion: @escaping (TalkToMeHomeEntry) -> Void) {
-    completion(current())
+    completion(TalkToMeWidgetPresence.homeEntry())
   }
 
   func getTimeline(in context: Context, completion: @escaping (Timeline<TalkToMeHomeEntry>) -> Void) {
-    completion(Timeline(entries: [current()], policy: .atEnd))
+    completion(TalkToMeWidgetPresence.timeline(from: TalkToMeWidgetPresence.homeEntry()))
   }
-
-  private func current() -> TalkToMeHomeEntry {
-    let data = UserDefaults(suiteName: "group.io.github.leeo86.talktome-mobile")?.data(forKey: "talktome.presence.snapshot")
-    if let data,
-       let state = try? JSONDecoder().decode(TalkToMeHomeState.self, from: data) {
-      return TalkToMeHomeEntry(
-        date: Date(),
-        connected: state.connected,
-        title: state.title,
-        detail: state.detail,
-        talking: state.talking ?? false
-      )
-    }
-    return TalkToMeHomeEntry(date: Date(), connected: false, title: "talktome", detail: "Not connected", talking: false)
-  }
-}
-
-struct TalkToMeHomeState: Codable {
-  var connected: Bool
-  var title: String
-  var detail: String
-  var audioActive: Bool
-  var talking: Bool?
 }
 
 struct TalkToMeHomeWidget: Widget {

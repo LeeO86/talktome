@@ -5,7 +5,21 @@
  * `disconnect()` does not run when the user swipe-kills a suspended app, so
  * native code has to drop those surfaces. AppState `background` is a live
  * session (lock screen card is supposed to stay) and must not disconnect.
+ *
+ * iOS: the main process holds an App Group flock. The home widget / Live
+ * Activity UI recheck it on `IOS_WIDGET_LIVENESS_RECHECK_SECONDS`. SIGKILL
+ * releases the lock so those surfaces leave connected mode without a JS
+ * disconnect. Suspended / locked still holds the lock.
  */
+export const IOS_WIDGET_LIVENESS_RECHECK_SECONDS = 20;
+
+export function shouldRenderDisconnectedPresence(
+  snapshotConnected: boolean,
+  appProcessAlive: boolean,
+): boolean {
+  return !snapshotConnected || !appProcessAlive;
+}
+
 export type PresenceShutdownTrigger =
   | 'app-state-background'
   | 'app-state-inactive'

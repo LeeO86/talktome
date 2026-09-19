@@ -19,6 +19,7 @@ public final class TalkToMePresenceModule: Module {
       // Swipe-kill of a suspended app never runs JS disconnect. Drop leftover
       // Live Activities / widget state from the previous process before JS hydrates.
       TalkToMeSessionShutdown.clearLockScreenSurfaces()
+      TalkToMeProcessLiveness.claimForProcessLifetime()
     }
 
     OnDestroy {
@@ -31,6 +32,7 @@ public final class TalkToMePresenceModule: Module {
     }
 
     AsyncFunction("update") { (snapshot: [String: Any]) in
+      TalkToMeProcessLiveness.claimForProcessLifetime()
       let state = TalkToMePresenceState(
         connected: snapshot["connected"] as? Bool ?? false,
         title: snapshot["title"] as? String ?? "talktome",

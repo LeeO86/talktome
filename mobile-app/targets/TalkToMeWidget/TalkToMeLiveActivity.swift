@@ -22,10 +22,12 @@ struct TalkToMePresenceAttributes: ActivityAttributes {
 struct TalkToMeLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: TalkToMePresenceAttributes.self) { context in
-      TalkToMeLockScreenView(state: context.state)
-        .padding()
-        .activityBackgroundTint(Color.black.opacity(0.82))
-        .activitySystemActionForegroundColor(.white)
+      TalkToMeResolvedPresence(state: context.state) { state in
+        TalkToMeLockScreenView(state: state)
+          .padding()
+      }
+      .activityBackgroundTint(Color.black.opacity(0.82))
+      .activitySystemActionForegroundColor(.white)
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
@@ -37,38 +39,69 @@ struct TalkToMeLiveActivity: Widget {
           }
         }
         DynamicIslandExpandedRegion(.center) {
-          VStack(alignment: .leading, spacing: 2) {
-            ForEach(presenceLines(context.state.title), id: \.self) { line in
-              Text(line)
-                .font(.headline)
-                .foregroundStyle(isOutgoingTalkLine(line) ? talkGreen : .white)
+          TalkToMeResolvedPresence(state: context.state) { state in
+            VStack(alignment: .leading, spacing: 2) {
+              ForEach(presenceLines(state.title), id: \.self) { line in
+                Text(line)
+                  .font(.headline)
+                  .foregroundStyle(isOutgoingTalkLine(line) ? talkGreen : .white)
+                  .minimumScaleFactor(0.8)
+              }
+              Text(state.detail)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 .minimumScaleFactor(0.8)
             }
-            Text(context.state.detail)
-              .font(.subheadline)
-              .foregroundStyle(.secondary)
-              .minimumScaleFactor(0.8)
           }
         }
         DynamicIslandExpandedRegion(.trailing) {
-          AudioAnalyzer(talking: context.state.talking, listening: context.state.listening)
+          TalkToMeResolvedPresence(state: context.state) { state in
+            AudioAnalyzer(talking: state.talking, listening: state.listening)
+          }
         }
         DynamicIslandExpandedRegion(.bottom) {
-          if #available(iOS 17.0, *) {
-            TalkToMeSessionActions(talking: context.state.talking)
+          TalkToMeResolvedPresence(state: context.state) { state in
+            if state.connected, #available(iOS 17.0, *) {
+              TalkToMeSessionActions(talking: state.talking)
+            }
           }
         }
       } compactLeading: {
         TalkToMeMark(size: 22)
       } compactTrailing: {
-        AudioAnalyzer(talking: context.state.talking, listening: context.state.listening, compact: true)
+        TalkToMeResolvedPresence(state: context.state) { state in
+          AudioAnalyzer(talking: state.talking, listening: state.listening, compact: true)
+        }
       } minimal: {
-        if context.state.talking || context.state.listening {
-          AudioAnalyzer(talking: context.state.talking, listening: context.state.listening, compact: true)
-        } else {
-          TalkToMeMark(size: 18)
+        TalkToMeResolvedPresence(state: context.state) { state in
+          if state.talking || state.listening {
+            AudioAnalyzer(talking: state.talking, listening: state.listening, compact: true)
+          } else {
+            TalkToMeMark(size: 18)
+          }
         }
       }
+    }
+  }
+}
+
+/// Live Activity / Dynamic Island views do not use WidgetKit timelines.
+/// Tick often enough to notice swipe-kill without treating lock-screen idle as disconnect.
+struct TalkToMeResolvedPresence<Content: View>: View {
+  let state: TalkToMePresenceAttributes.ContentState
+  let content: (TalkToMePresenceAttributes.ContentState) -> Content
+
+  init(
+    state: TalkToMePresenceAttributes.ContentState,
+    @ViewBuilder content: @escaping (TalkToMePresenceAttributes.ContentState) -> Content
+  ) {
+    self.state = state
+    self.content = content
+  }
+
+  var body: some View {
+    TimelineView(.periodic(from: .now, by: TalkToMeProcessLiveness.connectedRecheckInterval)) { _ in
+      content(TalkToMeWidgetPresence.resolvedLiveActivityState(state))
     }
   }
 }
@@ -98,7 +131,7 @@ struct TalkToMeLockScreenView: View {
         Spacer()
         AudioAnalyzer(talking: state.talking, listening: state.listening)
       }
-      if #available(iOS 17.0, *) {
+      if state.connected, #available(iOS 17.0, *) {
         TalkToMeSessionActions(talking: state.talking)
       }
     }
