@@ -21,6 +21,8 @@ import {
   PlayIcon,
   StopIcon,
   WalkieTalkieIcon,
+  WEB_AVATAR,
+  targetAvatarBackground,
 } from './icons';
 import { colors } from './theme';
 import { VolumeOverlay } from './VolumeOverlay';
@@ -95,17 +97,16 @@ export function TargetRow({
             : 'Online'
           : 'Offline';
 
-  const iconColor = dimmed ? 'rgba(255,255,255,0.28)' : speaking || streaming ? colors.speaking : colors.accent;
-
+  const avatarColor = dimmed ? WEB_AVATAR.offlineGlyph : WEB_AVATAR.glyph;
   const avatar =
     target.type === 'conference' ? (
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Choose who you hear in ${target.label}`}
         onPress={() => onOpenConferenceMembers?.(target)}
-        style={[styles.avatar, { backgroundColor: dimmed ? 'rgba(255,255,255,0.04)' : 'rgba(61,214,245,0.12)' }]}
+        style={[styles.avatar, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}
       >
-        <ConferenceIcon color={iconColor} />
+        <ConferenceIcon />
         {listenOnly ? (
           <View style={styles.listenBadge}>
             <ListenOnlyIcon color={colors.muted} size={10} />
@@ -113,8 +114,12 @@ export function TargetRow({
         ) : null}
       </Pressable>
     ) : (
-      <View style={[styles.avatar, { backgroundColor: dimmed ? 'rgba(255,255,255,0.04)' : 'rgba(61,214,245,0.12)' }]}>
-        {target.type === 'feed' ? <HeadphonesIcon color={iconColor} /> : <PersonIcon color={iconColor} />}
+      <View style={[styles.avatar, { backgroundColor: targetAvatarBackground(target.type, dimmed) }]}>
+        {target.type === 'feed' ? (
+          <HeadphonesIcon />
+        ) : (
+          <PersonIcon color={avatarColor} letter={target.label} />
+        )}
       </View>
     );
 

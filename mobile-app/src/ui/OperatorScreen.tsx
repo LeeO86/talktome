@@ -16,7 +16,7 @@ import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
 import { AudioRouteButton } from './AudioRouteButton';
 import { ConnectionStatusBadge } from './ConnectionStatusBadge';
-import { ChevronIcon, LockIcon, MicIcon, ReplyArrowIcon } from './icons';
+import { ChevronIcon, LockIcon, ReplyArrowIcon, WalkieTalkieIcon } from './icons';
 import { HoldToTalk } from './HoldToTalk';
 import {
   chunkTargets,
@@ -138,7 +138,7 @@ export function OperatorScreen() {
       {selectedLocked ? (
         <LockIcon color={colors.text} />
       ) : (
-        <MicIcon color={selected ? colors.text : 'rgba(255,255,255,0.38)'} />
+        <WalkieTalkieIcon color={selected ? colors.text : 'rgba(255,255,255,0.38)'} />
       )}
       <Text style={[styles.replyText, landscape && styles.replyTextLandscape, !selected && styles.replyMuted]}>
         {selectLabel}

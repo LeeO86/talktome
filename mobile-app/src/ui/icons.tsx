@@ -1,4 +1,4 @@
-import { StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, Text, View, type ImageSourcePropType } from 'react-native';
 
 import { colors } from './theme';
 
@@ -9,99 +9,98 @@ type IconProps = {
 
 const iconEvents = { pointerEvents: 'none' as const };
 
-export function ConferenceIcon({ color = colors.accent, size = 22 }: IconProps) {
+export const WEB_CONFERENCE_GLYPH = '📡';
+export const WEB_FEED_GLYPH = '🎧';
+
+/** Target-row avatar fills from the web client (`#targets-list .user-icon` / `.conf-icon` / `.feed-icon`). */
+export const WEB_AVATAR = {
+  user: '#446cc2',
+  conference: '#4f9b8b',
+  feed: '#475569',
+  offline: '#475569',
+  glyph: '#ffffff',
+  offlineGlyph: '#e2e8f0',
+} as const;
+
+const WALKIE_TALKIE = require('../../assets/icons/walkie-talkies-white.png') as ImageSourcePropType;
+const SPEAKER_ON = require('../../assets/icons/speaker-white.png') as ImageSourcePropType;
+const SPEAKER_MUTED = require('../../assets/icons/speaker-muted.png') as ImageSourcePropType;
+
+export function targetAvatarBackground(
+  type: 'user' | 'guest' | 'conference' | 'feed',
+  dimmed: boolean,
+): string {
+  if (dimmed) {
+    return WEB_AVATAR.offline;
+  }
+  if (type === 'conference') {
+    return WEB_AVATAR.conference;
+  }
+  if (type === 'feed') {
+    return WEB_AVATAR.feed;
+  }
+  return WEB_AVATAR.user;
+}
+
+function AssetIcon({
+  source,
+  color,
+  size,
+  tint = true,
+}: {
+  source: ImageSourcePropType;
+  color?: string;
+  size: number;
+  tint?: boolean;
+}) {
+  return (
+    <Image
+      source={source}
+      accessible={false}
+      resizeMode="contain"
+      style={{ width: size, height: size, tintColor: tint ? color : undefined }}
+      {...iconEvents}
+    />
+  );
+}
+
+function GlyphIcon({ glyph, size }: { glyph: string; size: number }) {
   return (
     <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View style={[styles.ring, { width: size, height: size, borderColor: color }]} />
-      <View style={[styles.ring, { width: size * 0.62, height: size * 0.62, borderColor: color }]} />
-      <View style={[styles.dot, { backgroundColor: color }]} />
+      <Text style={[styles.glyph, { fontSize: size * 0.72, lineHeight: size }]}>{glyph}</Text>
     </View>
   );
 }
 
-export function HeadphonesIcon({ color = colors.accent, size = 22 }: IconProps) {
-  return (
-    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View style={[styles.headband, { borderColor: color, width: size * 0.72, height: size * 0.5 }]} />
-      <View style={[styles.cup, { backgroundColor: color, left: 1 }]} />
-      <View style={[styles.cup, { backgroundColor: color, right: 1 }]} />
-    </View>
-  );
+export function ConferenceIcon({ size = 22 }: IconProps) {
+  return <GlyphIcon glyph={WEB_CONFERENCE_GLYPH} size={size} />;
 }
 
-export function PersonIcon({ color = colors.muted, size = 22 }: IconProps) {
+export function HeadphonesIcon({ size = 22 }: IconProps) {
+  return <GlyphIcon glyph={WEB_FEED_GLYPH} size={size} />;
+}
+
+export function PersonIcon({
+  color = WEB_AVATAR.glyph,
+  size = 22,
+  letter,
+}: IconProps & { letter?: string }) {
+  const initial = (letter ?? '?').trim().charAt(0).toUpperCase() || '?';
   return (
     <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View style={[styles.head, { backgroundColor: color }]} />
-      <View style={[styles.shoulders, { backgroundColor: color }]} />
+      <Text style={[styles.initial, { color, fontSize: size * 0.52, lineHeight: size }]}>{initial}</Text>
     </View>
   );
 }
 
 export function SpeakerIcon({ color = colors.text, muted = false, size = 20 }: IconProps & { muted?: boolean }) {
-  const cone = size * 0.34;
-  const bodyWidth = size * 0.22;
-  const bodyHeight = size * 0.34;
-  const wave1 = size * 0.42;
-  const wave2 = size * 0.62;
   return (
-    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View
-        style={[
-          styles.speakerBody,
-          {
-            backgroundColor: color,
-            width: bodyWidth,
-            height: bodyHeight,
-            left: size * 0.08,
-            borderRadius: 2,
-          },
-        ]}
-      />
-      <View
-        style={[
-          styles.speakerCone,
-          {
-            left: size * 0.24,
-            borderTopWidth: cone,
-            borderBottomWidth: cone,
-            borderLeftWidth: cone * 1.15,
-            borderLeftColor: color,
-          },
-        ]}
-      />
-      {!muted ? (
-        <>
-          <View
-            style={[
-              styles.speakerWave,
-              {
-                width: wave1,
-                height: wave1,
-                borderColor: color,
-                right: size * 0.22,
-              },
-            ]}
-          />
-          <View
-            style={[
-              styles.speakerWave,
-              {
-                width: wave2,
-                height: wave2,
-                borderColor: color,
-                right: size * 0.04,
-              },
-            ]}
-          />
-        </>
-      ) : (
-        <>
-          <View style={[styles.slashCut, { width: size * 0.92, backgroundColor: colors.mute }]} />
-          <View style={[styles.slash, { width: size * 0.92, backgroundColor: color }]} />
-        </>
-      )}
-    </View>
+    <AssetIcon
+      source={muted ? SPEAKER_MUTED : SPEAKER_ON}
+      color={color}
+      size={size}
+      tint={!muted}
+    />
   );
 }
 
@@ -210,44 +209,7 @@ export function ReplyArrowIcon({ color = colors.text, size = 18 }: IconProps) {
 }
 
 export function WalkieTalkieIcon({ color = colors.text, size = 22 }: IconProps) {
-  const bodyWidth = size * 0.58;
-  const bodyHeight = size * 0.68;
-  return (
-    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View
-        style={[
-          styles.walkieAntenna,
-          {
-            backgroundColor: color,
-            height: size * 0.28,
-            left: size * 0.62,
-          },
-        ]}
-      />
-      <View
-        style={[
-          styles.walkieTip,
-          {
-            backgroundColor: color,
-            left: size * 0.62 - 1.5,
-          },
-        ]}
-      />
-      <View
-        style={[
-          styles.walkieBody,
-          {
-            borderColor: color,
-            width: bodyWidth,
-            height: bodyHeight,
-          },
-        ]}
-      />
-      <View style={[styles.walkieGrill, { backgroundColor: color, top: size * 0.42 }]} />
-      <View style={[styles.walkieGrill, { backgroundColor: color, top: size * 0.54 }]} />
-      <View style={[styles.walkieGrill, { backgroundColor: color, top: size * 0.66 }]} />
-    </View>
-  );
+  return <AssetIcon source={WALKIE_TALKIE} color={color} size={size} />;
 }
 
 export function CheckIcon({
@@ -372,60 +334,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ring: {
-    position: 'absolute',
-    borderWidth: 2,
-    borderRadius: 999,
+  glyph: {
+    textAlign: 'center',
+    includeFontPadding: false,
   },
-  dot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-  },
-  headband: {
-    position: 'absolute',
-    top: 2,
-    borderWidth: 2,
-    borderBottomWidth: 0,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-  },
-  cup: {
-    position: 'absolute',
-    width: 5,
-    height: 10,
-    borderRadius: 2,
-    bottom: 3,
-  },
-  head: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginBottom: 2,
-  },
-  shoulders: {
-    width: 14,
-    height: 7,
-    borderTopLeftRadius: 7,
-    borderTopRightRadius: 7,
-  },
-  speakerBody: {
-    position: 'absolute',
-  },
-  speakerCone: {
-    position: 'absolute',
-    width: 0,
-    height: 0,
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
-  },
-  speakerWave: {
-    position: 'absolute',
-    borderWidth: 2,
-    borderRadius: 999,
-    borderLeftColor: 'transparent',
-    borderBottomColor: 'transparent',
-    transform: [{ rotate: '45deg' }],
+  initial: {
+    fontWeight: '700',
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   phoneBody: {
     borderWidth: 2,
@@ -441,12 +357,6 @@ const styles = StyleSheet.create({
     bottom: '22%',
     height: 3,
     borderRadius: 1,
-  },
-  slashCut: {
-    position: 'absolute',
-    height: 5,
-    borderRadius: 2,
-    transform: [{ rotate: '-38deg' }],
   },
   slash: {
     position: 'absolute',
@@ -532,31 +442,6 @@ const styles = StyleSheet.create({
   qrFinder: {
     position: 'absolute',
     borderWidth: 2,
-    borderRadius: 1,
-  },
-  walkieAntenna: {
-    position: 'absolute',
-    top: 1,
-    width: 2,
-    borderRadius: 1,
-  },
-  walkieTip: {
-    position: 'absolute',
-    top: 0,
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-  },
-  walkieBody: {
-    position: 'absolute',
-    bottom: 0,
-    borderWidth: 2,
-    borderRadius: 5,
-  },
-  walkieGrill: {
-    position: 'absolute',
-    width: 8,
-    height: 1.5,
     borderRadius: 1,
   },
   checkBox: {
