@@ -1,5 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
+const { mkdtempSync, rmSync, writeFileSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
 
 const {
   createVersionInfo,
@@ -135,4 +139,37 @@ test("falls back to 0.0.0-dev when no release tags are reachable", () => {
     "rev-parse --short=8 HEAD",
     "status --porcelain --untracked-files=no",
   ]);
+});
+
+test("resolves 0.0.0-dev against a real git repo with no tags", () => {
+  const dir = mkdtempSync(join(tmpdir(), "talktome-untagged-"));
+  const git = (args) =>
+    execFileSync("git", args, {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+  try {
+    git(["init", "-b", "main"]);
+    git(["config", "user.email", "ci@example.com"]);
+    git(["config", "user.name", "CI Test"]);
+    writeFileSync(join(dir, "README"), "untagged\n");
+    git(["add", "README"]);
+    git(["commit", "-m", "init"]);
+
+    assert.throws(
+      () => git(["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0", "HEAD"]),
+      /No names found/,
+    );
+
+    const info = resolveBuildVersion({ cwd: dir, environment: {} });
+    assert.equal(info.appVersion, "0.0.0-dev.1");
+    assert.equal(info.version, "v0.0.0-dev.1");
+    assert.equal(info.baseVersion, "0.0.0");
+    assert.equal(info.release, false);
+    assert.match(info.safeVersion, /^v0\.0\.0-dev\.1-[0-9a-f]{8}$/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
