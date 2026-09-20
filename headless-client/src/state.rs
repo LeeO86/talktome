@@ -135,8 +135,15 @@ pub struct Snapshot {
     pub server_version: Option<String>,
     pub audio_ok: bool,
     pub targets: Vec<TargetInfo>,
+    /// Effective Reply / Main destination (pin when assigned, else last incoming).
     pub reply_target: Option<TargetKey>,
     pub reply_name: Option<String>,
+    /// Configured `talk.main_target` pin, when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_target: Option<TargetKey>,
+    /// Pin is set but not in this user's assigned destinations.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub main_unavailable: bool,
     pub incoming: Vec<IncomingInfo>,
     /// Peak input level in dBFS for meters / VOX display.
     pub input_level_db: f32,
@@ -165,6 +172,8 @@ impl Snapshot {
             targets: Vec::new(),
             reply_target: None,
             reply_name: None,
+            main_target: None,
+            main_unavailable: false,
             incoming: Vec::new(),
             input_level_db: -100.0,
             media: None,
@@ -190,8 +199,22 @@ impl Snapshot {
 
     /// Label for the Reply key: the conference (or target) being talked to,
     /// never the caller’s display name. Matches the web client’s reply button.
+    /// A Main pin that is missing from the destination list is "Unavailable target"
+    /// and does not fall back to last incoming.
     pub fn reply_label(&self) -> Option<String> {
         let name_of = |key: TargetKey| self.target(key).map(|target| target.name.clone());
+        if self.main_unavailable {
+            return Some("Unavailable target".to_string());
+        }
+        if self.main_target.is_some() {
+            return self.reply_target.and_then(name_of).or_else(|| {
+                self.reply_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+            });
+        }
         let conference_name = |key: TargetKey| match key {
             TargetKey::Conference(_) => name_of(key),
             _ => None,
@@ -239,7 +262,8 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::Snapshot;
+    use super::{IncomingInfo, Snapshot};
+    use crate::talk::TargetKey;
 
     #[test]
     fn tally_label_pgm_wins_over_preview() {
@@ -249,6 +273,54 @@ mod tests {
         assert_eq!(snapshot.tally_label(), Some("PREVIEW"));
         snapshot.on_air = true;
         assert_eq!(snapshot.tally_label(), Some("ON AIR"));
+    }
+
+    #[test]
+    fn reply_label_missing_pin_does_not_use_incoming() {
+        let mut snapshot = Snapshot::initial("cam", "Cam");
+        snapshot.targets.push(super::TargetInfo {
+            key: TargetKey::Conference(1),
+            name: "News".into(),
+            can_talk: true,
+            online: true,
+            held: false,
+            locked: false,
+            incoming: true,
+            receiving: false,
+            volume: 0.9,
+            muted: false,
+            members: Vec::new(),
+        });
+        snapshot.incoming = vec![IncomingInfo {
+            from_name: "jan".into(),
+            target: Some(TargetKey::Conference(1)),
+        }];
+        snapshot.main_target = Some(TargetKey::User(9));
+        snapshot.main_unavailable = true;
+        snapshot.reply_target = None;
+        snapshot.reply_name = None;
+        assert_eq!(
+            snapshot.reply_label().as_deref(),
+            Some("Unavailable target")
+        );
+
+        snapshot.main_unavailable = false;
+        snapshot.reply_target = Some(TargetKey::User(9));
+        snapshot.reply_name = Some("Cam 9".into());
+        snapshot.targets.push(super::TargetInfo {
+            key: TargetKey::User(9),
+            name: "Cam 9".into(),
+            can_talk: true,
+            online: true,
+            held: false,
+            locked: false,
+            incoming: false,
+            receiving: false,
+            volume: 0.9,
+            muted: false,
+            members: Vec::new(),
+        });
+        assert_eq!(snapshot.reply_label().as_deref(), Some("Cam 9"));
     }
 }
 

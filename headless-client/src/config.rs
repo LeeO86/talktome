@@ -133,6 +133,9 @@ pub struct AudioConfig {
     /// from the observed capture and playback callback periods.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_delay_ms: Option<u32>,
+    /// Feed ducking while talking / addressed. Default −15 dB; stored −14 is
+    /// migrated to −15. The web client offers −6, −12, −15, −18, −24; other
+    /// finite values in the file are kept.
     pub dim_db: f32,
     pub dim_feeds_while_speaking: bool,
     pub dim_when_addressed: bool,
@@ -163,6 +166,11 @@ pub struct TalkConfig {
     /// A press shorter than this toggles the talk lock instead of talking.
     pub tap_ms: u64,
     pub lock_multiple: bool,
+    /// Pin Reply / Main to this destination (`user:4`, `conference:1`).
+    /// Empty/`null` = last incoming reply. A pin that is not in this user's
+    /// assigned targets does not fall back to another destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_target: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -468,7 +476,7 @@ impl Default for AudioConfig {
             input_gain_db: 0.0,
             auto_processing: false,
             stream_delay_ms: None,
-            dim_db: -14.0,
+            dim_db: DEFAULT_DIM_DB,
             dim_feeds_while_speaking: false,
             dim_when_addressed: true,
             jitter_min_ms: 20,
@@ -504,6 +512,41 @@ impl Default for TalkConfig {
         Self {
             tap_ms: 250,
             lock_multiple: false,
+            main_target: None,
+        }
+    }
+}
+
+/// Dim amounts offered by the web client and the headless Settings select.
+pub const DIM_AMOUNT_DB_OPTIONS: [f32; 5] = [-6.0, -12.0, -15.0, -18.0, -24.0];
+/// Default feed ducking, matching `dimAmountDb` in the web client.
+pub const DEFAULT_DIM_DB: f32 = DIM_AMOUNT_DB_OPTIONS[2];
+const LEGACY_DIM_DB: f32 = -14.0;
+
+fn json_number_as_f32(value: &Value) -> Option<f32> {
+    match value {
+        Value::Number(n) => n.as_f64().map(|v| v as f32),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// In-place upgrades for older configuration documents (dim −14 → −15,
+/// empty `talk.main_target` → null).
+pub fn migrate_document(doc: &mut Value) {
+    if let Some(audio) = doc.get_mut("audio") {
+        if let Some(dim) = audio.get("dim_db") {
+            if json_number_as_f32(dim).is_some_and(|value| (value - LEGACY_DIM_DB).abs() < 1e-3) {
+                audio["dim_db"] = serde_json::json!(DEFAULT_DIM_DB);
+            }
+        }
+    }
+    if let Some(talk) = doc.get_mut("talk") {
+        match talk.get("main_target") {
+            Some(Value::String(value)) if value.trim().is_empty() => {
+                talk["main_target"] = Value::Null;
+            }
+            _ => {}
         }
     }
 }
@@ -810,7 +853,8 @@ pub fn load_from_env() -> Result<LoadedConfig> {
     Ok(LoadedConfig { config, path: None })
 }
 
-pub fn from_document(doc: Value) -> Result<Config> {
+pub fn from_document(mut doc: Value) -> Result<Config> {
+    migrate_document(&mut doc);
     serde_json::from_value(doc).map_err(|e| anyhow!("invalid configuration: {e}"))
 }
 
@@ -1035,6 +1079,17 @@ impl Config {
         }
         if self.vox.enabled && self.vox.target.is_none() {
             bail!("vox.target is required when vox.enabled is true");
+        }
+        if let Some(target) = &self.talk.main_target {
+            let trimmed = target.trim();
+            if !trimmed.is_empty() {
+                let key = crate::talk::TargetKey::parse(trimmed).ok_or_else(|| {
+                    anyhow!("talk.main_target {target:?} must look like conference:1 or user:4")
+                })?;
+                if !key.can_talk() {
+                    bail!("talk.main_target {target:?} must be a user or conference");
+                }
+            }
         }
         for (name, output) in &self.gpio.outputs {
             if !matches!(
@@ -1507,6 +1562,73 @@ mod tests {
             text.contains("mode 0770") || text.contains("Permission denied"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn dim_default_is_minus_15_and_legacy_minus_14_migrates() {
+        let config = from_document(minimal_json()).unwrap();
+        assert!((config.audio.dim_db - DEFAULT_DIM_DB).abs() < 1e-6);
+        assert!(DIM_AMOUNT_DB_OPTIONS.contains(&DEFAULT_DIM_DB));
+        assert!(!DIM_AMOUNT_DB_OPTIONS.contains(&LEGACY_DIM_DB));
+
+        let mut doc = minimal_json();
+        doc["audio"] = serde_json::json!({ "dim_db": -14 });
+        let migrated = from_document(doc).unwrap();
+        assert!((migrated.audio.dim_db - DEFAULT_DIM_DB).abs() < 1e-6);
+
+        let mut custom = minimal_json();
+        custom["audio"] = serde_json::json!({ "dim_db": -20 });
+        let custom = from_document(custom).unwrap();
+        assert!((custom.audio.dim_db + 20.0).abs() < 1e-6);
+
+        let mut listed = minimal_json();
+        listed["audio"] = serde_json::json!({ "dim_db": -18 });
+        let listed = from_document(listed).unwrap();
+        assert!((listed.audio.dim_db + 18.0).abs() < 1e-6);
+
+        let running = from_document(minimal_json()).unwrap();
+        let mut file = serde_json::to_value(&running).unwrap();
+        file["audio"]["dim_db"] = serde_json::json!(-14);
+        assert!(
+            !file_differs_from_running(&file, &running),
+            "legacy -14 in the file must match the running -15 default"
+        );
+    }
+
+    #[test]
+    fn talk_main_target_parses_and_rejects_feeds() {
+        let mut doc = minimal_json();
+        doc["talk"] = serde_json::json!({ "main_target": "user:4" });
+        let config = from_document(doc).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.talk.main_target.as_deref(), Some("user:4"));
+
+        let mut env_doc = minimal_json();
+        let applied = apply_env_overrides(
+            &mut env_doc,
+            vec![(
+                "TALKTOME_TALK_MAIN_TARGET".to_string(),
+                "conference:1".to_string(),
+            )],
+        );
+        assert!(applied.contains(&"TALKTOME_TALK_MAIN_TARGET".to_string()));
+        let config = from_document(env_doc).unwrap();
+        assert_eq!(config.talk.main_target.as_deref(), Some("conference:1"));
+        config.validate().unwrap();
+
+        let mut empty = minimal_json();
+        empty["talk"] = serde_json::json!({ "main_target": "" });
+        let empty = from_document(empty).unwrap();
+        assert_eq!(empty.talk.main_target, None);
+        empty.validate().unwrap();
+
+        let mut config = from_document(minimal_json()).unwrap();
+        config.talk.main_target = Some("bogus".into());
+        assert!(config.validate().is_err());
+        config.talk.main_target = Some("feed:2".into());
+        assert!(config.validate().is_err());
+        config.talk.main_target = Some("conference:3".into());
+        config.validate().unwrap();
     }
 
     #[test]

@@ -25,7 +25,7 @@
     "profile": "standard",
     "auto_processing": false,
     "input_gain_db": 0,
-    "dim_db": -14,
+    "dim_db": -15,
     "dim_feeds_while_speaking": false,
     "dim_when_addressed": true,
     "jitter_min_ms": 20,
@@ -41,7 +41,8 @@
   },
   "talk": {
     "tap_ms": 250,
-    "lock_multiple": false
+    "lock_multiple": false,
+    "main_target": null
   },
   "ice": {
     "servers": null,

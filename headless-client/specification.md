@@ -452,7 +452,7 @@ written to WAV by the second instance (289 packets for a 6 s tone; the first
   (`audio.jitter_min_ms` 20 … `audio.jitter_max_ms` 120, adaptive) → mixer.
 - **Mixer**: `out = Σ source_i × volume_i × (muted_i ? 0 : 1) × dim_i`,
   soft-clipped. `dim_i` implements `dimFeedsWhileSpeaking` (feeds dimmed by
-  `audio.dim_db`, default −14 dB, while the user talks) and
+  `audio.dim_db`, default −15 dB, while the user talks) and
   `dimWhenAddressed` (feeds dimmed while `addressedNow` is non-empty).
   Live `user-audio-settings-updated` can change those dim knobs.
 - **Playback**: 48 kHz → device rate, stereo or mono as the device offers
@@ -494,7 +494,13 @@ one of `user:<id>`, `conference:<id>`, `feed:<id>` (feeds are listen-only,
   active adds to the target list; release restores the locked set. A
   dedicated "clear locks" action exists for GPIO and the deck status key.
 - **Reply** → talks to `incoming-talk-state.state.replyTarget` (falls back
-  to the most recent `addressedNow` entry); no target → no-op with an
+  to the most recent `addressedNow` entry) unless `talk.main_target` pins
+  Reply / Main to a user or conference (`user:4`, `conference:1`; env
+  `TALKTOME_TALK_MAIN_TARGET`). Empty pin = dynamic last incoming, matching
+  the web client Main button. A pin that is not in this user's assigned
+  destinations is unavailable and does **not** fall back to another target.
+  Remote Control, Stream Deck Reply, GPIO `reply`, and the local socket
+  `reply` command all share that resolution. No target → no-op with an
   error flash.
 - `ptt-state { talking, lockActive, target, targets, reason }` is emitted on
   every change, mirroring the browser, so Companion/Admin see the panel's
@@ -698,8 +704,9 @@ remote/Companion HTTP (that still goes through the Talktome server).
 - **Snapshot**: string target keys (`user:1`, `conference:2`, `feed:3`),
   `kind`, talk flags (`held`, `locked`, `incoming`, `receiving`, `muted`,
   `can_talk`, `online`), linear `volume` and `volume_db`, conference
-  `members` with the same fields, `reply`, PGM/PRV (`on_air` / `preview`),
-  connection, instance, user.
+  `members` with the same fields, `reply` (effective Main / Reply
+  destination), `main_target`, `main_unavailable`, PGM/PRV (`on_air` /
+  `preview`), connection, instance, user.
 - **Commands**: `press` / `release` / `lock` / `clear-locks` / `reply` /
   `mute` / `volume` (0–1) / `volume-db` / `volume-step` (`delta_db`,
   default `streamdeck.volume_step_db`) / `member-mute` /
@@ -738,12 +745,12 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
              "output_device": "plughw:CARD=Headset,DEV=0",
              "profile": "standard", "input_gain_db": 0,
              "auto_processing": false,
-             "dim_db": -14, "dim_feeds_while_speaking": false,
+             "dim_db": -15, "dim_feeds_while_speaking": false,
              "dim_when_addressed": true,
              "jitter_min_ms": 20, "jitter_max_ms": 120, "reopen_ms": 2000,
              "default_volume_db": 0 },
   "vox": { "enabled": false, "target": "conference:1", "threshold_db": -32, "hang_ms": 600 },
-  "talk": { "tap_ms": 250, "lock_multiple": false },
+  "talk": { "tap_ms": 250, "lock_multiple": false, "main_target": null },
   "ice": { "servers": null, "transport_policy": null },   // null = use the server's
   "network": { "ice_disconnect_grace_ms": 4000 },
   "streamdeck": { "enabled": true, "serial": null, "mock": null, "brightness": 60,

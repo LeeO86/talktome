@@ -634,7 +634,12 @@ fn reply_conference_name(snapshot: &Snapshot) -> Option<String> {
 fn reply_appearance(snapshot: &Snapshot) -> Appearance {
     let mut appearance = Appearance::simple("REPLY", palette::REPLY);
     match reply_conference_name(snapshot) {
-        Some(name) => appearance.subtitle = name,
+        Some(name) => {
+            appearance.subtitle = name;
+            if snapshot.main_unavailable {
+                appearance.foreground = palette::OFFLINE_TEXT;
+            }
+        }
         None => appearance.foreground = palette::OFFLINE_TEXT,
     }
     let reply_held = snapshot
@@ -1311,6 +1316,30 @@ mod tests {
         assert_eq!(keys[3].appearance.subtitle, "News");
         assert_ne!(keys[3].appearance.subtitle, "jan");
         assert_eq!(keys[3].appearance.background, palette::INCOMING);
+    }
+
+    #[test]
+    fn reply_missing_pin_does_not_show_incoming_conference() {
+        let mut snapshot = snapshot(2);
+        snapshot.targets[1].key = TargetKey::Conference(1);
+        snapshot.targets[1].name = "News".into();
+        snapshot.incoming = vec![crate::state::IncomingInfo {
+            from_name: "jan".into(),
+            target: Some(TargetKey::Conference(1)),
+        }];
+        snapshot.main_target = Some(TargetKey::User(9));
+        snapshot.main_unavailable = true;
+        snapshot.reply_target = None;
+        let keys = layout(
+            &geometry("neo"),
+            &snapshot,
+            &DeckState::default(),
+            &options(),
+        );
+        assert_eq!(keys[3].role, Role::Reply);
+        assert_eq!(keys[3].appearance.subtitle, "Unavailable target");
+        assert_ne!(keys[3].appearance.subtitle, "News");
+        assert_eq!(keys[3].appearance.foreground, palette::OFFLINE_TEXT);
     }
 
     #[test]

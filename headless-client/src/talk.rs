@@ -94,8 +94,8 @@ struct HeldKey {
     unlocked_on_press: bool,
 }
 
-/// Hold = talk while held, tap = toggle lock; reply resolves to the current
-/// reply target at press time.
+/// Hold = talk while held, tap = toggle lock; reply resolves to the Main pin
+/// when configured, otherwise the last incoming reply, at press time.
 #[derive(Debug, Clone)]
 pub struct TalkModel {
     tap_ms: u64,
@@ -103,6 +103,10 @@ pub struct TalkModel {
     held: HashMap<(InputSource, TargetRef), (TargetKey, HeldKey)>,
     locked: BTreeSet<TargetKey>,
     reply_target: Option<TargetKey>,
+    /// Configured Main / Reply pin (`talk.main_target`).
+    main_target: Option<TargetKey>,
+    /// Pin is in this user's assigned talk destinations. Offline is separate.
+    main_available: bool,
     vox_target: Option<TargetKey>,
     vox_active: bool,
 }
@@ -115,6 +119,8 @@ impl TalkModel {
             held: HashMap::new(),
             locked: BTreeSet::new(),
             reply_target: None,
+            main_target: None,
+            main_available: false,
             vox_target: None,
             vox_active: false,
         }
@@ -122,6 +128,36 @@ impl TalkModel {
 
     pub fn set_reply_target(&mut self, target: Option<TargetKey>) {
         self.reply_target = target;
+    }
+
+    pub fn set_main_target(&mut self, target: Option<TargetKey>) {
+        self.main_target = target;
+        if self.main_target.is_none() {
+            self.main_available = false;
+        }
+    }
+
+    pub fn set_main_available(&mut self, available: bool) {
+        self.main_available = available && self.main_target.is_some();
+    }
+
+    pub fn main_target(&self) -> Option<TargetKey> {
+        self.main_target
+    }
+
+    /// Pin is set but not in the assigned destination list (no fallback).
+    pub fn main_unavailable(&self) -> bool {
+        self.main_target.is_some() && !self.main_available
+    }
+
+    /// Destination Reply / Main talks to: the pin when assigned, otherwise
+    /// last incoming. A missing pin returns `None` rather than another target.
+    pub fn effective_reply(&self) -> Option<TargetKey> {
+        match self.main_target {
+            Some(key) if self.main_available => Some(key),
+            Some(_) => None,
+            None => self.reply_target(),
+        }
     }
 
     /// Prefer a conference when someone is addressing us in one, matching the
@@ -181,7 +217,7 @@ impl TalkModel {
     fn resolve(&self, target: TargetRef) -> Option<TargetKey> {
         match target {
             TargetRef::Key(key) => key.can_talk().then_some(key),
-            TargetRef::Reply => self.reply_target,
+            TargetRef::Reply => self.effective_reply(),
         }
     }
 
@@ -555,6 +591,36 @@ mod tests {
         assert!(model
             .press(deck(2), TargetRef::Key(TargetKey::Feed(1)), Instant::now())
             .is_none());
+    }
+
+    #[test]
+    fn pinned_main_target_does_not_fall_back() {
+        let mut model = TalkModel::new(250, false);
+        let t0 = Instant::now();
+        let incoming = TargetKey::User(3);
+        let pin = TargetKey::User(7);
+        model.set_reply_target(Some(incoming));
+        model.set_main_target(Some(pin));
+        model.set_main_available(true);
+        let change = model.press(deck(0), TargetRef::Reply, t0).unwrap();
+        assert_eq!(change.targets, vec![pin]);
+        model
+            .release(deck(0), TargetRef::Reply, t0 + Duration::from_millis(600))
+            .unwrap();
+
+        model.set_main_available(false);
+        assert!(model
+            .press(deck(0), TargetRef::Reply, Instant::now())
+            .is_none());
+        assert_eq!(model.reply_target(), Some(incoming));
+        assert!(model.main_unavailable());
+        assert_eq!(model.effective_reply(), None);
+
+        model.set_main_target(None);
+        let change = model
+            .press(deck(0), TargetRef::Reply, Instant::now())
+            .unwrap();
+        assert_eq!(change.targets, vec![incoming]);
     }
 
     #[test]

@@ -161,7 +161,12 @@ def paint(snapshot: dict[str, Any]) -> str:
                 f"      {member.get('key'):<14} {member.get('name', ''):<16} {mdb:>6} dB  {' '.join(mmarks)}"
             )
     reply = snapshot.get("reply")
-    if reply:
+    if snapshot.get("main_unavailable"):
+        lines.append("MAIN unavailable")
+    elif snapshot.get("main_target"):
+        name = (reply or {}).get("name") or ""
+        lines.append(f"MAIN {snapshot.get('main_target')}  {name}")
+    elif reply:
         lines.append(f"REPLY {reply.get('key')}  {reply.get('name') or ''}")
     return "\n".join(lines)
 
