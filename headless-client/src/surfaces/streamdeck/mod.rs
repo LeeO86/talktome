@@ -1147,16 +1147,18 @@ pub(crate) fn overlay_demo_targets(snapshot: Arc<Snapshot>) -> Arc<Snapshot> {
     }
     let mut snap = (*snapshot).clone();
     snap.targets = targets;
-    if let Ok(reply) = std::env::var(DEMO_REPLY_ENV) {
-        let reply = reply.trim();
-        if !reply.is_empty() {
-            snap.reply_name = Some(reply.to_string());
-            if let Some(target) = snap
-                .targets
-                .iter()
-                .find(|target| target.name.eq_ignore_ascii_case(reply))
-            {
-                snap.reply_target = Some(target.key);
+    if snap.reply_target.is_none() && !snap.main_unavailable {
+        if let Ok(reply) = std::env::var(DEMO_REPLY_ENV) {
+            let reply = reply.trim();
+            if !reply.is_empty() {
+                snap.reply_name = Some(reply.to_string());
+                if let Some(target) = snap
+                    .targets
+                    .iter()
+                    .find(|target| target.name.eq_ignore_ascii_case(reply))
+                {
+                    snap.reply_target = Some(target.key);
+                }
             }
         }
     }
