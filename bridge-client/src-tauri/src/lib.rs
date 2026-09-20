@@ -171,6 +171,7 @@ struct WindowFocusGuard {
 
 #[derive(Default)]
 struct TrayToggleGuard {
+    #[cfg(not(target_os = "macos"))]
     suppress_toggle_until: Mutex<Option<Instant>>,
 }
 
@@ -201,6 +202,7 @@ impl WindowFocusGuard {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl TrayToggleGuard {
     fn accept(&self) -> bool {
         let now = Instant::now();
@@ -217,6 +219,7 @@ impl TrayToggleGuard {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn handle_tray_left_click(app: &AppHandle, rect: tauri::Rect) {
     if let Some(guard) = app.try_state::<TrayToggleGuard>() {
         if !guard.accept() {
@@ -230,18 +233,21 @@ fn handle_tray_left_click(app: &AppHandle, rect: tauri::Rect) {
 fn hide_main_window_after_focus_check(window: tauri::Window<Wry>) {
     std::thread::spawn(move || {
         std::thread::sleep(WINDOW_FOCUS_HIDE_DELAY);
-
-        if window.is_focused().unwrap_or(false) {
-            return;
-        }
-
-        let should_suppress = window
-            .app_handle()
-            .try_state::<WindowFocusGuard>()
-            .is_some_and(|guard| guard.should_suppress_hide());
-        if !should_suppress {
-            let _ = window.hide();
-        }
+        // Serialize the final check and hide with tray events. A background
+        // thread must not hide a window that a tray click has just reopened.
+        let app = window.app_handle().clone();
+        let _ = app.run_on_main_thread(move || {
+            if window.is_focused().unwrap_or(false) {
+                return;
+            }
+            let should_suppress = window
+                .app_handle()
+                .try_state::<WindowFocusGuard>()
+                .is_some_and(|guard| guard.should_suppress_hide());
+            if !should_suppress {
+                let _ = window.hide();
+            }
+        });
     });
 }
 
@@ -975,7 +981,18 @@ pub fn run() {
                         button_state: MouseButtonState::Down | MouseButtonState::Up,
                         ..
                     } => handle_tray_left_click(tray.app_handle(), rect),
-                    #[cfg(not(target_os = "windows"))]
+                    // On macOS act on press, before the delayed focus-loss
+                    // hide can run. Waiting for release can hide then reopen
+                    // the window on the very same click. One press is one
+                    // toggle, so no time-based debounce is needed here.
+                    #[cfg(target_os = "macos")]
+                    TrayIconEvent::Click {
+                        rect,
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Down,
+                        ..
+                    } => toggle_main_window_from_tray(tray.app_handle(), rect),
+                    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
                     TrayIconEvent::Click {
                         rect,
                         button: MouseButton::Left,

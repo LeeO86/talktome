@@ -27,6 +27,7 @@ on:
       - "scripts/resolve-build-version.js"
       - "scripts/upload-release-asset.sh"
       - "server-app/**"
+      - "vendor/tray-icon/**"
 
 concurrency:
   group: release-builds-${{ github.workflow }}-${{ github.ref }}

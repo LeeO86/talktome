@@ -2145,6 +2145,54 @@
           transform: none;
         }
       }
+      /* Keep menu layout scoped; target buttons and admin dialogs are unchanged. */
+      #settings-menu {
+        position: fixed; right: auto; min-width: 0;
+        width: min(580px, calc(100vw - 1rem)); padding: 16px;
+        box-sizing: border-box; overflow-y: auto;
+      }
+      #settings-menu [hidden] { display: none !important; }
+      #settings-main-view { gap: 16px; }
+      #settings-menu .settings-group,
+      #settings-menu .settings-group-content { display: grid; gap: 12px; min-width: 0; }
+      #settings-menu .settings-group + .settings-group {
+        border-top: 1px solid #334155; padding-top: 16px;
+      }
+      #settings-menu h3 {
+        margin: 0; font-size: 0.72rem; font-weight: 600;
+        letter-spacing: 0.08em; text-transform: uppercase; color: #94a3b8;
+      }
+      #settings-menu .device-selector {
+        display: grid; grid-template-columns: 145px minmax(0, 1fr);
+        align-items: center; gap: 8px; margin: 0;
+      }
+      #settings-menu label { font-size: 0.85rem; font-weight: 400; }
+      #settings-menu select { width: 100%; min-width: 0; min-height: 36px; font-size: 0.82rem; }
+      #settings-menu .processing-options { margin: 0; }
+      #settings-menu label.settings-switch {
+        display: grid; grid-template-columns: minmax(0, 1fr) auto;
+        min-height: 36px; gap: 4px 12px;
+      }
+      #settings-menu .settings-switch__track { grid-column: 2; grid-row: 1; }
+      #settings-menu .settings-switch > span:not(.settings-switch__track) { grid-column: 1; grid-row: 1; }
+      #settings-menu .settings-switch > .processing-desc {
+        grid-column: 1 / -1 !important; grid-row: 2 !important;
+        font-size: 0.72rem; line-height: 1.5; margin: 0;
+      }
+      #settings-menu .settings-details { border-top: 1px solid #334155; padding-top: 10px; }
+      #settings-menu summary { cursor: pointer; font-size: 0.82rem; color: #cbd5e1; padding: 6px 0; }
+      #settings-menu .settings-details[open] > summary { margin-bottom: 8px; }
+      #settings-menu .user-level-controls,
+      #settings-menu .voice-trigger-controls { margin: 0; gap: 8px; border: 0; padding: 0; }
+      #settings-menu .settings-nav-button { padding: 10px 12px; }
+      #settings-menu #shortcut-settings-open { grid-template-areas: "title arrow"; }
+      #settings-menu .settings-nav-button__title { font-size: 0.85rem; font-weight: 500; }
+      #settings-menu .settings-nav-button__desc { font-size: 0.72rem; }
+      #settings-menu .settings-actions { position: static; padding: 8px 0 0; border: 0; }
+      @media (max-width: 480px) {
+        #settings-menu .device-selector { grid-template-columns: 1fr; gap: 4px; }
+        #settings-menu select { min-height: 40px; font-size: 16px; }
+      }
     </style>
   </head>
   <body>
@@ -2250,6 +2298,7 @@
                 <label for="production-session-select">Production</label>
                 <select id="production-session-select"></select>
               </div>
+              <section class="settings-group" aria-label="Audio">
               <div class="device-selector feed-optional">
                 <label for="input-select">Microphone</label>
                 <select id="input-select">
@@ -2262,61 +2311,12 @@
                   <option value="">System default</option>
                 </select>
               </div>
-              <div class="device-selector feed-optional">
-                <label for="quality-select">Audio profile</label>
-                <select id="quality-select">
-                  <option value="ultra-low">Ultra low (5 ms frame)</option>
-                  <option value="low">Low (10 ms frame)</option>
-                  <option value="standard">Standard (20 ms frame)</option>
-                </select>
-              </div>
-              <div class="device-selector feed-optional feed-dim-option">
-                <label for="dim-amount-select">Dim amount</label>
-                <select id="dim-amount-select">
-                  <option value="-6">-6 dB</option>
-                  <option value="-12">-12 dB</option>
-                  <option value="-14" selected>-14 dB</option>
-                  <option value="-18">-18 dB</option>
-                  <option value="-24">-24 dB</option>
-                </select>
-              </div>
-              <div class="processing-options feed-optional feed-dim-option">
-                <label class="settings-switch">
-                  <input type="checkbox" id="toggle-self-dim" role="switch" />
-                  <span class="settings-switch__track" aria-hidden="true"></span>
-                  <span>Dim feeds while speaking</span>
-                </label>
-              </div>
-              <div class="processing-options feed-optional feed-dim-option">
-                <label class="settings-switch">
-                  <input type="checkbox" id="toggle-incoming-dim" role="switch" />
-                  <span class="settings-switch__track" aria-hidden="true"></span>
-                  <span>Dim when addressed</span>
-                </label>
-              </div>
               <div class="processing-options feed-optional">
                 <label class="processing-setting-label settings-switch">
                   <input type="checkbox" id="toggle-processing" role="switch" />
                   <span class="settings-switch__track" aria-hidden="true"></span>
                   <span>Audio auto processing</span>
-                  <span class="processing-desc">(auto gain, noise cancellation, echo suppression - adds ~50 ms latency)</span>
-                </label>
-              </div>
-              <div class="processing-options feed-optional">
-                <label class="settings-switch">
-                  <input type="checkbox" id="toggle-left-hand-mode" role="switch" />
-                  <span class="settings-switch__track" aria-hidden="true"></span>
-                  <span>Left-hand mode</span>
-                </label>
-              </div>
-              <div class="processing-options feed-optional">
-                <label
-                  class="settings-switch"
-                  title="Keep locked targets active while temporarily talking to or locking additional targets."
-                >
-                  <input type="checkbox" id="toggle-lock-multiple-targets" role="switch" />
-                  <span class="settings-switch__track" aria-hidden="true"></span>
-                  <span>Lock multiple targets</span>
+                  <span class="processing-desc">Auto gain, noise cancellation &amp; echo suppression. Adds ~50 ms latency.</span>
                 </label>
               </div>
               <div class="user-level-controls feed-optional" id="user-level-controls">
@@ -2349,6 +2349,45 @@
                   Peak: <span id="user-meter-value">-inf dB</span>
                 </div>
               </div>
+              <details class="settings-details feed-optional">
+              <summary>Dimming &amp; processing</summary>
+              <div class="settings-group-content">
+              <div class="device-selector feed-optional">
+                <label for="quality-select">Audio profile</label>
+                <select id="quality-select">
+                  <option value="ultra-low">Ultra low (5 ms frame)</option>
+                  <option value="low">Low (10 ms frame)</option>
+                  <option value="standard">Standard (20 ms frame)</option>
+                </select>
+              </div>
+              <div class="device-selector feed-optional feed-dim-option">
+                <label for="dim-amount-select">Dim amount</label>
+                <select id="dim-amount-select">
+                  <option value="-6">-6 dB</option>
+                  <option value="-12">-12 dB</option>
+                  <option value="-15" selected>-15 dB</option>
+                  <option value="-18">-18 dB</option>
+                  <option value="-24">-24 dB</option>
+                </select>
+              </div>
+              <div class="processing-options feed-optional feed-dim-option">
+                <label class="settings-switch">
+                  <input type="checkbox" id="toggle-self-dim" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Dim feeds while speaking</span>
+                </label>
+              </div>
+              <div class="processing-options feed-optional feed-dim-option">
+                <label class="settings-switch">
+                  <input type="checkbox" id="toggle-incoming-dim" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Dim feeds when addressed</span>
+                </label>
+              </div>
+              </div>
+              </details>
+              <details class="settings-details feed-optional">
+              <summary>Level trigger</summary>
               <div class="voice-trigger-controls feed-optional" id="voice-trigger-controls">
                 <label class="settings-switch">
                   <input type="checkbox" id="toggle-voice-trigger" role="switch" />
@@ -2377,11 +2416,35 @@
                   aria-hidden="true"
                 ></div>
               </div>
+              </details>
+              </section>
+              <section class="settings-group feed-optional" aria-labelledby="settings-controls-heading">
+              <h3 id="settings-controls-heading">Controls</h3>
+              <div class="device-selector feed-optional">
+                <label for="main-button-target">Main button target</label>
+                <select id="main-button-target">
+                  <option value="">Reply</option>
+                </select>
+              </div>
+              <div class="processing-options">
+                <label class="settings-switch">
+                  <input type="checkbox" id="toggle-left-hand-mode" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Left-hand mode</span>
+                </label>
+              </div>
+              <div class="processing-options">
+                <label class="settings-switch" title="Keep locked targets active while temporarily talking to or locking additional targets.">
+                  <input type="checkbox" id="toggle-lock-multiple-targets" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Lock multiple targets</span>
+                </label>
+              </div>
               <button type="button" class="settings-nav-button feed-optional" id="shortcut-settings-open">
                 <span class="settings-nav-button__title">Keyboard shortcuts</span>
-                <span class="settings-nav-button__desc">Configure keys per target</span>
                 <span class="settings-nav-button__arrow" aria-hidden="true">&#8250;</span>
               </button>
+              </section>
               <div class="settings-actions">
                 <span id="settings-server-version" class="settings-server-version" hidden></span>
                 <button id="logout-btn" type="button" class="logout-btn">Logout</button>
@@ -2547,12 +2610,35 @@
       const settingsBody = settingsPanel?.querySelector(".settings-body");
 
       if (settingsPanel && settingsTrigger && settingsBody) {
+        const positionSettings = () => {
+          if (settingsBody.hidden) return;
+          const viewport = window.visualViewport;
+          const viewportLeft = viewport?.offsetLeft || 0;
+          const viewportTop = viewport?.offsetTop || 0;
+          const viewportWidth = viewport?.width || window.innerWidth;
+          const viewportHeight = viewport?.height || window.innerHeight;
+          const header = settingsPanel.closest('.session-bar').getBoundingClientRect();
+          const gap = 8;
+          const width = Math.min(580, viewportWidth - gap * 2);
+          const top = Math.max(header.bottom + gap, viewportTop + gap);
+          const left = Math.max(viewportLeft + gap,
+            Math.min(header.right - width, viewportLeft + viewportWidth - width - gap));
+          settingsBody.style.top = `${top}px`;
+          settingsBody.style.left = `${left}px`;
+          settingsBody.style.width = `${width}px`;
+          settingsBody.style.maxHeight = `${Math.max(0, viewportTop + viewportHeight - top - gap)}px`;
+        };
+        window.addEventListener('resize', positionSettings);
+        window.visualViewport?.addEventListener('resize', positionSettings);
+        window.visualViewport?.addEventListener('scroll', positionSettings);
+        new ResizeObserver(positionSettings).observe(settingsPanel.closest('.session-bar'));
         const openSettings = () => {
           if (settingsPanel.classList.contains("is-open")) {
             return;
           }
           settingsPanel.classList.add("is-open");
           settingsBody.hidden = false;
+          positionSettings();
           settingsTrigger.setAttribute("aria-expanded", "true");
           window.__talktomeOpenSettings?.();
         };

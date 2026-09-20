@@ -1487,6 +1487,56 @@ function syncStopTransmissionButtons(users = latestAdminStatus?.users || []) {
   });
 }
 
+const statusSortPreferences = new Map();
+
+function statusSortValue(row, key) {
+  switch (key) {
+    case 'Status': return row.talking ? 2 : row.online ? 1 : 0;
+    case 'Name': return row.name || '';
+    case 'Production': return row.activeProduction?.name || '';
+    case 'Client': return row.client || (row.configuredAsBridge ? 'Bridge configured' : '');
+    case 'Address': return row.remoteAddress || '';
+    case 'RTT': return Number(row.networkStats?.roundTripMs) || 0;
+    case 'Loss': return Number(row.networkStats?.packetLossPercent) || 0;
+    case 'Connected since': return Date.parse(row.connectedAt) || 0;
+    case 'Last seen': return row.online ? Number.MAX_SAFE_INTEGER : Date.parse(row.lastOnlineAt || row.lastSeenAt) || 0;
+    default: return '';
+  }
+}
+
+function sortStatusRows(rows, body, fallback) {
+  const preference = statusSortPreferences.get(body?.id);
+  rows.sort(preference ? (a, b) => {
+    const av = statusSortValue(a, preference.key);
+    const bv = statusSortValue(b, preference.key);
+    const result = typeof av === 'number' && typeof bv === 'number'
+      ? av - bv : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+    return result * preference.direction || String(a.name || '').localeCompare(String(b.name || ''));
+  } : fallback);
+  body?.closest('table')?.querySelectorAll('thead th').forEach(header => {
+    const key = header.dataset.sortKey || header.textContent.trim();
+    header.dataset.sortKey = key;
+    header.setAttribute('aria-sort', preference?.key === key
+      ? preference.direction === 1 ? 'ascending' : 'descending' : 'none');
+    if (header.querySelector('button')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'status-sort-button';
+    button.textContent = key;
+    button.title = `Sort by ${key}`;
+    button.addEventListener('click', () => {
+      const previous = statusSortPreferences.get(body.id);
+      if (previous?.key === key && previous.direction === -1) {
+        statusSortPreferences.delete(body.id);
+      } else {
+        statusSortPreferences.set(body.id, { key, direction: previous?.key === key ? -1 : 1 });
+      }
+      renderAdminStatus(latestAdminStatus);
+    });
+    header.replaceChildren(button);
+  });
+}
+
 function renderAdminStatus(payload = {}) {
   const canRestartServer = Boolean(adminState.isSuperAdmin && payload.restartSupported);
   const showProductionColumn = payload.multipleProductionsEnabled === true;
@@ -1502,10 +1552,10 @@ function renderAdminStatus(payload = {}) {
     || String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' })
   );
 
-  users.sort(sortByOnlineAndName);
-  feeds.sort(sortByOnlineAndName);
-  bridges.sort(sortByOnlineAndName);
-  companions.sort(sortByOnlineAndName);
+  sortStatusRows(users, statusUsersBody, sortByOnlineAndName);
+  sortStatusRows(feeds, statusFeedsBody, sortByOnlineAndName);
+  sortStatusRows(bridges, statusBridgesBody, sortByOnlineAndName);
+  sortStatusRows(companions, statusCompanionsBody, sortByOnlineAndName);
   syncStopTransmissionButtons(users);
 
   setStatusText('status-summary-users', `${summary.usersOnline || 0} / ${summary.usersTotal || 0}`);
@@ -1543,10 +1593,10 @@ function renderAdminStatus(payload = {}) {
             : '-';
           return `
             <tr>
-              <td>${statusIndicatorHtml({
+              <td><span class="status-with-stop">${statusIndicatorHtml({
                 ...user,
                 talkingLabel: formatStatusTalkTargetLabel(user),
-              })}</td>
+              })}${user.online && user.talking && Number.isFinite(userId) ? `<button type="button" class="status-stop-mic" data-stop-transmission-user-id="${userId}" onclick="stopUserTransmission(${userId}, this)" title="Stop transmission" aria-label="Stop transmission for ${escapeHtml(user.name)}"><img src="/images/mute_mic.png" alt="" /></button>` : ''}</span></td>
               <td>${userNameHtml}</td>
               ${showProductionColumn ? `<td title="${escapeHtml(productionLabel)}">${escapeHtml(productionLabel)}</td>` : ''}
               <td>${escapeHtml(clientLabel)}</td>
@@ -2617,9 +2667,6 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
     const deleteButton = isSuperadmin
       ? ''
       : `<button type="button" class="small danger" onclick="deleteUser(${user.id})" ${deleteAttrs}>Delete</button>`;
-    const stopTransmissionButton = !isSuperadmin && !isGuestProfile
-      ? `<button type="button" class="small warning" data-stop-transmission-user-id="${user.id}" onclick="stopUserTransmission(${user.id}, this)" disabled>Stop transmission</button>`
-      : '';
     const audioSettingsButton = !isSuperadmin && !isGuestProfile
       ? `<button type="button" class="small user-settings-button" onclick='openUserAudioSettings(${user.id}, ${JSON.stringify(user.name)})' aria-label="Audio settings for ${safeName}" title="Audio settings">
           <span>Audio</span>
@@ -2733,7 +2780,6 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
           ${loginQrButton}
           <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
-          ${stopTransmissionButton}
           ${audioSettingsButton}
           ${adminToggle}
           ${deleteButton}
@@ -3068,7 +3114,7 @@ async function loadDefaultClientSettings() {
   const payload = await fetchJSON('/admin/settings/default-client');
   const settings = payload?.settings || {};
   if (defaultClientAudioProfile) defaultClientAudioProfile.value = settings.audioProfile || 'ultra-low';
-  if (defaultClientDimAmount) defaultClientDimAmount.value = String(settings.dimAmountDb ?? -14);
+  if (defaultClientDimAmount) defaultClientDimAmount.value = String(settings.dimAmountDb ?? -15);
   if (defaultClientDimSelf) defaultClientDimSelf.checked = settings.dimFeedsWhileSpeaking === true;
   if (defaultClientDimIncoming) defaultClientDimIncoming.checked = settings.dimWhenAddressed === true;
   if (defaultClientAudioProcessing) defaultClientAudioProcessing.checked = settings.audioAutoProcessing === true;
@@ -3603,14 +3649,15 @@ window.stopUserTransmission = async function (userId, button) {
         ? `✅ Transmission stopped for ${userName}`
         : `ℹ️ ${userName} was no longer transmitting`,
       payload.stopped ? 'success' : 'warning',
-      'user'
+      'status'
     );
   } catch (err) {
     console.error('Error stopping user transmission:', err);
-    showMessage(`❌ ${err.message}`, 'error', 'user');
+    showMessage(`❌ ${err.message}`, 'error', 'status');
   } finally {
     if (button) delete button.dataset.requestPending;
     syncStopTransmissionButtons();
+    if (latestAdminStatus) renderAdminStatus(latestAdminStatus);
   }
 };
 
@@ -4264,7 +4311,7 @@ if (defaultClientSettingsForm) {
     const submitButton = defaultClientSettingsForm.querySelector('button[type="submit"]');
     const settings = {
       audioProfile: defaultClientAudioProfile?.value || 'ultra-low',
-      dimAmountDb: Number(defaultClientDimAmount?.value ?? -14),
+      dimAmountDb: Number(defaultClientDimAmount?.value ?? -15),
       dimFeedsWhileSpeaking: Boolean(defaultClientDimSelf?.checked),
       dimWhenAddressed: Boolean(defaultClientDimIncoming?.checked),
       audioAutoProcessing: Boolean(defaultClientAudioProcessing?.checked),
