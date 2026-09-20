@@ -102,7 +102,35 @@ function resolveBuildVersion(options = {}) {
     ["describe", "--tags", "--match", "v[0-9]*", "--exact-match", "HEAD"],
     { optional: true },
   );
-  const baseTag = exactTag || runGit(["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0", "HEAD"]);
+  let baseTag = exactTag;
+  if (!baseTag) {
+    try {
+      baseTag = runGit(["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0", "HEAD"], {
+        optional: true,
+      });
+    } catch (error) {
+      if (!/No names found/.test(String(error.message || ""))) {
+        throw error;
+      }
+      baseTag = "";
+    }
+  }
+
+  // Forks (and fresh clones) may have no reachable v* tags. Keep producing
+  // packages instead of failing `git describe`.
+  if (!baseTag) {
+    const distance = runGit(["rev-list", "--count", "HEAD"]);
+    const sha = runGit(["rev-parse", "--short=8", "HEAD"]);
+    const dirty = Boolean(runGit(["status", "--porcelain", "--untracked-files=no"]));
+    return createVersionInfo({
+      exactTag: "",
+      baseTag: "v0.0.0",
+      distance,
+      sha,
+      dirty,
+    });
+  }
+
   const distance = runGit(["rev-list", "--count", `${baseTag}..HEAD`]);
   const sha = runGit(["rev-parse", "--short=8", "HEAD"]);
   const dirty = Boolean(runGit(["status", "--porcelain", "--untracked-files=no"]));

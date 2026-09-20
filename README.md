@@ -92,10 +92,12 @@ native Bridge app.
 Git release tags are the single source of truth for every Server, Bridge and
 Docker build. Create a tag such as `v1.2.5` to produce version `1.2.5`; commits
 after the latest tag receive a development version such as `1.2.5-dev.3`.
-Package, Cargo and Tauri manifests intentionally contain only the neutral
-`0.0.0` placeholder and must not be edited for a release. The shared
-`scripts/resolve-build-version.js` resolver supplies the version to local and
-GitHub builds.
+If no `v*` tag is reachable (a fork that has not fetched release tags, for
+example), the resolver falls back to `0.0.0-dev.<commit count>` so local and
+GitHub builds still produce packages. Package, Cargo and Tauri manifests
+intentionally contain only the neutral `0.0.0` placeholder and must not be
+edited for a release. The shared `scripts/resolve-build-version.js` resolver
+supplies the version to local and GitHub builds.
 
 ## Configuration
 
