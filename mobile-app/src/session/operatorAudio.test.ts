@@ -15,7 +15,7 @@ describe('operatorAudio', () => {
     expect(normalizeOperatorAudio(undefined)).toEqual(DEFAULT_OPERATOR_AUDIO);
     expect(DEFAULT_OPERATOR_AUDIO.feedDimSelf).toBe(false);
     expect(DEFAULT_OPERATOR_AUDIO.feedDimIncoming).toBe(true);
-    expect(DEFAULT_OPERATOR_AUDIO.feedDimDb).toBe(-14);
+    expect(DEFAULT_OPERATOR_AUDIO.feedDimDb).toBe(-15);
     expect(DEFAULT_OPERATOR_AUDIO.echoCancellation).toBe(true);
     expect(DEFAULT_OPERATOR_AUDIO.noiseSuppression).toBe(true);
     expect(DEFAULT_OPERATOR_AUDIO.autoGainControl).toBe(true);
@@ -24,11 +24,17 @@ describe('operatorAudio', () => {
   it('maps the dim-amount slider onto the web dB steps', () => {
     expect(dimDbFromSliderPosition(0)).toBe(-6);
     expect(dimDbFromSliderPosition(1)).toBe(-24);
-    expect(dimDbFromSliderPosition(sliderPositionFromDimDb(-14))).toBe(-14);
+    expect(dimDbFromSliderPosition(sliderPositionFromDimDb(-15))).toBe(-15);
   });
 
-  it('ducks at -14 dB like the web client', () => {
-    expect(feedDuckingFactor(-14)).toBeCloseTo(10 ** (-14 / 20), 8);
+  it('ducks at -15 dB like TalkToMe 1.5.5', () => {
+    expect(feedDuckingFactor(-15)).toBeCloseTo(10 ** (-15 / 20), 8);
+  });
+
+  it('migrates stored -14 dB dim to -15 dB', () => {
+    expect(normalizeOperatorAudio({ feedDimDb: -14 }).feedDimDb).toBe(-15);
+    expect(resolveOperatorAudio({}, { dimAmountDb: -14 }).feedDimDb).toBe(-15);
+    expect(resolveOperatorAudio({}, { dimAmountDb: -15 }).feedDimDb).toBe(-15);
   });
 
   it('applies server defaults only where the user has no explicit choice', () => {

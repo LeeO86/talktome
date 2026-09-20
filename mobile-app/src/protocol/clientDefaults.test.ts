@@ -48,5 +48,10 @@ describe('normalizeServerClientDefaults', () => {
 
   it('accepts the same dim steps as the web picker', () => {
     expect(normalizeServerClientDefaults({ dimAmountDb: -24 })).toEqual({ dimAmountDb: -24 });
+    expect(normalizeServerClientDefaults({ dimAmountDb: -15 })).toEqual({ dimAmountDb: -15 });
+  });
+
+  it('migrates TalkToMe 1.5.4 -14 dB to 1.5.5 -15 dB', () => {
+    expect(normalizeServerClientDefaults({ dimAmountDb: -14 })).toEqual({ dimAmountDb: -15 });
   });
 });

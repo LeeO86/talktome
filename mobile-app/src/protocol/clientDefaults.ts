@@ -5,7 +5,9 @@
 export const AUDIO_PROFILES = ['ultra-low', 'low', 'standard'] as const;
 export type AudioProfileName = (typeof AUDIO_PROFILES)[number];
 
-export const DIM_AMOUNT_DB_OPTIONS = [-6, -12, -14, -18, -24] as const;
+/** TalkToMe 1.5.5 replaced -14 dB with -15 dB. Stored -14 still maps to -15. */
+export const DIM_AMOUNT_DB_OPTIONS = [-6, -12, -15, -18, -24] as const;
+export const DEFAULT_DIM_AMOUNT_DB = -15;
 
 export type ServerClientDefaults = {
   audioProfile?: AudioProfileName;
@@ -25,6 +27,10 @@ const BOOLEAN_KEYS = [
   'lockMultipleTargets',
 ] as const;
 
+export function migrateDimAmountDb(value: number): number {
+  return value === -14 ? DEFAULT_DIM_AMOUNT_DB : value;
+}
+
 export function normalizeServerClientDefaults(value: unknown): ServerClientDefaults {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
@@ -34,7 +40,7 @@ export function normalizeServerClientDefaults(value: unknown): ServerClientDefau
   if (AUDIO_PROFILES.includes(raw.audioProfile as AudioProfileName)) {
     normalized.audioProfile = raw.audioProfile as AudioProfileName;
   }
-  const dimAmountDb = Number(raw.dimAmountDb);
+  const dimAmountDb = migrateDimAmountDb(Number(raw.dimAmountDb));
   if (DIM_AMOUNT_DB_OPTIONS.includes(dimAmountDb as (typeof DIM_AMOUNT_DB_OPTIONS)[number])) {
     normalized.dimAmountDb = dimAmountDb;
   }

@@ -1,11 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { ServerClientDefaults } from '../protocol/clientDefaults';
+import {
+  DEFAULT_DIM_AMOUNT_DB,
+  DIM_AMOUNT_DB_OPTIONS,
+  migrateDimAmountDb,
+  type ServerClientDefaults,
+} from '../protocol/clientDefaults';
 
 const KEY = 'talktome.operator-audio';
 
-export const FEED_DIM_DB_OPTIONS = [-6, -12, -14, -18, -24] as const;
-export const DEFAULT_FEED_DIM_DB = -14;
+export const FEED_DIM_DB_OPTIONS = DIM_AMOUNT_DB_OPTIONS;
+export const DEFAULT_FEED_DIM_DB = DEFAULT_DIM_AMOUNT_DB;
 
 export type OperatorAudioSettings = {
   feedDimSelf: boolean;
@@ -94,8 +99,12 @@ export function resolveOperatorAudio(
 }
 
 export function normalizeFeedDimDb(value: number | null | undefined): number {
-  if (typeof value === 'number' && FEED_DIM_DB_OPTIONS.includes(value as (typeof FEED_DIM_DB_OPTIONS)[number])) {
-    return value;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_FEED_DIM_DB;
+  }
+  const migrated = migrateDimAmountDb(value);
+  if (FEED_DIM_DB_OPTIONS.includes(migrated as (typeof FEED_DIM_DB_OPTIONS)[number])) {
+    return migrated;
   }
   return DEFAULT_FEED_DIM_DB;
 }

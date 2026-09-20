@@ -291,8 +291,8 @@ function AudioSettingsPage() {
           <Text style={styles.sliderHint}>{FEED_DIM_DB_OPTIONS[FEED_DIM_DB_OPTIONS.length - 1]}</Text>
         </View>
         <SettingsHint
-          full="Same defaults as the web client: dim when someone calls you, not while you talk, by 14 dB."
-          compact="Dim when called, not while you talk. Default 14 dB."
+          full="Same defaults as the web client: dim when someone calls you, not while you talk, by 15 dB."
+          compact="Dim when called, not while you talk. Default 15 dB."
         />
       </SettingsSection>
 
