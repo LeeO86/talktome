@@ -13,6 +13,10 @@ import ActivityKit
 /// holds `LOCK_EX` for its lifetime; this extension only probes with
 /// `LOCK_EX | LOCK_NB`. Do not claim the lock from the widget — that would
 /// look like the app is alive after a swipe-kill.
+///
+/// Call C `flock` through `sysFlock`. A `Darwin.flock` function call is the
+/// `fcntl` struct, which fails Xcode with "argument passed to call that takes
+/// no arguments".
 enum TalkToMeProcessLiveness {
   static let suiteName = "group.io.github.leeo86.talktome-mobile"
   static let fileName = "talktome.process.alive"
@@ -28,9 +32,9 @@ enum TalkToMeProcessLiveness {
     guard fd >= 0 else {
       return false
     }
-    let acquired = Darwin.flock(fd, LOCK_EX | LOCK_NB) == 0
+    let acquired = sysFlock(fd, LOCK_EX | LOCK_NB) == 0
     if acquired {
-      _ = Darwin.flock(fd, LOCK_UN)
+      _ = sysFlock(fd, LOCK_UN)
     }
     close(fd)
     return !acquired
@@ -43,6 +47,9 @@ enum TalkToMeProcessLiveness {
       .path
   }
 }
+
+@_silgen_name("flock")
+private func sysFlock(_ fd: Int32, _ operation: Int32) -> Int32
 
 enum TalkToMeWidgetPresence {
   static let snapshotKey = "talktome.presence.snapshot"

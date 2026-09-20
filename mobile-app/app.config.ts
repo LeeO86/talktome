@@ -94,6 +94,7 @@ const config: ExpoConfig = {
           'TalkToMe uses the microphone so you can talk to other operators.',
       },
     ],
+    './plugins/withTalkToMeJitsiWebrtc',
     './plugins/withTalkToMeFgs',
     [
       'expo-camera',
