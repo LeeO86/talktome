@@ -126,7 +126,11 @@ desktops:
 - **Remote Control**: the same talk layout as the Talktome web client — destination
   rows with icon, name, volume, mute and hold-to-talk (slide left to lock), a
   reply bar, and conference **Members** for per-person hear/mute and level.
-  Talk is disabled when that user is offline.
+  Talk is disabled when that user is offline. The reply bar follows the last
+  incoming call unless Settings **Main / Reply pin** (`talk.main_target`,
+  `TALKTOME_TALK_MAIN_TARGET`) pins it to a user or conference, matching the
+  web client Main button. A pin that is not in this user’s destinations does
+  not fall back to another target.
 - **Stream Deck**: live rendering of the attached deck; keys, dials and touch
   points can be operated from the browser and behave like the hardware.
 - **Settings**: every configuration value as a form (audio devices are listed
@@ -358,8 +362,9 @@ send `volume-step` with `delta_db` (default `streamdeck.volume_step_db`).
 | `member-volume-step` | `target`, `member`, `delta_db` | `ack` |
 
 Errors are `{ "op": "error", "error": "…" }`. A snapshot includes string
-keys, `volume_db` per target/member, tally (`on_air` / `preview`), and the
-current reply target.
+keys, `volume_db` per target/member, tally (`on_air` / `preview`), the
+current reply destination, and `main_target` / `main_unavailable` when
+Reply is pinned.
 
 Packaged example (also in the source tree):
 

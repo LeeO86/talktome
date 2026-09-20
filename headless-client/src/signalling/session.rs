@@ -140,6 +140,15 @@ impl Session {
         let profile = config.audio.profile;
         let encoder = OpusEncoder::new(profile.frame_ms(), profile.bitrate(), profile.fec())?;
         let mut talk = TalkModel::new(config.talk.tap_ms, config.talk.lock_multiple);
+        talk.set_main_target(
+            config
+                .talk
+                .main_target
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .and_then(TargetKey::parse),
+        );
         let vox = if config.vox.enabled {
             talk.set_vox_target(config.vox.target.as_deref().and_then(TargetKey::parse));
             Some(LevelTrigger::new(
@@ -999,6 +1008,7 @@ impl Session {
                     self.send_talk_change(connected, &change, "user-offline")
                         .await;
                 }
+                self.refresh_main_availability();
                 self.snapshot_dirty = true;
             }
             "cut-camera" => {
@@ -1350,7 +1360,7 @@ impl Session {
 
     fn known_target(&self, target: TargetRef) -> bool {
         match target {
-            TargetRef::Reply => self.talk.reply_target().is_some(),
+            TargetRef::Reply => self.talk.effective_reply().is_some(),
             TargetRef::Key(key) => self.targets.iter().any(|t| t.key == key),
         }
     }
@@ -1358,7 +1368,7 @@ impl Session {
     fn target_is_talkable(&self, target: TargetRef) -> bool {
         let Some(key) = (match target {
             TargetRef::Key(key) => Some(key),
-            TargetRef::Reply => self.talk.reply_target(),
+            TargetRef::Reply => self.talk.effective_reply(),
         }) else {
             return false;
         };
@@ -1367,6 +1377,15 @@ impl Session {
             TargetKey::Conference(_) => true,
             TargetKey::Feed(_) => false,
         }
+    }
+
+    fn refresh_main_availability(&mut self) {
+        let available = self.talk.main_target().is_some_and(|key| {
+            self.targets
+                .iter()
+                .any(|target| target.key == key && target.can_talk)
+        });
+        self.talk.set_main_available(available);
     }
 
     async fn refresh_media_stats(&mut self, connected: &Connected) {
@@ -1575,6 +1594,7 @@ impl Session {
         }
         tracing::info!(event = "targets-loaded", count = targets.len());
         self.targets = targets;
+        self.refresh_main_availability();
         if let Ok(mut mixer) = self.io.mixer.lock() {
             for target in &self.targets {
                 mixer.set_level(target.key, self.audio.level(target.key));
@@ -1685,7 +1705,7 @@ impl Session {
                 }
             })
             .collect();
-        let reply_target = self.talk.reply_target();
+        let reply_target = self.talk.effective_reply();
         let reply_name = reply_target.and_then(|key| {
             self.targets
                 .iter()
@@ -1722,6 +1742,8 @@ impl Session {
             targets,
             reply_target,
             reply_name,
+            main_target: self.talk.main_target(),
+            main_unavailable: self.talk.main_unavailable(),
             incoming: self.incoming.clone(),
             input_level_db: self.input_level_db,
             media,

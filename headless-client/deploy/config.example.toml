@@ -50,7 +50,7 @@ auto_processing = false
 input_gain_db = 0
 # Optional AEC delay override (0–500 ms). Empty = estimate from callback periods.
 # stream_delay_ms = 40
-dim_db = -14
+dim_db = -15
 dim_feeds_while_speaking = false
 dim_when_addressed = true
 jitter_min_ms = 20
@@ -69,6 +69,9 @@ hang_ms = 600
 # A press shorter than this toggles the talk lock instead of talking.
 tap_ms = 250
 lock_multiple = false
+# Pin Reply / Main to a user or conference (`user:4`, `conference:1`).
+# Empty = last incoming reply. A missing pin does not fall back.
+# main_target = "conference:1"
 
 [ice]
 # Normally left empty: STUN/TURN servers and the policy come from the server.

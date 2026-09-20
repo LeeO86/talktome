@@ -604,6 +604,8 @@ pub fn snapshot_frame(snapshot: &Snapshot) -> Value {
             "key": key.to_string(),
             "name": snapshot.reply_name,
         })),
+        "main_target": snapshot.main_target.map(|key| key.to_string()),
+        "main_unavailable": snapshot.main_unavailable,
         "targets": snapshot.targets.iter().map(|target| {
             json!({
                 "key": target.key.to_string(),
@@ -787,11 +789,14 @@ mod tests {
         });
         snapshot.reply_target = Some(TargetKey::Conference(2));
         snapshot.reply_name = Some("News".into());
+        snapshot.main_target = Some(TargetKey::Conference(2));
         let frame = snapshot_frame(&snapshot);
         assert_eq!(frame["op"], "snapshot");
         assert_eq!(frame["targets"][0]["key"], "conference:2");
         assert_eq!(frame["targets"][0]["kind"], "conference");
         assert_eq!(frame["reply"]["key"], "conference:2");
+        assert_eq!(frame["main_target"], "conference:2");
+        assert_eq!(frame["main_unavailable"], false);
         assert!(frame["targets"][0]["volume_db"].as_f64().is_some());
     }
 

@@ -2655,7 +2655,6 @@ async function reconcileManagedBridgeConfig(config) {
 
 async function refreshManagedInventoryOnly() {
   if (!invoke) return;
-  await suppressWindowFocusHide(250);
   const inventory = await withTimeout(
     invoke("list_audio_devices"),
     AUDIO_INVENTORY_TIMEOUT_MS,
@@ -2798,7 +2797,6 @@ async function watchManagedInventory() {
       const inventory = await refreshManagedInventoryOnly();
       const nextInventorySignature = inventorySignature(inventory);
       if (nextInventorySignature && nextInventorySignature !== lastAnnouncedInventorySignature) {
-        await suppressWindowFocusHide(900);
         await announceBridge({ quiet: true, syncConfig: false });
       }
     }
@@ -3023,7 +3021,6 @@ async function announceBridge({ quiet = false, syncConfig = true } = {}) {
       if (!currentInventory) {
         throw new Error("Audio devices are not ready yet.");
       }
-      await suppressWindowFocusHide(250);
       return invoke("announce_bridge", {
         serverUrl,
         apiKey: authToken,
@@ -3576,7 +3573,6 @@ async function refreshDevices() {
     refreshButton.textContent = "Refreshing";
   }
   try {
-    await suppressWindowFocusHide(250);
     // Inventory probes each backend with a native timeout first. Status checks
     // run afterwards so a quarantined backend cannot block the other results.
     const inventoryResult = await Promise.allSettled([

@@ -77,6 +77,7 @@ pub async fn get_config(State(state): State<Shared>) -> Response {
     let file_document = path
         .and_then(|p| config::read_document(p).ok())
         .map(|mut doc| {
+            config::migrate_document(&mut doc);
             redact(&mut doc);
             doc
         });
@@ -192,6 +193,7 @@ pub fn save_document(
             }
         }
     }
+    config::migrate_document(&mut document);
     let config = config::from_document(document.clone())?;
     config.validate()?;
     config::write_document(path, &document)

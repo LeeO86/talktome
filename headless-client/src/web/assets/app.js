@@ -432,6 +432,7 @@
     try {
       renderStatus(status);
       renderRemote(status.snapshot);
+      refreshSettingsTargetSelects();
     } catch (error) {
       console.error(error);
     }
@@ -860,10 +861,22 @@
         state.locks.has('reply') ||
         (replyTarget && (replyTarget.held || replyTarget.locked || (replyKey && state.locks.has(replyKey))))
     );
-    button.disabled = !snap.reply_target;
+    const pinned = Boolean(snap.main_target);
+    const unavailable = Boolean(snap.main_unavailable);
+    const userOffline = Boolean(replyTarget && targetKind(replyKey) === 'user' && !replyTarget.online);
+    button.disabled = unavailable || !snap.reply_target || userOffline;
     button.classList.toggle('active', active);
-    button.dataset.label = snap.reply_name ? `🔊 ${snap.reply_name}` : '🔊 REPLY';
-    button.setAttribute('aria-label', snap.reply_name ? `Reply ${snap.reply_name}` : 'Reply');
+    if (unavailable) {
+      button.dataset.label = 'Unavailable target';
+      button.setAttribute('aria-label', 'Unavailable target');
+    } else if (pinned) {
+      const name = snap.reply_name || (replyTarget && replyTarget.name) || '';
+      button.dataset.label = name || 'Unavailable target';
+      button.setAttribute('aria-label', name ? `Talk to ${name}` : 'Unavailable target');
+    } else {
+      button.dataset.label = snap.reply_name ? `🔊 ${snap.reply_name}` : '🔊 REPLY';
+      button.setAttribute('aria-label', snap.reply_name ? `Reply ${snap.reply_name}` : 'Reply');
+    }
   }
 
   function bindReply() {
@@ -1261,6 +1274,7 @@
     locked: 'locked',
   };
 
+  const DIM_AMOUNT_DB_OPTIONS = [-6, -12, -15, -18, -24];
   const SECTIONS = [
     {
       key: 'general',
@@ -1310,7 +1324,7 @@
         { path: 'audio.input_gain_db', label: 'Input gain (dB)', type: 'number', step: 0.5, min: -30, max: 40, help: 'Ignored while auto processing is on (AGC runs instead).' },
         { path: 'audio.stream_delay_ms', label: 'AEC stream delay (ms)', type: 'number', min: 0, max: 500, nullable: true, help: 'Empty: estimate from capture + playback period. Set if echo remains.' },
         { path: 'audio.default_volume_db', label: 'Default target volume (dB)', type: 'number', step: 0.5, min: -60, max: 0, nullable: true, help: '0 dB is unity. Overrides the legacy 0–1 default_volume value.' },
-        { path: 'audio.dim_db', label: 'Dim amount (dB)', type: 'number', step: 1 },
+        { path: 'audio.dim_db', label: 'Dim amount (dB)', type: 'select', numeric: true, options: DIM_AMOUNT_DB_OPTIONS.map((db) => [String(db), `${db} dB`]), help: 'Same list as the web client. Stored −14 dB is migrated to −15 dB.' },
         { path: 'audio.dim_feeds_while_speaking', label: 'Dim feeds while speaking', type: 'bool' },
         { path: 'audio.dim_when_addressed', label: 'Dim feeds when addressed', type: 'bool' },
         { path: 'audio.jitter_min_ms', label: 'Jitter buffer minimum (ms)', type: 'number' },
@@ -1325,6 +1339,7 @@
       fields: [
         { path: 'talk.tap_ms', label: 'Tap threshold (ms)', type: 'number', help: 'A shorter press toggles the talk lock' },
         { path: 'talk.lock_multiple', label: 'Allow several locks at once', type: 'bool' },
+        { path: 'talk.main_target', label: 'Main / Reply pin', type: 'target', nullable: true, kinds: ['user', 'conference'], emptyLabel: 'Reply (last incoming)', help: 'Empty: Reply follows the last incoming call. A pin that is not in this user’s destinations does not fall back to another target. Same as the web client Main button. Restart to apply.' },
         { path: 'vox.enabled', label: 'Voice trigger (VOX)', type: 'bool' },
         { path: 'vox.target', label: 'VOX target', type: 'target', nullable: true, help: 'Conference or user the VOX talks to' },
         { path: 'vox.threshold_db', label: 'VOX threshold (dBFS)', type: 'number' },
@@ -1533,6 +1548,7 @@
       const legacy = Number(getPath(doc, 'streamdeck.volume_step'));
       value = Number.isFinite(legacy) && legacy > 1 ? legacy : 3;
     }
+    if (field.path === 'audio.dim_db' && Number(value) === -14) value = -15;
     const wrapper = el('label', { class: `field${field.wide ? ' wide' : ''}`, dataset: { path: field.path } });
     if (field.type === 'bool') {
       wrapper.className = `field-check${field.wide ? ' wide' : ''}`;
@@ -1544,12 +1560,30 @@
     wrapper.append(el('span', { text: field.label }));
     let input;
     if (field.type === 'select' || field.type === 'target') {
-      input = el('select', { dataset: { path: field.path, type: 'select', nullable: field.nullable ? '1' : '' }, autocomplete: 'off' });
-      const options = field.type === 'target' ? targetSelectOptions(value, { allowEmpty: field.nullable }) : field.options;
+      const kinds = (field.kinds || []).join(',');
+      input = el('select', {
+        dataset: {
+          path: field.path,
+          type: 'select',
+          nullable: field.nullable ? '1' : '',
+          numeric: field.numeric ? '1' : '',
+          kinds,
+          emptyLabel: field.emptyLabel || '',
+        },
+        autocomplete: 'off',
+      });
+      let options =
+        field.type === 'target'
+          ? targetSelectOptions(value, { allowEmpty: field.nullable, kinds: field.kinds, emptyLabel: field.emptyLabel })
+          : (field.options || []).map((option) => option.slice());
+      const current = value == null ? '' : String(value);
+      if (field.type === 'select' && current && !options.some((option) => String(option[0]) === current)) {
+        options = options.concat([[current, field.numeric ? `Custom (${current} dB)` : current]]);
+      }
       for (const [optionValue, label] of options) {
         input.append(el('option', { value: optionValue, text: label }));
       }
-      input.value = value == null ? '' : String(value);
+      input.value = current;
     } else if (field.type === 'device') {
       const listId = `devices-${field.path.replace(/\W/g, '-')}`;
       input = el('input', { type: 'text', list: listId, placeholder: 'default device', dataset: { path: field.path, type: 'text', nullable: '1' }, autocomplete: 'off' });
@@ -1585,10 +1619,10 @@
     return wrapper;
   }
 
-  function targetSelectOptions(current, { allowEmpty = true, kinds = null } = {}) {
+  function targetSelectOptions(current, { allowEmpty = true, kinds = null, emptyLabel = '—' } = {}) {
     const options = [];
     const seen = new Set();
-    if (allowEmpty) options.push(['', '—']);
+    if (allowEmpty) options.push(['', emptyLabel || '—']);
     const targets = (state.status && state.status.snapshot && state.status.snapshot.targets) || [];
     for (const target of targets) {
       const key = targetKey(target.key);
@@ -1607,6 +1641,19 @@
       select.append(el('option', { value: optionValue, text: label }));
     }
     select.value = value;
+  }
+
+  function refreshSettingsTargetSelects() {
+    for (const select of $$('#settings-form select[data-path]')) {
+      const path = select.dataset.path;
+      if (path !== 'vox.target' && path !== 'talk.main_target' && path !== 'streamdeck.pedal_left' && path !== 'streamdeck.pedal_target') continue;
+      const kinds = (select.dataset.kinds || '').split(',').filter(Boolean);
+      fillTargetSelect(select, select.value, {
+        allowEmpty: select.dataset.nullable === '1',
+        kinds: kinds.length ? kinds : null,
+        emptyLabel: select.dataset.emptyLabel || (path === 'talk.main_target' ? 'Reply (last incoming)' : '—'),
+      });
+    }
   }
 
   function renderGpioOutputs(doc) {
@@ -1750,7 +1797,11 @@
           }
         }
       } else if (type === 'select') {
-        value = input.value === '' && nullable ? null : input.value;
+        if (input.value === '' && nullable) value = null;
+        else if (input.dataset.numeric === '1') {
+          value = Number(input.value);
+          if (Number.isNaN(value)) throw new Error(`${path}: not a number`);
+        } else value = input.value;
       } else {
         const text = input.value;
         value = text.trim() === '' && nullable ? null : text;
