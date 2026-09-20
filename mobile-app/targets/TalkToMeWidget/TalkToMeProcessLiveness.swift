@@ -8,15 +8,14 @@ import ActivityKit
 
 /// Widget-side copy of the App Group process lock.
 ///
-/// Keep the file name and flock protocol in sync with
+/// Keep the file name and fcntl F_SETLK protocol in sync with
 /// `modules/session-presence/ios/TalkToMeProcessLiveness.swift`. The main app
-/// holds `LOCK_EX` for its lifetime; this extension only probes with
-/// `LOCK_EX | LOCK_NB`. Do not claim the lock from the widget — that would
-/// look like the app is alive after a swipe-kill.
+/// holds `F_SETLKW` for its lifetime; this extension only probes with
+/// `F_SETLK`. Do not claim the lock from the widget — that would look like
+/// the app is alive after a swipe-kill.
 ///
-/// Call C `flock` through `sysFlock`. A `Darwin.flock` function call is the
-/// `fcntl` struct, which fails Xcode with "argument passed to call that takes
-/// no arguments".
+/// `import Darwin` also imports the `fcntl` `flock` struct, so never call
+/// the Darwin flock function.
 enum TalkToMeProcessLiveness {
   static let suiteName = "group.io.github.leeo86.talktome-mobile"
   static let fileName = "talktome.process.alive"
@@ -24,17 +23,31 @@ enum TalkToMeProcessLiveness {
   static let connectedRecheckInterval: TimeInterval = 20
 
   /// True while the main app still holds the lock (foreground, background, or suspended).
+  ///
+  /// A lock-screen Live Activity must not treat "cannot open the file" as death.
+  /// That happens when data protection blocks the extension while the device is
+  /// locked, and it was painting "Not connected" over a live session.
   static func appProcessIsAlive() -> Bool {
     guard let path = lockPath() else {
       return true
     }
-    let fd = open(path, O_RDWR)
-    guard fd >= 0 else {
+    if !FileManager.default.fileExists(atPath: path) {
       return false
     }
-    let acquired = sysFlock(fd, LOCK_EX | LOCK_NB) == 0
+    let fd = open(path, O_RDWR)
+    if fd < 0 {
+      let err = errno
+      if err == ENOENT {
+        return false
+      }
+      if err == EACCES || err == EPERM {
+        return true
+      }
+      return true
+    }
+    let acquired = setExclusiveLock(fd: fd, wait: false)
     if acquired {
-      _ = sysFlock(fd, LOCK_UN)
+      unlock(fd: fd)
     }
     close(fd)
     return !acquired
@@ -46,10 +59,32 @@ enum TalkToMeProcessLiveness {
       .appendingPathComponent(fileName)
       .path
   }
-}
 
-@_silgen_name("flock")
-private func sysFlock(_ fd: Int32, _ operation: Int32) -> Int32
+  private static func setExclusiveLock(fd: Int32, wait: Bool) -> Bool {
+    var spec = flock()
+    spec.l_start = 0
+    spec.l_len = 0
+    spec.l_pid = 0
+    spec.l_type = Int16(F_WRLCK)
+    spec.l_whence = Int16(SEEK_SET)
+    let cmd = wait ? F_SETLKW : F_SETLK
+    return withUnsafeMutablePointer(to: &spec) { pointer in
+      fcntl(fd, cmd, pointer) == 0
+    }
+  }
+
+  private static func unlock(fd: Int32) {
+    var spec = flock()
+    spec.l_start = 0
+    spec.l_len = 0
+    spec.l_pid = 0
+    spec.l_type = Int16(F_UNLCK)
+    spec.l_whence = Int16(SEEK_SET)
+    _ = withUnsafeMutablePointer(to: &spec) { pointer in
+      fcntl(fd, F_SETLK, pointer)
+    }
+  }
+}
 
 enum TalkToMeWidgetPresence {
   static let snapshotKey = "talktome.presence.snapshot"
@@ -83,27 +118,6 @@ enum TalkToMeWidgetPresence {
     return Timeline(entries: [entry], policy: .atEnd)
   }
 
-  static func resolvedLiveActivityState(
-    _ state: TalkToMePresenceAttributes.ContentState
-  ) -> TalkToMePresenceAttributes.ContentState {
-    if state.connected && !TalkToMeProcessLiveness.appProcessIsAlive() {
-      persistDisconnected()
-      return disconnectedLiveActivityState
-    }
-    return state
-  }
-
-  static var disconnectedLiveActivityState: TalkToMePresenceAttributes.ContentState {
-    TalkToMePresenceAttributes.ContentState(
-      connected: false,
-      title: "talktome",
-      detail: "Not connected",
-      audioActive: false,
-      talking: false,
-      listening: false
-    )
-  }
-
   private static func persistDisconnected() {
     writeSnapshot(
       Snapshot(
@@ -121,10 +135,20 @@ enum TalkToMeWidgetPresence {
   private static func endOrphanedLiveActivities() {
     #if canImport(ActivityKit)
     if #available(iOS 16.2, *) {
-      for activity in Activity<TalkToMePresenceAttributes>.activities {
-        Task { @MainActor in
+      let activities = Array(Activity<TalkToMePresenceAttributes>.activities)
+      guard !activities.isEmpty else {
+        return
+      }
+      let done = TalkToMeWaitFlag()
+      Task { @MainActor in
+        for activity in activities {
           await activity.end(nil, dismissalPolicy: .immediate)
         }
+        done.set()
+      }
+      let deadline = Date().addingTimeInterval(0.8)
+      while !done.isSet && Date() < deadline {
+        RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.02))
       }
     }
     #endif
@@ -190,5 +214,23 @@ enum TalkToMeWidgetPresence {
       talking = try container.decodeIfPresent(Bool.self, forKey: .talking) ?? false
       listening = try container.decodeIfPresent(Bool.self, forKey: .listening) ?? false
     }
+  }
+}
+
+/// WidgetKit/ActivityKit `end` is async; swipe-kill must actually wait for it.
+private final class TalkToMeWaitFlag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = false
+
+  func set() {
+    lock.lock()
+    value = true
+    lock.unlock()
+  }
+
+  var isSet: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
   }
 }

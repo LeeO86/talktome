@@ -3,17 +3,13 @@ import Foundation
 
 /// Process-lifetime lock in the App Group container.
 ///
-/// BSD `flock` is released on SIGKILL, including swipe-away of a suspended app
-/// (JS `disconnect()` and often `willTerminate` never run). The widget
-/// extension (`targets/TalkToMeWidget/TalkToMeProcessLiveness.swift`) tries
-/// the same lock non-blocking: if it can take it, the app process is gone
-/// and connected leftovers should not stay on screen.
-/// A suspended or backgrounded app keeps the lock — lock-screen session
-/// must remain connected until the process actually dies.
+/// The widget extension (`targets/TalkToMeWidget/TalkToMeProcessLiveness.swift`)
+/// probes the same file. Keep this protocol in sync with that copy.
 ///
-/// Call C `flock` through `sysFlock`. `import Darwin` also imports the
-/// `fcntl` `flock` struct, so a `Darwin.flock` function call is a Swift
-/// compile error (struct initializer, not the C function).
+/// Use POSIX `fcntl` `F_SETLKW` with the Darwin `flock` struct (that struct is
+/// why calling Darwin flock as a function does not compile). The lock file is created with
+/// `FileProtectionType.none` so a lock-screen Live Activity can open it.
+/// SIGKILL still drops the lock. Never call the Darwin flock function.
 enum TalkToMeProcessLiveness {
   static let suiteName = TalkToMePresenceStore.suiteName
   static let fileName = TalkToMePresenceStore.processAliveFileName
@@ -28,11 +24,12 @@ enum TalkToMeProcessLiveness {
     guard heldFd < 0, let path = lockPath() else {
       return
     }
+    prepareLockFile(at: path)
     let fd = open(path, O_RDWR | O_CREAT, 0o664)
     guard fd >= 0 else {
       return
     }
-    if sysFlock(fd, LOCK_EX) == 0 {
+    if setExclusiveLock(fd: fd, wait: true) {
       heldFd = fd
     } else {
       close(fd)
@@ -45,7 +42,28 @@ enum TalkToMeProcessLiveness {
       .appendingPathComponent(fileName)
       .path
   }
-}
 
-@_silgen_name("flock")
-private func sysFlock(_ fd: Int32, _ operation: Int32) -> Int32
+  private static func prepareLockFile(at path: String) {
+    let attrs: [FileAttributeKey: Any] = [
+      .protectionKey: FileProtectionType.none,
+    ]
+    if !FileManager.default.fileExists(atPath: path) {
+      FileManager.default.createFile(atPath: path, contents: Data(), attributes: attrs)
+    } else {
+      try? FileManager.default.setAttributes(attrs, ofItemAtPath: path)
+    }
+  }
+
+  private static func setExclusiveLock(fd: Int32, wait: Bool) -> Bool {
+    var spec = flock()
+    spec.l_start = 0
+    spec.l_len = 0
+    spec.l_pid = 0
+    spec.l_type = Int16(F_WRLCK)
+    spec.l_whence = Int16(SEEK_SET)
+    let cmd = wait ? F_SETLKW : F_SETLK
+    return withUnsafeMutablePointer(to: &spec) { pointer in
+      fcntl(fd, cmd, pointer) == 0
+    }
+  }
+}

@@ -33,7 +33,7 @@ final class TalkToMeLiveActivityController {
       listening: state.listening
     )
     if !state.connected {
-      Self.endAllDetached()
+      Self.endAllAndWait()
       return
     }
     Task { @MainActor in
@@ -44,6 +44,30 @@ final class TalkToMeLiveActivityController {
   static func endAllDetached() {
     Task { @MainActor in
       await endAll()
+    }
+  }
+
+  /// `willTerminate` and module-create used to fire `Task { end }` and return.
+  /// The process then died before ActivityKit dismissed the Dynamic Island.
+  static func endAllAndWait(timeout: TimeInterval = 1.8) {
+    let existing = Array(Activity<TalkToMePresenceAttributes>.activities)
+    guard !existing.isEmpty else {
+      return
+    }
+    let done = TalkToMeWaitFlag()
+    Task { @MainActor in
+      await endAll()
+      done.set()
+    }
+    let deadline = Date().addingTimeInterval(timeout)
+    if Thread.isMainThread {
+      while !done.isSet && Date() < deadline {
+        RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.02))
+      }
+    } else {
+      while !done.isSet && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.02)
+      }
     }
   }
 
@@ -75,6 +99,23 @@ final class TalkToMeLiveActivityController {
     } catch {
       log.error("Live Activity request failed: \(error.localizedDescription, privacy: .public)")
     }
+  }
+}
+
+private final class TalkToMeWaitFlag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = false
+
+  func set() {
+    lock.lock()
+    value = true
+    lock.unlock()
+  }
+
+  var isSet: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
   }
 }
 #endif

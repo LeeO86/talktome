@@ -1,10 +1,15 @@
 import { useEffect } from 'react';
-import { ActivityIndicator, Linking, SafeAreaView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, SafeAreaView, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 import { session, useSessionStore } from './src/session/store';
-import { cameraTallyColor, TALLY_FRAME_WIDTH } from './src/protocol';
+import {
+  cameraTallyColor,
+  TALLY_FRAME_OVERHANG,
+  tallyFrameStrokeRadius,
+  tallyFrameStrokeWidth,
+} from './src/protocol';
 import { androidSafeArea } from './src/ui/androidSafeArea';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { OperatorScreen } from './src/ui/OperatorScreen';
@@ -71,14 +76,32 @@ export default function App() {
         <StatusBar style="light" />
         {body}
       </SafeAreaView>
-      {identity && operatorReady && tallyColor ? (
-        <View
-          pointerEvents="none"
-          accessible={false}
-          importantForAccessibility="no-hide-descendants"
-          style={[styles.tallyFrame, { borderColor: tallyColor, borderWidth: TALLY_FRAME_WIDTH }]}
-        />
-      ) : null}
+      {identity && operatorReady && tallyColor ? <TallyScreenFrame color={tallyColor} /> : null}
+    </View>
+  );
+}
+
+/**
+ * One bordered view, no assets. The inner cut is the same curve as a plain
+ * 16px / radius-28 border. The view hangs past every screen edge and the container
+ * clips it, so its rounded outer corner is never visible: the outer edge is square
+ * and painted to the corner of a theoretical square screen.
+ */
+function TallyScreenFrame({ color }: { color: string }) {
+  return (
+    <View
+      pointerEvents="none"
+      accessible={false}
+      importantForAccessibility="no-hide-descendants"
+      style={styles.tallyFrame}
+    >
+      <View
+        style={[
+          styles.tallyStroke,
+          { borderColor: color },
+          Platform.OS === 'ios' ? styles.tallyStrokeContinuous : null,
+        ]}
+      />
     </View>
   );
 }
@@ -95,5 +118,18 @@ const styles = StyleSheet.create({
   tallyFrame: {
     ...StyleSheet.absoluteFill,
     zIndex: 40,
+    overflow: 'hidden',
+  },
+  tallyStroke: {
+    position: 'absolute',
+    top: -TALLY_FRAME_OVERHANG,
+    left: -TALLY_FRAME_OVERHANG,
+    right: -TALLY_FRAME_OVERHANG,
+    bottom: -TALLY_FRAME_OVERHANG,
+    borderWidth: tallyFrameStrokeWidth(),
+    borderRadius: tallyFrameStrokeRadius(),
+  },
+  tallyStrokeContinuous: {
+    borderCurve: 'continuous',
   },
 });

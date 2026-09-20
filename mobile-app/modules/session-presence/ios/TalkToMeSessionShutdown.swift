@@ -13,15 +13,21 @@ import ActivityKit
 enum TalkToMeSessionShutdown {
   static func clearLockScreenSurfaces() {
     TalkToMePresenceStore.writeDisconnected()
-    #if canImport(ActivityKit)
-    if #available(iOS 16.2, *) {
-      TalkToMeLiveActivityController.endAllDetached()
-    }
-    #endif
+    endLeftoverLiveActivities()
     if #available(iOS 14.0, *) {
       WidgetCenter.shared.reloadAllTimelines()
     }
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+  }
+
+  /// Wait for ActivityKit to dismiss the Dynamic Island. A detached `Task`
+  /// is killed with the process and leaves the island on screen.
+  static func endLeftoverLiveActivities() {
+    #if canImport(ActivityKit)
+    if #available(iOS 16.2, *) {
+      TalkToMeLiveActivityController.endAllAndWait()
+    }
+    #endif
   }
 
   static func postWillTerminate() {

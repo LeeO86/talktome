@@ -12,7 +12,7 @@ struct TalkToMePresenceState: Codable, Hashable {
 enum TalkToMePresenceStore {
   static let suiteName = "group.io.github.leeo86.talktome-mobile"
   static let snapshotKey = "talktome.presence.snapshot"
-  /// Exclusive flock held by the main app; widget probes this after swipe-kill.
+  /// Exclusive fcntl write lock held by the main app; widget probes this after swipe-kill.
   static let processAliveFileName = "talktome.process.alive"
   static let talkNotification = "io.github.leeo86.talktome.talk" as CFString
   static let disconnectNotification = "io.github.leeo86.talktome.disconnect" as CFString

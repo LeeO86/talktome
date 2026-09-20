@@ -6,10 +6,13 @@
  * native code has to drop those surfaces. AppState `background` is a live
  * session (lock screen card is supposed to stay) and must not disconnect.
  *
- * iOS: the main process holds an App Group flock. The home widget / Live
- * Activity UI recheck it on `IOS_WIDGET_LIVENESS_RECHECK_SECONDS`. SIGKILL
- * releases the lock so those surfaces leave connected mode without a JS
- * disconnect. Suspended / locked still holds the lock.
+ * iOS: the main process holds an App Group `fcntl` write lock. The home widget
+ * rechecks it on `IOS_WIDGET_LIVENESS_RECHECK_SECONDS`. SIGKILL releases the
+ * lock so the widget can drop connected leftovers without a JS disconnect.
+ * Live Activity / Dynamic Island show ActivityKit state while the process
+ * lives (including lock screen) and are ended with `.immediate` from native
+ * `willTerminate` — they are not restyled to "Not connected" by a view tick.
+ * Suspended / locked still holds the lock.
  */
 export const IOS_WIDGET_LIVENESS_RECHECK_SECONDS = 20;
 

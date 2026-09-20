@@ -22,12 +22,14 @@ struct TalkToMePresenceAttributes: ActivityAttributes {
 struct TalkToMeLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: TalkToMePresenceAttributes.self) { context in
-      TalkToMeResolvedPresence(state: context.state) { state in
-        TalkToMeLockScreenView(state: state)
-          .padding()
-      }
-      .activityBackgroundTint(Color.black.opacity(0.82))
-      .activitySystemActionForegroundColor(.white)
+      // Paint ActivityKit state as-is. A TimelineView liveness overlay was
+      // rewriting this to "Not connected" on the lock screen while the app
+      // was still alive (file protection / probe false-dead). Swipe-kill
+      // dismisses the island from the app process via Activity.end(.immediate).
+      TalkToMeLockScreenView(state: context.state)
+        .padding()
+        .activityBackgroundTint(Color.black.opacity(0.82))
+        .activitySystemActionForegroundColor(.white)
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
@@ -39,69 +41,38 @@ struct TalkToMeLiveActivity: Widget {
           }
         }
         DynamicIslandExpandedRegion(.center) {
-          TalkToMeResolvedPresence(state: context.state) { state in
-            VStack(alignment: .leading, spacing: 2) {
-              ForEach(presenceLines(state.title), id: \.self) { line in
-                Text(line)
-                  .font(.headline)
-                  .foregroundStyle(isOutgoingTalkLine(line) ? talkGreen : .white)
-                  .minimumScaleFactor(0.8)
-              }
-              Text(state.detail)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+          VStack(alignment: .leading, spacing: 2) {
+            ForEach(presenceLines(context.state.title), id: \.self) { line in
+              Text(line)
+                .font(.headline)
+                .foregroundStyle(isOutgoingTalkLine(line) ? talkGreen : .white)
                 .minimumScaleFactor(0.8)
             }
+            Text(context.state.detail)
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+              .minimumScaleFactor(0.8)
           }
         }
         DynamicIslandExpandedRegion(.trailing) {
-          TalkToMeResolvedPresence(state: context.state) { state in
-            AudioAnalyzer(talking: state.talking, listening: state.listening)
-          }
+          AudioAnalyzer(talking: context.state.talking, listening: context.state.listening)
         }
         DynamicIslandExpandedRegion(.bottom) {
-          TalkToMeResolvedPresence(state: context.state) { state in
-            if state.connected, #available(iOS 17.0, *) {
-              TalkToMeSessionActions(talking: state.talking)
-            }
+          if context.state.connected, #available(iOS 17.0, *) {
+            TalkToMeSessionActions(talking: context.state.talking)
           }
         }
       } compactLeading: {
         TalkToMeMark(size: 22)
       } compactTrailing: {
-        TalkToMeResolvedPresence(state: context.state) { state in
-          AudioAnalyzer(talking: state.talking, listening: state.listening, compact: true)
-        }
+        AudioAnalyzer(talking: context.state.talking, listening: context.state.listening, compact: true)
       } minimal: {
-        TalkToMeResolvedPresence(state: context.state) { state in
-          if state.talking || state.listening {
-            AudioAnalyzer(talking: state.talking, listening: state.listening, compact: true)
-          } else {
-            TalkToMeMark(size: 18)
-          }
+        if context.state.talking || context.state.listening {
+          AudioAnalyzer(talking: context.state.talking, listening: context.state.listening, compact: true)
+        } else {
+          TalkToMeMark(size: 18)
         }
       }
-    }
-  }
-}
-
-/// Live Activity / Dynamic Island views do not use WidgetKit timelines.
-/// Tick often enough to notice swipe-kill without treating lock-screen idle as disconnect.
-struct TalkToMeResolvedPresence<Content: View>: View {
-  let state: TalkToMePresenceAttributes.ContentState
-  let content: (TalkToMePresenceAttributes.ContentState) -> Content
-
-  init(
-    state: TalkToMePresenceAttributes.ContentState,
-    @ViewBuilder content: @escaping (TalkToMePresenceAttributes.ContentState) -> Content
-  ) {
-    self.state = state
-    self.content = content
-  }
-
-  var body: some View {
-    TimelineView(.periodic(from: .now, by: TalkToMeProcessLiveness.connectedRecheckInterval)) { _ in
-      content(TalkToMeWidgetPresence.resolvedLiveActivityState(state))
     }
   }
 }

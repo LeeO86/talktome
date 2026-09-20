@@ -16,10 +16,12 @@ public final class TalkToMePresenceModule: Module {
     OnCreate {
       self.observeShortcuts()
       self.observeWillTerminate()
-      // Swipe-kill of a suspended app never runs JS disconnect. Drop leftover
-      // Live Activities / widget state from the previous process before JS hydrates.
-      TalkToMeSessionShutdown.clearLockScreenSurfaces()
+      // Claim before clearing so a lock-screen widget probe during launch
+      // cannot treat this new process as dead. Then drop leftovers from the
+      // previous process; wait so ActivityKit actually dismisses the island
+      // before JS publishes the restored session.
       TalkToMeProcessLiveness.claimForProcessLifetime()
+      TalkToMeSessionShutdown.clearLockScreenSurfaces()
     }
 
     OnDestroy {
