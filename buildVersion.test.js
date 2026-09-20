@@ -104,3 +104,35 @@ test("rejects an invalid propagated workflow version", () => {
     /Invalid Talktome version tag/,
   );
 });
+
+test("falls back to 0.0.0-dev when no release tags are reachable", () => {
+  const calls = [];
+  const info = resolveBuildVersion({
+    runGit(args, options = {}) {
+      const key = args.join(" ");
+      calls.push(key);
+      if (key.startsWith("describe")) {
+        if (options.optional) return "";
+        throw new Error("Git version resolution failed: fatal: No names found, cannot describe anything.");
+      }
+      if (key === "rev-list --count HEAD") return "17";
+      if (key === "rev-parse --short=8 HEAD") return "cafed00d";
+      if (key === "status --porcelain --untracked-files=no") return "";
+      throw new Error(`unexpected git ${key}`);
+    },
+  });
+
+  assert.equal(info.appVersion, "0.0.0-dev.17");
+  assert.equal(info.version, "v0.0.0-dev.17");
+  assert.equal(info.safeVersion, "v0.0.0-dev.17-cafed00d");
+  assert.equal(info.baseVersion, "0.0.0");
+  assert.equal(info.release, false);
+  assert.equal(info.sha, "cafed00d");
+  assert.deepEqual(calls, [
+    "describe --tags --match v[0-9]* --exact-match HEAD",
+    "describe --tags --match v[0-9]* --abbrev=0 HEAD",
+    "rev-list --count HEAD",
+    "rev-parse --short=8 HEAD",
+    "status --porcelain --untracked-files=no",
+  ]);
+});
