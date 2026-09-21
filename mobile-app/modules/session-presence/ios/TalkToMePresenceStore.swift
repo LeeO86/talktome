@@ -12,8 +12,11 @@ struct TalkToMePresenceState: Codable, Hashable {
 enum TalkToMePresenceStore {
   static let suiteName = "group.io.github.leeo86.talktome-mobile"
   static let snapshotKey = "talktome.presence.snapshot"
-  /// Exclusive fcntl write lock held by the main app; widget probes this after swipe-kill.
-  static let processAliveFileName = "talktome.process.alive"
+  /// Builds 15/16 held a process-lifetime file lock here so the widget could probe
+  /// liveness. iOS kills an app that holds a lock on a shared-container file when it
+  /// suspends it (RunningBoard 0xDEAD10CC), which TestFlight reports as a crash.
+  /// Never lock files in the App Group container. The leftover file is deleted at launch.
+  static let legacyProcessAliveFileName = "talktome.process.alive"
   static let talkNotification = "io.github.leeo86.talktome.talk" as CFString
   static let disconnectNotification = "io.github.leeo86.talktome.disconnect" as CFString
   /// Posted when the process is about to die. PushToTalk listens and leaves the channel.
@@ -40,6 +43,17 @@ enum TalkToMePresenceStore {
       defaults.set(data, forKey: snapshotKey)
       defaults.synchronize()
     }
+  }
+
+  static func removeLegacyProcessLockFile() {
+    guard
+      let url = FileManager.default
+        .containerURL(forSecurityApplicationGroupIdentifier: suiteName)?
+        .appendingPathComponent(legacyProcessAliveFileName)
+    else {
+      return
+    }
+    try? FileManager.default.removeItem(at: url)
   }
 
   static func read() -> TalkToMePresenceState {

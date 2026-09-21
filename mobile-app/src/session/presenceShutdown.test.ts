@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  IOS_WIDGET_LIVENESS_RECHECK_SECONDS,
   shouldClearOrphanedPresence,
   shouldDisconnectForAppStateChange,
   shouldDisconnectSession,
-  shouldRenderDisconnectedPresence,
 } from './presenceShutdown';
 
 describe('presence shutdown', () => {
@@ -26,13 +24,5 @@ describe('presence shutdown', () => {
   it('clears leftover native presence after a kill that skipped JS disconnect', () => {
     expect(shouldClearOrphanedPresence(true)).toBe(true);
     expect(shouldClearOrphanedPresence(false)).toBe(false);
-  });
-
-  it('drops connected widget UI after SIGKILL without treating lock-screen suspend as death', () => {
-    expect(shouldRenderDisconnectedPresence(true, true)).toBe(false);
-    expect(shouldRenderDisconnectedPresence(true, false)).toBe(true);
-    expect(shouldRenderDisconnectedPresence(false, true)).toBe(true);
-    expect(shouldRenderDisconnectedPresence(false, false)).toBe(true);
-    expect(IOS_WIDGET_LIVENESS_RECHECK_SECONDS).toBe(20);
   });
 });

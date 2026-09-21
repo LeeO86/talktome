@@ -16,11 +16,10 @@ public final class TalkToMePresenceModule: Module {
     OnCreate {
       self.observeShortcuts()
       self.observeWillTerminate()
-      // Claim before clearing so a lock-screen widget probe during launch
-      // cannot treat this new process as dead. Then drop leftovers from the
-      // previous process; wait so ActivityKit actually dismisses the island
-      // before JS publishes the restored session.
-      TalkToMeProcessLiveness.claimForProcessLifetime()
+      // Drop leftovers from the previous process (a swipe-killed suspended app
+      // gets no willTerminate). Nothing here blocks; the Live Activity
+      // controller orders this end before any request JS makes for the
+      // restored session.
       TalkToMeSessionShutdown.clearLockScreenSurfaces()
     }
 
@@ -34,7 +33,6 @@ public final class TalkToMePresenceModule: Module {
     }
 
     AsyncFunction("update") { (snapshot: [String: Any]) in
-      TalkToMeProcessLiveness.claimForProcessLifetime()
       let state = TalkToMePresenceState(
         connected: snapshot["connected"] as? Bool ?? false,
         title: snapshot["title"] as? String ?? "talktome",
@@ -99,8 +97,9 @@ public final class TalkToMePresenceModule: Module {
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      TalkToMeSessionShutdown.runForImminentTermination()
-      self?.sendEvent("onAppTerminating", [:])
+      TalkToMeSessionShutdown.runForImminentTermination(beforeWait: {
+        self?.sendEvent("onAppTerminating", [:])
+      })
     }
   }
 

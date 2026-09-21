@@ -19,68 +19,70 @@ struct TalkToMePresenceAttributes: ActivityAttributes {
   var name: String
 }
 
+/// Owns the single TalkToMe Live Activity of this process.
+///
+/// Threading: ActivityKit calls are `async` and not main-actor bound, so every
+/// job runs on a detached task. Nothing here spins the main run loop. The one
+/// synchronous wait, `endAllAndWait`, is for `willTerminate` only: the process is
+/// about to die, a fire-and-forget task would die with it, and a bounded
+/// `DispatchSemaphore` wait is what the system gives us (~5 s) to let ActivityKit
+/// dismiss the Dynamic Island.
+///
+/// Ordering: end and request/update jobs are chained on `TalkToMeLiveActivityQueue`,
+/// so a restored session published right after launch cannot request a new activity
+/// while the orphan from the previous process is still being ended.
 @available(iOS 16.2, *)
 final class TalkToMeLiveActivityController {
-  private let log = Logger(subsystem: "io.github.leeo86.talktome-mobile", category: "LiveActivity")
+  static let terminateTimeout: TimeInterval = 2.0
+
+  private static let log = Logger(subsystem: "io.github.leeo86.talktome-mobile", category: "LiveActivity")
 
   func update(state: TalkToMePresenceState) {
-    let content = TalkToMePresenceAttributes.ContentState(
-      connected: state.connected,
-      title: state.title,
-      detail: state.detail,
-      audioActive: state.audioActive,
-      talking: state.talking,
-      listening: state.listening
-    )
+    let content = Self.content(from: state)
     if !state.connected {
-      Self.endAllAndWait()
+      Self.endAll(finalContent: content)
       return
     }
-    Task { @MainActor in
-      await requestOrUpdate(content)
+    TalkToMeLiveActivityQueue.enqueue {
+      await Self.requestOrUpdate(content)
     }
   }
 
-  static func endAllDetached() {
-    Task { @MainActor in
-      await endAll()
+  /// End every activity of this process without blocking the caller.
+  /// Used at launch (orphans of the previous process) and on in-app disconnect.
+  @discardableResult
+  static func endAll(finalContent: TalkToMePresenceAttributes.ContentState? = nil) -> Task<Void, Never> {
+    TalkToMeLiveActivityQueue.enqueue {
+      await Self.endAllNow(finalContent: finalContent)
     }
   }
 
-  /// `willTerminate` and module-create used to fire `Task { end }` and return.
-  /// The process then died before ActivityKit dismissed the Dynamic Island.
-  static func endAllAndWait(timeout: TimeInterval = 1.8) {
-    let existing = Array(Activity<TalkToMePresenceAttributes>.activities)
-    guard !existing.isEmpty else {
+  /// `willTerminate` only. Blocks the calling thread until ActivityKit has ended
+  /// the activities or `timeout` passes, whichever comes first.
+  static func endAllAndWait(timeout: TimeInterval = terminateTimeout) {
+    guard !Activity<TalkToMePresenceAttributes>.activities.isEmpty else {
       return
     }
-    let done = TalkToMeWaitFlag()
-    Task { @MainActor in
-      await endAll()
-      done.set()
+    let done = DispatchSemaphore(value: 0)
+    let job = endAll(finalContent: disconnectedContent())
+    Task.detached(priority: .userInitiated) {
+      await job.value
+      done.signal()
     }
-    let deadline = Date().addingTimeInterval(timeout)
-    if Thread.isMainThread {
-      while !done.isSet && Date() < deadline {
-        RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.02))
-      }
-    } else {
-      while !done.isSet && Date() < deadline {
-        Thread.sleep(forTimeInterval: 0.02)
-      }
+    if done.wait(timeout: .now() + timeout) == .timedOut {
+      log.error("Live Activity end did not finish within \(timeout, privacy: .public)s before termination")
     }
   }
 
-  @MainActor
-  static func endAll() async {
+  private static func endAllNow(finalContent: TalkToMePresenceAttributes.ContentState?) async {
     let existing = Array(Activity<TalkToMePresenceAttributes>.activities)
+    let content = finalContent.map { ActivityContent(state: $0, staleDate: Date()) }
     for activity in existing {
-      await activity.end(nil, dismissalPolicy: .immediate)
+      await activity.end(content, dismissalPolicy: .immediate)
     }
   }
 
-  @MainActor
-  private func requestOrUpdate(_ content: TalkToMePresenceAttributes.ContentState) async {
+  private static func requestOrUpdate(_ content: TalkToMePresenceAttributes.ContentState) async {
     if !ActivityAuthorizationInfo().areActivitiesEnabled {
       log.error("Live Activities are disabled in iOS Settings")
       return
@@ -100,22 +102,49 @@ final class TalkToMeLiveActivityController {
       log.error("Live Activity request failed: \(error.localizedDescription, privacy: .public)")
     }
   }
-}
 
-private final class TalkToMeWaitFlag: @unchecked Sendable {
-  private let lock = NSLock()
-  private var value = false
-
-  func set() {
-    lock.lock()
-    value = true
-    lock.unlock()
+  private static func content(from state: TalkToMePresenceState) -> TalkToMePresenceAttributes.ContentState {
+    TalkToMePresenceAttributes.ContentState(
+      connected: state.connected,
+      title: state.title,
+      detail: state.detail,
+      audioActive: state.audioActive,
+      talking: state.talking,
+      listening: state.listening
+    )
   }
 
-  var isSet: Bool {
+  private static func disconnectedContent() -> TalkToMePresenceAttributes.ContentState {
+    TalkToMePresenceAttributes.ContentState(
+      connected: false,
+      title: "talktome",
+      detail: "Not connected",
+      audioActive: false,
+      talking: false,
+      listening: false
+    )
+  }
+}
+
+/// Serial chain of ActivityKit jobs. Each job starts after the previous one
+/// finished, regardless of which thread enqueued it.
+private enum TalkToMeLiveActivityQueue {
+  private static let lock = NSLock()
+  private static var tail: Task<Void, Never>?
+
+  @discardableResult
+  static func enqueue(_ job: @escaping @Sendable () async -> Void) -> Task<Void, Never> {
     lock.lock()
     defer { lock.unlock() }
-    return value
+    let previous = tail
+    let next = Task.detached(priority: .userInitiated) {
+      if let previous {
+        await previous.value
+      }
+      await job()
+    }
+    tail = next
+    return next
   }
 }
 #endif
