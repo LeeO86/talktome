@@ -23,6 +23,7 @@ import {
   COLLAPSED_HEADER_HEIGHT,
   estimateTargetListHeight,
   isCompactOperatorScreen,
+  isTabletOperatorScreen,
   operatorLayout,
   shouldOfferHeaderCollapse,
   targetLayerCount,
@@ -35,8 +36,12 @@ import { colors } from './theme';
 
 export function OperatorScreen() {
   const store = useSessionStore();
-  const { width, height } = useWindowDimensions();
+  const window = useWindowDimensions();
+  const [measured, setMeasured] = useState({ width: 0, height: 0 });
+  const width = measured.width || window.width;
+  const height = measured.height || window.height;
   const compact = isCompactOperatorScreen(width, height);
+  const tablet = isTabletOperatorScreen(width, height);
   const [layerIndex, setLayerIndex] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionOpen, setSessionOpen] = useState(false);
@@ -47,7 +52,6 @@ export function OperatorScreen() {
   const compactRef = useRef(compact);
   const reply = store.replyTarget;
   const selected = store.selectedTalkTarget;
-  const landscape = width > height;
   const availableHeight = listHeight || estimateTargetListHeight(width, height, headerCollapsed);
   const layout = operatorLayout({
     width,
@@ -55,6 +59,7 @@ export function OperatorScreen() {
     availableHeight,
     headerCollapsed,
   });
+  const replyBeside = layout.replyBeside;
   const layers = targetLayerCount(store.targets.length, width, height, availableHeight, headerCollapsed);
   const safeLayerIndex = Math.min(layerIndex, layers - 1);
   const page = visibleTargets(store.targets, safeLayerIndex, width, height, availableHeight, headerCollapsed);
@@ -71,7 +76,7 @@ export function OperatorScreen() {
 
   useEffect(() => {
     setLayerIndex(0);
-  }, [store.productionId, store.targets.length, landscape]);
+  }, [store.productionId, store.targets.length, layout.columns, replyBeside]);
 
   useEffect(() => {
     if (compactRef.current === compact) {
@@ -129,8 +134,8 @@ export function OperatorScreen() {
       style={[
         styles.reply,
         styles.talkSelect,
-        landscape && styles.replyLandscape,
-        compact && !landscape && styles.replyCompact,
+        replyBeside && styles.replyLandscape,
+        compact && !replyBeside && styles.replyCompact,
         mainTalking && styles.talkSelectActive,
         !selected && styles.replyDisabled,
       ]}
@@ -140,7 +145,7 @@ export function OperatorScreen() {
       ) : (
         <WalkieTalkieIcon color={selected ? colors.text : 'rgba(255,255,255,0.38)'} />
       )}
-      <Text style={[styles.replyText, landscape && styles.replyTextLandscape, !selected && styles.replyMuted]}>
+      <Text style={[styles.replyText, replyBeside && styles.replyTextLandscape, !selected && styles.replyMuted]}>
         {selectLabel}
       </Text>
       {selected && !compact ? (
@@ -158,8 +163,8 @@ export function OperatorScreen() {
       onRelease={() => void session.releaseTalk()}
       style={[
         styles.reply,
-        landscape && styles.replyLandscape,
-        compact && !landscape && styles.replyCompact,
+        replyBeside && styles.replyLandscape,
+        compact && !replyBeside && styles.replyCompact,
         mainTalking && styles.replyActive,
         !reply && styles.replyDisabled,
       ]}
@@ -169,7 +174,7 @@ export function OperatorScreen() {
       ) : (
         <ReplyArrowIcon color={reply ? colors.text : 'rgba(255,255,255,0.38)'} />
       )}
-      <Text style={[styles.replyText, landscape && styles.replyTextLandscape, !reply && styles.replyMuted]}>
+      <Text style={[styles.replyText, replyBeside && styles.replyTextLandscape, !reply && styles.replyMuted]}>
         {replyLabel}
       </Text>
       {reply && !compact ? (
@@ -179,33 +184,33 @@ export function OperatorScreen() {
   );
 
   return (
-    <View style={[styles.screen, landscape && styles.screenLandscape, compact && styles.screenCompact]}>
+    <View
+      onLayout={(event) => {
+        const next = event.nativeEvent.layout;
+        setMeasured((current) =>
+          current.width === next.width && current.height === next.height
+            ? current
+            : { width: next.width, height: next.height },
+        );
+      }}
+      style={[
+        styles.screen,
+        replyBeside && styles.screenLandscape,
+        compact && styles.screenCompact,
+        tablet && styles.screenTablet,
+        headerCollapsed && styles.screenPeek,
+      ]}
+    >
       {headerCollapsed ? (
-        <View style={styles.collapsedHeader}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Show top bar"
-            onPress={expandHeader}
-            style={[styles.collapseButton, compact && styles.collapseButtonCompact]}
-          >
-            <ChevronIcon color={colors.text} direction="down" />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Session, ${connection.label}`}
-            onPress={() => setSessionOpen(true)}
-            style={styles.collapsedIdentity}
-          >
-            <Text style={styles.collapsedName} numberOfLines={1}>
-              {store.identity?.name ?? 'talktome'}
-            </Text>
-            <ConnectionStatusBadge health={connection} compact={compact} />
-          </Pressable>
-          <View style={styles.headerActions}>
-            <AudioRouteButton />
-            {layerButton}
-          </View>
-        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Show top bar"
+          accessibilityHint="Reveals name, connection, audio route, and layers"
+          onPress={expandHeader}
+          style={styles.headerPeekCard}
+        >
+          <ChevronIcon color={colors.text} direction="down" size={14} />
+        </Pressable>
       ) : (
         <View
           style={[styles.header, compact && styles.headerCompact]}
@@ -281,8 +286,8 @@ export function OperatorScreen() {
       <View
         style={[
           styles.body,
-          landscape && styles.bodyLandscape,
-          landscape && store.leftHanded && styles.bodyLandscapeLeft,
+          replyBeside && styles.bodyLandscape,
+          replyBeside && store.leftHanded && styles.bodyLandscapeLeft,
         ]}
       >
         <View
@@ -295,10 +300,10 @@ export function OperatorScreen() {
                 <View key={`${target.type}-${target.id}`} style={styles.gridCell}>
                   <TargetRow
                     target={target}
-                    compact={compact || landscape}
+                    compact={compact || replyBeside}
                     volumeReadout={compact}
                     height={layout.cardHeight}
-                    edgeTalkAffordance={!landscape && store.edgeTalkAffordance}
+                    edgeTalkAffordance={!replyBeside && store.edgeTalkAffordance}
                     onOpenConferenceMembers={setConferenceTarget}
                   />
                 </View>
@@ -343,6 +348,14 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 8,
   },
+  screenTablet: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 16,
+  },
+  screenPeek: {
+    paddingTop: 0,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -353,26 +366,17 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     gap: 6,
   },
-  collapsedHeader: {
-    minHeight: COLLAPSED_HEADER_HEIGHT,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  headerPeekCard: {
+    height: COLLAPSED_HEADER_HEIGHT,
     marginBottom: 8,
-  },
-  collapsedIdentity: {
-    flexGrow: 1,
-    flexShrink: 1,
-    flexDirection: 'row',
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: 'rgba(255,255,255,0.20)',
     alignItems: 'center',
-    gap: 8,
-    minWidth: 0,
-  },
-  collapsedName: {
-    color: colors.text,
-    fontSize: 17,
-    fontWeight: '700',
-    flexShrink: 1,
+    justifyContent: 'center',
   },
   identity: {
     flexGrow: 1,

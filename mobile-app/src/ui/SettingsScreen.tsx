@@ -210,8 +210,8 @@ function LayoutSettingsPage() {
           onValueChange={(value) => session.setLeftHanded(value)}
         />
         <SettingsHint
-          full="Moves the volume ring and the landscape Reply column to the left, and slides right to lock — same as the web client."
-          compact="Volume and landscape Reply move left. Slide right to lock."
+          full="Moves the volume ring and the phone-landscape Reply column to the left, and slides right to lock — same as the web client. Tablets keep Reply on the bottom."
+          compact="Volume and phone-landscape Reply move left. Slide right to lock."
         />
         <SettingsSwitchRow
           label="Talk & select"
@@ -247,8 +247,8 @@ function LayoutSettingsPage() {
           onValueChange={(value) => session.setEdgeTalkAffordance(value)}
         />
         <SettingsHint
-          full="Adds a walkie-talkie past the volume ring so you can hit targets from the phone’s edge. In Talk & select it becomes a checkmark. Hidden in landscape, where cards use two columns."
-          compact="Talk control on the phone edge. Hidden in landscape."
+          full="Moves the walkie-talkie to the phone’s edge so you can hit it with a thumb. Talkable cards always show the icon; this only widens the hit target. In Talk & select it becomes a checkmark. The extra edge target is hidden in phone landscape, where cards use two columns."
+          compact="Widens the walkie toward the phone edge. Hidden in phone landscape."
         />
       </SettingsSection>
     </>

@@ -1,6 +1,7 @@
 // Phone portrait aims for 8 target rows plus chrome, matching the web client.
 // Cards compress/expand slightly; leftover space sits above the list (bottom-justified).
-// Landscape uses two columns and a shorter row cap so Reply can sit in a narrow side column.
+// Phone landscape uses two columns and a shorter row cap so Reply can sit in a narrow side column.
+// Tablets keep Reply on the bottom (like the web client) and use 2–4 columns by width.
 
 export const CARD_GAP = 8;
 export const CARD_MIN_HEIGHT = 56;
@@ -10,9 +11,21 @@ export const PORTRAIT_MAX_ROWS = 8;
 export const LANDSCAPE_MAX_ROWS = 4;
 export const LANDSCAPE_COLUMNS = 2;
 export const HEADER_COLLAPSE_ROW_THRESHOLD = 4;
-export const COLLAPSED_HEADER_HEIGHT = 44;
+/** Full-width peek card (same min height as a target card); only the lower half is on screen. */
+export const HEADER_PEEK_CARD_HEIGHT = CARD_MIN_HEIGHT;
+/** Visible strip of the collapsed peek (lower half + chevron). */
+export const COLLAPSED_HEADER_HEIGHT = HEADER_PEEK_CARD_HEIGHT / 2;
 /** Short side at or below this is RG440-class; iPhone 390 stays above it. */
 export const COMPACT_SHORT_SIDE_MAX = 360;
+/** Android sw600dp / iPad mini. Phone landscape (844×390) stays below this. */
+export const TABLET_SHORT_SIDE_MIN = 600;
+/** Web `#targets-list` 2-column band (`min-width: 700px` / `max-width: 899px`). */
+export const TABLET_TWO_COLUMN_MIN_WIDTH = 700;
+/** Web 3-column tablet band (`min-width: 900px`, coarse landscape up to 1366). */
+export const TABLET_THREE_COLUMN_MIN_WIDTH = 900;
+/** Web 4-column band (`min-width: 1367px`). */
+export const TABLET_FOUR_COLUMN_MIN_WIDTH = 1367;
+export const TABLET_MAX_COLUMNS = 4;
 
 const ESTIMATED_HEADER_HEIGHT = 96;
 const ESTIMATED_REPLY_HEIGHT = 72;
@@ -27,6 +40,8 @@ export type OperatorLayoutInput = {
 
 export type OperatorLayout = {
   landscape: boolean;
+  tablet: boolean;
+  replyBeside: boolean;
   columns: number;
   rows: number;
   layerSize: number;
@@ -43,12 +58,30 @@ export function isCompactOperatorScreen(width: number, height: number): boolean 
   return Math.min(width, height) <= COMPACT_SHORT_SIDE_MAX;
 }
 
+export function isTabletOperatorScreen(width: number, height: number): boolean {
+  return Math.min(width, height) >= TABLET_SHORT_SIDE_MIN;
+}
+
+/** Phone landscape only: Reply is a side column. Tablets keep it on the bottom. */
+export function replyBesideTargets(width: number, height: number): boolean {
+  return isLandscape(width, height) && !isTabletOperatorScreen(width, height);
+}
+
 export function targetGridColumns(width: number, height: number): number {
+  if (isTabletOperatorScreen(width, height)) {
+    if (width >= TABLET_FOUR_COLUMN_MIN_WIDTH) {
+      return TABLET_MAX_COLUMNS;
+    }
+    if (width >= TABLET_THREE_COLUMN_MIN_WIDTH) {
+      return 3;
+    }
+    return 2;
+  }
   return isLandscape(width, height) ? LANDSCAPE_COLUMNS : 1;
 }
 
 export function targetGridMaxRows(width: number, height: number): number {
-  return isLandscape(width, height) ? LANDSCAPE_MAX_ROWS : PORTRAIT_MAX_ROWS;
+  return replyBesideTargets(width, height) ? LANDSCAPE_MAX_ROWS : PORTRAIT_MAX_ROWS;
 }
 
 export function estimateTargetListHeight(
@@ -57,7 +90,7 @@ export function estimateTargetListHeight(
   headerCollapsed = false,
 ): number {
   const header = headerCollapsed ? COLLAPSED_HEADER_HEIGHT : ESTIMATED_HEADER_HEIGHT;
-  const reply = isLandscape(width, height) ? 0 : ESTIMATED_REPLY_HEIGHT;
+  const reply = replyBesideTargets(width, height) ? 0 : ESTIMATED_REPLY_HEIGHT;
   return Math.max(CARD_MIN_HEIGHT, height - header - reply - ESTIMATED_SCREEN_PADDING);
 }
 
@@ -86,6 +119,8 @@ export function cardHeightForRows(availableHeight: number, rows: number): number
 
 export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const landscape = isLandscape(input.width, input.height);
+  const tablet = isTabletOperatorScreen(input.width, input.height);
+  const replyBeside = replyBesideTargets(input.width, input.height);
   const columns = targetGridColumns(input.width, input.height);
   const maxRows = targetGridMaxRows(input.width, input.height);
   const available =
@@ -93,6 +128,8 @@ export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const rows = rowsThatFit(available, maxRows);
   return {
     landscape,
+    tablet,
+    replyBeside,
     columns,
     rows,
     layerSize: rows * columns,
@@ -143,6 +180,7 @@ export function visibleTargets<T>(
   return items.slice(start, start + size);
 }
 
+/** Row-major pages, same fill order as the web client's CSS grid. */
 export function chunkTargets<T>(items: T[], columns: number): T[][] {
   const count = Math.max(1, Math.floor(columns));
   const rows: T[][] = [];

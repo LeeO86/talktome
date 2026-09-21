@@ -66,6 +66,9 @@ export function TargetRow({
       talkTargetIdentity(state.selectedTalkTarget!) === key,
   );
   const canTalk = session.canTalkTo(target);
+  // Web `#targets-list .talk-btn` always paints the walkie, including offline
+  // users. Feeds and listen-only conferences have no talk button.
+  const showTalkIcon = target.canTalk && target.type !== 'feed';
   const userOnline =
     target.type !== 'user' || peers.some((peer) => peer.kind === 'user' && peer.userId === target.id);
   const dimmed = target.type === 'feed' ? !feedOnline : target.type === 'user' && !userOnline;
@@ -184,18 +187,25 @@ export function TargetRow({
         ? 'rgba(255,255,255,0.28)'
         : colors.text;
 
-  const edgeTalk =
-    edgeTalkAffordance && canTalk
-      ? wrapTalk(
-          talkSelectMode ? (
-            <CheckIcon color={edgeIconColor} size={tight ? 18 : 20} checked={selected} />
-          ) : (
-            <WalkieTalkieIcon color={edgeIconColor} size={tight ? 18 : 22} />
-          ),
-          [styles.edgeTalk, talking && styles.talkZoneActive],
-          talkSelectMode ? `Select ${target.label}` : `Talk to ${target.label} from the phone edge`,
-        )
-      : null;
+  const talkControl = showTalkIcon
+    ? wrapTalk(
+        talkSelectMode ? (
+          <CheckIcon color={edgeIconColor} size={tight ? 18 : 20} checked={selected} />
+        ) : (
+          <WalkieTalkieIcon color={edgeIconColor} size={tight ? 18 : 22} />
+        ),
+        [
+          styles.talkControl,
+          edgeTalkAffordance && styles.edgeTalk,
+          talking && styles.talkZoneActive,
+        ],
+        talkSelectMode
+          ? `Select ${target.label}`
+          : edgeTalkAffordance
+            ? `Talk to ${target.label} from the phone edge`
+            : `Talk to ${target.label}`,
+      )
+    : null;
 
   const rowStyle = [
     styles.row,
@@ -244,7 +254,7 @@ export function TargetRow({
           onDoublePress={() => session.toggleTargetMuted(target)}
         />
       </View>
-      {edgeTalk}
+      {talkControl}
       <VolumeOverlay
         visible={volumeOpen}
         title={target.label}
@@ -377,11 +387,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.08)',
   },
-  edgeTalk: {
-    width: 44,
+  talkControl: {
+    width: 36,
     alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+  },
+  edgeTalk: {
+    width: 44,
   },
 });

@@ -24,6 +24,7 @@ describe('web client UI icons', () => {
       const path = resolve(iconsRoot, filename);
       expect(sha256(path)).toBe(digest);
       expect(source).toContain(`assets/icons/${filename}`);
+    expect(source).toContain('resizeMethod="resize"');
       const upstream = resolve(referenceImages, filename);
       if (existsSync(upstream)) {
         expect(sha256(upstream), `${filename} drifted from the web client`).toBe(digest);
@@ -41,12 +42,15 @@ describe('web client UI icons', () => {
     expect(source).toContain("offline: '#475569'");
   });
 
-  it('uses the walkie on talk-select and the edge talk control', () => {
+  it('uses the walkie on talk-select and every talkable target card', () => {
     const operator = readFileSync(resolve(__dirname, 'OperatorScreen.tsx'), 'utf8');
     const row = readFileSync(resolve(__dirname, 'TargetRow.tsx'), 'utf8');
     expect(operator).toContain('<WalkieTalkieIcon');
     expect(operator).not.toContain('MicIcon');
     expect(row).toContain('<WalkieTalkieIcon');
+    expect(row).toContain("target.canTalk && target.type !== 'feed'");
+    expect(row).not.toContain('edgeTalkAffordance && canTalk');
+    expect(row).not.toContain('talkControlGlyph');
     expect(row).toContain('letter={target.label}');
   });
 });

@@ -58,6 +58,7 @@ function AssetIcon({
       source={source}
       accessible={false}
       resizeMode="contain"
+      resizeMethod="resize"
       style={{ width: size, height: size, tintColor: tint ? color : undefined }}
       {...iconEvents}
     />
