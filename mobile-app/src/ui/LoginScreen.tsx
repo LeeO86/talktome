@@ -93,6 +93,13 @@ export function LoginScreen() {
   };
 
   const signInWithLink = (raw: string, force = false) => {
+    if (/^http:\/\//i.test(raw.trim())) {
+      useSessionStore.setState({
+        error: 'The server address must use HTTPS.',
+        statusMessage: '',
+      });
+      return Promise.resolve();
+    }
     const parsed = parseConnectPayload(raw);
     const serverAddress = parsed.serverAddress || store.serverAddress;
     if (!parsed.token) {
@@ -167,6 +174,10 @@ export function LoginScreen() {
 
   const applyScanned = (raw: string) => {
     setScanning(false);
+    if (/^http:\/\//i.test(raw.trim())) {
+      useSessionStore.setState({ error: 'The server address must use HTTPS.', statusMessage: '' });
+      return;
+    }
     const parsed = parseConnectPayload(raw);
     if (!parsed.serverAddress && !parsed.token) {
       useSessionStore.setState({ error: 'This QR code is not a TalkToMe server or login link.' });

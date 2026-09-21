@@ -115,20 +115,6 @@ export function shouldUseSystemPtt(input: {
   );
 }
 
-export function canJoinCachedSystemPtt(input: {
-  platform: string;
-  pttEnabled: boolean;
-  channelUUID?: string | null;
-  guest?: boolean;
-}): boolean {
-  return (
-    input.platform === 'ios' &&
-    input.pttEnabled &&
-    !input.guest &&
-    Boolean(input.channelUUID?.trim())
-  );
-}
-
 export function shouldShowPttJoinBanner(input: {
   platform: string;
   pttEnabled: boolean;
@@ -136,6 +122,28 @@ export function shouldShowPttJoinBanner(input: {
   joined: boolean;
 }): boolean {
   return input.platform === 'ios' && input.pttEnabled && input.bootstrapEnabled && !input.joined;
+}
+
+/** Operator-screen copy. Bootstrap is not proof the server can send an Apple push. */
+export function operatorPttNotice(input: {
+  platform: string;
+  pttEnabled: boolean;
+  bootstrapEnabled: boolean;
+  joined: boolean;
+  verified: boolean;
+  diagnostic: string;
+}): string | null {
+  if (input.platform !== 'ios' || !input.pttEnabled) {
+    return null;
+  }
+  if (input.joined && !input.verified) {
+    return 'System Push to Talk is joined, but no Apple push has arrived. In-app talk still works. Leave the system channel in Settings → Debug if this server has no push key.';
+  }
+  const diagnostic = input.diagnostic.trim();
+  if (!input.joined && input.bootstrapEnabled && diagnostic) {
+    return diagnostic;
+  }
+  return null;
 }
 
 export function pttStatusLabel(input: {

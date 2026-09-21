@@ -3,12 +3,7 @@
 // the same list at runtime; codecs stay in JS so a new map does not need a
 // native module. Audio (HFP/HSP) is still paired in system Bluetooth settings.
 
-import {
-  decodeHm10Byte,
-  looksLikeHardwareCommand,
-  peekAccessoryNotify,
-  talkPressedFromFrames,
-} from '../hardware/codecs';
+import { decodeHm10Byte, looksLikeHardwareCommand } from '../hardware/codecs';
 
 export { decodeHm10Byte, decodeZelloTwoByte } from '../hardware/codecs';
 
@@ -222,13 +217,6 @@ export function looksLikePttCommand(
   profile: AccessoryProfile = FALLBACK_ACCESSORY_PROFILE,
 ): boolean {
   return looksLikeHardwareCommand(bytes, profile);
-}
-
-export function decodeAccessoryNotify(
-  bytes: readonly number[],
-  profile: AccessoryProfile = FALLBACK_ACCESSORY_PROFILE,
-): boolean | null {
-  return talkPressedFromFrames(peekAccessoryNotify(bytes, profile));
 }
 
 export function coerceNotifyBytes(data: unknown): number[] {

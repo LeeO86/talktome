@@ -25,6 +25,12 @@ describe('parseServerAddress', () => {
   it('rejects an empty address', () => {
     expect(() => parseServerAddress('   ')).toThrow('The server address is invalid.');
   });
+
+  it('rejects cleartext HTTP', () => {
+    expect(() => parseServerAddress('http://intercom.local:8443')).toThrow(
+      'The server address must use HTTPS.',
+    );
+  });
 });
 
 describe('isLikelyLocalHost', () => {

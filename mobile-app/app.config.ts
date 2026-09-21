@@ -1,11 +1,16 @@
 import type { ExpoConfig } from 'expo/config';
 
 const enableIosPtt = process.env.EXPO_PUBLIC_ENABLE_IOS_PTT === '1';
+// Store / TestFlight builds must set EXPO_PUBLIC_APNS_ENVIRONMENT=production.
+// Development is only for a dev-signed client. app.config writes the key first so
+// the PTT plugin cannot leave a store build on the development APNs environment.
+const apnsEnvironment =
+  process.env.EXPO_PUBLIC_APNS_ENVIRONMENT === 'production' ? 'production' : 'development';
 
 const config: ExpoConfig = {
   name: 'TalkToMe',
   slug: 'talktome-mobile',
-  version: '0.1.0',
+  version: '1.0.0',
   orientation: 'default',
   icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
@@ -21,7 +26,7 @@ const config: ExpoConfig = {
       ...(enableIosPtt
         ? {
             'com.apple.developer.push-to-talk': true,
-            'aps-environment': 'development',
+            'aps-environment': apnsEnvironment,
           }
         : {}),
     },

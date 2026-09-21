@@ -11,9 +11,9 @@ export const PORTRAIT_MAX_ROWS = 8;
 export const LANDSCAPE_MAX_ROWS = 4;
 export const LANDSCAPE_COLUMNS = 2;
 export const HEADER_COLLAPSE_ROW_THRESHOLD = 4;
-/** Full-width peek card (same min height as a target card); only the lower half is on screen. */
+/** Target-card minimum. The collapsed header is half of this height. */
 export const HEADER_PEEK_CARD_HEIGHT = CARD_MIN_HEIGHT;
-/** Visible strip of the collapsed peek (lower half + chevron). */
+/** Collapsed header: a 28px full-width bar (flat top, rounded bottom). */
 export const COLLAPSED_HEADER_HEIGHT = HEADER_PEEK_CARD_HEIGHT / 2;
 /** Short side at or below this is RG440-class; iPhone 390 stays above it. */
 export const COMPACT_SHORT_SIDE_MAX = 360;

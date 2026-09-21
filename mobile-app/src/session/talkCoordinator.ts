@@ -8,6 +8,7 @@ import {
 } from './conferenceListen';
 import { updatePttRemoteParticipant } from '../ptt/native';
 import { resolveReplyTalkTarget } from '../talk/replyTarget';
+import { loadTalkLinkToken, talkLinkAuthorizes } from '../talk/talkLink';
 import { addTalkTarget, removeTalkTarget, talkTargetKeys } from '../talk/talkSet';
 import { HOLD_HINT, latestIncomingName, useSessionStore } from './state';
 import type { SessionController } from './sessionController';
@@ -289,17 +290,12 @@ export class TalkCoordinator {
   }
 
   handleTalkUrl(url: string): void {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      return;
-    }
-    if (parsed.protocol !== 'talktome:') {
-      return;
-    }
-    const path = `${parsed.host}${parsed.pathname}`.replace(/\/+$/, '').replace(/^\/+/, '');
-    if (path !== 'talk') {
+    void this.acceptTalkUrl(url);
+  }
+
+  private async acceptTalkUrl(url: string): Promise<void> {
+    const token = await loadTalkLinkToken().catch(() => null);
+    if (!talkLinkAuthorizes(url, token) || !useSessionStore.getState().operatorReady) {
       return;
     }
     void this.toggleCurrentTalk();
@@ -424,7 +420,6 @@ export class TalkCoordinator {
     useSessionStore.setState({
       talking: this.c.talkingTargets.length > 0,
       talkLocked: locked && this.c.lockedTargets.length > 0,
-      talkingTargetKey: keys[0] ?? null,
       talkingTargetKeys: keys,
       lockedTargetKeys: locked ? lockedKeys : [],
       error: null,

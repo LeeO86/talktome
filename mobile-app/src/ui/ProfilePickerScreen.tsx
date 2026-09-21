@@ -24,7 +24,7 @@ export function ProfilePickerScreen() {
               <Pressable
                 accessibilityRole="button"
                 disabled={busy}
-                onPress={() => void session.connectProfile(profile.id, { userGesture: true })}
+                onPress={() => void session.connectProfile(profile.id)}
                 style={[styles.cardMain, busy && styles.busy]}
               >
                 <Text style={styles.name}>{profile.username}</Text>

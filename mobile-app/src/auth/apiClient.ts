@@ -16,7 +16,12 @@ import {
   type TalkTarget,
   type TalkTargetResponse,
 } from '../protocol/types';
-import { ApiClientError, FeedLoginNotSupportedError, InvalidCredentialsError } from './errors';
+import {
+  ApiClientError,
+  FeedLoginNotSupportedError,
+  InvalidCredentialsError,
+  operatorFacingServerMessage,
+} from './errors';
 import { readJson, TalkToMeHttp } from './http';
 
 export class ApiClient {
@@ -176,11 +181,8 @@ export class ApiClient {
   }
 
   private async serverError(response: Response): Promise<ApiClientError> {
-    const payload = await readJson<{ error?: string }>(response);
-    const message = payload?.error
-      ? `Server error ${response.status}: ${payload.error}`
-      : `Server error ${response.status}.`;
-    return new ApiClientError(message, response.status);
+    const payload = await readJson<{ error?: unknown }>(response);
+    return new ApiClientError(operatorFacingServerMessage(response.status, payload?.error), response.status);
   }
 }
 

@@ -1,5 +1,6 @@
-// Ported from talktome-apple AudioController + AppSession keepalive @ 004d6e76
-// by Daniel Jocher. Tier B owns AVAudioSession only when PushToTalk does not.
+// Tier B keeps AVAudioSession until a system Push to Talk channel has joined.
+// Join hands the session to iOS immediately. A later push verifies APNs; it is
+// not what makes the system own the session.
 
 export const TIER_B_COPY =
   'Keeps working if you background the app during an active session. Locking the screen or sitting idle will usually suspend it. We will not wake for a new caller.';
@@ -125,7 +126,7 @@ export function audioSessionCapabilityReason(input: {
   pttEnabled: boolean;
 }): string {
   if (input.pttEnabled) {
-    return 'This build includes the PushToTalk module. The app must not activate its own audio session while the system owns the channel. Server bootstrap is advisory — APNs is not verified until a real push arrives.';
+    return 'Push to Talk is in this build. The app keeps its own audio session until the operator joins a system channel. After join, iOS owns the session even before a push arrives, so join only when this server has an Apple push key.';
   }
   if (!input.available) {
     return `Rebuild the Dev Client to enable the audio-session module. ${TIER_B_COPY} ${TIER_B_UNMEASURED}`;

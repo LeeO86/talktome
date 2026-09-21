@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  canJoinCachedSystemPtt,
+  operatorPttNotice,
   hexPushToken,
   incomingPushResultForPayload,
   parseApplePttBootstrap,
@@ -86,23 +86,37 @@ describe('Apple PTT policy', () => {
     ).toBe(false);
   });
 
-  it('allows a cached-channel join from a profile tap before operator ready', () => {
+  it('warns on the operator screen when a join has not been verified by a push', () => {
     expect(
-      canJoinCachedSystemPtt({
+      operatorPttNotice({
         platform: 'ios',
         pttEnabled: true,
-        channelUUID: '3abe3537-8595-4284-8352-02f4c1c4cc13',
+        bootstrapEnabled: true,
+        joined: true,
+        verified: false,
+        diagnostic: '',
       }),
-    ).toBe(true);
+    ).toMatch(/no Apple push/);
     expect(
-      canJoinCachedSystemPtt({
+      operatorPttNotice({
         platform: 'ios',
         pttEnabled: true,
-        channelUUID: '3abe3537-8595-4284-8352-02f4c1c4cc13',
-        guest: true,
+        bootstrapEnabled: false,
+        joined: false,
+        verified: false,
+        diagnostic: 'ignored',
       }),
-    ).toBe(false);
-    expect(canJoinCachedSystemPtt({ platform: 'ios', pttEnabled: true, channelUUID: '' })).toBe(false);
+    ).toBeNull();
+    expect(
+      operatorPttNotice({
+        platform: 'android',
+        pttEnabled: true,
+        bootstrapEnabled: true,
+        joined: true,
+        verified: false,
+        diagnostic: '',
+      }),
+    ).toBeNull();
   });
 
   it('shows a session Join banner until the system channel is joined', () => {

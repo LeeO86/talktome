@@ -42,4 +42,8 @@ describe('parseConnectPayload', () => {
   it('returns empty for blank input', () => {
     expect(parseConnectPayload('   ')).toEqual({});
   });
+
+  it('does not adopt an http URL', () => {
+    expect(parseConnectPayload('http://intercom.local:8443/#login=abcDEF1234567890')).toEqual({});
+  });
 });

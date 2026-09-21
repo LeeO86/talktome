@@ -35,14 +35,6 @@ export function audioSessionAvailable(): boolean {
   return loadNative() != null;
 }
 
-export function audioSessionProfile(): AudioSessionProfile {
-  return loadNative()?.profile?.() ?? 'idle';
-}
-
-export async function activateForMonitoring(): Promise<boolean> {
-  return (await loadNative()?.activateForMonitoring?.()) === true;
-}
-
 export async function activateForIntercom(): Promise<boolean> {
   return (await loadNative()?.activateForIntercom?.()) === true;
 }

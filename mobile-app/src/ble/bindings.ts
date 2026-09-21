@@ -334,15 +334,6 @@ export function isBindingConnected(
   return live?.kind === 'connected';
 }
 
-export function syntheticLiveDevice(binding: BleDeviceBinding): BleDeviceState {
-  return {
-    id: binding.id,
-    kind: binding.kind === 'onboard' ? 'connected' : 'idle',
-    name: binding.name,
-    profileId: binding.kind,
-  };
-}
-
 /** Update names of saved accessories from live native state. Pairing must add devices explicitly. */
 export function refreshBindingNames(
   bindings: readonly BleDeviceBinding[],

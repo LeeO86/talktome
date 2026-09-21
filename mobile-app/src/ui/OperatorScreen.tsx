@@ -9,7 +9,7 @@ import {
   talkTargetIdentity,
   type TalkTarget,
 } from '../protocol';
-import { shouldShowPttJoinBanner } from '../ptt/policy';
+import { operatorPttNotice, shouldShowPttJoinBanner } from '../ptt/policy';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { session, useSessionStore } from '../session/store';
 import { slideToLockHint } from '../talk/slideToLock';
@@ -101,6 +101,16 @@ export function OperatorScreen() {
 
   const productionLabel = visibleProductionName(store.productionName);
   const connection = connectionHealthFromSession(store);
+  const pttNotice = operatorPttNotice({
+    platform: Platform.OS,
+    pttEnabled: iosPttEnabled(),
+    bootstrapEnabled: store.pttBootstrapEnabled,
+    joined: store.pttJoined,
+    verified: store.pttVerified,
+    diagnostic: store.pttDiagnostic,
+  });
+  const mediaNotice =
+    connection.kind === 'warning' || connection.kind === 'failed' ? connection.label : store.audioNotice;
   const tallyColor = cameraTallyColor(store.cameraTally);
   const tallyLabel = cameraTallyLabel(store.cameraTally);
   const replyLocked =
@@ -261,6 +271,8 @@ export function OperatorScreen() {
         </View>
       )}
 
+      {mediaNotice ? <Text style={styles.warn}>{mediaNotice}</Text> : null}
+      {pttNotice ? <Text style={styles.warn}>{pttNotice}</Text> : null}
       {store.overBudget ? (
         <Text style={styles.warn}>Too many incoming streams — some feeds paused.</Text>
       ) : null}
@@ -273,12 +285,14 @@ export function OperatorScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Join PushToTalk channel"
-          accessibilityHint="Enables Lock Screen and Dynamic Island talk while the app is in the foreground"
+          accessibilityHint="Joins Apple's Push to Talk channel when this server has a push key. In-app talk does not need it."
           onPress={() => void session.joinSystemPttChannel()}
           style={styles.pttBanner}
         >
-          <Text style={styles.pttBannerTitle}>Join PushToTalk</Text>
-          <Text style={styles.pttBannerHint}>Needed for Lock Screen and Dynamic Island.</Text>
+          <Text style={styles.pttBannerTitle}>Optional: system Push to Talk</Text>
+          <Text style={styles.pttBannerHint}>
+            Only if this server has an Apple push key. Not required to talk, or for the lock screen card.
+          </Text>
         </Pressable>
       ) : null}
       {store.error ? <Text style={styles.error}>{store.error}</Text> : null}

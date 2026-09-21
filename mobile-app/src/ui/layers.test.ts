@@ -100,7 +100,7 @@ describe('target layers', () => {
     expect(isCompactOperatorScreen(844, 390)).toBe(false);
   });
 
-  it('treats the collapsed chrome as a half-height peek card', () => {
+  it('reserves a 28px full-width bar for the collapsed header', () => {
     expect(HEADER_PEEK_CARD_HEIGHT).toBe(56);
     expect(COLLAPSED_HEADER_HEIGHT).toBe(28);
     const expanded = estimateTargetListHeight(320, 534, false);

@@ -74,6 +74,7 @@ export class SessionController {
   private pendingPassword?: string;
   private pendingLoginToken = false;
   private reconnecting = false;
+  private reconnectFailures = 0;
 
   // Shared mutable fields used across coordinators.
   api: ApiClient | null = null;
@@ -390,13 +391,10 @@ export class SessionController {
     });
   }
 
-  async connectProfile(profileId: string, options?: { userGesture?: boolean }): Promise<void> {
+  async connectProfile(profileId: string): Promise<void> {
     const profile = useSessionStore.getState().profiles.find((item) => item.id === profileId);
     if (!profile) {
       throw new Error('Profile not found.');
-    }
-    if (options?.userGesture) {
-      this.background.joinCachedSystemPttFromUserGesture(profile);
     }
     const password = await passwordForProfile(profile.id);
     this.pendingPassword = password;
@@ -468,7 +466,7 @@ export class SessionController {
       this.startAddProfile();
       return;
     }
-    await this.connectProfile(id, { userGesture: true });
+    await this.connectProfile(id);
   }
 
   async removeSavedProfile(profileId: string): Promise<void> {
@@ -812,6 +810,7 @@ export class SessionController {
       }
       if (!isRegisterOk(register) && identity.kind === 'user' && this.pendingPassword) {
         await this.reauthenticateUser();
+        this.reconnectFailures = 0;
         return;
       }
       if (!isRegisterOk(register)) {
@@ -820,18 +819,24 @@ export class SessionController {
       }
       await this.announceActiveProduction(useSessionStore.getState().productionId);
       await this.mediaCoordinator.rebuildMediaAfterReconnect();
+      this.reconnectFailures = 0;
     } catch (error) {
       if (useSessionStore.getState().identity?.kind === 'user' && this.pendingPassword) {
         try {
           await this.reauthenticateUser();
+          this.reconnectFailures = 0;
           return;
         } catch {
           // fall through
         }
       }
+      this.reconnectFailures += 1;
       useSessionStore.setState({
         error: error instanceof Error ? error.message : String(error),
-        statusMessage: 'Reconnect failed. Retrying…',
+        statusMessage:
+          this.reconnectFailures >= 3
+            ? 'Reconnect failed. Sign in again from the session menu.'
+            : 'Reconnect failed. Retrying…',
       });
     } finally {
       this.reconnecting = false;
@@ -1085,6 +1090,10 @@ export class SessionController {
 
   handleTalkUrl(url: string): void {
     this.talk.handleTalkUrl(url);
+  }
+
+  async leaveSystemPtt(): Promise<void> {
+    await this.background.leaveSystemPtt();
   }
 
   setConferenceMemberListening(conferenceId: number | string, userId: number, listening: boolean): void {

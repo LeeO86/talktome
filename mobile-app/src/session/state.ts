@@ -49,7 +49,6 @@ export type SessionUiState = {
   openLoginScanner: boolean;
   operatorReady: boolean;
   targets: TalkTarget[];
-  talkingTargetKey: string | null;
   talkingTargetKeys: string[];
   lockedTargetKeys: string[];
   talking: boolean;
@@ -84,6 +83,8 @@ export type SessionUiState = {
   recvIceState: string;
   mediaIceError: string | null;
   mediaReady: boolean;
+  /** Set when a heard feed fails to open. Cleared on the next successful resync. */
+  audioNotice: string;
   fgsRunning: boolean;
   fgsAvailable: boolean;
   audioSessionAvailable: boolean;
@@ -116,7 +117,7 @@ export type SessionUiState = {
 };
 
 export const FOREGROUND_REASON =
-  'Foreground only on this build. iOS audio background mode is declared; lock-screen idle is still expected to die until Tier A.';
+  'In-app talk. Backgrounding keeps the session while the process is alive. Lock-screen wake for a new caller needs system Push to Talk and a server Apple push key.';
 export const HOLD_HINT = 'Hold to talk. Slide to lock.';
 
 export const initialState: SessionUiState = {
@@ -148,7 +149,6 @@ export const initialState: SessionUiState = {
   openLoginScanner: false,
   operatorReady: false,
   targets: [],
-  talkingTargetKey: null,
   talkingTargetKeys: [],
   lockedTargetKeys: [],
   talking: false,
@@ -182,6 +182,7 @@ export const initialState: SessionUiState = {
   recvIceState: 'idle',
   mediaIceError: null,
   mediaReady: false,
+  audioNotice: '',
   fgsRunning: false,
   fgsAvailable: false,
   audioSessionAvailable: false,

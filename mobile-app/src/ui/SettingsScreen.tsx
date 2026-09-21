@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
 import { describeAudioRouteKind } from '../audio/routes';
 import { pttStatusLabel, shouldShowPttJoinBanner } from '../ptt/policy';
+import { loadTalkLinkToken } from '../talk/talkLink';
 import { describePttDevicesSummary } from '../ble/bindings';
 import { fgsStatusLabel } from '../background/fgs';
 import { FEED_DIM_DB_OPTIONS, dimDbFromSliderPosition, sliderPositionFromDimDb } from '../session/operatorAudio';
@@ -357,6 +358,25 @@ function WatchSettingsSection() {
 
 function DebugSettingsPage({ onClose }: { onClose: () => void }) {
   const store = useSessionStore();
+  const [talkLinkToken, setTalkLinkToken] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadTalkLinkToken()
+      .then((token) => {
+        if (!cancelled) {
+          setTalkLinkToken(token);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTalkLinkToken('');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
@@ -423,10 +443,18 @@ function DebugSettingsPage({ onClose }: { onClose: () => void }) {
                 }}
               />
             ) : null}
+            {store.pttJoined ? (
+              <SettingsActionRow label="Leave PushToTalk channel" onPress={() => void session.leaveSystemPtt()} />
+            ) : null}
             <SettingsHint
-              full="Lock Screen, Dynamic Island, and the home widget have Reply lock (toggle locked reply) and Disconnect. On iOS 18, add those same controls to Control Center or the Action Button."
-              compact="Lock Screen and widget have Reply lock and Disconnect."
+              full="Lock Screen, Dynamic Island, and the home widget have Reply lock and Disconnect without system Push to Talk. Join the system channel only when this server has an Apple push key. On iOS 18, the same controls can be added to Control Center or the Action Button."
+              compact="Lock Screen and the widget do not need system Push to Talk."
             />
+            {talkLinkToken ? (
+              <SettingsFootnote>
+                {`talktome://talk is ignored unless the link includes ?token=${talkLinkToken}`}
+              </SettingsFootnote>
+            ) : null}
           </>
         ) : (
           <SettingsHint

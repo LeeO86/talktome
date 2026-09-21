@@ -97,7 +97,7 @@ import {
 } from '../hardware/native';
 import { nextTalkableTarget, selectionFromTalkTarget, talkableAtKnob } from '../hardware/rotary';
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
-import { canJoinCachedSystemPtt, isHexPushToken, parseApplePttBootstrap, shouldUseSystemPtt } from '../ptt/policy';
+import { isHexPushToken, parseApplePttBootstrap, shouldUseSystemPtt } from '../ptt/policy';
 import {
   beginPttJoin,
   lastPttDiagnostic,
@@ -106,7 +106,6 @@ import {
   subscribePttNative,
   updatePttChannel,
 } from '../ptt/native';
-import { cachedPttChannel, type SavedProfile } from './remembered';
 import { sessionPresence, presenceNotification } from './presence';
 import { publishSessionPresence, subscribeAppTerminating, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
 import { shouldDisconnectForAppStateChange } from './presenceShutdown';
@@ -153,35 +152,6 @@ export class BackgroundCoordinator {
       return;
     }
     await this.beginSystemPttJoin(channelUUID, channelName);
-  }
-
-  joinCachedSystemPttFromUserGesture(profile: SavedProfile): void {
-    const cached = cachedPttChannel(profile);
-    if (
-      !cached ||
-      !canJoinCachedSystemPtt({
-        platform: Platform.OS,
-        pttEnabled: iosPttEnabled(),
-        channelUUID: cached.channelUUID,
-        guest: Boolean(profile.guest),
-      })
-    ) {
-      return;
-    }
-    this.c.pttChannelUUID = cached.channelUUID;
-    useSessionStore.setState({
-      pttChannelName: cached.channelName,
-      pttDiagnostic: 'Joining system PTT channel…',
-      statusMessage: 'Joining system PTT channel…',
-    });
-    this.c.pttJoin.begin();
-    const joining = beginPttJoin(cached.channelUUID, cached.channelName);
-    void joining.then((ok) => {
-      if (!ok) {
-        this.c.pttJoin.settle();
-      }
-    });
-    void this.finishSystemPttJoin(joining);
   }
 
   private async beginSystemPttJoin(channelUUID: string, channelName: string): Promise<void> {
@@ -545,6 +515,9 @@ export class BackgroundCoordinator {
     });
     this.appStateSubscription?.remove();
     this.appStateSubscription = AppState.addEventListener('change', (next) => {
+      // shouldDisconnectForAppStateChange is false for background and inactive.
+      // Lock screen and Home must keep the session. The call stays so a future
+      // change to that policy is the only way disconnect runs from AppState.
       if (shouldDisconnectForAppStateChange(next)) {
         void this.c.disconnect();
       }
@@ -1266,6 +1239,9 @@ export class BackgroundCoordinator {
   }
 
   async syncAudioSession(appState: AppStateStatus = AppState.currentState): Promise<void> {
+    // Own the session until PTChannelManager has joined. After join, iOS owns
+    // AVAudioSession even if no push has arrived yet, so this handoff cannot
+    // wait for pttVerified. Profile connect does not join; only the Join control does.
     const state = useSessionStore.getState();
     const pttEnabled = iosPttEnabled();
     const available = audioSessionAvailable();

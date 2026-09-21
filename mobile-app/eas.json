@@ -19,7 +19,8 @@
     },
     "production": {
       "env": {
-        "EXPO_PUBLIC_ENABLE_IOS_PTT": "1"
+        "EXPO_PUBLIC_ENABLE_IOS_PTT": "1",
+        "EXPO_PUBLIC_APNS_ENVIRONMENT": "production"
       }
     }
   },

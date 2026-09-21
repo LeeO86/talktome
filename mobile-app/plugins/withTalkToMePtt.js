@@ -14,7 +14,8 @@ function withTalkToMePtt(config) {
 
   config = withEntitlementsPlist(config, (mod) => {
     mod.modResults['com.apple.developer.push-to-talk'] = true;
-    // PTChannelManager also requires the Push Notifications capability (aps-environment).
+    // app.config.ts sets aps-environment from EXPO_PUBLIC_APNS_ENVIRONMENT.
+    // Only fill the key when that config did not (local prebuild without the env var).
     if (!mod.modResults['aps-environment']) {
       mod.modResults['aps-environment'] =
         process.env.EXPO_PUBLIC_APNS_ENVIRONMENT === 'production' ? 'production' : 'development';

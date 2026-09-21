@@ -176,4 +176,22 @@ describe('ApiClient', () => {
     );
     await expect(client.fetchTargets(7, 2)).resolves.toEqual([]);
   });
+
+  it('hides a raw server failure from the operator', async () => {
+    const { client } = clientWith(
+      mockFetch(async () =>
+        jsonResponse(500, {
+          error: 'SQLITE_ERROR: no such table\n    at Server (/app/server.js:10:1)',
+        }),
+      ),
+    );
+    await expect(client.fetchTargets(7)).rejects.toThrow('The server could not complete the request.');
+  });
+
+  it('keeps a short human server message', async () => {
+    const { client } = clientWith(
+      mockFetch(async () => jsonResponse(409, { error: 'This user is already signed in.' })),
+    );
+    await expect(client.fetchTargets(7)).rejects.toThrow('This user is already signed in.');
+  });
 });

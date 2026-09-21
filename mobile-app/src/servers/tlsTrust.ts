@@ -1,8 +1,9 @@
-// Phase 0.5 Q7: per-host SHA-256 pin. Expo SDK 56 fetch uses ExpoFetchModule
-// (not RCTHTTPRequestHandler). The native module pins that stack plus RN XHR.
-// JS never sets a global rejectUnauthorized=false.
+// Per-host SHA-256 pin for a self-signed server. Expo SDK 56 fetch uses
+// ExpoFetchModule (not RCTHTTPRequestHandler). The native module pins that
+// stack plus RN XHR. JS never sets a global rejectUnauthorized=false.
+// Remembered pins are in SecureStore (see tlsPins.ts).
 
-import { formatFingerprint, isSha256Fingerprint } from './fingerprint';
+import { isSha256Fingerprint } from './fingerprint';
 import { loadTlsPins, pinForHost, saveTlsPins, upsertTlsPin, type TlsPin } from './tlsPins';
 
 export type CertificateProbe = {
@@ -18,10 +19,6 @@ type NativeCertTrust = {
 };
 
 let cachedPins: TlsPin[] = [];
-
-export function rememberedTlsPins(): TlsPin[] {
-  return cachedPins;
-}
 
 export async function hydrateTlsPins(): Promise<TlsPin[]> {
   cachedPins = await loadTlsPins();
@@ -58,11 +55,6 @@ export async function probeServerCertificate(url: string): Promise<CertificatePr
   } catch {
     return null;
   }
-}
-
-export function describeCertificate(probe: CertificateProbe): string {
-  const issuer = probe.issuer ? `\nIssuer: ${probe.issuer}` : '';
-  return `${probe.hostname}\nSHA-256: ${formatFingerprint(probe.sha256)}${issuer}`;
 }
 
 async function applyPinsToNative(pins: TlsPin[]): Promise<void> {

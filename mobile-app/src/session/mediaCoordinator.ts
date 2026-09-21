@@ -104,7 +104,6 @@ export class MediaCoordinator {
       operatorReady: true,
       talking: false,
       talkLocked: false,
-      talkingTargetKey: null,
       talkingTargetKeys: [],
       lockedTargetKeys: [],
       statusMessage: useSessionStore.getState().talkSelectMode ? 'Talk & select: tap a card, then hold Talk.' : HOLD_HINT,
@@ -319,8 +318,14 @@ export class MediaCoordinator {
     }
     try {
       await this.c.media?.consumeProducer(producer, this.consumerContext());
+      if (useSessionStore.getState().audioNotice) {
+        useSessionStore.setState({ audioNotice: '' });
+      }
     } catch {
       // Keep the session; the next producer event or resync will retry.
+      useSessionStore.setState({
+        audioNotice: 'A live feed could not be opened. TalkToMe will retry.',
+      });
     } finally {
       this.publishMediaSnapshot();
     }
@@ -343,6 +348,9 @@ export class MediaCoordinator {
   async syncHeardAudio(producers: ActiveProducer[]): Promise<void> {
     this.replaceLiveProducers(producers);
     await this.c.media?.syncProducers(this.heardProducers(producers), this.consumerContext());
+    if (useSessionStore.getState().audioNotice) {
+      useSessionStore.setState({ audioNotice: '' });
+    }
     this.publishMediaSnapshot();
   }
 
@@ -371,7 +379,7 @@ export class MediaCoordinator {
   consumerContext() {
     const state = useSessionStore.getState();
     return {
-      talkTargetKey: state.talkingTargetKey,
+      talkTargetKey: state.talkingTargetKeys[0] ?? null,
       lockedTargetKey: state.lockedTargetKeys[0] ?? null,
     };
   }

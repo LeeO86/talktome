@@ -127,15 +127,6 @@ export function PhoneIcon({ color = colors.text, size = 18 }: IconProps) {
   );
 }
 
-export function MicIcon({ color = colors.text, size = 18 }: IconProps) {
-  return (
-    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View style={[styles.micCapsule, { backgroundColor: color }]} />
-      <View style={[styles.micStand, { backgroundColor: color }]} />
-    </View>
-  );
-}
-
 export function StopIcon({ color = colors.text, size = 14 }: IconProps) {
   return <View style={{ width: size, height: size, borderRadius: 3, backgroundColor: color }} {...iconEvents} />;
 }
@@ -156,28 +147,6 @@ export function PlayIcon({ color = colors.text, size = 14 }: IconProps) {
       }}
       {...iconEvents}
     />
-  );
-}
-
-export function GearIcon({ color = colors.text, size = 18 }: IconProps) {
-  return (
-    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View style={[styles.gearTooth, { backgroundColor: color, width: size * 0.28, height: size }]} />
-      <View
-        style={[
-          styles.gearTooth,
-          { backgroundColor: color, width: size * 0.28, height: size, transform: [{ rotate: '60deg' }] },
-        ]}
-      />
-      <View
-        style={[
-          styles.gearTooth,
-          { backgroundColor: color, width: size * 0.28, height: size, transform: [{ rotate: '120deg' }] },
-        ]}
-      />
-      <View style={[styles.gearHub, { width: size * 0.62, height: size * 0.62, backgroundColor: color }]} />
-      <View style={[styles.gearHole, { width: size * 0.28, height: size * 0.28 }]} />
-    </View>
   );
 }
 
@@ -374,19 +343,6 @@ const styles = StyleSheet.create({
     width: 2,
     height: 5,
     marginTop: 1,
-  },
-  gearTooth: {
-    position: 'absolute',
-    borderRadius: 2,
-  },
-  gearHub: {
-    position: 'absolute',
-    borderRadius: 999,
-  },
-  gearHole: {
-    position: 'absolute',
-    borderRadius: 999,
-    backgroundColor: '#142033',
   },
   replyStem: {
     width: 12,

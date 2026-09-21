@@ -31,7 +31,7 @@ export function parseConnectPayload(input: string): ParsedConnectPayload {
     return {};
   }
 
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+  if (url.protocol !== 'https:') {
     return {};
   }
 

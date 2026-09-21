@@ -26,7 +26,10 @@ export function parseServerAddress(input: string): ParsedServerAddress {
     throw new InvalidServerAddressError();
   }
 
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+  if (url.protocol === 'http:') {
+    throw new InvalidServerAddressError('The server address must use HTTPS.');
+  }
+  if (url.protocol !== 'https:') {
     throw new InvalidServerAddressError();
   }
   if (!url.hostname) {
