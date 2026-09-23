@@ -7,6 +7,12 @@ const socket = io({
   timeout: 10000,
 });
 
+const connectionSounds = createConnectionSounds(() => ensureAudioContext());
+for (const event of ['pointerdown', 'touchend', 'click', 'keydown']) {
+  // Retry on later gestures too: mobile Safari may interrupt an unlocked context.
+  document.addEventListener(event, () => { void connectionSounds.prepare(); }, { passive: true });
+}
+
 const USER_AGENT = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
 const isTouchMacUA = typeof navigator !== 'undefined'
   ? navigator.maxTouchPoints > 1 && /Macintosh/.test(USER_AGENT)
@@ -1147,7 +1153,7 @@ async function resumeAudioContextIfNeeded(ctx, { label = 'AudioContext', onRunni
     }
     return;
   }
-  if (ctx.state !== 'suspended' || typeof ctx.resume !== 'function') {
+  if (!['suspended', 'interrupted'].includes(ctx.state) || typeof ctx.resume !== 'function') {
     logReceiveDiagnostic('context-resume-skipped', {
       label,
       state: ctx.state,
@@ -3521,6 +3527,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const mediaConnectionStatusEl = document.getElementById('media-connection-status');
   const mediaConnectionStatusLabelEl = document.getElementById('media-connection-status-label');
   const mediaConnectionState = {
+    heartbeatInterrupted: false,
     signaling: socket.connected ? 'connected' : 'connecting',
     send: 'idle',
     receive: 'idle',
@@ -3555,6 +3562,9 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (states.includes('failed')) {
       label = 'Media failed';
       className = 'is-failed';
+    } else if (mediaConnectionState.heartbeatInterrupted) {
+      label = 'Server not responding';
+      className = 'is-warning';
     } else if (states.includes('disconnected')) {
       label = 'Media interrupted';
       className = 'is-warning';
@@ -3579,6 +3589,7 @@ document.addEventListener("DOMContentLoaded", () => {
     mediaConnectionStatusLabelEl.textContent = label;
     mediaConnectionStatusEl.title = [
       `Signaling: ${mediaConnectionState.signaling}`,
+      `Server heartbeat: ${mediaConnectionState.heartbeatInterrupted ? 'missing' : 'no interruption detected'}`,
       `Send media: ${mediaConnectionState.send}`,
       `Receive media: ${mediaConnectionState.receive}`,
       `Send ICE: ${mediaConnectionState.sendIce}`,
@@ -3604,6 +3615,17 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function announceConnectionRecovery() {
+    if (!sessionResetInProgress && session.name && socket.connected
+        && !mediaConnectionState.heartbeatInterrupted
+        // Unused transports stay 'new' until the first producer/consumer.
+        // Only current transport states matter after transports are replaced.
+        && ![mediaConnectionState.send, mediaConnectionState.receive]
+          .some((state) => ['disconnected', 'failed', 'connecting'].includes(state))) {
+      connectionSounds.reconnected();
+    }
+  }
+
   function bindMediaTransportStatus(transport, direction) {
     if (!transport || !['send', 'receive'].includes(direction)) return;
     mediaConnectionState[direction] = transport.connectionState || 'new';
@@ -3614,6 +3636,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (direction === 'send' && transport !== sendTransport) return;
       if (direction === 'receive' && transport !== recvTransport) return;
       mediaConnectionState[direction] = state || transport.connectionState || 'unknown';
+      if (!sessionResetInProgress && session.name) {
+        if (['disconnected', 'failed'].includes(mediaConnectionState[direction])) {
+          connectionSounds.disconnected();
+        } else if (state === 'connected') {
+          announceConnectionRecovery();
+        }
+      }
       if (state === 'connected') mediaConnectionState.iceError = null;
       renderMediaConnectionStatus();
       reportMediaTransportEvent(direction, 'connection-state', mediaConnectionState[direction]);
@@ -6538,6 +6567,7 @@ let cachedOperatorTargets = null;
       }
       clearReconnectRecovery({ resetAttempt: true });
       previousSocketId = null;
+      announceConnectionRecovery();
       return true;
     })();
 
@@ -7055,6 +7085,7 @@ let cachedOperatorTargets = null;
   });
 
   async function handleLogoutClick() {
+    sessionResetInProgress = true;
     if (session.kind === 'feed') {
       stopFeedStream({ manual: true });
     }
@@ -7078,9 +7109,19 @@ let cachedOperatorTargets = null;
   });
 
   // Signaling Events
+  const connectionHealth = createConnectionHealth(socket, (interrupted) => {
+    mediaConnectionState.heartbeatInterrupted = interrupted;
+    renderMediaConnectionStatus();
+    if (sessionResetInProgress || !session.name) return;
+    if (interrupted) connectionSounds.disconnected();
+    else announceConnectionRecovery();
+  });
+  if (socket.connected) connectionHealth.start();
+
   socket.on("connect", async () => {
     console.log("Connected to signaling server as", socket.id);
     setSignalingConnectionState('connected');
+    connectionHealth.start();
     lastConnectedSocketId = socket.id;
     await recoverConnectedSession('socket-connect');
   });
@@ -7092,7 +7133,11 @@ let cachedOperatorTargets = null;
   });
 
   socket.on("disconnect", (reason) => {
+    connectionHealth.stop();
     console.log("Disconnected from server:", reason);
+    if (!sessionResetInProgress && session.name && reason !== 'io client disconnect') {
+      connectionSounds.disconnected();
+    }
     setSignalingConnectionState('disconnected');
     previousSocketId = lastConnectedSocketId;
     lastConnectedSocketId = null;
