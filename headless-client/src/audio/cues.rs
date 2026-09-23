@@ -33,7 +33,13 @@ mod tests {
 
     #[test]
     fn cues_match_the_web_client_clips() {
-        assert!(disconnected().len() > 48_000, "disconnect tone is about 1.8 s");
-        assert!(reconnected().len() > 48_000, "reconnect tone is about 1.6 s");
+        assert!(
+            disconnected().len() > 48_000,
+            "disconnect tone is about 1.8 s"
+        );
+        assert!(
+            reconnected().len() > 48_000,
+            "reconnect tone is about 1.6 s"
+        );
     }
 }
