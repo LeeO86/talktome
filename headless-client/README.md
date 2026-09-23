@@ -119,7 +119,7 @@ desktops:
   written to the configuration file; saving Settings does the same rewrite.
 - **Status**: Talktome connection (state, server, user, production, transports,
   consumers, ICE servers, RTT, packet loss, receive concealment, reconnects,
-  PGM/PRV tally), audio devices with an input meter, every configured GPIO
+  server heartbeat, PGM/PRV tally), audio devices with an input meter, every configured GPIO
   output (live state) and input (pressed, event count), the local control
   socket (path, optional loopback TCP, connected clients), Stream Deck and service
   details.
@@ -364,7 +364,9 @@ send `volume-step` with `delta_db` (default `streamdeck.volume_step_db`).
 Errors are `{ "op": "error", "error": "…" }`. A snapshot includes string
 keys, `volume_db` per target/member, tally (`on_air` / `preview`), the
 current reply destination, and `main_target` / `main_unavailable` when
-Reply is pinned.
+Reply is pinned. `server_not_responding` and `heartbeat` (`ok`, `missing`,
+`not offered`) report the v1.5.6 server heartbeat. `media_status` is the
+web client's media line (`Server not responding`, `Media interrupted`, …).
 
 Packaged example (also in the source tree):
 

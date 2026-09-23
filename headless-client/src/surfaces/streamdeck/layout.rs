@@ -589,7 +589,10 @@ fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot
 fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
     let mut appearance = Appearance::simple(
         &snapshot.user_name,
-        if snapshot.connection == ConnectionState::Ready && snapshot.audio_ok {
+        if snapshot.connection == ConnectionState::Ready
+            && snapshot.audio_ok
+            && !snapshot.server_not_responding
+        {
             palette::STATUS_OK
         } else {
             palette::STATUS_BAD
@@ -599,6 +602,13 @@ fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
         "MEMBERS".to_string()
     } else if state.volume_layer {
         "VOLUME".to_string()
+    } else if snapshot.server_not_responding {
+        "no server".to_string()
+    } else if matches!(
+        snapshot.media_status.as_deref(),
+        Some("Media interrupted") | Some("Media failed")
+    ) {
+        "media down".to_string()
     } else if snapshot.connection != ConnectionState::Ready {
         snapshot.connection.label().to_string()
     } else if !snapshot.audio_ok {
@@ -1096,6 +1106,30 @@ mod tests {
         assert_eq!(keys[6].role, Role::Target(TargetKey::Feed(2)));
         assert_eq!(keys[7].role, Role::Empty);
         assert_eq!(keys[0].appearance.subtitle, "ready");
+    }
+
+    #[test]
+    fn status_shows_server_not_responding() {
+        let mut snapshot = snapshot(1);
+        snapshot.server_not_responding = true;
+        snapshot.heartbeat = "missing".into();
+        snapshot.media_status = Some("Server not responding".into());
+        let keys = layout(
+            &geometry("neo"),
+            &snapshot,
+            &DeckState::default(),
+            &options(),
+        );
+        assert_eq!(keys[0].appearance.subtitle, "no server");
+        assert_eq!(keys[0].appearance.background, palette::STATUS_BAD);
+        snapshot.on_air = true;
+        let keys = layout(
+            &geometry("neo"),
+            &snapshot,
+            &DeckState::default(),
+            &options(),
+        );
+        assert_eq!(keys[0].appearance.subtitle, "ON AIR");
     }
 
     #[test]

@@ -167,6 +167,19 @@
     return el('code', { text });
   }
 
+  function connectionAlert(snap) {
+    switch (snap.media_status) {
+      case 'Server not responding':
+      case 'Media interrupted':
+      case 'Media connecting':
+        return { text: snap.media_status, kind: 'warn' };
+      case 'Media failed':
+        return { text: snap.media_status, kind: 'bad' };
+      default:
+        return null;
+    }
+  }
+
   function connectionKind(connection) {
     switch (connection) {
       case 'ready':
@@ -441,10 +454,19 @@
   function renderStatus(status) {
     const snap = status.snapshot;
     $('#topbar-user').textContent = `${snap.user_name}${snap.user_id != null ? ` (#${snap.user_id})` : ''} · ${snap.server_url}`;
-    setBadge($('#badge-connection'), snap.connection, connectionKind(snap.connection));
+    const alert = connectionAlert(snap);
+    setBadge(
+      $('#badge-connection'),
+      alert ? alert.text : snap.connection,
+      alert ? alert.kind : connectionKind(snap.connection)
+    );
     $('#badge-onair').classList.toggle('is-hidden', !snap.on_air);
     $('#badge-preview').classList.toggle('is-hidden', !snap.preview);
-    setBadge($('#conn-state'), snap.connection + (snap.detail ? ` · ${snap.detail}` : ''), connectionKind(snap.connection));
+    setBadge(
+      $('#conn-state'),
+      alert ? alert.text : snap.connection + (snap.detail ? ` · ${snap.detail}` : ''),
+      alert ? alert.kind : connectionKind(snap.connection)
+    );
 
     const media = snap.media || {};
     kv($('#conn-details'), [
@@ -453,6 +475,8 @@
       ['Production', snap.production || 'Default'],
       ['Registered for', snap.registered_since_unix ? formatDuration(status.now_unix - snap.registered_since_unix) : '–'],
       ['Reconnects', snap.reconnects],
+      ['Server heartbeat', snap.heartbeat || '–'],
+      ['Media', snap.media_status || '–'],
       ['Send transport', media.send_state || '–'],
       ['Receive transport', media.recv_state || '–'],
       ['Consumers', media.consumers != null ? media.consumers : '–'],

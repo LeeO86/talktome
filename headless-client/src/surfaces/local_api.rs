@@ -586,7 +586,7 @@ fn current_snapshot_frame(snapshots: &mut watch::Receiver<Arc<Snapshot>>) -> Val
 }
 
 pub fn snapshot_frame(snapshot: &Snapshot) -> Value {
-    json!({
+    let mut frame = json!({
         "op": "snapshot",
         "instance": snapshot.instance,
         "user_name": snapshot.user_name,
@@ -631,7 +631,11 @@ pub fn snapshot_frame(snapshot: &Snapshot) -> Value {
                 })).collect::<Vec<_>>(),
             })
         }).collect::<Vec<_>>(),
-    })
+    });
+    frame["server_not_responding"] = json!(snapshot.server_not_responding);
+    frame["heartbeat"] = json!(snapshot.heartbeat);
+    frame["media_status"] = json!(snapshot.media_status);
+    frame
 }
 
 #[cfg(test)]
@@ -797,6 +801,8 @@ mod tests {
         assert_eq!(frame["reply"]["key"], "conference:2");
         assert_eq!(frame["main_target"], "conference:2");
         assert_eq!(frame["main_unavailable"], false);
+        assert_eq!(frame["server_not_responding"], false);
+        assert_eq!(frame["heartbeat"], "–");
         assert!(frame["targets"][0]["volume_db"].as_f64().is_some());
     }
 

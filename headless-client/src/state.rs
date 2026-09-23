@@ -151,6 +151,15 @@ pub struct Snapshot {
     /// Unix seconds when the current registration became active.
     pub registered_since_unix: Option<u64>,
     pub reconnects: u32,
+    /// v1.5.6 heartbeat: the socket is up but `connection-health` has gone stale.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub server_not_responding: bool,
+    /// `ok`, `missing`, `not offered`, or an em dash while offline.
+    #[serde(default)]
+    pub heartbeat: String,
+    /// Web-client media line (`Server not responding`, `Media interrupted`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_status: Option<String>,
 }
 
 impl Snapshot {
@@ -179,6 +188,9 @@ impl Snapshot {
             media: None,
             registered_since_unix: None,
             reconnects: 0,
+            server_not_responding: false,
+            heartbeat: "–".into(),
+            media_status: None,
         }
     }
 

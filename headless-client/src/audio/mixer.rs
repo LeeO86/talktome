@@ -1,7 +1,7 @@
 //! Sums all consumer streams into one mono signal with per-target volume,
 //! mute and dimming.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -69,6 +69,8 @@ pub struct Mixer {
     jitter_max_ms: u32,
     /// Output peak of the last render, for meters.
     pub output_peak: f32,
+    /// One-shot connection cue mixed on top of the intercom bus.
+    cue: VecDeque<f32>,
 }
 
 impl Mixer {
@@ -93,7 +95,14 @@ impl Mixer {
             jitter_min_ms,
             jitter_max_ms,
             output_peak: 0.0,
+            cue: VecDeque::new(),
         }
+    }
+
+    /// Replaces any cue still playing. The web client stops the previous tone.
+    pub fn enqueue_cue(&mut self, samples: &[f32]) {
+        self.cue.clear();
+        self.cue.extend(samples.iter().copied());
     }
 
     pub fn add_source_from(
@@ -208,6 +217,13 @@ impl Mixer {
         for (id, gain) in gains {
             if let Some(source) = self.sources.get_mut(&id) {
                 source.buffer.mix_into(out, gain);
+            }
+        }
+        for sample in out.iter_mut() {
+            if let Some(cue) = self.cue.pop_front() {
+                *sample += cue;
+            } else {
+                break;
             }
         }
         let mut peak = 0f32;
@@ -385,5 +401,19 @@ mod tests {
             "muting one conference member: both={both} adi={adi_only}"
         );
         assert_eq!(mixer.receiving_speakers(1), vec![2, 3]);
+    }
+
+    #[test]
+    fn connection_cue_mixes_then_stops_when_replaced() {
+        let mut mixer = Mixer::new(1.0, -20.0, false, false, 20, 200);
+        mixer.enqueue_cue(&[0.25, 0.5, 0.75, 1.0]);
+        mixer.enqueue_cue(&[0.1, 0.2]);
+        let mut out = vec![0f32; 4];
+        mixer.render(&mut out);
+        assert!((out[0] - 0.1).abs() < 1e-6);
+        assert!((out[1] - 0.2).abs() < 1e-6);
+        assert_eq!(out[2], 0.0);
+        mixer.render(&mut out);
+        assert_eq!(out, vec![0.0, 0.0, 0.0, 0.0]);
     }
 }

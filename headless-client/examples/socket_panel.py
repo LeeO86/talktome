@@ -127,6 +127,10 @@ def paint(snapshot: dict[str, Any]) -> str:
         flags.append("TALK")
     if snapshot.get("lock_active"):
         flags.append("LOCK")
+    if snapshot.get("server_not_responding"):
+        flags.append("NO SERVER")
+    elif snapshot.get("media_status") in ("Media interrupted", "Media failed"):
+        flags.append("MEDIA")
     head = f"[{snapshot.get('instance')}] {snapshot.get('user_name') or ''}  {conn}"
     if flags:
         head += "  " + " ".join(flags)
