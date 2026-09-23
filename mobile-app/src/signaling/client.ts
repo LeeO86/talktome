@@ -111,6 +111,22 @@ export class SignalingClient {
     return this.socket?.id;
   }
 
+  get connected(): boolean {
+    return this.socket?.connected === true;
+  }
+
+  /** TalkToMe 1.5.6. Volatile so an outage cannot queue a reply that clears the warning. */
+  emitConnectionHealth(timeoutMs: number, onReply: (error: unknown, reply: unknown) => void): void {
+    const socket = this.socket;
+    if (!socket) {
+      onReply(new Error('disconnected'), null);
+      return;
+    }
+    socket.volatile.timeout(timeoutMs).emit('connection-health', (error: unknown, reply: unknown) => {
+      onReply(error, reply);
+    });
+  }
+
   async connect(): Promise<string> {
     this.disconnect();
     this.awaitingInitialConnect = true;

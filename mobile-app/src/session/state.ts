@@ -83,6 +83,8 @@ export type SessionUiState = {
   recvIceState: string;
   mediaIceError: string | null;
   mediaReady: boolean;
+  /** TalkToMe 1.5.6 heartbeat: the socket still looks up, but acks have stopped. */
+  serverHeartbeatInterrupted: boolean;
   /** Set when a heard feed fails to open. Cleared on the next successful resync. */
   audioNotice: string;
   fgsRunning: boolean;
@@ -182,6 +184,7 @@ export const initialState: SessionUiState = {
   recvIceState: 'idle',
   mediaIceError: null,
   mediaReady: false,
+  serverHeartbeatInterrupted: false,
   audioNotice: '',
   fgsRunning: false,
   fgsAvailable: false,

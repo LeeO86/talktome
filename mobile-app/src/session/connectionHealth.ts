@@ -59,6 +59,7 @@ export function connectionHealth(input: {
   receiveIce?: string;
   iceError?: string | null;
   mediaReady?: boolean;
+  heartbeatInterrupted?: boolean;
 }): ConnectionHealth {
   const send = input.send ?? 'idle';
   const receive = input.receive ?? 'idle';
@@ -73,6 +74,9 @@ export function connectionHealth(input: {
   }
   if (states.includes('failed')) {
     return { kind: 'failed', label: 'Media failed', shortLabel: 'Failed' };
+  }
+  if (input.heartbeatInterrupted) {
+    return { kind: 'warning', label: 'Server not responding', shortLabel: 'No reply' };
   }
   if (states.includes('disconnected') || states.includes('closed')) {
     return { kind: 'warning', label: 'Media interrupted', shortLabel: 'Interrupted' };
@@ -103,6 +107,7 @@ export function connectionHealthFromSession(state: {
   recvIceState: string;
   mediaIceError: string | null;
   mediaReady: boolean;
+  serverHeartbeatInterrupted?: boolean;
 }): ConnectionHealth {
   return connectionHealth({
     signaling: state.signalingStatus,
@@ -112,5 +117,6 @@ export function connectionHealthFromSession(state: {
     receiveIce: state.recvIceState,
     iceError: state.mediaIceError,
     mediaReady: state.mediaReady,
+    heartbeatInterrupted: state.serverHeartbeatInterrupted,
   });
 }

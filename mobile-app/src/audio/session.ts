@@ -14,6 +14,7 @@ type NativeAudioSession = {
   deactivate?: () => Promise<boolean>;
   setWebRTCAudioEnabled?: (enabled: boolean) => Promise<boolean>;
   updateNowPlaying?: (title: string, detail: string, active: boolean) => Promise<boolean>;
+  playConnectionCue?: (name: string) => Promise<boolean>;
 };
 
 let cached: NativeAudioSession | null | undefined;
@@ -61,6 +62,15 @@ export async function deactivateAudioSession(): Promise<boolean> {
 
 export async function setWebRTCAudioEnabled(enabled: boolean): Promise<boolean> {
   return (await loadNative()?.setWebRTCAudioEnabled?.(enabled)) === true;
+}
+
+/** TalkToMe 1.5.6 disconnect / reconnect tones. No-ops when the intercom session is idle. */
+export async function playConnectionCue(name: 'disconnected' | 'reconnected'): Promise<boolean> {
+  try {
+    return (await loadNative()?.playConnectionCue?.(name)) === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Clears leftover iOS Now Playing. TalkToMe does not register as a media player. */

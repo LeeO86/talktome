@@ -6,6 +6,7 @@ import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Build
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -16,6 +17,7 @@ class TalkToMeAudioSessionModule : Module() {
   private var focusRequest: AudioFocusRequest? = null
   private var preferredRouteId = "speaker"
   private var deviceCallback: AudioDeviceCallback? = null
+  private var cuePlayer: MediaPlayer? = null
 
   override fun definition() = ModuleDefinition {
     Name("TalkToMeAudioSession")
@@ -77,6 +79,10 @@ class TalkToMeAudioSessionModule : Module() {
       true
     }
 
+    AsyncFunction("playConnectionCue") { name: String ->
+      playConnectionCue(name)
+    }
+
     Function("audioRoutes") {
       routeSnapshot()["routes"]
     }
@@ -106,7 +112,47 @@ class TalkToMeAudioSessionModule : Module() {
     return true
   }
 
+  private fun playConnectionCue(name: String): Boolean {
+    if (profile == "idle") return false
+    val resName = when (name) {
+      "disconnected" -> "talktome_disconnected"
+      "reconnected" -> "talktome_reconnected"
+      else -> return false
+    }
+    val context = appContext.reactContext ?: return false
+    val resId = context.resources.getIdentifier(resName, "raw", context.packageName).takeIf { it != 0 }
+      ?: context.resources.getIdentifier(resName, "raw", "expo.modules.audiosession")
+    if (resId == 0) return false
+    return try {
+      cuePlayer?.release()
+      val player = MediaPlayer()
+      cuePlayer = player
+      player.setAudioAttributes(
+        AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+          .build(),
+      )
+      context.resources.openRawResourceFd(resId).use { afd ->
+        player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+        player.prepare()
+      }
+      player.setOnCompletionListener {
+        it.release()
+        if (cuePlayer == it) cuePlayer = null
+      }
+      player.start()
+      true
+    } catch (_: Exception) {
+      cuePlayer?.release()
+      cuePlayer = null
+      false
+    }
+  }
+
   private fun deactivate(): Boolean {
+    cuePlayer?.release()
+    cuePlayer = null
     val manager = audioManager() ?: return false
     abandonFocus(manager)
     manager.mode = previousMode

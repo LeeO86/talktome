@@ -14,4 +14,5 @@ Pod::Spec.new do |s|
   s.dependency 'JitsiWebRTC', '~> 124.0.0'
 
   s.source_files = '**/*.{h,m,mm,swift}'
+  s.resources = 'Resources/*.mp3'
 end

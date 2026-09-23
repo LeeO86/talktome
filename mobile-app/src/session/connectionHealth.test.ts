@@ -26,6 +26,29 @@ describe('connectionHealth', () => {
     ).toBe('Media failed');
   });
 
+  it('warns when the server stops answering before media drops', () => {
+    expect(
+      connectionHealth({
+        signaling: 'connected',
+        send: 'connected',
+        receive: 'connected',
+        heartbeatInterrupted: true,
+      }),
+    ).toEqual({
+      kind: 'warning',
+      label: 'Server not responding',
+      shortLabel: 'No reply',
+    });
+    expect(
+      connectionHealth({
+        signaling: 'connected',
+        send: 'failed',
+        receive: 'connected',
+        heartbeatInterrupted: true,
+      }).label,
+    ).toBe('Media failed');
+  });
+
   it('treats a dropped or closed transport as interrupted', () => {
     expect(
       connectionHealth({

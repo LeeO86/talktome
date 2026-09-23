@@ -304,6 +304,7 @@ export class MediaCoordinator {
       mediaIceError: connection.iceError,
       mediaReady: connection.mediaReady,
     });
+    this.c.noteTransportConnection();
   }
 
   rememberLiveProducer(producer: ActiveProducer): void {

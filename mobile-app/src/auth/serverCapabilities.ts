@@ -2,6 +2,8 @@
  * v1.1.3 and earlier authenticate register-user from the login JSON body only. */
 export const BROWSER_SESSION_SINCE = '1.2.1';
 export const ACTIVE_PRODUCTION_SINCE = '1.5.0';
+/** TalkToMe 1.5.6 answers `connection-health`. Older servers have no handler. */
+export const SERVER_HEARTBEAT_SINCE = '1.5.6';
 
 export function parseAppVersion(value: string | null | undefined): [number, number, number] | null {
   const match = String(value ?? '')
@@ -40,4 +42,10 @@ export function supportsActiveProduction(appVersion?: string | null): boolean | 
     return null;
   }
   return cmp >= 0;
+}
+
+/** False when the version is missing. An unknown server must not be treated as silent. */
+export function supportsServerHeartbeat(appVersion?: string | null): boolean {
+  const cmp = compareAppVersion(appVersion ?? '', SERVER_HEARTBEAT_SINCE);
+  return cmp != null && cmp >= 0;
 }

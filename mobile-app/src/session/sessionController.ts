@@ -3,7 +3,11 @@ import type { CookieMap } from '../auth/cookieJar';
 import { SessionConflictError, SessionCookieUnavailableError, TlsUntrustedError } from '../auth/errors';
 import { TalkToMeHttp } from '../auth/http';
 import { hasSessionCookie, readNativeCookies } from '../auth/nativeCookies';
-import { requiresBrowserSessionCookie, supportsActiveProduction } from '../auth/serverCapabilities';
+import {
+  requiresBrowserSessionCookie,
+  supportsActiveProduction,
+  supportsServerHeartbeat,
+} from '../auth/serverCapabilities';
 import type { MediaEngine } from '../media/engine';
 import {
   EMPTY_CAMERA_TALLY,
@@ -13,7 +17,7 @@ import {
   type TargetAudioPreference,
   type TalkTarget,
 } from '../protocol';
-import { audioSessionAvailable } from '../audio/session';
+import { audioSessionAvailable, playConnectionCue } from '../audio/session';
 import { isLikelyLocalHost, parseServerAddress } from '../servers/parseServerAddress';
 import { looksLikeTlsFailure } from '../servers/tlsFailure';
 import { pinMatches } from '../servers/tlsPins';
@@ -51,6 +55,8 @@ import {
   upsertProfile,
   type SavedProfile,
 } from './remembered';
+import { canAnnounceConnectionRecovery, createConnectionCues, transportReportsLoss } from './connectionCues';
+import { createServerHeartbeat } from './serverHeartbeat';
 import { BackgroundCoordinator } from './backgroundCoordinator';
 import { MediaCoordinator } from './mediaCoordinator';
 import { TalkCoordinator } from './talkCoordinator';
@@ -75,6 +81,12 @@ export class SessionController {
   private pendingLoginToken = false;
   private reconnecting = false;
   private reconnectFailures = 0;
+  /** Intentional logout, pause, or profile leave. Suppresses connection tones. */
+  private sessionEnding = false;
+  private heartbeat: { stop: () => void } | null = null;
+  private readonly connectionCues = createConnectionCues((cue) => {
+    void playConnectionCue(cue);
+  });
 
   // Shared mutable fields used across coordinators.
   api: ApiClient | null = null;
@@ -489,7 +501,87 @@ export class SessionController {
     });
   }
 
+  noteTransportConnection(): void {
+    const state = useSessionStore.getState();
+    if (this.sessionEnding || !state.identity) {
+      return;
+    }
+    if (transportReportsLoss(state.sendTransportState, state.recvTransportState)) {
+      this.connectionCues.noteDisconnected();
+      return;
+    }
+    if (state.sendTransportState === 'connected' || state.recvTransportState === 'connected') {
+      this.announceConnectionRecovery();
+    }
+  }
+
+  private noteUnexpectedDisconnect(): void {
+    if (this.sessionEnding || !useSessionStore.getState().identity) {
+      return;
+    }
+    this.connectionCues.noteDisconnected();
+  }
+
+  private announceConnectionRecovery(): void {
+    const state = useSessionStore.getState();
+    if (
+      !canAnnounceConnectionRecovery({
+        ending: this.sessionEnding,
+        signedIn: Boolean(state.identity),
+        socketConnected: this.signaling?.connected === true,
+        heartbeatInterrupted: state.serverHeartbeatInterrupted,
+        send: state.sendTransportState,
+        receive: state.recvTransportState,
+      })
+    ) {
+      return;
+    }
+    this.connectionCues.noteReconnected();
+  }
+
+  private onServerHeartbeat(interrupted: boolean): void {
+    useSessionStore.setState({ serverHeartbeatInterrupted: interrupted });
+    if (this.sessionEnding || !useSessionStore.getState().identity) {
+      return;
+    }
+    if (interrupted) {
+      this.connectionCues.noteDisconnected();
+      return;
+    }
+    this.announceConnectionRecovery();
+  }
+
+  private stopServerHeartbeat(): void {
+    this.heartbeat?.stop();
+    this.heartbeat = null;
+  }
+
+  private syncServerHeartbeat(): void {
+    this.stopServerHeartbeat();
+    const signaling = this.signaling;
+    if (!signaling?.connected || !supportsServerHeartbeat(this.serverAppVersion) || this.sessionEnding) {
+      if (useSessionStore.getState().serverHeartbeatInterrupted) {
+        useSessionStore.setState({ serverHeartbeatInterrupted: false });
+      }
+      return;
+    }
+    const heartbeat = createServerHeartbeat(
+      {
+        get connected() {
+          return signaling.connected;
+        },
+        emitHealth: (timeoutMs, onReply) => signaling.emitConnectionHealth(timeoutMs, onReply),
+      },
+      (interrupted) => this.onServerHeartbeat(interrupted),
+    );
+    this.heartbeat = heartbeat;
+    heartbeat.start();
+  }
+
   private async teardownSession(): Promise<void> {
+    this.sessionEnding = true;
+    this.stopServerHeartbeat();
+    this.connectionCues.reset();
     const identity = useSessionStore.getState().identity;
     try {
       await this.media?.stopTalking();
@@ -670,6 +762,7 @@ export class SessionController {
             signalingStatus: 'connected',
             signalingLabel: `connected ${state.socketId ?? ''}`.trim(),
           });
+          this.syncServerHeartbeat();
         } else if (state.status === 'connecting') {
           useSessionStore.setState({
             signalingStatus: 'connecting',
@@ -680,11 +773,14 @@ export class SessionController {
             signalingStatus: 'failed',
             signalingLabel: `failed: ${state.message}`,
           });
+          this.stopServerHeartbeat();
+          this.noteUnexpectedDisconnect();
         } else {
           useSessionStore.setState({
             signalingStatus: 'disconnected',
             signalingLabel: 'disconnected',
           });
+          this.stopServerHeartbeat();
         }
       },
       onReconnect: () => {
@@ -820,6 +916,7 @@ export class SessionController {
       await this.announceActiveProduction(useSessionStore.getState().productionId);
       await this.mediaCoordinator.rebuildMediaAfterReconnect();
       this.reconnectFailures = 0;
+      this.announceConnectionRecovery();
     } catch (error) {
       if (useSessionStore.getState().identity?.kind === 'user' && this.pendingPassword) {
         try {
@@ -864,6 +961,7 @@ export class SessionController {
   }
 
   private beginConnect(serverAddress: string, username: string, rememberPassword: boolean): void {
+    this.sessionEnding = false;
     useSessionStore.setState({
       status: 'connecting',
       error: null,
@@ -998,20 +1096,24 @@ export class SessionController {
       const remembered = productions.find((item) => item.id === rememberedProductionId);
       if (remembered) {
         await this.mediaCoordinator.enterOperator(remembered);
+        this.announceConnectionRecovery();
         return;
       }
       if (rememberedProductionId == null && rememberedProductionName?.trim().toLowerCase() === 'default') {
         await this.mediaCoordinator.enterOperator(null);
+        this.announceConnectionRecovery();
         return;
       }
       useSessionStore.setState({
         status: 'choose-production',
         statusMessage: 'Choose a production',
       });
+      this.announceConnectionRecovery();
       return;
     }
 
     await this.mediaCoordinator.enterOperator(null);
+    this.announceConnectionRecovery();
   }
 
   requireApi(): ApiClient {

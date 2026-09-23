@@ -74,6 +74,10 @@ public final class TalkToMeAudioSessionModule: Module {
       return true
     }
 
+    AsyncFunction("playConnectionCue") { (name: String) in
+      self.controller.playConnectionCue(name)
+    }
+
     Function("audioRoutes") {
       self.controller.routeSnapshot()["routes"]
     }

@@ -15,6 +15,7 @@ final class TalkToMeAudioSessionController {
   private var wantsBackgroundReceiveKeepalive = false
   private var backgroundTask = UIBackgroundTaskIdentifier.invalid
   private var preferredRouteId = "speaker"
+  private var cuePlayer: AVAudioPlayer?
   var onRouteChange: (() -> Void)?
 
   init(notificationCenter: NotificationCenter = .default) {
@@ -32,6 +33,41 @@ final class TalkToMeAudioSessionController {
 
   func profile() -> String {
     activeProfile
+  }
+
+  /// Plays a bundled TalkToMe 1.5.6 cue on the current session. Idle sessions stay silent
+  /// so a tone never activates the microphone by itself.
+  func playConnectionCue(_ name: String) -> Bool {
+    guard activeProfile != "idle", name == "disconnected" || name == "reconnected" else {
+      return false
+    }
+    guard let url = cueURL(name) else {
+      return false
+    }
+    do {
+      cuePlayer?.stop()
+      let player = try AVAudioPlayer(contentsOf: url)
+      player.prepareToPlay()
+      cuePlayer = player
+      return player.play()
+    } catch {
+      return false
+    }
+  }
+
+  private func cueURL(_ name: String) -> URL? {
+    let candidates = [Bundle.main, Bundle(for: TalkToMeAudioSessionModule.self)]
+    for bundle in candidates {
+      if let url = bundle.url(forResource: name, withExtension: "mp3") {
+        return url
+      }
+      if let nested = bundle.url(forResource: "TalkToMeAudioSession", withExtension: "bundle"),
+         let resourceBundle = Bundle(url: nested),
+         let url = resourceBundle.url(forResource: name, withExtension: "mp3") {
+        return url
+      }
+    }
+    return nil
   }
 
   func activateForMonitoring() throws {
