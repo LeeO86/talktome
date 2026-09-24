@@ -60,6 +60,7 @@ describe('signaling handshake', () => {
       guestProfileUserId: null,
       productionId: null,
       force: false,
+      clientType: null,
     });
   });
 
@@ -82,6 +83,7 @@ describe('signaling handshake', () => {
       guestProfileUserId: 9,
       productionId: null,
       force: false,
+      clientType: null,
     });
   });
 
@@ -89,5 +91,11 @@ describe('signaling handshake', () => {
     expect(
       registerUserPayload({ id: 5, name: 'adi', kind: 'user' }, false, 4),
     ).toMatchObject({ productionId: 4 });
+  });
+
+  it('identifies native iOS and Android registrations', () => {
+    const identity = { id: 5, name: 'adi', kind: 'user' } as const;
+    expect(registerUserPayload(identity, false, null, 'ios').clientType).toBe('ios-app');
+    expect(registerUserPayload(identity, false, null, 'android').clientType).toBe('android-app');
   });
 });

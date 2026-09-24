@@ -85,6 +85,7 @@ export function registerUserPayload(
   identity: OperatorIdentity,
   force = false,
   productionId?: number | null,
+  platform?: string,
 ) {
   return {
     id: String(identity.kind === 'guest' ? (identity.guestId ?? identity.id) : identity.id),
@@ -93,6 +94,7 @@ export function registerUserPayload(
     guestProfileUserId: identity.guestProfileUserId ?? null,
     productionId: productionId ?? null,
     force,
+    clientType: platform === 'ios' ? 'ios-app' : platform === 'android' ? 'android-app' : null,
   };
 }
 
@@ -105,6 +107,7 @@ export class SignalingClient {
   constructor(
     private readonly baseUrl: string,
     private readonly getCookies: () => CookieMap,
+    private readonly platform: string,
   ) {}
 
   get socketId(): string | undefined {
@@ -188,7 +191,7 @@ export class SignalingClient {
   ): Promise<RegisterUserResponse> {
     return this.emitAck<RegisterUserResponse>(
       SocketEvent.registerUser,
-      registerUserPayload(identity, force, productionId),
+      registerUserPayload(identity, force, productionId, this.platform),
     );
   }
 

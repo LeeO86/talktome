@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 import { ApiClient } from '../auth/apiClient';
 import type { CookieMap } from '../auth/cookieJar';
 import { SessionConflictError, SessionCookieUnavailableError, TlsUntrustedError } from '../auth/errors';
@@ -85,7 +87,7 @@ export class SessionController {
   private sessionEnding = false;
   private heartbeat: { stop: () => void } | null = null;
   private readonly connectionCues = createConnectionCues((cue) => {
-    void playConnectionCue(cue);
+    if (this.serverClientDefaults.playConnectionSounds !== false) void playConnectionCue(cue);
   });
 
   // Shared mutable fields used across coordinators.
@@ -1048,7 +1050,7 @@ export class SessionController {
   private async finishIdentity(identity: OperatorIdentity, force: boolean): Promise<void> {
     const parsed = parseServerAddress(useSessionStore.getState().serverAddress);
     this.signaling?.disconnect();
-    this.signaling = new SignalingClient(parsed.baseUrl, () => this.cookies);
+    this.signaling = new SignalingClient(parsed.baseUrl, () => this.cookies, Platform.OS);
     this.bindSignaling(this.signaling);
 
     useSessionStore.setState({ statusMessage: 'Connecting signaling…' });

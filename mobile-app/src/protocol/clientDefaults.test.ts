@@ -10,13 +10,14 @@ describe('parseDefaultClientSettingsScript', () => {
     const body =
       'window.TALKTOME_DEFAULT_CLIENT_SETTINGS = {"audioProfile":"ultra-low","dimAmountDb":-12,' +
       '"dimFeedsWhileSpeaking":true,"dimWhenAddressed":true,"audioAutoProcessing":true,' +
-      '"leftHandMode":false,"lockMultipleTargets":true};\n';
+      '"playConnectionSounds":false,"leftHandMode":false,"lockMultipleTargets":true};\n';
     expect(parseDefaultClientSettingsScript(body)).toEqual({
       audioProfile: 'ultra-low',
       dimAmountDb: -12,
       dimFeedsWhileSpeaking: true,
       dimWhenAddressed: true,
       audioAutoProcessing: true,
+      playConnectionSounds: false,
       leftHandMode: false,
       lockMultipleTargets: true,
     });

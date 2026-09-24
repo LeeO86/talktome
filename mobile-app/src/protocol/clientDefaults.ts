@@ -15,6 +15,7 @@ export type ServerClientDefaults = {
   dimFeedsWhileSpeaking?: boolean;
   dimWhenAddressed?: boolean;
   audioAutoProcessing?: boolean;
+  playConnectionSounds?: boolean;
   leftHandMode?: boolean;
   lockMultipleTargets?: boolean;
 };
@@ -23,6 +24,7 @@ const BOOLEAN_KEYS = [
   'dimFeedsWhileSpeaking',
   'dimWhenAddressed',
   'audioAutoProcessing',
+  'playConnectionSounds',
   'leftHandMode',
   'lockMultipleTargets',
 ] as const;
