@@ -11,6 +11,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
+use super::alerts::{Announcement, ConnectionAlerts, ProbeReply};
 use super::http::{LoginResponse, ServerApi, TargetEntry};
 use super::socketio::{ConnectOptions, SocketClient, SocketEvent};
 use crate::audio::codec::OpusEncoder;
@@ -87,6 +88,7 @@ enum Event {
     AudioStatus,
     Tick,
     Shutdown,
+    Probe(ProbeReply),
 }
 
 /// Why the connected loop ended.
@@ -131,6 +133,9 @@ pub struct Session {
     reconnects: u32,
     /// Details of the current transports for the status page.
     media_info: Option<crate::state::MediaInfo>,
+    alerts: ConnectionAlerts,
+    probe_tx: mpsc::Sender<ProbeReply>,
+    probe_rx: mpsc::Receiver<ProbeReply>,
 }
 
 impl Session {
@@ -168,6 +173,7 @@ impl Session {
             }
         }
         let (rx_tx, rx_rx) = mpsc::channel(1024);
+        let (probe_tx, probe_rx) = mpsc::channel(32);
         Ok(Self {
             frame_duration: Duration::from_millis(profile.frame_ms() as u64),
             config,
@@ -201,6 +207,9 @@ impl Session {
             registered_since: None,
             reconnects: 0,
             media_info: None,
+            alerts: ConnectionAlerts::new(),
+            probe_tx,
+            probe_rx,
         })
     }
 
@@ -794,6 +803,8 @@ impl Session {
     async fn run_connected(&mut self, mut connected: Connected) -> Exit {
         if let Err(error) = self.setup_media(&mut connected).await {
             tracing::error!(event = "media-setup-failed", error = %format!("{error:#}"));
+            let cue = self.alerts.on_socket_lost();
+            self.play_announcement(cue);
             connected.socket.close().await;
             return Exit::Disconnected(format!("media setup failed: {error:#}"));
         }
@@ -806,6 +817,8 @@ impl Session {
                 .await;
         }
         self.snapshot_dirty = true;
+        while self.probe_rx.try_recv().is_ok() {}
+        self.alerts.start(Instant::now());
 
         let mut tick = tokio::time::interval(Duration::from_millis(500));
         let mut last_sync = Instant::now();
@@ -823,6 +836,7 @@ impl Session {
                 _ = self.io.audio_status.changed() => Event::AudioStatus,
                 _ = wait_true(&mut shutdown) => Event::Shutdown,
                 _ = tick.tick() => Event::Tick,
+                Some(reply) = self.probe_rx.recv() => Event::Probe(reply),
             };
 
             match event {
@@ -831,10 +845,14 @@ impl Session {
                     return Exit::Shutdown;
                 }
                 Event::Socket(SocketEvent::Disconnected(reason)) => {
+                    let cue = self.alerts.on_socket_lost();
+                    self.play_announcement(cue);
                     self.teardown_media(&mut connected).await;
                     return Exit::Disconnected(reason);
                 }
                 Event::Socket(SocketEvent::ConnectError(error)) => {
+                    let cue = self.alerts.on_socket_lost();
+                    self.play_announcement(cue);
                     self.teardown_media(&mut connected).await;
                     return Exit::Disconnected(format!("connect error: {error}"));
                 }
@@ -847,6 +865,7 @@ impl Session {
                     match name.as_str() {
                         "session-kicked" => {
                             tracing::warn!(event = "session-kicked", detail = %payload);
+                            self.alerts.suppress_loss();
                             self.teardown_media(&mut connected).await;
                             connected.socket.close().await;
                             return Exit::Kicked;
@@ -918,6 +937,19 @@ impl Session {
                             .await;
                     }
                     // Receiving indicators change without any event; refresh them.
+                    // This 500 ms tick is also the v1.5.6 connection-health probe.
+                    let now = Instant::now();
+                    let cue = self.alerts.on_tick(now);
+                    self.play_announcement(cue);
+                    self.spawn_health_probe(&connected.socket);
+                    self.snapshot_dirty = true;
+                }
+                Event::Probe(reply) => {
+                    let (send_blocks, recv_blocks) = transport_blocks(connected.media.as_ref());
+                    let cue = self
+                        .alerts
+                        .on_ack(reply, Instant::now(), send_blocks, recv_blocks);
+                    self.play_announcement(cue);
                     self.snapshot_dirty = true;
                 }
             }
@@ -926,6 +958,7 @@ impl Session {
     }
 
     async fn shutdown_connected(&mut self, connected: &mut Connected) {
+        self.alerts.suppress_loss();
         let change = self.talk.reset();
         if change != self.talk_change_now() || !change.targets.is_empty() {
             self.send_talk_change(connected, &change, "shutdown").await;
@@ -1094,21 +1127,34 @@ impl Session {
                         Direction::Recv => media.recv_state = state,
                     }
                     if let Some(info) = self.media_info.as_mut() {
-                        info.send_state = media.send_state.to_string();
-                        info.recv_state = media.recv_state.to_string();
+                        info.send_state = peer_state_label(media.send_state).to_string();
+                        info.recv_state = peer_state_label(media.recv_state).to_string();
                         info.consumers = media.consumers.len();
                     }
                     self.snapshot_dirty = true;
                 }
+                if matches!(
+                    state,
+                    RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed
+                ) {
+                    let cue = self.alerts.on_transport_down();
+                    self.play_announcement(cue);
+                }
                 if matches!(state, RTCPeerConnectionState::Failed) {
                     self.recover_media(connected, &format!("{direction:?} transport {state}"))
                         .await;
+                } else if matches!(state, RTCPeerConnectionState::Connected) {
+                    let (send_blocks, recv_blocks) = transport_blocks(connected.media.as_ref());
+                    let cue = self.alerts.on_transport_up(send_blocks, recv_blocks);
+                    self.play_announcement(cue);
                 }
                 self.update_ready_state(connected);
             }
             RtcEvent::IceState { direction, state } => {
                 tracing::debug!(event = "ice-state", direction = ?direction, state = %state);
                 if matches!(state, RTCIceConnectionState::Failed) {
+                    let cue = self.alerts.on_transport_down();
+                    self.play_announcement(cue);
                     self.recover_media(connected, &format!("{direction:?} ICE failed"))
                         .await;
                 }
@@ -1753,7 +1799,71 @@ impl Session {
                 .map(|d| d.as_secs())
                 .filter(|_| self.connection.is_online()),
             reconnects: self.reconnects,
+            server_not_responding: self.connection.is_online() && self.alerts.interrupted(),
+            heartbeat: self
+                .alerts
+                .heartbeat(self.connection.is_online())
+                .to_string(),
+            media_status: self
+                .connection
+                .is_online()
+                .then(|| {
+                    let (send, recv) = self
+                        .media_info
+                        .as_ref()
+                        .map(|info| (info.send_state.as_str(), info.recv_state.as_str()))
+                        .unwrap_or(("", ""));
+                    super::alerts::media_status(self.alerts.interrupted(), send, recv)
+                        .map(str::to_string)
+                })
+                .flatten(),
         }
+    }
+
+    fn play_announcement(&self, announcement: Option<Announcement>) {
+        let Some(announcement) = announcement else {
+            return;
+        };
+        let samples = match announcement {
+            Announcement::Disconnected => crate::audio::cues::disconnected(),
+            Announcement::Reconnected => crate::audio::cues::reconnected(),
+        };
+        if let Ok(mut mixer) = self.io.mixer.lock() {
+            mixer.enqueue_cue(samples);
+        }
+        tracing::info!(
+            event = "connection-cue",
+            kind = match announcement {
+                Announcement::Disconnected => "disconnected",
+                Announcement::Reconnected => "reconnected",
+            }
+        );
+    }
+
+    fn spawn_health_probe(&mut self, socket: &SocketClient) {
+        if !self.alerts.wants_probe() {
+            return;
+        }
+        let generation = self.alerts.generation();
+        self.alerts.note_probe_sent();
+        let socket = socket.clone();
+        let tx = self.probe_tx.clone();
+        let sent_at = Instant::now();
+        tokio::spawn(async move {
+            let ok = matches!(
+                socket
+                    .request_no_payload("connection-health", super::alerts::PROBE_TIMEOUT)
+                    .await,
+                Ok(Value::Bool(true))
+            );
+            let _ = tx
+                .send(ProbeReply {
+                    generation,
+                    sent_at,
+                    ok,
+                })
+                .await;
+        });
     }
 
     fn publish(&mut self, force: bool) {
@@ -1793,6 +1903,33 @@ async fn wait_true(rx: &mut watch::Receiver<bool>) {
             std::future::pending::<()>().await;
         }
     }
+}
+
+fn peer_state_label(state: RTCPeerConnectionState) -> &'static str {
+    match state {
+        RTCPeerConnectionState::Unspecified => "unspecified",
+        RTCPeerConnectionState::New => "new",
+        RTCPeerConnectionState::Connecting => "connecting",
+        RTCPeerConnectionState::Connected => "connected",
+        RTCPeerConnectionState::Disconnected => "disconnected",
+        RTCPeerConnectionState::Failed => "failed",
+        RTCPeerConnectionState::Closed => "closed",
+    }
+}
+
+fn transport_blocks(media: Option<&Media>) -> (bool, bool) {
+    let Some(media) = media else {
+        return (false, false);
+    };
+    let blocks = |state| {
+        matches!(
+            state,
+            RTCPeerConnectionState::Connecting
+                | RTCPeerConnectionState::Disconnected
+                | RTCPeerConnectionState::Failed
+        )
+    };
+    (blocks(media.send_state), blocks(media.recv_state))
 }
 
 fn parse_cut_camera(payload: &Value) -> (bool, bool) {

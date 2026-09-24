@@ -1,6 +1,7 @@
 //! Local audio: Opus codec, capture/playback, jitter buffering and mixing.
 
 pub mod codec;
+pub mod cues;
 pub mod io;
 pub mod jitter;
 pub mod mixer;

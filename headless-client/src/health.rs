@@ -62,6 +62,9 @@ pub fn status_line(snapshot: &Snapshot) -> String {
     if let Some(tally) = snapshot.tally_label() {
         parts.push(tally.into());
     }
+    if snapshot.server_not_responding {
+        parts.push("server not responding".into());
+    }
     if !snapshot.audio_ok {
         parts.push("no audio device".into());
     }
@@ -72,13 +75,17 @@ pub fn status_line(snapshot: &Snapshot) -> String {
 }
 
 pub fn health_body(snapshot: &Snapshot) -> (u16, String) {
-    let healthy = snapshot.connection == ConnectionState::Ready && snapshot.audio_ok;
+    let healthy = snapshot.connection == ConnectionState::Ready
+        && snapshot.audio_ok
+        && !snapshot.server_not_responding;
     let body = serde_json::json!({
         "ok": healthy,
         "instance": snapshot.instance,
         "user": snapshot.user_name,
         "connection": snapshot.connection,
         "detail": snapshot.detail,
+        "server_not_responding": snapshot.server_not_responding,
+        "heartbeat": snapshot.heartbeat,
         "audio_ok": snapshot.audio_ok,
         "talking": snapshot.talking,
         "on_air": snapshot.on_air,
@@ -146,6 +153,16 @@ mod tests {
         assert_eq!(status_line(&snapshot), "ready as Cam 1, PREVIEW");
         snapshot.on_air = true;
         assert_eq!(status_line(&snapshot), "ready as Cam 1, ON AIR");
+        snapshot.server_not_responding = true;
+        snapshot.heartbeat = "missing".into();
+        let (status, body) = health_body(&snapshot);
+        assert_eq!(status, 503);
+        assert!(body.contains("\"server_not_responding\":true"));
+        assert_eq!(
+            status_line(&snapshot),
+            "ready as Cam 1, ON AIR, server not responding"
+        );
+        snapshot.server_not_responding = false;
         let (_, body) = health_body(&snapshot);
         assert!(body.contains("\"on_air\":true"));
         assert!(body.contains("\"preview\":true"));

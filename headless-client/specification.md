@@ -253,6 +253,9 @@ api-talk-command-result / api-target-audio-command-result
 set-active-production    { productionId }           -> {} | { error }
 user-audio-settings-update { settings }             -> { ok, settings }
 user-logout              (no payload, on clean shutdown)
+connection-health        (no payload) -> true
+                         v1.5.6+. Emitted every 500 ms while registered.
+                         A server that never acks does not raise a warning.
 ```
 
 Events **received**:
@@ -396,6 +399,16 @@ re-consume everything from `request-active-producers`. Talk state is
 preserved: if a key is still held or locked when recovery completes, the
 new producer is resumed and `talk-targets-updated` re-sent. Typical
 recovery time on LTE→Wi-Fi is one ICE gathering + DTLS round trip.
+
+While registered the client also emits `connection-health` every 500 ms
+(v1.5.6). After the server has answered `true` once, two seconds without a
+fresh ack sets `server_not_responding` and the status line
+`Server not responding`. A pre-1.5.6 server never acks, so that warning
+stays off. The playback device plays the web client's disconnect tone once
+when the socket drops, the heartbeat is lost, or a transport enters
+`disconnected` or `failed`, and the reconnect tone once when the socket is
+up, the heartbeat is healthy, and neither transport is `disconnected`,
+`failed` or `connecting`. Shutdown and `session-kicked` stay silent.
 
 ### 6.7 Interop notes (from the spike, §15 step 1)
 
@@ -706,7 +719,8 @@ remote/Companion HTTP (that still goes through the Talktome server).
   `can_talk`, `online`), linear `volume` and `volume_db`, conference
   `members` with the same fields, `reply` (effective Main / Reply
   destination), `main_target`, `main_unavailable`, PGM/PRV (`on_air` /
-  `preview`), connection, instance, user.
+  `preview`), connection, `server_not_responding`, `heartbeat`,
+  `media_status`, instance, user.
 - **Commands**: `press` / `release` / `lock` / `clear-locks` / `reply` /
   `mute` / `volume` (0–1) / `volume-db` / `volume-step` (`delta_db`,
   default `streamdeck.volume_step_db`) / `member-mute` /
