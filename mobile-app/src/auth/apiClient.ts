@@ -172,6 +172,24 @@ export class ApiClient {
     return payload.map(talkTargetFromResponse);
   }
 
+  /** TalkToMe 1.5.8. The list must be the complete current target set. */
+  async saveTargetOrder(
+    productionId: number | null,
+    items: { targetType: string; targetId: number }[],
+  ): Promise<void> {
+    const response = await this.http.request('/api/v1/client/targets/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productionId, items }),
+    });
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiClientError('This account cannot arrange targets.', response.status);
+    }
+    if (!response.ok) {
+      throw await this.serverError(response);
+    }
+  }
+
   async logout(userId?: number | string, socketId?: string): Promise<void> {
     await this.http.request('/api/v1/client/logout', {
       method: 'POST',

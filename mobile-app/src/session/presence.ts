@@ -9,7 +9,7 @@ export type PresenceSnapshot = {
   talkingLabels: string[];
   listeningLabels: string[];
   talkLocked: boolean;
-  actionKind: 'reply' | 'select';
+  actionKind: 'reply' | 'talk';
   actionTarget: string | null;
 };
 
@@ -51,17 +51,17 @@ export function formatPresenceList(labels: string[]): string {
 
 export function sessionPresence(input: {
   operatorReady: boolean;
-  talkSelectMode: boolean;
   incoming: IncomingTalkState;
   talking: boolean;
   talkingLabels: string[];
   talkLocked: boolean;
   replyTarget: TalkTarget | null;
-  selectedTalkTarget: TalkTarget | null;
+  /** Set when the bottom button is pinned. Null means Reply. */
+  mainButtonLabel: string | null;
   targets: TalkTarget[];
   streamingFeedLabels?: string[];
 }): PresenceSnapshot {
-  const actionTarget = input.talkSelectMode ? input.selectedTalkTarget : input.replyTarget;
+  const actionTarget = input.mainButtonLabel != null ? { label: input.mainButtonLabel } : input.replyTarget;
   const listeningLabels = uniqueLabels([
     ...incomingDestinationLabels(input.incoming, input.targets),
     ...(input.streamingFeedLabels ?? []),
@@ -74,7 +74,7 @@ export function sessionPresence(input: {
     talkingLabels: input.talkingLabels,
     listeningLabels,
     talkLocked: input.talkLocked,
-    actionKind: input.talkSelectMode ? 'select' : 'reply',
+    actionKind: input.mainButtonLabel != null ? 'talk' : 'reply',
     actionTarget: actionTarget?.label ?? null,
   };
 }
@@ -137,7 +137,7 @@ export function presenceWidgetLines(snapshot: PresenceSnapshot): {
 }
 
 export function presenceActionLine(snapshot: PresenceSnapshot): string {
-  const kind = snapshot.actionKind === 'select' ? 'Talk' : 'Reply';
+  const kind = snapshot.actionKind === 'talk' ? 'Talk' : 'Reply';
   return snapshot.actionTarget ? `${kind}: ${snapshot.actionTarget}` : `${kind}: none`;
 }
 

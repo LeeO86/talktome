@@ -21,6 +21,21 @@ describe('connection cues', () => {
     expect(played).toEqual(['disconnected', 'reconnected']);
   });
 
+  it('plays one cycle in the background, then stays quiet until the foreground', () => {
+    const played: string[] = [];
+    const cues = createConnectionCues((cue) => played.push(cue));
+    cues.setBackground(true);
+    cues.noteDisconnected();
+    cues.noteReconnected();
+    cues.noteDisconnected();
+    cues.noteReconnected();
+    expect(played).toEqual(['disconnected', 'reconnected']);
+    cues.setBackground(false);
+    cues.noteDisconnected();
+    cues.noteReconnected();
+    expect(played).toEqual(['disconnected', 'reconnected', 'disconnected', 'reconnected']);
+  });
+
   it('treats an unused transport as ready and a connecting one as not', () => {
     expect(transportsAllowRecovery('connected', 'new')).toBe(true);
     expect(transportsAllowRecovery('idle', 'idle')).toBe(true);

@@ -182,40 +182,6 @@ export function WalkieTalkieIcon({ color = colors.text, size = 22 }: IconProps) 
   return <AssetIcon source={WALKIE_TALKIE} color={color} size={size} />;
 }
 
-export function CheckIcon({
-  color = colors.text,
-  size = 22,
-  checked = false,
-}: IconProps & { checked?: boolean }) {
-  return (
-    <View
-      style={[
-        styles.checkBox,
-        {
-          width: size,
-          height: size,
-          borderColor: color,
-          backgroundColor: checked ? color : 'transparent',
-        },
-      ]}
-      {...iconEvents}
-    >
-      {checked ? (
-        <View
-          style={[
-            styles.checkMark,
-            {
-              width: size * 0.42,
-              height: size * 0.22,
-              borderColor: '#142033',
-            },
-          ]}
-        />
-      ) : null}
-    </View>
-  );
-}
-
 export function ChevronIcon({
   color = colors.text,
   size = 16,
@@ -400,18 +366,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     borderWidth: 2,
     borderRadius: 1,
-  },
-  checkBox: {
-    borderWidth: 2,
-    borderRadius: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkMark: {
-    borderLeftWidth: 2.5,
-    borderBottomWidth: 2.5,
-    marginTop: -2,
-    transform: [{ rotate: '-45deg' }],
   },
   chevron: {
     width: 0,

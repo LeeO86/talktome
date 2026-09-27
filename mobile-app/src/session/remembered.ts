@@ -30,9 +30,17 @@ type RememberedProfile = {
   rememberPassword: boolean;
   allowInsecureLocalTLS?: boolean;
   leftHanded?: boolean;
-  talkSelectMode?: boolean;
   guest?: RememberedGuest;
 };
+
+function readMainButtonTargets(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim() !== ''),
+  );
+}
 
 export async function loadProfileBundle(): Promise<ProfileBundle> {
   const raw = await AsyncStorage.getItem(PROFILES_KEY);
@@ -44,11 +52,12 @@ export async function loadProfileBundle(): Promise<ProfileBundle> {
         lastProfileId: typeof parsed.lastProfileId === 'string' ? parsed.lastProfileId : null,
         // Keys absent from storage stay undefined so server defaults can apply.
         leftHanded: typeof parsed.leftHanded === 'boolean' ? parsed.leftHanded : undefined,
-        talkSelectMode: Boolean(parsed.talkSelectMode),
         lockMultipleTargets:
           typeof parsed.lockMultipleTargets === 'boolean' ? parsed.lockMultipleTargets : undefined,
         edgeTalkAffordance:
           typeof parsed.edgeTalkAffordance === 'boolean' ? parsed.edgeTalkAffordance : undefined,
+        mainButtonTargets: readMainButtonTargets(parsed.mainButtonTargets),
+        bigMainButton: parsed.bigMainButton === true,
       };
     } catch {
       // fall through to legacy
@@ -105,7 +114,7 @@ async function loadPasswords(): Promise<Record<string, string>> {
 async function migrateLegacyProfile(): Promise<ProfileBundle> {
   const raw = await AsyncStorage.getItem(LEGACY_PROFILE_KEY);
   if (!raw) {
-    return { profiles: [], lastProfileId: null, talkSelectMode: false };
+    return { profiles: [], lastProfileId: null };
   }
   try {
     const profile = JSON.parse(raw) as RememberedProfile;
@@ -125,7 +134,6 @@ async function migrateLegacyProfile(): Promise<ProfileBundle> {
       profiles: [saved],
       lastProfileId: id,
       leftHanded: Boolean(profile.leftHanded),
-      talkSelectMode: Boolean(profile.talkSelectMode),
     };
     await saveProfileBundle(bundle);
     if (password) {
@@ -135,6 +143,6 @@ async function migrateLegacyProfile(): Promise<ProfileBundle> {
     await SecureStore.deleteItemAsync(LEGACY_PASSWORD_KEY);
     return bundle;
   } catch {
-    return { profiles: [], lastProfileId: null, talkSelectMode: false };
+    return { profiles: [], lastProfileId: null };
   }
 }

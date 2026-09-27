@@ -9,7 +9,10 @@ import { loadTalkLinkToken } from '../talk/talkLink';
 import { describePttDevicesSummary } from '../ble/bindings';
 import { fgsStatusLabel } from '../background/fgs';
 import { FEED_DIM_DB_OPTIONS, dimDbFromSliderPosition, sliderPositionFromDimDb } from '../session/operatorAudio';
+import { mainButtonCandidates, mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
+import { moveTargetOrder } from '../session/targetOrder';
 import { session, useSessionStore } from '../session/store';
+import { talkTargetIdentity, type TalkTarget } from '../protocol';
 import { describeWatchRemoteStatus, watchRemoteShortStatus, watchRemoteStatus } from '../watch/native';
 import { androidSafeArea } from './androidSafeArea';
 import { PttAddDevicePage, PttDeviceDetailPage, PttDevicesPage } from './PttSettingsScreens';
@@ -36,6 +39,8 @@ type Props = {
 type SettingsPage =
   | { kind: 'root' }
   | { kind: 'layout' }
+  | { kind: 'main-button' }
+  | { kind: 'arrange' }
   | { kind: 'audio' }
   | { kind: 'ptt' }
   | { kind: 'ptt-add' }
@@ -46,6 +51,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
   const store = useSessionStore();
   const scheme = useColorScheme();
   const [page, setPage] = useState<SettingsPage>({ kind: 'root' });
+  const [sliderDragging, setSliderDragging] = useState(false);
   const showPttList = useCallback(() => setPage({ kind: 'ptt' }), []);
 
   useEffect(() => {
@@ -54,6 +60,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
       return;
     }
     setPage({ kind: 'root' });
+    setSliderDragging(false);
     void session.cancelButtonPairing();
   }, [visible]);
 
@@ -67,6 +74,10 @@ export function SettingsScreen({ visible, onClose }: Props) {
       setPage({ kind: 'ptt' });
       return;
     }
+    if (page.kind === 'main-button' || page.kind === 'arrange') {
+      setPage({ kind: 'layout' });
+      return;
+    }
     setPage({ kind: 'root' });
   };
 
@@ -78,7 +89,11 @@ export function SettingsScreen({ visible, onClose }: Props) {
           page={page}
           onBack={page.kind === 'root' ? undefined : goBack}
           onClose={onClose}
+          scrollEnabled={!sliderDragging}
+          onDimSliding={setSliderDragging}
           onOpenLayout={() => setPage({ kind: 'layout' })}
+          onOpenMainButton={() => setPage({ kind: 'main-button' })}
+          onOpenArrange={() => setPage({ kind: 'arrange' })}
           onOpenAudio={() => setPage({ kind: 'audio' })}
           onOpenAccessories={() => setPage({ kind: 'ptt' })}
           onOpenDebug={() => setPage({ kind: 'debug' })}
@@ -96,7 +111,11 @@ function SettingsSheet({
   page,
   onBack,
   onClose,
+  scrollEnabled,
+  onDimSliding,
   onOpenLayout,
+  onOpenMainButton,
+  onOpenArrange,
   onOpenAudio,
   onOpenAccessories,
   onOpenDebug,
@@ -108,7 +127,11 @@ function SettingsSheet({
   page: SettingsPage;
   onBack?: () => void;
   onClose: () => void;
+  scrollEnabled: boolean;
+  onDimSliding: (active: boolean) => void;
   onOpenLayout: () => void;
+  onOpenMainButton: () => void;
+  onOpenArrange: () => void;
   onOpenAudio: () => void;
   onOpenAccessories: () => void;
   onOpenDebug: () => void;
@@ -130,7 +153,7 @@ function SettingsSheet({
         onDone={onClose}
       />
 
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
+      <ScrollView scrollEnabled={scrollEnabled} style={styles.scroll} contentContainerStyle={styles.body}>
         {page.kind === 'root' ? (
           <>
             <SettingsSection>
@@ -157,8 +180,12 @@ function SettingsSheet({
           </>
         ) : null}
 
-        {page.kind === 'layout' ? <LayoutSettingsPage /> : null}
-        {page.kind === 'audio' ? <AudioSettingsPage /> : null}
+        {page.kind === 'layout' ? (
+          <LayoutSettingsPage onOpenMainButton={onOpenMainButton} onOpenArrange={onOpenArrange} />
+        ) : null}
+        {page.kind === 'main-button' ? <MainButtonSettingsPage /> : null}
+        {page.kind === 'arrange' ? <ArrangeTargetsPage /> : null}
+        {page.kind === 'audio' ? <AudioSettingsPage onDimSliding={onDimSliding} /> : null}
 
         {page.kind === 'ptt' ? (
           <>
@@ -183,6 +210,10 @@ function headerForPage(page: SettingsPage, deviceName?: string): { title: string
   switch (page.kind) {
     case 'layout':
       return { title: 'Layout', backLabel: 'Settings' };
+    case 'main-button':
+      return { title: 'Main button target', backLabel: 'Layout' };
+    case 'arrange':
+      return { title: 'Arrange targets', backLabel: 'Layout' };
     case 'audio':
       return { title: 'Audio', backLabel: 'Settings' };
     case 'ptt':
@@ -198,9 +229,22 @@ function headerForPage(page: SettingsPage, deviceName?: string): { title: string
   }
 }
 
-function LayoutSettingsPage() {
+function LayoutSettingsPage({
+  onOpenMainButton,
+  onOpenArrange,
+}: {
+  onOpenMainButton: () => void;
+  onOpenArrange: () => void;
+}) {
   const store = useSessionStore();
   const audio = store.operatorAudio;
+  const main = resolveMainButton({
+    storedIdentity: store.mainButtonTargets[mainButtonStorageKey(store.activeProfileId, store.productionId)],
+    targets: store.targets,
+    replyTarget: store.replyTarget,
+    canTalk: (target) => session.canTalkTo(target),
+  });
+  const canArrange = store.identity?.kind === 'user';
 
   return (
     <>
@@ -214,16 +258,23 @@ function LayoutSettingsPage() {
           full="Moves the volume ring and the phone-landscape Reply column to the left, and slides right to lock — same as the web client. Tablets keep Reply on the bottom."
           compact="Volume and phone-landscape Reply move left. Slide right to lock."
         />
+        <SettingsNavRow label="Main button target" value={main.label} onPress={onOpenMainButton} />
+        <SettingsHint
+          full="Chooses what the bottom button does. Reply follows the last caller. A named target always talks to that target. Cards still talk on their own, same as the web client."
+          compact="Sets the bottom button. Cards still talk on their own."
+        />
         <SettingsSwitchRow
-          label="Talk & select"
-          value={store.talkSelectMode}
-          onValueChange={(value) => session.setTalkSelectMode(value)}
-          trackColor="#E23B4A"
+          label="Big main button"
+          value={store.bigMainButton}
+          onValueChange={(value) => session.setBigMainButton(value)}
         />
         <SettingsHint
-          full="Reply becomes a red Talk button. Cards only choose the destination. Tap the volume ring to set level in dB and mute. Double-tap a ring to mute. Tap a conference icon to set who you hear."
-          compact="Reply becomes Talk. Cards pick the destination. Tap dB to set level."
+          full="Makes the bottom button taller so it is harder to miss. Off until you turn it on."
+          compact="Taller bottom button. Off until you turn it on."
         />
+        {canArrange ? (
+          <SettingsNavRow label="Arrange targets" onPress={onOpenArrange} />
+        ) : null}
         <SettingsSwitchRow
           label="Lock multiple targets"
           value={store.lockMultipleTargets}
@@ -248,7 +299,7 @@ function LayoutSettingsPage() {
           onValueChange={(value) => session.setEdgeTalkAffordance(value)}
         />
         <SettingsHint
-          full="Moves the walkie-talkie to the phone’s edge so you can hit it with a thumb. Talkable cards always show the icon; this only widens the hit target. In Talk & select it becomes a checkmark. The extra edge target is hidden in phone landscape, where cards use two columns."
+          full="Moves the walkie-talkie to the phone’s edge so you can hit it with a thumb. Talkable cards always show the icon; this only widens the hit target. Listen-only rows keep the empty slot so the other icons stay put. The extra edge target is hidden in phone landscape, where cards use two columns."
           compact="Widens the walkie toward the phone edge. Hidden in phone landscape."
         />
       </SettingsSection>
@@ -256,7 +307,107 @@ function LayoutSettingsPage() {
   );
 }
 
-function AudioSettingsPage() {
+function MainButtonSettingsPage() {
+  const store = useSessionStore();
+  const key = mainButtonStorageKey(store.activeProfileId, store.productionId);
+  const stored = store.mainButtonTargets[key] ?? '';
+  const selfId = store.identity?.kind === 'user' ? store.identity.id : null;
+  const candidates = mainButtonCandidates(store.targets, selfId);
+  const known = candidates.some((target) => talkTargetIdentity(target) === stored);
+
+  return (
+    <SettingsSection>
+      <SettingsRow label="Reply" selected={!stored} onPress={() => session.setMainButtonTarget('')} />
+      {candidates.map((target) => {
+        const identity = talkTargetIdentity(target);
+        const kind = target.type === 'conference' ? 'Conference' : 'User';
+        return (
+          <SettingsRow
+            key={identity}
+            label={target.label}
+            value={kind}
+            selected={stored === identity}
+            onPress={() => session.setMainButtonTarget(identity)}
+          />
+        );
+      })}
+      {stored && !known ? <SettingsRow label="Unavailable target" value="Saved" selected /> : null}
+      <SettingsHint
+        full="Reply is the web client default. Pick a target to pin the bottom button. The choice is saved for this profile and production."
+        compact="Reply, or pin one target. Saved for this production."
+      />
+    </SettingsSection>
+  );
+}
+
+function arrangeKind(target: TalkTarget): string {
+  if (target.type === 'conference') {
+    return target.canTalk ? 'Conference' : 'Conference · Listen only';
+  }
+  if (target.type === 'feed') {
+    return 'Feed';
+  }
+  return 'User';
+}
+
+function ArrangeTargetsPage() {
+  const targets = useSessionStore((state) => state.targets);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const move = async (index: number, delta: number) => {
+    if (busy) {
+      return;
+    }
+    const next = moveTargetOrder(targets, index, index + delta);
+    if (!next) {
+      return;
+    }
+    setBusy(true);
+    setMessage('Saving…');
+    try {
+      await session.saveTargetOrder(next);
+      setMessage('Saved');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not save target order');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      {targets.length === 0 ? (
+        <SettingsSection>
+          <SettingsFootnote>No targets available.</SettingsFootnote>
+        </SettingsSection>
+      ) : (
+        targets.map((target, index) => (
+          <SettingsSection key={talkTargetIdentity(target)}>
+            <SettingsRow label={target.label} value={arrangeKind(target)} />
+            <SettingsActionRow
+              label="Move up"
+              disabled={busy || index === 0}
+              onPress={() => void move(index, -1)}
+            />
+            <SettingsActionRow
+              label="Move down"
+              disabled={busy || index === targets.length - 1}
+              onPress={() => void move(index, 1)}
+            />
+          </SettingsSection>
+        ))
+      )}
+      {message ? <SettingsFootnote>{message}</SettingsFootnote> : null}
+      <SettingsHint
+        full="Saves this order on the server, the same list the web client stores. Up and down avoid dragging inside a scrolling page."
+        compact="Saves the same target order as the web client."
+      />
+    </>
+  );
+}
+
+function AudioSettingsPage({ onDimSliding }: { onDimSliding: (active: boolean) => void }) {
   const store = useSessionStore();
   const audio = store.operatorAudio;
   const styles = useSettingsStyles();
@@ -286,7 +437,9 @@ function AudioSettingsPage() {
             flex
             accessibilityLabel="Dim amount"
             value={sliderPositionFromDimDb(audio.feedDimDb)}
+            stepCount={FEED_DIM_DB_OPTIONS.length}
             quantize={(position) => sliderPositionFromDimDb(dimDbFromSliderPosition(position))}
+            onSliding={onDimSliding}
             onChange={(position) => session.setOperatorAudio({ feedDimDb: dimDbFromSliderPosition(position) })}
           />
           <Text style={styles.sliderHint}>{FEED_DIM_DB_OPTIONS[FEED_DIM_DB_OPTIONS.length - 1]}</Text>
@@ -294,6 +447,18 @@ function AudioSettingsPage() {
         <SettingsHint
           full="Same defaults as the web client: dim when someone calls you, not while you talk, by 15 dB."
           compact="Dim when called, not while you talk. Default 15 dB."
+        />
+      </SettingsSection>
+
+      <SettingsSection title="Connection">
+        <SettingsSwitchRow
+          label="Play connection sounds"
+          value={audio.playConnectionSounds}
+          onValueChange={(value) => session.setOperatorAudio({ playConnectionSounds: value })}
+        />
+        <SettingsHint
+          full="Plays the disconnected and reconnected tones. The server’s Play connection sounds default applies until you change this. Pause and sign-out stay silent either way."
+          compact="Disconnected and reconnected tones. Uses the server default until you change it."
         />
       </SettingsSection>
 

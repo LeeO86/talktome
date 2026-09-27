@@ -16,6 +16,9 @@ type Props = {
   accessibilityLabel?: string;
   quantize?: (value: number) => number;
   logarithmic?: boolean;
+  /** Draw a detent at each equal step, including both ends. */
+  stepCount?: number;
+  onSliding?: (active: boolean) => void;
 };
 
 export function VolumeSlider({
@@ -27,6 +30,8 @@ export function VolumeSlider({
   accessibilityLabel = 'Volume',
   quantize,
   logarithmic = false,
+  stepCount,
+  onSliding,
 }: Props) {
   const originX = useRef(0);
   const width = useRef(1);
@@ -49,7 +54,23 @@ export function VolumeSlider({
 
   const endDrag = () => {
     setDraft(null);
+    onSliding?.(false);
   };
+
+  const ticks =
+    stepCount && stepCount > 1
+      ? Array.from({ length: stepCount }, (_, index) => {
+          const position = index / (stepCount - 1);
+          const center = volumeThumbLeft(position, trackWidth || width.current, VOLUME_THUMB_SIZE) + VOLUME_THUMB_SIZE / 2;
+          return (
+            <View
+              key={index}
+              pointerEvents="none"
+              style={[styles.tick, light && styles.tickLight, { left: center - 3 }]}
+            />
+          );
+        })
+      : null;
 
   return (
     <View
@@ -63,9 +84,12 @@ export function VolumeSlider({
         setTrackWidth(nextWidth);
       }}
       onStartShouldSetResponder={() => !disabled}
+      onStartShouldSetResponderCapture={() => !disabled}
       onMoveShouldSetResponder={() => !disabled}
+      onMoveShouldSetResponderCapture={() => !disabled}
       onResponderTerminationRequest={() => false}
       onResponderGrant={(event) => {
+        onSliding?.(true);
         const { pageX, locationX } = event.nativeEvent;
         originX.current = pageX - locationX;
         applyPageX(pageX);
@@ -75,6 +99,7 @@ export function VolumeSlider({
       onResponderTerminate={endDrag}
     >
       <View pointerEvents="none" style={[styles.rail, light && styles.railLight]} />
+      {ticks}
       <View pointerEvents="none" style={[styles.fill, { width: thumbLeft }]} />
       <View
         pointerEvents="none"
@@ -121,6 +146,16 @@ const styles = StyleSheet.create({
     height: VOLUME_THUMB_SIZE,
     borderRadius: VOLUME_THUMB_SIZE / 2,
     backgroundColor: colors.text,
+  },
+  tick: {
+    position: 'absolute',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+  },
+  tickLight: {
+    backgroundColor: 'rgba(60, 60, 67, 0.45)',
   },
   railLight: {
     backgroundColor: 'rgba(60, 60, 67, 0.18)',

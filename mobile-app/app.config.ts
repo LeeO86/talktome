@@ -19,7 +19,7 @@ const config: ExpoConfig = {
     supportsTablet: true,
     icon: './assets/icon.png',
     bundleIdentifier: 'io.github.leeo86.talktome-mobile',
-    buildNumber: '19',
+    buildNumber: '20',
     appleTeamId: '4876GGFAH9',
     entitlements: {
       'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
@@ -62,7 +62,7 @@ const config: ExpoConfig = {
   android: {
     // Android Java packages cannot contain a hyphen.
     package: 'io.github.leeo86.talktomemobile',
-    versionCode: 19,
+    versionCode: 20,
     adaptiveIcon: {
       backgroundColor: '#000000',
       foregroundImage: './assets/android-icon-foreground.png',

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createServerHeartbeat, type HeartbeatSocket } from './serverHeartbeat';
 
-function setup() {
+function setup(options: { paused?: () => boolean } = {}) {
   let time = 0;
   let tick: (() => void) | null = null;
   const replies: Array<(error: unknown, reply: unknown) => void> = [];
@@ -22,6 +22,7 @@ function setup() {
     cancel() {
       tick = null;
     },
+    isPaused: options.paused,
   });
   return {
     health,
@@ -50,7 +51,9 @@ describe('server heartbeat', () => {
     expect(fixture.changes).toEqual([true]);
     fixture.replies.at(-1)?.(null, true);
     expect(fixture.changes).toEqual([true, false]);
-    fixture.advance(2000);
+    for (let i = 0; i < 4; i += 1) {
+      fixture.advance(500);
+    }
     expect(fixture.changes).toEqual([true, false, true]);
   });
 
@@ -67,7 +70,9 @@ describe('server heartbeat', () => {
   it('ignores expired, failed, and invalid replies', () => {
     const fixture = setup();
     fixture.health.start();
-    fixture.advance(2000);
+    for (let i = 0; i < 4; i += 1) {
+      fixture.advance(500);
+    }
     fixture.replies[0]?.(null, true);
     fixture.replies.at(-1)?.(new Error('timeout'), null);
     fixture.replies.at(-1)?.(null, false);
@@ -90,5 +95,35 @@ describe('server heartbeat', () => {
     expect(fixture.changes).toEqual([true]);
     fixture.replies.at(-1)?.(null, true);
     expect(fixture.changes).toEqual([true, false]);
+  });
+
+  it('treats a stalled timer as a resume, not a server outage', () => {
+    const fixture = setup();
+    fixture.health.start();
+    fixture.replies[0]?.(null, true);
+    fixture.advance(5000);
+    expect(fixture.changes).toEqual([]);
+    for (let i = 0; i < 3; i += 1) {
+      fixture.advance(500);
+    }
+    expect(fixture.changes).toEqual([]);
+    fixture.advance(500);
+    expect(fixture.changes).toEqual([true]);
+  });
+
+  it('does not warn while the app is in the background', () => {
+    let paused = true;
+    const fixture = setup({ paused: () => paused });
+    fixture.health.start();
+    fixture.advance(5000);
+    expect(fixture.changes).toEqual([]);
+    expect(fixture.replies).toHaveLength(0);
+    paused = false;
+    for (let i = 0; i < 3; i += 1) {
+      fixture.advance(500);
+    }
+    expect(fixture.changes).toEqual([]);
+    fixture.advance(500);
+    expect(fixture.changes).toEqual([true]);
   });
 });

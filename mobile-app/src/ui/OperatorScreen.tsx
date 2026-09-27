@@ -11,6 +11,7 @@ import {
 } from '../protocol';
 import { operatorPttNotice, shouldShowPttJoinBanner } from '../ptt/policy';
 import { connectionHealthFromSession } from '../session/connectionHealth';
+import { mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
 import { session, useSessionStore } from '../session/store';
 import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
@@ -51,7 +52,12 @@ export function OperatorScreen() {
   const [listHeight, setListHeight] = useState(0);
   const compactRef = useRef(compact);
   const reply = store.replyTarget;
-  const selected = store.selectedTalkTarget;
+  const mainButton = resolveMainButton({
+    storedIdentity: store.mainButtonTargets[mainButtonStorageKey(store.activeProfileId, store.productionId)],
+    targets: store.targets,
+    replyTarget: reply,
+    canTalk: (target) => session.canTalkTo(target),
+  });
   const availableHeight = listHeight || estimateTargetListHeight(width, height, headerCollapsed);
   const layout = operatorLayout({
     width,
@@ -93,11 +99,9 @@ export function OperatorScreen() {
     setHeaderCollapsed(false);
   };
 
-  const replyLabel = reply ? `Reply to ${reply.label}` : 'Reply';
-  const selectLabel = selected ? `Talk to ${selected.label}` : 'Talk';
-  const mainTalking = store.talkSelectMode
-    ? Boolean(store.talking && selected)
-    : Boolean(store.talking && reply);
+  const mainTarget = mainButton.target;
+  const mainKey = mainTarget ? talkTargetIdentity(mainTarget) : '';
+  const mainTalking = Boolean(mainTarget && store.talking && store.talkingTargetKeys.includes(mainKey));
 
   const productionLabel = visibleProductionName(store.productionName);
   const connection = connectionHealthFromSession(store);
@@ -113,11 +117,7 @@ export function OperatorScreen() {
     connection.kind === 'warning' || connection.kind === 'failed' ? connection.label : store.audioNotice;
   const tallyColor = cameraTallyColor(store.cameraTally);
   const tallyLabel = cameraTallyLabel(store.cameraTally);
-  const replyLocked =
-    Boolean(store.replyTarget) && store.lockedTargetKeys.includes(talkTargetIdentity(store.replyTarget!));
-  const selectedLocked =
-    Boolean(store.selectedTalkTarget) &&
-    store.lockedTargetKeys.includes(talkTargetIdentity(store.selectedTalkTarget!));
+  const mainLocked = Boolean(mainKey && store.lockedTargetKeys.includes(mainKey));
 
   const layerButton =
     layers > 1 ? (
@@ -132,62 +132,50 @@ export function OperatorScreen() {
       </Pressable>
     ) : null;
 
-  const replyButton = store.talkSelectMode ? (
+  const replyButton = (
     <HoldToTalk
-      accessibilityLabel="Talk to selected destination"
-      disabled={!selected}
-      locked={selectedLocked}
+      accessibilityLabel={mainButton.accessibilityLabel}
+      disabled={!mainTarget}
+      locked={mainLocked}
       leftHanded={store.leftHanded}
-      onPress={() => void session.pressSelectedTalk()}
-      onLock={() => void session.lockSelectedTalk()}
-      onRelease={() => void session.releaseTalk()}
-      style={[
-        styles.reply,
-        styles.talkSelect,
-        replyBeside && styles.replyLandscape,
-        compact && !replyBeside && styles.replyCompact,
-        mainTalking && styles.talkSelectActive,
-        !selected && styles.replyDisabled,
-      ]}
-    >
-      {selectedLocked ? (
-        <LockIcon color={colors.text} />
-      ) : (
-        <WalkieTalkieIcon color={selected ? colors.text : 'rgba(255,255,255,0.38)'} />
-      )}
-      <Text style={[styles.replyText, replyBeside && styles.replyTextLandscape, !selected && styles.replyMuted]}>
-        {selectLabel}
-      </Text>
-      {selected && !compact ? (
-        <Text style={styles.replyHint}>{slideToLockHint(store.leftHanded)}</Text>
-      ) : null}
-    </HoldToTalk>
-  ) : (
-    <HoldToTalk
-      accessibilityLabel="Reply"
-      disabled={!reply}
-      locked={replyLocked}
-      leftHanded={store.leftHanded}
-      onPress={() => void session.pressReply()}
-      onLock={() => void session.lockReply()}
+      onPress={() => void session.pressMainButton()}
+      onLock={() => void session.lockMainButton()}
       onRelease={() => void session.releaseTalk()}
       style={[
         styles.reply,
         replyBeside && styles.replyLandscape,
         compact && !replyBeside && styles.replyCompact,
+        store.bigMainButton && styles.replyBig,
+        store.bigMainButton && replyBeside && styles.replyBigLandscape,
         mainTalking && styles.replyActive,
-        !reply && styles.replyDisabled,
+        !mainTarget && styles.replyDisabled,
       ]}
     >
-      {replyLocked ? (
-        <LockIcon color={colors.text} />
+      {mainLocked ? (
+        <LockIcon color={colors.text} size={store.bigMainButton ? 28 : 22} />
+      ) : mainButton.mode === 'target' ? (
+        <WalkieTalkieIcon
+          color={mainTarget ? colors.text : 'rgba(255,255,255,0.38)'}
+          size={store.bigMainButton ? 32 : 22}
+        />
       ) : (
-        <ReplyArrowIcon color={reply ? colors.text : 'rgba(255,255,255,0.38)'} />
+        <ReplyArrowIcon
+          color={mainTarget ? colors.text : 'rgba(255,255,255,0.38)'}
+          size={store.bigMainButton ? 28 : 22}
+        />
       )}
-      <Text style={[styles.replyText, replyBeside && styles.replyTextLandscape, !reply && styles.replyMuted]}>
-        {replyLabel}
+      <Text
+        numberOfLines={2}
+        style={[
+          styles.replyText,
+          replyBeside && styles.replyTextLandscape,
+          store.bigMainButton && styles.replyTextBig,
+          !mainTarget && styles.replyMuted,
+        ]}
+      >
+        {mainButton.label}
       </Text>
-      {reply && !compact ? (
+      {mainTarget && !compact ? (
         <Text style={styles.replyHint}>{slideToLockHint(store.leftHanded)}</Text>
       ) : null}
     </HoldToTalk>
@@ -542,17 +530,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     gap: 8,
   },
+  replyBig: {
+    minHeight: 112,
+    paddingVertical: 16,
+    gap: 14,
+  },
+  replyBigLandscape: {
+    width: 148,
+    maxWidth: 168,
+  },
   replyActive: {
     backgroundColor: 'rgba(122,71,199,0.28)',
     borderColor: 'rgba(158,112,230,0.68)',
-  },
-  talkSelect: {
-    backgroundColor: 'rgba(226,59,74,0.88)',
-    borderColor: 'rgba(255,180,180,0.55)',
-  },
-  talkSelectActive: {
-    backgroundColor: '#B81F2E',
-    borderColor: 'rgba(255,180,180,0.8)',
   },
   replyDisabled: {
     backgroundColor: 'rgba(255,255,255,0.05)',
@@ -566,6 +555,9 @@ const styles = StyleSheet.create({
   replyTextLandscape: {
     fontSize: 14,
     textAlign: 'center',
+  },
+  replyTextBig: {
+    fontSize: 26,
   },
   replyMuted: {
     color: 'rgba(255,255,255,0.5)',

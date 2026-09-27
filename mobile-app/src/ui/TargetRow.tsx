@@ -12,7 +12,6 @@ import { session, useSessionStore } from '../session/store';
 import { incomingHighlightsTarget } from '../talk/replyTarget';
 import { HoldToTalk } from './HoldToTalk';
 import {
-  CheckIcon,
   ConferenceIcon,
   HeadphonesIcon,
   ListenOnlyIcon,
@@ -59,12 +58,6 @@ export function TargetRow({
   const feedStopped = useSessionStore((state) => state.stoppedFeedKeys.includes(key));
   const feedOnline = useSessionStore((state) => state.activeFeedKeys.includes(key));
   const volumeFader = useSessionStore((state) => state.operatorAudio.volumeFader);
-  const talkSelectMode = useSessionStore((state) => state.talkSelectMode);
-  const selected = useSessionStore(
-    (state) =>
-      Boolean(state.selectedTalkTarget) &&
-      talkTargetIdentity(state.selectedTalkTarget!) === key,
-  );
   const canTalk = session.canTalkTo(target);
   // Web `#targets-list .talk-btn` always paints the walkie, including offline
   // users. Feeds and listen-only conferences have no talk button.
@@ -141,20 +134,7 @@ export function TargetRow({
   );
 
   const wrapTalk = (children: ReactNode, style: StyleProp<ViewStyle>, accessibilityLabel: string) => {
-    if (talkSelectMode && canTalk) {
-      return (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={accessibilityLabel}
-          accessibilityState={{ selected }}
-          onPress={() => session.selectTalkTarget(target)}
-          style={style}
-        >
-          {children}
-        </Pressable>
-      );
-    }
-    if (canTalk && !talkSelectMode) {
+    if (canTalk) {
       return (
         <HoldToTalk
           accessibilityLabel={locked ? `Unlock ${target.label}` : accessibilityLabel}
@@ -176,36 +156,21 @@ export function TargetRow({
   const talkZone = wrapTalk(
     identity,
     [styles.talkZone, talking ? styles.talkZoneActive : null],
-    talkSelectMode ? `Select ${target.label}` : `Talk to ${target.label}`,
+    `Talk to ${target.label}`,
   );
 
-  const edgeIconColor = talking
-    ? colors.talking
-    : selected
-      ? '#FFB020'
-      : dimmed
-        ? 'rgba(255,255,255,0.28)'
-        : colors.text;
+  const edgeIconColor = talking ? colors.talking : dimmed ? 'rgba(255,255,255,0.28)' : colors.text;
+  const talkSlotStyle = [styles.talkControl, edgeTalkAffordance && styles.edgeTalk];
 
-  const talkControl = showTalkIcon
-    ? wrapTalk(
-        talkSelectMode ? (
-          <CheckIcon color={edgeIconColor} size={tight ? 18 : 20} checked={selected} />
-        ) : (
-          <WalkieTalkieIcon color={edgeIconColor} size={tight ? 18 : 22} />
-        ),
-        [
-          styles.talkControl,
-          edgeTalkAffordance && styles.edgeTalk,
-          talking && styles.talkZoneActive,
-        ],
-        talkSelectMode
-          ? `Select ${target.label}`
-          : edgeTalkAffordance
-            ? `Talk to ${target.label} from the phone edge`
-            : `Talk to ${target.label}`,
-      )
-    : null;
+  const talkControl = showTalkIcon ? (
+    wrapTalk(
+      <WalkieTalkieIcon color={edgeIconColor} size={tight ? 18 : 22} />,
+      [...talkSlotStyle, talking && styles.talkZoneActive],
+      edgeTalkAffordance ? `Talk to ${target.label} from the phone edge` : `Talk to ${target.label}`,
+    )
+  ) : (
+    <View style={talkSlotStyle} />
+  );
 
   const rowStyle = [
     styles.row,
@@ -213,7 +178,6 @@ export function TargetRow({
     tight && styles.rowCompact,
     talking && styles.rowTalking,
     (speaking || streaming) && !talking && styles.rowSpeaking,
-    talkSelectMode && selected && styles.rowSelected,
     dimmed && styles.rowOffline,
     height != null ? { height, minHeight: height, flex: 1, paddingVertical: tight ? 4 : 8 } : null,
   ];
@@ -301,12 +265,6 @@ const styles = StyleSheet.create({
   },
   rowSpeaking: {
     borderColor: 'rgba(117,242,184,0.32)',
-  },
-  // Amber "armed" highlight: red is reserved for live transmission (Talk button),
-  // so the selected destination must not look like it is already on air.
-  rowSelected: {
-    backgroundColor: 'rgba(255,176,32,0.16)',
-    borderColor: 'rgba(255,176,32,0.66)',
   },
   rowOffline: {
     opacity: 0.72,

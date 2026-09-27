@@ -240,8 +240,8 @@ export function PttDeviceDetailPage({
             />
           </View>
           <SettingsHint
-            full="In Talk & select, the knob and up/down always move the selected card. With Talk & select off they do nothing unless this is on, in which case they retarget PTT 1. SOS always replies."
-            compact="Knob moves the selected card in Talk & select. SOS always replies."
+            full="When this is on, the channel knob and up/down retarget PTT 1. Otherwise they do nothing. SOS always replies."
+            compact="Knob and up/down retarget PTT 1 when this is on. SOS always replies."
           />
         </SettingsSection>
       ) : null}

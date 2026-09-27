@@ -106,10 +106,9 @@ export class MediaCoordinator {
       talkLocked: false,
       talkingTargetKeys: [],
       lockedTargetKeys: [],
-      statusMessage: useSessionStore.getState().talkSelectMode ? 'Talk & select: tap a card, then hold Talk.' : HOLD_HINT,
+      statusMessage: HOLD_HINT,
     });
     this.c.talk.refreshReplyTarget();
-    this.c.talk.refreshSelectedTalkTarget(targets);
     await this.c.background.syncAudioSession(AppState.currentState);
     await this.c.background.syncForegroundService();
     await this.c.background.syncSystemPtt();
@@ -163,7 +162,6 @@ export class MediaCoordinator {
     const targets = await this.loadTargets(identity, useSessionStore.getState().productionId);
     useSessionStore.setState({ targets });
     this.c.talk.refreshReplyTarget();
-    this.c.talk.refreshSelectedTalkTarget(targets);
     await this.resyncHeardAudio();
   }
 

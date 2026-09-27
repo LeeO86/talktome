@@ -13,16 +13,15 @@ const schniedel = { type: 'conference' as const, id: 2, label: 'Schniedel', canT
 const pat = { type: 'user' as const, id: 9, label: 'Pat', canTalk: true };
 
 describe('sessionPresence', () => {
-  it('uses reply unless talk & select is on', () => {
+  it('uses reply unless the main button is pinned to a target', () => {
     const reply = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: incoming('Pat'),
       talking: false,
       talkingLabels: [],
       talkLocked: false,
       replyTarget: pat,
-      selectedTalkTarget: stage,
+      mainButtonLabel: null,
       targets: [pat, stage],
     });
     expect(reply.actionKind).toBe('reply');
@@ -32,13 +31,12 @@ describe('sessionPresence', () => {
     expect(
       sessionPresence({
         operatorReady: true,
-        talkSelectMode: true,
         incoming: incoming(),
         talking: false,
         talkingLabels: [],
         talkLocked: false,
         replyTarget: pat,
-        selectedTalkTarget: stage,
+        mainButtonLabel: 'Stage',
         targets: [pat, stage],
       }).actionTarget,
     ).toBe('Stage');
@@ -49,13 +47,12 @@ describe('presence copy', () => {
   it('names the person for a direct incoming talk', () => {
     const snapshot = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: incoming('Pat'),
       talking: false,
       talkingLabels: [],
       talkLocked: false,
       replyTarget: pat,
-      selectedTalkTarget: null,
+      mainButtonLabel: null,
       targets: [pat],
     });
     expect(presenceNotification(snapshot)).toEqual({
@@ -74,13 +71,12 @@ describe('presence copy', () => {
   it('uses Reply lock copy on widget / FGS talk buttons', () => {
     const idle = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: incoming(),
       talking: false,
       talkingLabels: [],
       talkLocked: false,
       replyTarget: pat,
-      selectedTalkTarget: null,
+      mainButtonLabel: null,
       targets: [pat],
     });
     expect(presenceTalkButtonLabel(idle)).toBe('Reply lock');
@@ -88,13 +84,12 @@ describe('presence copy', () => {
 
     const locked = sessionPresence({
       operatorReady: true,
-      talkSelectMode: true,
       incoming: incoming(),
       talking: true,
       talkingLabels: ['Stage'],
       talkLocked: true,
       replyTarget: null,
-      selectedTalkTarget: stage,
+      mainButtonLabel: 'Stage',
       targets: [stage],
     });
     expect(presenceTalkButtonLabel(locked)).toBe('Stop reply');
@@ -103,13 +98,12 @@ describe('presence copy', () => {
   it('names the conference, not the speaker, when talk is into a conference', () => {
     const snapshot = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: incoming('beni', 'conference', 2),
       talking: false,
       talkingLabels: [],
       talkLocked: false,
       replyTarget: schniedel,
-      selectedTalkTarget: null,
+      mainButtonLabel: null,
       targets: [schniedel, pat],
     });
     expect(snapshot.speaker).toBe('beni');
@@ -121,7 +115,6 @@ describe('presence copy', () => {
   it('lists multiple live destinations and idle copy is Nobody Talking', () => {
     const snapshot = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: {
         addressedNow: [
           { fromName: 'beni', fromUserId: 9, targetType: 'conference', targetId: 2, at: 2 },
@@ -132,20 +125,19 @@ describe('presence copy', () => {
       talkingLabels: [],
       talkLocked: false,
       replyTarget: schniedel,
-      selectedTalkTarget: null,
+      mainButtonLabel: null,
       targets: [stage, schniedel],
     });
     expect(presenceWidgetLines(snapshot).title).toBe('Schniedel, Stage');
 
     const idle = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: incoming(),
       talking: false,
       talkingLabels: [],
       talkLocked: false,
       replyTarget: null,
-      selectedTalkTarget: null,
+      mainButtonLabel: null,
       targets: [stage],
     });
     expect(presenceWidgetLines(idle)).toMatchObject({
@@ -158,16 +150,15 @@ describe('presence copy', () => {
     });
   });
 
-  it('uses Talk when talk & select is on', () => {
+  it('uses Talk when the main button is pinned to a target', () => {
     const snapshot = sessionPresence({
       operatorReady: true,
-      talkSelectMode: true,
       incoming: incoming(),
       talking: true,
       talkingLabels: ['Stage'],
       talkLocked: false,
       replyTarget: null,
-      selectedTalkTarget: stage,
+      mainButtonLabel: 'Stage',
       targets: [stage],
     });
     expect(presenceNotification(snapshot)).toEqual({
@@ -180,13 +171,12 @@ describe('presence copy', () => {
   it('puts talking first on the lock screen when also listening', () => {
     const snapshot = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: incoming('beni', 'conference', 2),
       talking: true,
       talkingLabels: ['Traktor'],
       talkLocked: false,
       replyTarget: schniedel,
-      selectedTalkTarget: null,
+      mainButtonLabel: null,
       targets: [schniedel],
     });
     expect(presenceWidgetLines(snapshot).title).toBe('Talking · Traktor, Schniedel');
@@ -200,7 +190,6 @@ describe('presence copy', () => {
     const virus = { type: 'feed' as const, id: 4, label: 'Virus (vom Lab 2Wcom)', canTalk: false };
     const addressed = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: {
         addressedNow: [{ fromName: 'Virus', fromUserId: 1, targetType: 'feed', targetId: 4, at: 1 }],
       },
@@ -208,20 +197,19 @@ describe('presence copy', () => {
       talkingLabels: [],
       talkLocked: false,
       replyTarget: null,
-      selectedTalkTarget: null,
+      mainButtonLabel: null,
       targets: [virus],
     });
     expect(presenceWidgetLines(addressed).title).toBe('Nobody Talking');
 
     const streaming = sessionPresence({
       operatorReady: true,
-      talkSelectMode: false,
       incoming: incoming(),
       talking: false,
       talkingLabels: [],
       talkLocked: false,
       replyTarget: null,
-      selectedTalkTarget: null,
+      mainButtonLabel: null,
       targets: [virus],
       streamingFeedLabels: ['Virus (vom Lab 2Wcom)'],
     });

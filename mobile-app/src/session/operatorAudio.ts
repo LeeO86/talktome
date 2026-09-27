@@ -16,6 +16,8 @@ export type OperatorAudioSettings = {
   feedDimSelf: boolean;
   feedDimIncoming: boolean;
   feedDimDb: number;
+  /** Web client "Play connection sounds". Disconnect and reconnect tones. */
+  playConnectionSounds: boolean;
   volumeFader: boolean;
   echoCancellation: boolean;
   noiseSuppression: boolean;
@@ -27,6 +29,7 @@ export const DEFAULT_OPERATOR_AUDIO: OperatorAudioSettings = {
   feedDimSelf: false,
   feedDimIncoming: true,
   feedDimDb: DEFAULT_FEED_DIM_DB,
+  playConnectionSounds: true,
   volumeFader: false,
   echoCancellation: true,
   noiseSuppression: true,
@@ -37,6 +40,7 @@ export const DEFAULT_OPERATOR_AUDIO: OperatorAudioSettings = {
 const BOOLEAN_KEYS = [
   'feedDimSelf',
   'feedDimIncoming',
+  'playConnectionSounds',
   'volumeFader',
   'echoCancellation',
   'noiseSuppression',
@@ -50,6 +54,7 @@ export function normalizeOperatorAudio(
     feedDimSelf: Boolean(value?.feedDimSelf),
     feedDimIncoming: value?.feedDimIncoming !== false,
     feedDimDb: normalizeFeedDimDb(value?.feedDimDb),
+    playConnectionSounds: value?.playConnectionSounds !== false,
     volumeFader: Boolean(value?.volumeFader),
     echoCancellation: value?.echoCancellation !== false,
     noiseSuppression: value?.noiseSuppression !== false,
@@ -78,6 +83,9 @@ export function operatorAudioServerDefaults(
   }
   if (typeof defaults.dimWhenAddressed === 'boolean') {
     mapped.feedDimIncoming = defaults.dimWhenAddressed;
+  }
+  if (typeof defaults.playConnectionSounds === 'boolean') {
+    mapped.playConnectionSounds = defaults.playConnectionSounds;
   }
   if (typeof defaults.audioAutoProcessing === 'boolean') {
     mapped.echoCancellation = defaults.audioAutoProcessing;

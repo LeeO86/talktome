@@ -16,6 +16,7 @@ describe('operatorAudio', () => {
     expect(DEFAULT_OPERATOR_AUDIO.feedDimSelf).toBe(false);
     expect(DEFAULT_OPERATOR_AUDIO.feedDimIncoming).toBe(true);
     expect(DEFAULT_OPERATOR_AUDIO.feedDimDb).toBe(-15);
+    expect(DEFAULT_OPERATOR_AUDIO.playConnectionSounds).toBe(true);
     expect(DEFAULT_OPERATOR_AUDIO.echoCancellation).toBe(true);
     expect(DEFAULT_OPERATOR_AUDIO.noiseSuppression).toBe(true);
     expect(DEFAULT_OPERATOR_AUDIO.autoGainControl).toBe(true);
@@ -45,6 +46,7 @@ describe('operatorAudio', () => {
         dimFeedsWhileSpeaking: true,
         dimWhenAddressed: false,
         audioAutoProcessing: false,
+        playConnectionSounds: false,
       },
     );
     // Explicit user choice wins over the server default.
@@ -55,6 +57,17 @@ describe('operatorAudio', () => {
     expect(resolved.echoCancellation).toBe(false);
     expect(resolved.noiseSuppression).toBe(false);
     expect(resolved.autoGainControl).toBe(false);
+    expect(resolved.playConnectionSounds).toBe(false);
+  });
+
+  it('lets an explicit connection-sound choice beat the server default', () => {
+    expect(resolveOperatorAudio({ playConnectionSounds: true }, { playConnectionSounds: false }).playConnectionSounds).toBe(
+      true,
+    );
+    expect(resolveOperatorAudio({ playConnectionSounds: false }, { playConnectionSounds: true }).playConnectionSounds).toBe(
+      false,
+    );
+    expect(normalizeOperatorAudio({ playConnectionSounds: false }).playConnectionSounds).toBe(false);
   });
 
   it('falls back to the builtin defaults without server settings', () => {

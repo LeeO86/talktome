@@ -224,8 +224,8 @@ export class BackgroundCoordinator {
     useSessionStore.setState({
       bleBindings: bindings,
       statusMessage: enabled
-        ? 'Channel knob / up-down can change PTT 1 when Talk & select is off.'
-        : 'Channel knob / up-down only changes the Talk & select card.',
+        ? 'Channel knob / up-down can change the PTT 1 target.'
+        : 'Channel knob / up-down leave the PTT 1 target unchanged.',
     });
     this.persistBlePreferences();
   }
@@ -514,7 +514,9 @@ export class BackgroundCoordinator {
       },
     });
     this.appStateSubscription?.remove();
+    this.c.noteConnectionCueBackground(AppState.currentState !== 'active');
     this.appStateSubscription = AppState.addEventListener('change', (next) => {
+      this.c.noteConnectionCueBackground(next !== 'active');
       // shouldDisconnectForAppStateChange is false for background and inactive.
       // Lock screen and Home must keep the session. The call stays so a future
       // change to that policy is the only way disconnect runs from AppState.
@@ -534,11 +536,7 @@ export class BackgroundCoordinator {
         void this.registerPttToken(event.token, event.channelUUID);
       },
       onBeginTransmitting: () => {
-        if (useSessionStore.getState().talkSelectMode) {
-          void this.c.talk.pressSelectedTalk();
-          return;
-        }
-        void this.c.talk.pressReply();
+        void this.c.talk.pressMainButton();
       },
       onEndTransmitting: () => {
         void this.c.talk.releaseTalk();
@@ -844,13 +842,9 @@ export class BackgroundCoordinator {
 
   private handleChannelStep(deviceId: string, delta: number): void {
     const state = useSessionStore.getState();
-    if (state.talkSelectMode) {
-      this.c.talk.cycleSelectedTalkTarget(delta);
-      return;
-    }
     const binding = state.bleBindings.find((item) => item.id === deviceId);
     if (!binding?.rotaryRetargetsPtt1) {
-      this.noteHardwareLog('Channel step ignored (enable “Change PTT 1 target” or Talk & select).');
+      this.noteHardwareLog('Channel step ignored (enable “Change PTT 1 target”).');
       return;
     }
     const candidates = bleTalkCandidates(state.targets);
@@ -873,13 +867,9 @@ export class BackgroundCoordinator {
     if (!next) {
       return;
     }
-    if (state.talkSelectMode) {
-      this.c.talk.selectTalkableByKnob(position);
-      return;
-    }
     const binding = state.bleBindings.find((item) => item.id === deviceId);
     if (!binding?.rotaryRetargetsPtt1) {
-      this.noteHardwareLog('Channel knob ignored (enable “Change PTT 1 target” or Talk & select).');
+      this.noteHardwareLog('Channel knob ignored (enable “Change PTT 1 target”).');
       return;
     }
     this.setBluetoothButtonTarget(selectionFromTalkTarget(next), deviceId, 'ptt');
@@ -1132,15 +1122,15 @@ export class BackgroundCoordinator {
 
   private currentPresence() {
     const state = useSessionStore.getState();
+    const main = this.c.talk.resolvedMainButton();
     return sessionPresence({
       operatorReady: state.operatorReady,
-      talkSelectMode: state.talkSelectMode,
       incoming: state.incoming,
       talking: state.talking,
       talkingLabels: this.c.talkingTargets.map((item) => item.label),
       talkLocked: state.talkLocked,
       replyTarget: state.replyTarget,
-      selectedTalkTarget: state.selectedTalkTarget,
+      mainButtonLabel: main.mode === 'target' ? main.label : null,
       targets: state.targets,
       streamingFeedLabels: state.targets
         .filter((target) => {

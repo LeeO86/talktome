@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { ApiClient } from '../auth/apiClient';
 import type { CookieMap } from '../auth/cookieJar';
@@ -58,6 +58,8 @@ import {
   type SavedProfile,
 } from './remembered';
 import { canAnnounceConnectionRecovery, createConnectionCues, transportReportsLoss } from './connectionCues';
+import { mainButtonStorageKey } from './mainButton';
+import { targetOrderPayload } from './targetOrder';
 import { createServerHeartbeat } from './serverHeartbeat';
 import { BackgroundCoordinator } from './backgroundCoordinator';
 import { MediaCoordinator } from './mediaCoordinator';
@@ -87,7 +89,9 @@ export class SessionController {
   private sessionEnding = false;
   private heartbeat: { stop: () => void } | null = null;
   private readonly connectionCues = createConnectionCues((cue) => {
-    if (this.serverClientDefaults.playConnectionSounds !== false) void playConnectionCue(cue);
+    if (useSessionStore.getState().operatorAudio.playConnectionSounds) {
+      void playConnectionCue(cue);
+    }
   });
 
   // Shared mutable fields used across coordinators.
@@ -138,9 +142,10 @@ export class SessionController {
       productionId: last?.productionId ?? null,
       productionName: last?.productionName ?? null,
       leftHanded: bundle.leftHanded ?? false,
-      talkSelectMode: bundle.talkSelectMode,
       lockMultipleTargets: bundle.lockMultipleTargets ?? false,
       edgeTalkAffordance: bundle.edgeTalkAffordance !== false,
+      mainButtonTargets: bundle.mainButtonTargets ?? {},
+      bigMainButton: bundle.bigMainButton === true,
       audioSessionAvailable: audioSessionAvailable(),
       pttAvailable: pttNativeAvailable(),
       capabilityReason: this.background.capabilityReason({
@@ -553,6 +558,10 @@ export class SessionController {
     this.announceConnectionRecovery();
   }
 
+  noteConnectionCueBackground(background: boolean): void {
+    this.connectionCues.setBackground(background);
+  }
+
   private stopServerHeartbeat(): void {
     this.heartbeat?.stop();
     this.heartbeat = null;
@@ -575,6 +584,7 @@ export class SessionController {
         emitHealth: (timeoutMs, onReply) => signaling.emitConnectionHealth(timeoutMs, onReply),
       },
       (interrupted) => this.onServerHeartbeat(interrupted),
+      { isPaused: () => AppState.currentState !== 'active' },
     );
     this.heartbeat = heartbeat;
     heartbeat.start();
@@ -637,9 +647,10 @@ export class SessionController {
       rememberPassword: next.rememberPassword,
       allowInsecureLocalTLS: next.allowInsecureLocalTLS,
       leftHanded: next.leftHanded,
-      talkSelectMode: next.talkSelectMode,
       lockMultipleTargets: next.lockMultipleTargets,
       edgeTalkAffordance: next.edgeTalkAffordance,
+      mainButtonTargets: next.mainButtonTargets,
+      bigMainButton: next.bigMainButton,
       productionId: next.productionId,
       productionName: next.productionName,
       profiles: next.profiles,
@@ -726,9 +737,10 @@ export class SessionController {
   private layoutBundleFields(state: SessionUiState) {
     return {
       leftHanded: this.leftHandedExplicit ? state.leftHanded : undefined,
-      talkSelectMode: state.talkSelectMode,
       lockMultipleTargets: this.lockMultipleTargetsExplicit ? state.lockMultipleTargets : undefined,
       edgeTalkAffordance: state.edgeTalkAffordance,
+      mainButtonTargets: state.mainButtonTargets,
+      bigMainButton: state.bigMainButton,
     };
   }
 
@@ -745,6 +757,26 @@ export class SessionController {
       void this.talk.collapseToSingleLock();
     }
     this.persistLayout();
+  }
+
+  setBigMainButton(bigMainButton: boolean): void {
+    useSessionStore.setState({ bigMainButton });
+    this.persistLayout();
+  }
+
+  setMainButtonTarget(identity: string): void {
+    const state = useSessionStore.getState();
+    const key = mainButtonStorageKey(state.activeProfileId, state.productionId);
+    const mainButtonTargets = { ...state.mainButtonTargets };
+    const trimmed = identity.trim();
+    if (trimmed) {
+      mainButtonTargets[key] = trimmed;
+    } else {
+      delete mainButtonTargets[key];
+    }
+    useSessionStore.setState({ mainButtonTargets });
+    this.persistLayout();
+    this.background.syncPresence();
   }
 
   setEdgeTalkAffordance(edgeTalkAffordance: boolean): void {
@@ -1172,20 +1204,25 @@ export class SessionController {
     return this.talk.replyTalkTarget();
   }
 
-  setTalkSelectMode(talkSelectMode: boolean): void {
-    this.talk.setTalkSelectMode(talkSelectMode);
+  async pressMainButton(): Promise<void> {
+    await this.talk.pressMainButton();
   }
 
-  selectTalkTarget(target: TalkTarget): void {
-    this.talk.selectTalkTarget(target);
+  async lockMainButton(): Promise<void> {
+    await this.talk.lockMainButton();
   }
 
-  async pressSelectedTalk(): Promise<void> {
-    await this.talk.pressSelectedTalk();
-  }
-
-  async lockSelectedTalk(): Promise<void> {
-    await this.talk.lockSelectedTalk();
+  async saveTargetOrder(next: TalkTarget[]): Promise<void> {
+    const previous = useSessionStore.getState().targets;
+    useSessionStore.setState({ targets: next });
+    try {
+      await this.requireApi().saveTargetOrder(useSessionStore.getState().productionId, targetOrderPayload(next));
+    } catch (error) {
+      useSessionStore.setState({ targets: previous });
+      await this.mediaCoordinator.refreshTargets().catch(() => undefined);
+      throw error;
+    }
+    await this.mediaCoordinator.refreshTargets().catch(() => undefined);
   }
 
   async toggleCurrentTalk(): Promise<void> {

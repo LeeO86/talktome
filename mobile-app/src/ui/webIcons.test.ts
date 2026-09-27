@@ -42,7 +42,7 @@ describe('web client UI icons', () => {
     expect(source).toContain("offline: '#475569'");
   });
 
-  it('uses the walkie on talk-select and every talkable target card', () => {
+  it('uses the walkie on a pinned main button and every talkable target card', () => {
     const operator = readFileSync(resolve(__dirname, 'OperatorScreen.tsx'), 'utf8');
     const row = readFileSync(resolve(__dirname, 'TargetRow.tsx'), 'utf8');
     expect(operator).toContain('<WalkieTalkieIcon');

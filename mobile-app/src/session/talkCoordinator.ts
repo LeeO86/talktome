@@ -1,5 +1,5 @@
 import { canTalkToTarget, talkTargetIdentity, type TalkTarget } from '../protocol';
-import { nextTalkableTarget, talkableAtKnob } from '../hardware/rotary';
+import { mainButtonStorageKey, resolveMainButton, type ResolvedMainButton } from './mainButton';
 import {
   saveConferenceListen,
   setConferenceMemberLevel as nextConferenceMemberLevel,
@@ -13,7 +13,7 @@ import { addTalkTarget, removeTalkTarget, talkTargetKeys } from '../talk/talkSet
 import { HOLD_HINT, latestIncomingName, useSessionStore } from './state';
 import type { SessionController } from './sessionController';
 
-/** Press/lock/release talk, reply, talk-select, and conference listen. */
+/** Press/lock/release talk, the main button, and conference listen. */
 export class TalkCoordinator {
   constructor(private readonly c: SessionController) {}
 
@@ -177,100 +177,45 @@ export class TalkCoordinator {
     return useSessionStore.getState().replyTarget;
   }
 
-  setTalkSelectMode(talkSelectMode: boolean): void {
+  resolvedMainButton(): ResolvedMainButton {
     const state = useSessionStore.getState();
-    const selectedTalkTarget = talkSelectMode
-      ? state.selectedTalkTarget ?? state.replyTarget ?? this.firstTalkableTarget()
-      : state.selectedTalkTarget;
-    useSessionStore.setState({
-      talkSelectMode,
-      selectedTalkTarget,
-      statusMessage: talkSelectMode
-        ? selectedTalkTarget
-          ? `Talk & select: ${selectedTalkTarget.label}`
-          : 'Talk & select: tap a card, then hold Talk.'
-        : HOLD_HINT,
+    return resolveMainButton({
+      storedIdentity: state.mainButtonTargets[mainButtonStorageKey(state.activeProfileId, state.productionId)],
+      targets: state.targets,
+      replyTarget: state.replyTarget,
+      canTalk: (target) => this.canTalkTo(target),
     });
-    this.c.persistLayout();
-    this.c.background.syncPresence();
   }
 
-  selectTalkTarget(target: TalkTarget): void {
-    if (!this.canTalkTo(target)) {
+  async pressMainButton(): Promise<void> {
+    const resolved = this.resolvedMainButton();
+    if (!resolved.target) {
+      useSessionStore.setState({
+        error: resolved.unavailable ? 'That main button target is unavailable.' : 'No one to reply to.',
+      });
       return;
     }
-    useSessionStore.setState({ selectedTalkTarget: target });
-    const state = useSessionStore.getState();
-    if (state.talkSelectMode && state.talking) {
-      void this.retargetTalk(target);
+    if (resolved.mode === 'reply') {
+      await this.pressReply();
+      return;
     }
-    this.c.background.syncPresence();
+    await this.pressTalk(resolved.target);
   }
 
-  cycleSelectedTalkTarget(delta: number): TalkTarget | null {
-    const state = useSessionStore.getState();
-    const candidates = state.targets.filter((target) => this.canTalkTo(target));
-    const next = nextTalkableTarget(candidates, state.selectedTalkTarget, delta);
-    if (!next) {
-      return null;
+  async lockMainButton(): Promise<void> {
+    const resolved = this.resolvedMainButton();
+    if (!resolved.target) {
+      return;
     }
-    this.selectTalkTarget(next);
-    useSessionStore.setState({
-      statusMessage: `Talk & select: ${next.label}`,
-    });
-    return next;
-  }
-
-  selectTalkableByKnob(position: number): TalkTarget | null {
-    const state = useSessionStore.getState();
-    const candidates = state.targets.filter((target) => this.canTalkTo(target));
-    const next = talkableAtKnob(candidates, position);
-    if (!next) {
-      return null;
+    if (resolved.mode === 'reply') {
+      await this.lockReply();
+      return;
     }
-    this.selectTalkTarget(next);
-    useSessionStore.setState({
-      statusMessage: `Talk & select: ${next.label}`,
-    });
-    return next;
+    await this.lockTalk(resolved.target);
   }
 
   firstTalkableTarget(): TalkTarget | null {
     return useSessionStore.getState().targets.find((target) => this.canTalkTo(target)) ?? null;
-  }
-
-  private async retargetTalk(target: TalkTarget): Promise<void> {
-    const media = this.c.media;
-    if (!media || !this.canTalkTo(target)) {
-      return;
-    }
-    this.c.talkingTargets = [target];
-    if (useSessionStore.getState().talkLocked) {
-      this.c.lockedTargets = [target];
-    }
-    this.publishTalkState(useSessionStore.getState().talkLocked);
-    try {
-      await media.startTalking(this.c.talkingTargets, useSessionStore.getState().talkLocked);
-    } catch (error) {
-      this.failTalk(error);
-    }
-  }
-
-  async pressSelectedTalk(): Promise<void> {
-    const target = useSessionStore.getState().selectedTalkTarget;
-    if (!target) {
-      useSessionStore.setState({ error: 'Select a destination on a card first.' });
-      return;
-    }
-    await this.pressTalk(target);
-  }
-
-  async lockSelectedTalk(): Promise<void> {
-    const target = useSessionStore.getState().selectedTalkTarget;
-    if (!target) {
-      return;
-    }
-    await this.lockTalk(target);
   }
 
   async toggleCurrentTalk(): Promise<void> {
@@ -282,11 +227,7 @@ export class TalkCoordinator {
       await this.unlockTalk();
       return;
     }
-    if (state.talkSelectMode) {
-      await this.lockSelectedTalk();
-      return;
-    }
-    await this.lockReply();
+    await this.lockMainButton();
   }
 
   handleTalkUrl(url: string): void {
@@ -340,20 +281,6 @@ export class TalkCoordinator {
     const incomingName = latestIncomingName(state.incoming);
     void updatePttRemoteParticipant(incomingName ?? replyTarget?.label ?? null);
     this.c.background.syncPresence();
-  }
-
-  refreshSelectedTalkTarget(targets: TalkTarget[]): void {
-    const selected = useSessionStore.getState().selectedTalkTarget;
-    if (!selected) {
-      if (useSessionStore.getState().talkSelectMode) {
-        useSessionStore.setState({
-          selectedTalkTarget: useSessionStore.getState().replyTarget ?? this.firstTalkableTarget(),
-        });
-      }
-      return;
-    }
-    const next = targets.find((target) => talkTargetIdentity(target) === talkTargetIdentity(selected)) ?? null;
-    useSessionStore.setState({ selectedTalkTarget: next });
   }
 
   /** Drops one lock from a multi-lock set; stops talking if it was the last. */
