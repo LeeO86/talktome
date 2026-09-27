@@ -53,6 +53,9 @@ input_gain_db = 0
 dim_db = -15
 dim_feeds_while_speaking = false
 dim_when_addressed = true
+# Disconnect and reconnect tones. Same as the web client "Play connection sounds".
+# A live user-audio-settings-updated playConnectionSounds value overrides this.
+play_connection_sounds = true
 jitter_min_ms = 20
 jitter_max_ms = 120
 reopen_ms = 2000

@@ -227,7 +227,7 @@ acknowledgements, ping/pong. Connection URL:
 Events **sent** by the client (all with ack unless noted):
 
 ```text
-register-user            { id, name, kind:"user", force, productionId }
+register-user            { id, name, kind:"user", force, productionId, clientType:"headless" }
                          -> { ok, productionId, productions, targetAudioStates,
                               userAudioSettings }  // settings or null
 get-router-rtp-capabilities            -> RtpCapabilities
@@ -409,6 +409,14 @@ when the socket drops, the heartbeat is lost, or a transport enters
 `disconnected` or `failed`, and the reconnect tone once when the socket is
 up, the heartbeat is healthy, and neither transport is `disconnected`,
 `failed` or `connecting`. Shutdown and `session-kicked` stay silent.
+`audio.play_connection_sounds` (default true) turns both tones off. A
+`user-audio-settings-updated` object with `playConnectionSounds` overrides
+that for the running session and stops a tone that is already playing.
+
+`register-user` sends `clientType: "headless"`. v1.5.9 only displays
+`ios-app` and `android-app`; any other value is ignored and the admin
+status falls back to the WebSocket `User-Agent` (`talktome-headless/<version>`,
+which that server describes as a generic browser).
 
 ### 6.7 Interop notes (from the spike, §15 step 1)
 

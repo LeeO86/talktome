@@ -62,6 +62,7 @@ pub async fn connect_and_register(config: &Config) -> Result<Connected> {
                 "kind": "user",
                 "force": true,
                 "productionId": config.user.production,
+                "clientType": crate::signalling::REGISTERED_CLIENT_TYPE,
             }),
             SIGNAL_TIMEOUT,
         )

@@ -12,6 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::header::{HeaderValue, USER_AGENT};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::Connector;
 use url::Url;
@@ -106,6 +107,9 @@ impl SocketClient {
         request
             .headers_mut()
             .insert("Origin", base.as_str().trim_end_matches('/').parse()?);
+        if let Ok(agent) = HeaderValue::from_str(&format!("talktome-headless/{}", crate::VERSION)) {
+            request.headers_mut().insert(USER_AGENT, agent);
+        }
 
         let connector = Connector::Rustls(options.tls.clone());
         let (stream, _response) = tokio::time::timeout(

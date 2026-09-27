@@ -52,6 +52,7 @@ pub struct UserAudioPatch {
     pub dim_amount_db: Option<f32>,
     pub dim_feeds_while_speaking: Option<bool>,
     pub dim_when_addressed: Option<bool>,
+    pub play_connection_sounds: Option<bool>,
 }
 
 impl UserAudioPatch {
@@ -63,6 +64,7 @@ impl UserAudioPatch {
             dim_amount_db: json_f32(value.get("dimAmountDb")),
             dim_feeds_while_speaking: value.get("dimFeedsWhileSpeaking").and_then(Value::as_bool),
             dim_when_addressed: value.get("dimWhenAddressed").and_then(Value::as_bool),
+            play_connection_sounds: value.get("playConnectionSounds").and_then(Value::as_bool),
         }
     }
 
@@ -72,6 +74,7 @@ impl UserAudioPatch {
             && self.dim_amount_db.is_none()
             && self.dim_feeds_while_speaking.is_none()
             && self.dim_when_addressed.is_none()
+            && self.play_connection_sounds.is_none()
     }
 
     pub fn has_dimming(&self) -> bool {
@@ -400,6 +403,7 @@ mod tests {
             "dimAmountDb": -12,
             "dimFeedsWhileSpeaking": true,
             "dimWhenAddressed": false,
+            "playConnectionSounds": false,
             "audioProfile": "low",
         }));
         assert_eq!(
@@ -410,6 +414,7 @@ mod tests {
                 dim_amount_db: Some(-12.0),
                 dim_feeds_while_speaking: Some(true),
                 dim_when_addressed: Some(false),
+                play_connection_sounds: Some(false),
             }
         );
         assert!(UserAudioPatch::from_json(&serde_json::json!(null)).is_empty());

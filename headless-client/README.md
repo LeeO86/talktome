@@ -122,7 +122,9 @@ desktops:
   server heartbeat, PGM/PRV tally), audio devices with an input meter, every configured GPIO
   output (live state) and input (pressed, event count), the local control
   socket (path, optional loopback TCP, connected clients), Stream Deck and service
-  details.
+  details. Disconnect and reconnect tones follow **Play connection sounds**
+  (`audio.play_connection_sounds`, default on). An admin `playConnectionSounds`
+  update applies immediately.
 - **Remote Control**: the same talk layout as the Talktome web client — destination
   rows with icon, name, volume, mute and hold-to-talk (slide left to lock), a
   reply bar, and conference **Members** for per-person hear/mute and level.

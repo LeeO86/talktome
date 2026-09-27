@@ -1351,6 +1351,7 @@
         { path: 'audio.dim_db', label: 'Dim amount (dB)', type: 'select', numeric: true, options: DIM_AMOUNT_DB_OPTIONS.map((db) => [String(db), `${db} dB`]), help: 'Same list as the web client. Stored −14 dB is migrated to −15 dB.' },
         { path: 'audio.dim_feeds_while_speaking', label: 'Dim feeds while speaking', type: 'bool' },
         { path: 'audio.dim_when_addressed', label: 'Dim feeds when addressed', type: 'bool' },
+        { path: 'audio.play_connection_sounds', label: 'Play connection sounds', type: 'bool', help: 'Disconnect and reconnect tones. Same as the web client. Admin can turn them off for this user after register. Restart to apply a change made here.' },
         { path: 'audio.jitter_min_ms', label: 'Jitter buffer minimum (ms)', type: 'number' },
         { path: 'audio.jitter_max_ms', label: 'Jitter buffer maximum (ms)', type: 'number' },
         { path: 'audio.reopen_ms', label: 'Device reopen interval (ms)', type: 'number' },

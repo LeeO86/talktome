@@ -139,6 +139,11 @@ pub struct AudioConfig {
     pub dim_db: f32,
     pub dim_feeds_while_speaking: bool,
     pub dim_when_addressed: bool,
+    /// Play the disconnect and reconnect tones. Same as the web client's
+    /// "Play connection sounds" switch. A live `playConnectionSounds` value
+    /// in `user-audio-settings-updated` overrides this until restart.
+    #[serde(default = "default_play_connection_sounds")]
+    pub play_connection_sounds: bool,
     pub jitter_min_ms: u32,
     pub jitter_max_ms: u32,
     pub reopen_ms: u64,
@@ -479,6 +484,7 @@ impl Default for AudioConfig {
             dim_db: DEFAULT_DIM_DB,
             dim_feeds_while_speaking: false,
             dim_when_addressed: true,
+            play_connection_sounds: default_play_connection_sounds(),
             jitter_min_ms: 20,
             jitter_max_ms: 120,
             reopen_ms: 2000,
@@ -486,6 +492,10 @@ impl Default for AudioConfig {
             default_volume_db: None,
         }
     }
+}
+
+fn default_play_connection_sounds() -> bool {
+    true
 }
 
 impl AudioConfig {
@@ -1274,6 +1284,13 @@ mod tests {
         config.validate().unwrap();
         assert!((config.audio.default_volume_linear() - 0.5).abs() < 0.02);
         assert!(config.audio.auto_processing);
+        assert!(config.audio.play_connection_sounds);
+        let quiet = toml_text.replace(
+            "[audio]",
+            "[audio]\n            play_connection_sounds = false",
+        );
+        let quiet = from_document(parse_document(Path::new("cam1.toml"), &quiet).unwrap()).unwrap();
+        assert!(!quiet.audio.play_connection_sounds);
         assert_eq!(config.audio.stream_delay_ms, Some(40));
         assert!((config.audio.input_gain_db + 6.0).abs() < 1e-6);
         assert_eq!(config.streamdeck.volume_step_db(), 3.0);

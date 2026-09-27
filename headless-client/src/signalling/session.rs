@@ -136,6 +136,9 @@ pub struct Session {
     alerts: ConnectionAlerts,
     probe_tx: mpsc::Sender<ProbeReply>,
     probe_rx: mpsc::Receiver<ProbeReply>,
+    /// Disconnect / reconnect tones. Starts from config and follows a live
+    /// `playConnectionSounds` admin update.
+    play_connection_sounds: bool,
 }
 
 impl Session {
@@ -174,6 +177,7 @@ impl Session {
         }
         let (rx_tx, rx_rx) = mpsc::channel(1024);
         let (probe_tx, probe_rx) = mpsc::channel(32);
+        let play_connection_sounds = config.audio.play_connection_sounds;
         Ok(Self {
             frame_duration: Duration::from_millis(profile.frame_ms() as u64),
             config,
@@ -210,6 +214,7 @@ impl Session {
             alerts: ConnectionAlerts::new(),
             probe_tx,
             probe_rx,
+            play_connection_sounds,
         })
     }
 
@@ -508,6 +513,7 @@ impl Session {
                         "kind": "user",
                         "force": force,
                         "productionId": connected.production_id,
+                        "clientType": super::REGISTERED_CLIENT_TYPE,
                     }),
                     SIGNAL_TIMEOUT,
                 )
@@ -1665,11 +1671,20 @@ impl Session {
                 );
             }
         }
+        if let Some(enabled) = patch.play_connection_sounds {
+            if self.play_connection_sounds && !enabled {
+                if let Ok(mut mixer) = self.io.mixer.lock() {
+                    mixer.clear_cue();
+                }
+            }
+            self.play_connection_sounds = enabled;
+        }
         tracing::info!(
             event = "user-audio-settings",
             auto_processing = ?patch.audio_auto_processing,
             input_gain_db = ?patch.user_input_gain_db,
             dim_db = ?patch.dim_amount_db,
+            play_connection_sounds = self.play_connection_sounds,
         );
         self.snapshot_dirty = true;
     }
@@ -1824,6 +1839,9 @@ impl Session {
         let Some(announcement) = announcement else {
             return;
         };
+        if !self.play_connection_sounds {
+            return;
+        }
         let samples = match announcement {
             Announcement::Disconnected => crate::audio::cues::disconnected(),
             Announcement::Reconnected => crate::audio::cues::reconnected(),

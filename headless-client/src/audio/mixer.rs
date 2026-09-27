@@ -105,6 +105,10 @@ impl Mixer {
         self.cue.extend(samples.iter().copied());
     }
 
+    pub fn clear_cue(&mut self) {
+        self.cue.clear();
+    }
+
     pub fn add_source_from(
         &mut self,
         consumer_id: &str,
@@ -413,6 +417,16 @@ mod tests {
         assert!((out[0] - 0.1).abs() < 1e-6);
         assert!((out[1] - 0.2).abs() < 1e-6);
         assert_eq!(out[2], 0.0);
+        mixer.render(&mut out);
+        assert_eq!(out, vec![0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn clear_cue_drops_a_playing_announcement() {
+        let mut mixer = Mixer::new(1.0, -20.0, false, false, 20, 200);
+        mixer.enqueue_cue(&[0.4, 0.4, 0.4, 0.4]);
+        mixer.clear_cue();
+        let mut out = vec![0f32; 4];
         mixer.render(&mut out);
         assert_eq!(out, vec![0.0, 0.0, 0.0, 0.0]);
     }
