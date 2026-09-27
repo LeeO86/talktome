@@ -405,23 +405,60 @@ fn callback_period_ms(frames: usize, rate: u32) -> u32 {
     }
 }
 
-fn open_capture(
-    config: &AudioConfig,
+/// `0` leaves the driver period alone. Otherwise request that many milliseconds
+/// as `BufferSize::Fixed`; cpal uses it as the ALSA period and a two-period buffer.
+fn requested_buffer_size(period_ms: u32, rate: u32) -> cpal::BufferSize {
+    if period_ms == 0 || rate == 0 {
+        return cpal::BufferSize::Default;
+    }
+    let frames = (u64::from(rate) * u64::from(period_ms) / 1_000).max(1) as u32;
+    cpal::BufferSize::Fixed(frames)
+}
+
+/// Opens `build` with the requested period. A rejected size is retried once
+/// with the driver default. `build` must be callable twice: a failed
+/// `build_*_stream` consumes its callback.
+fn open_stream_with_period(
+    direction: &'static str,
+    period_ms: u32,
+    mut config: StreamConfig,
+    mut build: impl FnMut(&StreamConfig) -> Result<Stream>,
+) -> Result<Stream> {
+    config.buffer_size = requested_buffer_size(period_ms, config.sample_rate);
+    match build(&config) {
+        Ok(stream) => Ok(stream),
+        Err(error) if period_ms != 0 => {
+            tracing::warn!(
+                event = "audio-period-rejected",
+                direction,
+                period_ms,
+                error = %error,
+                "device rejected the requested period; using the driver default"
+            );
+            config.buffer_size = cpal::BufferSize::Default;
+            build(&config)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_capture_stream(
+    device: &cpal::Device,
+    stream_config: &StreamConfig,
+    format: SampleFormat,
+    channels: usize,
+    rate: u32,
     frame_samples: usize,
-    processor: Arc<Mutex<Processor>>,
-    control: Arc<ProcessingControl>,
-    frames: mpsc::Sender<Vec<f32>>,
-) -> Result<OpenStream> {
-    let host = cpal::default_host();
-    let device = pick_device(&host, &config.input_device, true)?;
-    let name = format!("{} ({})", device_label(&device), device_pcm_id(&device));
-    let supported = choose_config(&device, true).context("no usable capture configuration")?;
-    let channels = supported.channels() as usize;
-    let rate = supported.sample_rate();
-    let format = supported.sample_format();
-    let stream_config: StreamConfig = supported.into();
-    let failed = Arc::new(AtomicBool::new(false));
-    let error_flag = failed.clone();
+    processor: &Arc<Mutex<Processor>>,
+    control: &Arc<ProcessingControl>,
+    frames: &mpsc::Sender<Vec<f32>>,
+    failed: &Arc<AtomicBool>,
+) -> Result<Stream> {
+    let processor = Arc::clone(processor);
+    let control = Arc::clone(control);
+    let frames = frames.clone();
+    let error_flag = Arc::clone(failed);
     let err_fn = move |error: cpal::Error| {
         tracing::warn!(event = "audio-stream-error", direction = "capture", error = %error);
         error_flag.store(true, Ordering::Relaxed);
@@ -459,53 +496,51 @@ fn open_capture(
         }
     };
 
-    let stream = match format {
-        SampleFormat::F32 => device.build_input_stream(
-            stream_config,
-            move |data: &[f32], _| handle_samples(data),
-            err_fn,
-            None,
-        )?,
-        SampleFormat::I16 => {
-            let mut scratch: Vec<f32> = Vec::new();
-            device.build_input_stream(
+    let stream_config = *stream_config;
+    match format {
+        SampleFormat::F32 => device
+            .build_input_stream(
                 stream_config,
-                move |data: &[i16], _| {
-                    scratch.clear();
-                    scratch.extend(data.iter().map(|s| *s as f32 / 32768.0));
-                    handle_samples(&scratch)
-                },
+                move |data: &[f32], _| handle_samples(data),
                 err_fn,
                 None,
-            )?
+            )
+            .context("building capture stream"),
+        SampleFormat::I16 => {
+            let mut scratch: Vec<f32> = Vec::new();
+            device
+                .build_input_stream(
+                    stream_config,
+                    move |data: &[i16], _| {
+                        scratch.clear();
+                        scratch.extend(data.iter().map(|s| *s as f32 / 32768.0));
+                        handle_samples(&scratch)
+                    },
+                    err_fn,
+                    None,
+                )
+                .context("building capture stream")
         }
         other => anyhow::bail!("unsupported capture sample format {other:?}"),
-    };
-    stream.play().context("starting capture stream")?;
-    tracing::info!(event = "audio-capture-open", device = %name, rate, channels, format = ?format);
-    Ok(OpenStream {
-        name,
-        failed,
-        _stream: stream,
-    })
+    }
 }
 
-fn open_playback(
-    config: &AudioConfig,
-    mixer: Arc<Mutex<Mixer>>,
-    processor: Arc<Mutex<Processor>>,
-    control: Arc<ProcessingControl>,
-) -> Result<OpenStream> {
-    let host = cpal::default_host();
-    let device = pick_device(&host, &config.output_device, false)?;
-    let name = format!("{} ({})", device_label(&device), device_pcm_id(&device));
-    let supported = choose_config(&device, false).context("no usable playback configuration")?;
-    let channels = supported.channels() as usize;
-    let rate = supported.sample_rate();
-    let format = supported.sample_format();
-    let stream_config: StreamConfig = supported.into();
-    let failed = Arc::new(AtomicBool::new(false));
-    let error_flag = failed.clone();
+#[allow(clippy::too_many_arguments)]
+fn build_playback_stream(
+    device: &cpal::Device,
+    stream_config: &StreamConfig,
+    format: SampleFormat,
+    channels: usize,
+    rate: u32,
+    mixer: &Arc<Mutex<Mixer>>,
+    processor: &Arc<Mutex<Processor>>,
+    control: &Arc<ProcessingControl>,
+    failed: &Arc<AtomicBool>,
+) -> Result<Stream> {
+    let mixer = Arc::clone(mixer);
+    let processor = Arc::clone(processor);
+    let control = Arc::clone(control);
+    let error_flag = Arc::clone(failed);
     let err_fn = move |error: cpal::Error| {
         tracing::warn!(event = "audio-stream-error", direction = "playback", error = %error);
         error_flag.store(true, Ordering::Relaxed);
@@ -544,32 +579,122 @@ fn open_playback(
         }
     };
 
-    let stream = match format {
-        SampleFormat::F32 => device.build_output_stream(
-            stream_config,
-            move |data: &mut [f32], _| render_mono(data),
-            err_fn,
-            None,
-        )?,
-        SampleFormat::I16 => {
-            let mut scratch: Vec<f32> = Vec::new();
-            device.build_output_stream(
+    let stream_config = *stream_config;
+    match format {
+        SampleFormat::F32 => device
+            .build_output_stream(
                 stream_config,
-                move |data: &mut [i16], _| {
-                    scratch.resize(data.len(), 0.0);
-                    render_mono(&mut scratch);
-                    for (dst, src) in data.iter_mut().zip(scratch.iter()) {
-                        *dst = (src.clamp(-1.0, 1.0) * 32767.0) as i16;
-                    }
-                },
+                move |data: &mut [f32], _| render_mono(data),
                 err_fn,
                 None,
-            )?
+            )
+            .context("building playback stream"),
+        SampleFormat::I16 => {
+            let mut scratch: Vec<f32> = Vec::new();
+            device
+                .build_output_stream(
+                    stream_config,
+                    move |data: &mut [i16], _| {
+                        scratch.resize(data.len(), 0.0);
+                        render_mono(&mut scratch);
+                        for (dst, src) in data.iter_mut().zip(scratch.iter()) {
+                            *dst = (src.clamp(-1.0, 1.0) * 32767.0) as i16;
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .context("building playback stream")
         }
         other => anyhow::bail!("unsupported playback sample format {other:?}"),
-    };
+    }
+}
+
+fn open_capture(
+    config: &AudioConfig,
+    frame_samples: usize,
+    processor: Arc<Mutex<Processor>>,
+    control: Arc<ProcessingControl>,
+    frames: mpsc::Sender<Vec<f32>>,
+) -> Result<OpenStream> {
+    let host = cpal::default_host();
+    let device = pick_device(&host, &config.input_device, true)?;
+    let name = format!("{} ({})", device_label(&device), device_pcm_id(&device));
+    let supported = choose_config(&device, true).context("no usable capture configuration")?;
+    let channels = supported.channels() as usize;
+    let rate = supported.sample_rate();
+    let format = supported.sample_format();
+    let stream_config: StreamConfig = supported.into();
+    let failed = Arc::new(AtomicBool::new(false));
+    let period_ms = config.device_period_ms;
+    let stream = open_stream_with_period("capture", period_ms, stream_config, |stream_config| {
+        build_capture_stream(
+            &device,
+            stream_config,
+            format,
+            channels,
+            rate,
+            frame_samples,
+            &processor,
+            &control,
+            &frames,
+            &failed,
+        )
+    })?;
+    stream.play().context("starting capture stream")?;
+    tracing::info!(
+        event = "audio-capture-open",
+        device = %name,
+        rate,
+        channels,
+        format = ?format,
+        period_ms
+    );
+    Ok(OpenStream {
+        name,
+        failed,
+        _stream: stream,
+    })
+}
+
+fn open_playback(
+    config: &AudioConfig,
+    mixer: Arc<Mutex<Mixer>>,
+    processor: Arc<Mutex<Processor>>,
+    control: Arc<ProcessingControl>,
+) -> Result<OpenStream> {
+    let host = cpal::default_host();
+    let device = pick_device(&host, &config.output_device, false)?;
+    let name = format!("{} ({})", device_label(&device), device_pcm_id(&device));
+    let supported = choose_config(&device, false).context("no usable playback configuration")?;
+    let channels = supported.channels() as usize;
+    let rate = supported.sample_rate();
+    let format = supported.sample_format();
+    let stream_config: StreamConfig = supported.into();
+    let failed = Arc::new(AtomicBool::new(false));
+    let period_ms = config.device_period_ms;
+    let stream = open_stream_with_period("playback", period_ms, stream_config, |stream_config| {
+        build_playback_stream(
+            &device,
+            stream_config,
+            format,
+            channels,
+            rate,
+            &mixer,
+            &processor,
+            &control,
+            &failed,
+        )
+    })?;
     stream.play().context("starting playback stream")?;
-    tracing::info!(event = "audio-playback-open", device = %name, rate, channels, format = ?format);
+    tracing::info!(
+        event = "audio-playback-open",
+        device = %name,
+        rate,
+        channels,
+        format = ?format,
+        period_ms
+    );
     Ok(OpenStream {
         name,
         failed,
@@ -579,7 +704,21 @@ fn open_playback(
 
 #[cfg(test)]
 mod tests {
-    use super::{tone_frequency, wav_sink_path};
+    use super::{requested_buffer_size, tone_frequency, wav_sink_path};
+
+    #[test]
+    fn period_frames_follow_the_requested_milliseconds() {
+        assert_eq!(requested_buffer_size(0, 48_000), cpal::BufferSize::Default);
+        assert_eq!(requested_buffer_size(10, 0), cpal::BufferSize::Default);
+        assert_eq!(
+            requested_buffer_size(10, 48_000),
+            cpal::BufferSize::Fixed(480)
+        );
+        assert_eq!(
+            requested_buffer_size(5, 48_000),
+            cpal::BufferSize::Fixed(240)
+        );
+    }
 
     #[test]
     fn tone_device_defaults_to_440hz() {

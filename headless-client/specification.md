@@ -460,17 +460,30 @@ written to WAV by the second instance (289 packets for a 6 s tone; the first
   are ALSA names as listed by `talktome-headless --list-audio-devices`
   (e.g. `plughw:CARD=Headset,DEV=0`). A Pi's headphone jack has no input;
   a USB headset or USB audio interface is expected.
+  `audio.device_period_ms` (default 10, `0` = driver default) is requested
+  as the ALSA period; cpal then uses a two-period device buffer. A size the
+  card rejects is opened again with the driver default and logged as
+  `audio-period-rejected`. Native ALSA defaults are often 512–2048 frames
+  (about 21–85 ms per period), which is most of the gap versus a Mac browser.
 - **Capture**: mono, device rate → `rubato` → 48 kHz, then either
   sonora APM (when `audio.auto_processing` / server
   `audioAutoProcessing` is on) or manual `audio.input_gain_db`
   (same range as `userInputGainDb`, −30…40 dB). RMS level for VOX and
-  meters is taken after that.
-- **Encode**: libopus 48 kHz mono, `application = voip`, frame size
-  `audio.profile` = `standard` (20 ms, FEC on, 64 kbit/s) by default; `low`
-  (10 ms) and `ultra-low` (5 ms) mirror `QUALITY_PROFILES` in
-  `public/client.js` for LAN use. Frames go to a `TrackLocalStaticSample`.
+  meters is taken after that. Encoded frames wait in a queue of four; a
+  fuller queue would play audio that is already late.
+- **Encode**: libopus 48 kHz mono, `application = voip`, complexity 5
+  (so a quad Cortex-A7 can finish a 5 ms frame). Frame size
+  `audio.profile` = `ultra-low` (5 ms, no FEC, 48 kbit/s) by default,
+  matching `QUALITY_PROFILES` in `public/client.js`. `low` (10 ms, no FEC,
+  64 kbit/s) and `standard` (20 ms, FEC, 64 kbit/s) are the stable choices.
+  The offer keeps `minptime=10` (router and browser) and sets `ptime` to
+  the frame size. Frames go straight to a `TrackLocalStaticSample`.
 - **Decode**: per consumer, RTP → Opus decode with PLC/FEC → jitter buffer
-  (`audio.jitter_min_ms` 20 … `audio.jitter_max_ms` 120, adaptive) → mixer.
+  → mixer. Playout starts at `audio.jitter_min_ms` (20). The buffer is
+  trimmed to that target plus one frame, so a burst does not sit at
+  `audio.jitter_max_ms` (120). An underrun raises the target by one frame
+  up to the maximum and waits for that depth again; five seconds of clean
+  audio lowers it by one frame.
 - **Mixer**: `out = Σ source_i × volume_i × (muted_i ? 0 : 1) × dim_i`,
   soft-clipped. `dim_i` implements `dimFeedsWhileSpeaking` (feeds dimmed by
   `audio.dim_db`, default −15 dB, while the user talks) and
@@ -765,7 +778,7 @@ values (e.g. `TALKTOME_USER_PASSWORD`), which is also how the systemd
                     "retry_ms": 5000, "kicked_retry_ms": 10000 },
   "audio": { "input_device": "plughw:CARD=Headset,DEV=0",
              "output_device": "plughw:CARD=Headset,DEV=0",
-             "profile": "standard", "input_gain_db": 0,
+             "profile": "ultra-low", "device_period_ms": 10, "input_gain_db": 0,
              "auto_processing": false,
              "dim_db": -15, "dim_feeds_while_speaking": false,
              "dim_when_addressed": true,

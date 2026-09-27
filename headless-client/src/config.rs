@@ -125,6 +125,11 @@ pub struct AudioConfig {
     /// ALSA/cpal device name; `null` = system default. `"none"` disables playback.
     pub output_device: Option<String>,
     pub profile: AudioProfile,
+    /// ALSA period in milliseconds. `0` keeps the driver default (often
+    /// 21–85 ms). The device buffer is two periods. A size the card rejects
+    /// falls back to the driver default.
+    #[serde(default = "default_device_period_ms")]
+    pub device_period_ms: u32,
     pub input_gain_db: f32,
     /// Echo cancellation, noise suppression and AGC (same as the browser
     /// `audioAutoProcessing` toggle). Ignored for `input_gain_db` while on.
@@ -477,7 +482,8 @@ impl Default for AudioConfig {
         Self {
             input_device: None,
             output_device: None,
-            profile: AudioProfile::Standard,
+            profile: AudioProfile::UltraLow,
+            device_period_ms: default_device_period_ms(),
             input_gain_db: 0.0,
             auto_processing: false,
             stream_delay_ms: None,
@@ -496,6 +502,10 @@ impl Default for AudioConfig {
 
 fn default_play_connection_sounds() -> bool {
     true
+}
+
+fn default_device_period_ms() -> u32 {
+    10
 }
 
 impl AudioConfig {
@@ -1049,6 +1059,9 @@ impl Config {
         if self.audio.jitter_min_ms > self.audio.jitter_max_ms {
             bail!("audio.jitter_min_ms must not exceed audio.jitter_max_ms");
         }
+        if self.audio.device_period_ms != 0 && !(2..=40).contains(&self.audio.device_period_ms) {
+            bail!("audio.device_period_ms must be 0 (driver default) or between 2 and 40");
+        }
         if let Some(policy) = &self.ice.transport_policy {
             if !matches!(policy.as_str(), "all" | "relay") {
                 bail!("ice.transport_policy must be \"all\" or \"relay\"");
@@ -1285,6 +1298,8 @@ mod tests {
         assert!((config.audio.default_volume_linear() - 0.5).abs() < 0.02);
         assert!(config.audio.auto_processing);
         assert!(config.audio.play_connection_sounds);
+        assert_eq!(config.audio.profile, AudioProfile::UltraLow);
+        assert_eq!(config.audio.device_period_ms, 10);
         let quiet = toml_text.replace(
             "[audio]",
             "[audio]\n            play_connection_sounds = false",
@@ -1302,6 +1317,22 @@ mod tests {
         );
         let legacy = StreamDeckConfig::default();
         assert_eq!(legacy.volume_step_db(), 3.0);
+    }
+
+    #[test]
+    fn device_period_rejects_values_the_card_cannot_use() {
+        let text = minimal_json().to_string();
+        let mut config =
+            from_document(parse_document(Path::new("cam1.json"), &text).unwrap()).unwrap();
+        config.validate().unwrap();
+        config.audio.device_period_ms = 0;
+        config.validate().unwrap();
+        config.audio.device_period_ms = 1;
+        assert!(config.validate().is_err());
+        config.audio.device_period_ms = 41;
+        assert!(config.validate().is_err());
+        config.audio.device_period_ms = 5;
+        config.validate().unwrap();
     }
 
     #[test]

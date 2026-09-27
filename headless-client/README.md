@@ -215,6 +215,22 @@ only runs when both capture and playback are real ALSA devices — `tone`
 and `wav:` skips AEC. Optional `audio.stream_delay_ms` overrides the
 estimated loudspeaker-to-mic delay if residual echo remains.
 
+## Latency
+
+The default codec profile is `ultra-low` (5 ms Opus, no FEC), the same
+profile the web client uses. The receive jitter buffer starts at
+`audio.jitter_min_ms` (20) and only grows toward `audio.jitter_max_ms`
+(120) after an underrun, then eases back after five seconds of clean
+audio. `audio.device_period_ms` (default 10) is the ALSA period; the
+device buffer is two of those. `0` keeps the driver default, which on
+many cards is several times larger.
+
+On a NanoPi NEO Core LTS, leave the period at 10 ms. If the log shows
+`audio-period-rejected` or `audio-stream-error`, or the audio crackles,
+raise the period (20) and set `audio.profile` to `low` or `standard`.
+A faster host on a quiet LAN can try `device_period_ms = 5` and
+`jitter_min_ms = 10`.
+
 ## Conference member mix
 
 Like the web client, each conference card has **Members**: hear/mute and a

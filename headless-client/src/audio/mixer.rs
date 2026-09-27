@@ -344,11 +344,16 @@ mod tests {
                 muted: true,
             },
         );
+        // The jitter target keeps about two frames, so top up before each render.
+        mixer.push_packet("c1", 6, &conf[0]).unwrap();
+        mixer.push_packet("f1", 6, &feed[0]).unwrap();
         mixer.render(&mut out);
         let feed_only = rms(&out);
         assert!((feed_only - 0.35).abs() < 0.1, "feed alone: {feed_only}");
 
         mixer.set_dim_state(true, false);
+        mixer.push_packet("c1", 7, &conf[1]).unwrap();
+        mixer.push_packet("f1", 7, &feed[1]).unwrap();
         mixer.render(&mut out);
         let dimmed = rms(&out);
         assert!(dimmed < feed_only * 0.2, "dimmed {dimmed} vs {feed_only}");
@@ -398,6 +403,8 @@ mod tests {
                 muted: true,
             },
         );
+        mixer.push_packet("adi", 6, &packets[0]).unwrap();
+        mixer.push_packet("beni", 6, &packets[0]).unwrap();
         mixer.render(&mut out);
         let adi_only = rms(&out);
         assert!(

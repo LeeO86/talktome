@@ -593,6 +593,8 @@ impl Session {
             disconnected_timeout: grace,
             failed_timeout: grace * 3,
             keepalive_interval: Duration::from_secs(2),
+            opus_ptime_ms: self.config.audio.profile.frame_ms(),
+            opus_inband_fec: self.config.audio.profile.fec(),
         }
     }
 

@@ -195,6 +195,16 @@ mod tests {
         assert_eq!(params.mid.as_deref(), Some("0"));
         assert_eq!(params.codecs[0].payload_type, 100);
         assert_eq!(params.codecs[0].parameters["useinbandfec"], 1);
+        let low_latency = OFFER.replace(
+            "minptime=10;useinbandfec=1",
+            "minptime=10;useinbandfec=0;ptime=5",
+        );
+        let parsed = sdp::parse(&low_latency).unwrap();
+        let local = local_audio_info(&parsed.media[0]).unwrap();
+        let params = sending_rtp_parameters(&local, &router_caps()).unwrap();
+        assert_eq!(params.codecs[0].parameters["ptime"], 5);
+        assert_eq!(params.codecs[0].parameters["useinbandfec"], 0);
+        assert_eq!(params.codecs[0].parameters["minptime"], 10);
         assert_eq!(params.codecs[0].rtcp_feedback.len(), 1);
         assert_eq!(params.codecs[0].rtcp_feedback[0].kind, "transport-cc");
         assert_eq!(params.encodings[0].ssrc, Some(777));

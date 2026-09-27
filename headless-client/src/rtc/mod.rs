@@ -86,6 +86,11 @@ pub struct RtcSettings {
     pub disconnected_timeout: Duration,
     pub failed_timeout: Duration,
     pub keepalive_interval: Duration,
+    /// Opus packet time in milliseconds, advertised as `ptime`. `minptime`
+    /// stays 10, matching the mediasoup router and the browser offer; the
+    /// encoder frame size is what actually sets the packet duration.
+    pub opus_ptime_ms: u32,
+    pub opus_inband_fec: bool,
 }
 
 impl Default for RtcSettings {
@@ -96,8 +101,19 @@ impl Default for RtcSettings {
             disconnected_timeout: Duration::from_secs(4),
             failed_timeout: Duration::from_secs(12),
             keepalive_interval: Duration::from_secs(2),
+            opus_ptime_ms: 20,
+            opus_inband_fec: true,
         }
     }
+}
+
+/// Opus fmtp matching the browser client: `minptime` stays 10 (router and
+/// browser offer), `ptime` is the profile frame size, FEC follows the profile.
+pub(crate) fn opus_fmtp_line(ptime_ms: u32, inband_fec: bool) -> String {
+    format!(
+        "minptime=10;useinbandfec={};ptime={ptime_ms}",
+        u8::from(inband_fec)
+    )
 }
 
 /// Builds peer connections configured for the router's Opus payload type.
@@ -142,7 +158,10 @@ impl MediaFactory {
             mime_type: MIME_TYPE_OPUS.to_owned(),
             clock_rate: 48_000,
             channels: 2,
-            sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+            sdp_fmtp_line: opus_fmtp_line(
+                self.settings.opus_ptime_ms,
+                self.settings.opus_inband_fec,
+            ),
             rtcp_feedback: vec![RTCPFeedback {
                 typ: "transport-cc".to_owned(),
                 parameter: String::new(),
@@ -845,5 +864,22 @@ impl LinkStats {
             packets_lost,
             packets_received,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opus_fmtp_line;
+
+    #[test]
+    fn opus_fmtp_advertises_ptime_and_keeps_router_minptime() {
+        assert_eq!(
+            opus_fmtp_line(5, false),
+            "minptime=10;useinbandfec=0;ptime=5"
+        );
+        assert_eq!(
+            opus_fmtp_line(20, true),
+            "minptime=10;useinbandfec=1;ptime=20"
+        );
     }
 }
