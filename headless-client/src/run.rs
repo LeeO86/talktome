@@ -40,7 +40,9 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
     )));
     let frame_samples =
         (crate::audio::codec::SAMPLE_RATE * config.audio.profile.frame_ms() / 1000) as usize;
-    let (frames_tx, frames_rx) = mpsc::channel(64);
+    // Four frames is enough slack for the session loop to encode. A deeper
+    // queue would send audio that is already late (64 × 20 ms was over a second).
+    let (frames_tx, frames_rx) = mpsc::channel(4);
     let processing = ProcessingControl::from_audio(&config.audio);
     let audio_io = AudioIo::start(
         config.audio.clone(),

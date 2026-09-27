@@ -426,6 +426,7 @@ async fn status(State(state): State<Shared>) -> Response {
             "input_device": config.audio.input_device,
             "output_device": config.audio.output_device,
             "profile": config.audio.profile,
+            "device_period_ms": config.audio.device_period_ms,
             "auto_processing": config.audio.auto_processing,
             "input_gain_db": config.audio.input_gain_db,
         },

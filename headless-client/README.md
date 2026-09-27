@@ -122,7 +122,9 @@ desktops:
   server heartbeat, PGM/PRV tally), audio devices with an input meter, every configured GPIO
   output (live state) and input (pressed, event count), the local control
   socket (path, optional loopback TCP, connected clients), Stream Deck and service
-  details.
+  details. Disconnect and reconnect tones follow **Play connection sounds**
+  (`audio.play_connection_sounds`, default on). An admin `playConnectionSounds`
+  update applies immediately.
 - **Remote Control**: the same talk layout as the Talktome web client — destination
   rows with icon, name, volume, mute and hold-to-talk (slide left to lock), a
   reply bar, and conference **Members** for per-person hear/mute and level.
@@ -212,6 +214,22 @@ toggle for this user (`audioAutoProcessing`). While it is on, manual
 only runs when both capture and playback are real ALSA devices — `tone`
 and `wav:` skips AEC. Optional `audio.stream_delay_ms` overrides the
 estimated loudspeaker-to-mic delay if residual echo remains.
+
+## Latency
+
+The default codec profile is `ultra-low` (5 ms Opus, no FEC), the same
+profile the web client uses. The receive jitter buffer starts at
+`audio.jitter_min_ms` (20) and only grows toward `audio.jitter_max_ms`
+(120) after an underrun, then eases back after five seconds of clean
+audio. `audio.device_period_ms` (default 10) is the ALSA period; the
+device buffer is two of those. `0` keeps the driver default, which on
+many cards is several times larger.
+
+On a NanoPi NEO Core LTS, leave the period at 10 ms. If the log shows
+`audio-period-rejected` or `audio-stream-error`, or the audio crackles,
+raise the period (20) and set `audio.profile` to `low` or `standard`.
+A faster host on a quiet LAN can try `device_period_ms = 5` and
+`jitter_min_ms = 10`.
 
 ## Conference member mix
 

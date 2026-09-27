@@ -22,7 +22,8 @@
   "audio": {
     "input_device": "plughw:CARD=Headset,DEV=0",
     "output_device": "plughw:CARD=Headset,DEV=0",
-    "profile": "standard",
+    "profile": "ultra-low",
+    "device_period_ms": 10,
     "auto_processing": false,
     "input_gain_db": 0,
     "dim_db": -15,

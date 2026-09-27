@@ -62,6 +62,7 @@ pub async fn connect_and_register(config: &Config) -> Result<Connected> {
                 "kind": "user",
                 "force": true,
                 "productionId": config.user.production,
+                "clientType": crate::signalling::REGISTERED_CLIENT_TYPE,
             }),
             SIGNAL_TIMEOUT,
         )
@@ -92,6 +93,8 @@ fn rtc_settings(config: &Config) -> RtcSettings {
         disconnected_timeout: Duration::from_millis(config.network.ice_disconnect_grace_ms),
         failed_timeout: Duration::from_millis(config.network.ice_disconnect_grace_ms * 3),
         keepalive_interval: Duration::from_secs(2),
+        opus_ptime_ms: config.audio.profile.frame_ms(),
+        opus_inband_fec: config.audio.profile.fec(),
     }
 }
 

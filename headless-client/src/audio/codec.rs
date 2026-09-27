@@ -5,6 +5,11 @@ use bytes::Bytes;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 
+/// Speech complexity. 10 (libopus default) misses 5 ms deadlines on a
+/// Cortex-A7 such as the NanoPi NEO Core LTS; 5 keeps speech quality and
+/// finishes inside the frame.
+const SPEECH_COMPLEXITY: i32 = 5;
+
 pub struct OpusEncoder {
     inner: opus::Encoder,
     frame_samples: usize,
@@ -24,6 +29,9 @@ impl OpusEncoder {
             .set_packet_loss_perc(if fec { 10 } else { 0 })
             .context("setting expected packet loss")?;
         inner.set_vbr(true).context("setting vbr")?;
+        inner
+            .set_complexity(SPEECH_COMPLEXITY)
+            .context("setting opus complexity")?;
         Ok(Self {
             inner,
             frame_samples: (SAMPLE_RATE * frame_ms / 1000) as usize,
@@ -119,5 +127,6 @@ mod tests {
         }
         assert!(decoded_energy > 0.05, "decoded energy {decoded_energy}");
         assert_eq!(decoder.conceal(960).unwrap().len(), 960);
+        assert_eq!(encoder.inner.get_complexity().unwrap(), 5);
     }
 }

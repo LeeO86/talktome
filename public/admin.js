@@ -95,6 +95,9 @@ const multipleProductionsInput = document.getElementById('multiple-productions-e
 const configExportBtn = document.getElementById('config-export-btn');
 const configImportBtn = document.getElementById('config-import-btn');
 const configImportFile = document.getElementById('config-import-file');
+const automaticBackupForm = document.getElementById('config-auto-backup-form');
+const automaticBackupEnabled = document.getElementById('config-auto-backup-enabled');
+const automaticBackupInterval = document.getElementById('config-auto-backup-interval');
 const apiKeyRegenerateBtn = document.getElementById('api-key-regenerate-btn');
 const apiKeyCopyBtn = document.getElementById('api-key-copy-btn');
 const apiKeyValueInput = document.getElementById('api-key-value');
@@ -114,6 +117,7 @@ const defaultClientDimAmount = document.getElementById('default-client-dim-amoun
 const defaultClientDimSelf = document.getElementById('default-client-dim-self');
 const defaultClientDimIncoming = document.getElementById('default-client-dim-incoming');
 const defaultClientAudioProcessing = document.getElementById('default-client-audio-processing');
+const defaultClientConnectionSounds = document.getElementById('default-client-connection-sounds');
 const defaultClientLeftHand = document.getElementById('default-client-left-hand');
 const defaultClientLockMultiple = document.getElementById('default-client-lock-multiple');
 const adminImageLightbox = document.getElementById('admin-image-lightbox');
@@ -1459,12 +1463,12 @@ function setStatusText(id, value) {
 }
 
 function formatStatusLatency(networkStats) {
-  const roundTripMs = Number(networkStats?.roundTripMs);
+  const roundTripMs = networkStats?.roundTripMs;
   return Number.isFinite(roundTripMs) ? `${Math.round(roundTripMs)} ms` : '-';
 }
 
 function formatStatusPacketLoss(networkStats) {
-  const packetLossPercent = Number(networkStats?.packetLossPercent);
+  const packetLossPercent = networkStats?.packetLossPercent;
   if (!Number.isFinite(packetLossPercent)) return '-';
   return `${packetLossPercent.toFixed(packetLossPercent >= 10 ? 0 : 1)}%`;
 }
@@ -1596,13 +1600,13 @@ function renderAdminStatus(payload = {}) {
               <td><span class="status-with-stop">${statusIndicatorHtml({
                 ...user,
                 talkingLabel: formatStatusTalkTargetLabel(user),
-              })}${user.online && user.talking && Number.isFinite(userId) ? `<button type="button" class="status-stop-mic" data-stop-transmission-user-id="${userId}" onclick="stopUserTransmission(${userId}, this)" title="Stop transmission" aria-label="Stop transmission for ${escapeHtml(user.name)}"><img src="/images/mute_mic.png" alt="" /></button>` : ''}</span></td>
+              })}${user.talkLocked ? '<svg class="status-talk-lock-icon" viewBox="0 0 24 24" role="img" aria-label="Talk locked" title="Talk locked"><path d="M7 10V7a5 5 0 0 1 10 0v3"/><rect x="5" y="10" width="14" height="11" rx="2"/></svg>' : ''}${user.online && user.talking && Number.isFinite(userId) ? `<button type="button" class="status-stop-mic" data-stop-transmission-user-id="${userId}" onclick="stopUserTransmission(${userId}, this)" title="Stop transmission" aria-label="Stop transmission for ${escapeHtml(user.name)}"><img src="/images/mute_mic.png" alt="" /></button>` : ''}</span></td>
               <td>${userNameHtml}</td>
               ${showProductionColumn ? `<td title="${escapeHtml(productionLabel)}">${escapeHtml(productionLabel)}</td>` : ''}
               <td>${escapeHtml(clientLabel)}</td>
               <td>${escapeHtml(user.remoteAddress || '-')}</td>
-              <td title="WebRTC round-trip time from this browser">${formatStatusLatency(user.networkStats)}</td>
-              <td title="WebRTC audio packet loss reported by this browser">${formatStatusPacketLoss(user.networkStats)}</td>
+              <td title="${user.connectionType === 'bridge' ? 'Bridge API request round-trip time' : 'WebRTC round-trip time from this browser'}">${formatStatusLatency(user.networkStats)}</td>
+              <td title="${user.connectionType === 'bridge' ? 'Input RTP packet loss from Bridge to server' : 'WebRTC audio packet loss reported by this browser'}">${formatStatusPacketLoss(user.networkStats)}</td>
               <td>${user.online ? statusTimeHtml(user.connectedAt, { suffix: false, empty: '-' }) : '-'}</td>
               <td>${user.online ? 'Now' : statusTimeHtml(user.lastOnlineAt)}</td>
             </tr>
@@ -1626,8 +1630,8 @@ function renderAdminStatus(payload = {}) {
               ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
               <td>${escapeHtml(clientLabel)}</td>
               <td>${escapeHtml(feed.remoteAddress || '-')}</td>
-              <td title="WebRTC round-trip time from this browser">${formatStatusLatency(feed.networkStats)}</td>
-              <td title="WebRTC audio packet loss reported by this browser">${formatStatusPacketLoss(feed.networkStats)}</td>
+              <td title="${feed.connectionType === 'bridge' ? 'Bridge API request round-trip time' : 'WebRTC round-trip time from this browser'}">${formatStatusLatency(feed.networkStats)}</td>
+              <td title="${feed.connectionType === 'bridge' ? 'Input RTP packet loss from Bridge to server' : 'WebRTC audio packet loss reported by this browser'}">${formatStatusPacketLoss(feed.networkStats)}</td>
               <td>${feed.online ? statusTimeHtml(feed.connectedAt, { suffix: false, empty: '-' }) : '-'}</td>
               <td>${feed.online ? 'Now' : statusTimeHtml(feed.lastSeenAt, { empty: 'Never' })}</td>
             </tr>
@@ -1651,8 +1655,8 @@ function renderAdminStatus(payload = {}) {
               ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
               <td>${escapeHtml(bridge.client || 'Bridge')}</td>
               <td>${escapeHtml(bridge.remoteAddress || '-')}</td>
-              <td>-</td>
-              <td>-</td>
+              <td title="Average Bridge API request round-trip time across active ports">${formatStatusLatency(bridge.networkStats)}</td>
+              <td title="Input RTP packet loss from Bridge to server across active ports">${formatStatusPacketLoss(bridge.networkStats)}</td>
               <td>${bridge.online ? statusTimeHtml(bridge.connectedAt, { suffix: false, empty: '-' }) : '-'}</td>
               <td>${bridge.online ? 'Now' : statusTimeHtml(bridge.lastSeenAt)}</td>
             </tr>
@@ -2291,6 +2295,7 @@ async function loadData() {
 
   await Promise.allSettled([
     loadDefaultClientSettings(),
+    loadAutomaticBackupSettings(),
     loadMdnsSettings(),
     loadMediaNetworkSettings(),
     loadRtcPortSettings(),
@@ -3118,9 +3123,56 @@ async function loadDefaultClientSettings() {
   if (defaultClientDimSelf) defaultClientDimSelf.checked = settings.dimFeedsWhileSpeaking === true;
   if (defaultClientDimIncoming) defaultClientDimIncoming.checked = settings.dimWhenAddressed === true;
   if (defaultClientAudioProcessing) defaultClientAudioProcessing.checked = settings.audioAutoProcessing === true;
+  if (defaultClientConnectionSounds) defaultClientConnectionSounds.checked = settings.playConnectionSounds !== false;
   if (defaultClientLeftHand) defaultClientLeftHand.checked = settings.leftHandMode === true;
   if (defaultClientLockMultiple) defaultClientLockMultiple.checked = settings.lockMultipleTargets === true;
   return payload;
+}
+
+function renderAutomaticBackupSettings(settings = {}) {
+  if (automaticBackupEnabled) automaticBackupEnabled.checked = settings.enabled === true;
+  if (automaticBackupInterval) automaticBackupInterval.value = String(settings.intervalDays ?? 7);
+  const directory = document.getElementById('config-auto-backup-directory');
+  const last = document.getElementById('config-auto-backup-last');
+  const next = document.getElementById('config-auto-backup-next');
+  const error = document.getElementById('config-auto-backup-error');
+  const formatTime = (value) => {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Unavailable';
+  };
+  if (directory) directory.textContent = settings.directory || 'Unavailable';
+  if (last) last.textContent = settings.lastBackupAt ? formatTime(settings.lastBackupAt) : 'Never';
+  if (next) {
+    next.textContent = !settings.enabled
+      ? 'Disabled'
+      : settings.nextBackupAt ? formatTime(settings.nextBackupAt) : 'Pending';
+  }
+  if (error) {
+    error.textContent = settings.lastError ? `Last error: ${settings.lastError}` : '';
+    error.classList.toggle('is-hidden', !settings.lastError);
+  }
+  syncAutomaticBackupVisibility();
+}
+
+function syncAutomaticBackupVisibility() {
+  if (!automaticBackupForm) return;
+  const enabled = automaticBackupEnabled?.checked === true;
+  automaticBackupForm.classList.toggle('is-collapsed', !enabled);
+  const intervalField = document.getElementById('config-auto-backup-interval-field');
+  const status = document.getElementById('config-auto-backup-status');
+  const error = document.getElementById('config-auto-backup-error');
+  if (intervalField) intervalField.hidden = !enabled;
+  if (status) status.hidden = !enabled;
+  if (error) error.hidden = !enabled;
+  automaticBackupForm.querySelectorAll('.config-auto-backup-time').forEach((item) => {
+    item.hidden = !enabled;
+  });
+}
+
+async function loadAutomaticBackupSettings() {
+  const settings = await fetchJSON('/admin/settings/automatic-backup');
+  renderAutomaticBackupSettings(settings);
+  return settings;
 }
 
 function clearApiKeyField() {
@@ -4315,6 +4367,7 @@ if (defaultClientSettingsForm) {
       dimFeedsWhileSpeaking: Boolean(defaultClientDimSelf?.checked),
       dimWhenAddressed: Boolean(defaultClientDimIncoming?.checked),
       audioAutoProcessing: Boolean(defaultClientAudioProcessing?.checked),
+      playConnectionSounds: Boolean(defaultClientConnectionSounds?.checked),
       leftHandMode: Boolean(defaultClientLeftHand?.checked),
       lockMultipleTargets: Boolean(defaultClientLockMultiple?.checked),
     };
@@ -4358,6 +4411,40 @@ if (configExportBtn) {
     } catch (err) {
       console.error('Failed to export configuration:', err);
       showMessage('❌ Failed to export configuration', 'error', 'config');
+    }
+  });
+}
+
+if (automaticBackupForm) {
+  automaticBackupEnabled?.addEventListener('change', syncAutomaticBackupVisibility);
+  automaticBackupForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const submitButton = automaticBackupForm.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const res = await authedFetch('/admin/settings/automatic-backup', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: Boolean(automaticBackupEnabled?.checked),
+          intervalDays: Number(automaticBackupInterval?.value || 7),
+        }),
+      });
+      const settings = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(settings.error || 'Failed to save automatic backup settings');
+      renderAutomaticBackupSettings(settings);
+      showMessage(
+        settings.lastError
+          ? `⚠️ Automatic backup is enabled, but the backup failed: ${settings.lastError}`
+          : '✅ Automatic backup settings saved',
+        settings.lastError ? 'warning' : 'success',
+        'config'
+      );
+    } catch (error) {
+      console.error('Failed to save automatic backup settings:', error);
+      showMessage(`❌ ${error.message || 'Failed to save automatic backup settings'}`, 'error', 'config');
+    } finally {
+      if (submitButton) submitButton.disabled = false;
     }
   });
 }
@@ -5105,6 +5192,7 @@ function renderUserAudioSettingsFields(settings, targets = []) {
     <label class="user-audio-settings-switch"><span>Dim feeds while speaking</span><span class="admin-switch"><input id="admin-dim-speaking" type="checkbox" role="switch" ${checked('dimFeedsWhileSpeaking')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Dim when addressed</span><span class="admin-switch"><input id="admin-dim-addressed" type="checkbox" role="switch" ${checked('dimWhenAddressed')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Audio auto processing</span><span class="admin-switch"><input id="admin-auto-processing" type="checkbox" role="switch" ${checked('audioAutoProcessing')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Play connection sounds</span><span class="admin-switch"><input id="admin-connection-sounds" type="checkbox" role="switch" ${checked('playConnectionSounds')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Left-hand mode</span><span class="admin-switch"><input id="admin-left-hand" type="checkbox" role="switch" ${checked('leftHandMode')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Lock multiple targets</span><span class="admin-switch"><input id="admin-lock-multiple" type="checkbox" role="switch" ${checked('lockMultipleTargets')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-mic-gain"><span>Manual mic gain</span><output id="admin-mic-gain-value">${Number(settings.userInputGainDb).toFixed(1)} dB</output></label><input id="admin-mic-gain" type="range" min="-30" max="40" step="0.5" value="${settings.userInputGainDb}"></div>
@@ -5157,6 +5245,7 @@ userAudioSettingsForm?.addEventListener('submit', async (event) => {
     dimFeedsWhileSpeaking: document.getElementById('admin-dim-speaking').checked,
     dimWhenAddressed: document.getElementById('admin-dim-addressed').checked,
     audioAutoProcessing: document.getElementById('admin-auto-processing').checked,
+    playConnectionSounds: document.getElementById('admin-connection-sounds').checked,
     leftHandMode: document.getElementById('admin-left-hand').checked,
     lockMultipleTargets: document.getElementById('admin-lock-multiple').checked,
     userInputGainDb: Number(document.getElementById('admin-mic-gain').value),
