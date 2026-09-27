@@ -415,6 +415,54 @@ function makeSettingsStyles(palette: SettingsPalette) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: palette.separator,
     },
+    orderList: {
+      paddingBottom: 0,
+    },
+    orderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingLeft: 16,
+      paddingRight: 8,
+      paddingVertical: 8,
+      gap: 8,
+    },
+    orderRowDivider: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: palette.separator,
+    },
+    orderText: {
+      flex: 1,
+      minWidth: 0,
+      paddingVertical: 4,
+    },
+    orderName: {
+      color: palette.text,
+      fontSize: 16,
+    },
+    orderKind: {
+      color: palette.muted,
+      fontSize: 13,
+      paddingTop: 2,
+    },
+    orderButtons: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    orderButton: {
+      width: 44,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    orderArrow: {
+      color: palette.link,
+      fontSize: 22,
+      fontWeight: '600',
+      lineHeight: 24,
+    },
+    orderArrowDisabled: {
+      color: palette.disabled,
+    },
   });
 }
 

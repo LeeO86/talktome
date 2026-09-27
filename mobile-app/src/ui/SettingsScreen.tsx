@@ -342,7 +342,7 @@ function MainButtonSettingsPage() {
 
 function arrangeKind(target: TalkTarget): string {
   if (target.type === 'conference') {
-    return target.canTalk ? 'Conference' : 'Conference · Listen only';
+    return target.canTalk ? 'Conference' : 'Listen only';
   }
   if (target.type === 'feed') {
     return 'Feed';
@@ -350,8 +350,37 @@ function arrangeKind(target: TalkTarget): string {
   return 'User';
 }
 
+function OrderArrow({
+  direction,
+  label,
+  disabled,
+  onPress,
+}: {
+  direction: 'up' | 'down';
+  label: string;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const styles = useSettingsStyles();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={styles.orderButton}
+    >
+      <Text style={[styles.orderArrow, disabled && styles.orderArrowDisabled]}>
+        {direction === 'up' ? '↑' : '↓'}
+      </Text>
+    </Pressable>
+  );
+}
+
 function ArrangeTargetsPage() {
   const targets = useSessionStore((state) => state.targets);
+  const styles = useSettingsStyles();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -382,21 +411,35 @@ function ArrangeTargetsPage() {
           <SettingsFootnote>No targets available.</SettingsFootnote>
         </SettingsSection>
       ) : (
-        targets.map((target, index) => (
-          <SettingsSection key={talkTargetIdentity(target)}>
-            <SettingsRow label={target.label} value={arrangeKind(target)} />
-            <SettingsActionRow
-              label="Move up"
-              disabled={busy || index === 0}
-              onPress={() => void move(index, -1)}
-            />
-            <SettingsActionRow
-              label="Move down"
-              disabled={busy || index === targets.length - 1}
-              onPress={() => void move(index, 1)}
-            />
-          </SettingsSection>
-        ))
+        <SettingsSection style={styles.orderList}>
+          {targets.map((target, index) => (
+            <View
+              key={talkTargetIdentity(target)}
+              style={[styles.orderRow, index > 0 && styles.orderRowDivider]}
+            >
+              <View style={styles.orderText}>
+                <Text style={styles.orderName} numberOfLines={1}>
+                  {target.label}
+                </Text>
+                <Text style={styles.orderKind}>{arrangeKind(target)}</Text>
+              </View>
+              <View style={styles.orderButtons}>
+                <OrderArrow
+                  direction="up"
+                  label={`Move ${target.label} up`}
+                  disabled={busy || index === 0}
+                  onPress={() => void move(index, -1)}
+                />
+                <OrderArrow
+                  direction="down"
+                  label={`Move ${target.label} down`}
+                  disabled={busy || index === targets.length - 1}
+                  onPress={() => void move(index, 1)}
+                />
+              </View>
+            </View>
+          ))}
+        </SettingsSection>
       )}
       {message ? <SettingsFootnote>{message}</SettingsFootnote> : null}
       <SettingsHint
