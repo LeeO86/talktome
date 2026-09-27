@@ -4,7 +4,10 @@
     const buffers = {};
     const decoding = {};
     let lost = false;
+    let enabled = true;
     let source = null;
+    let background = false;
+    let backgroundCycleComplete = false;
     // Fetch while connected: the loss notification must not require the server.
     for (const name of ['disconnected', 'reconnected']) {
       files[name] = load(`/audio/${name}.mp3`)
@@ -34,6 +37,7 @@
       }));
     }
     function play(name) {
+      if (!enabled) return;
       const ctx = getContext();
       // Never queue a stale announcement for a later user gesture.
       if (!ctx || ctx.state !== 'running' || !buffers[name]) return;
@@ -49,8 +53,31 @@
     }
     return {
       prepare,
-      disconnected() { if (!lost) { lost = true; play('disconnected'); } },
-      reconnected() { if (lost) { lost = false; play('reconnected'); } },
+      setEnabled(value) {
+        enabled = !!value;
+        if (!enabled && source) {
+          try { source.stop(); } catch {}
+          source = null;
+        }
+      },
+      setBackground(value) {
+        const next = !!value;
+        if (background !== next) {
+          background = next;
+          backgroundCycleComplete = false;
+        }
+      },
+      disconnected() {
+        if (lost) return;
+        lost = true;
+        if (!background || !backgroundCycleComplete) play('disconnected');
+      },
+      reconnected() {
+        if (!lost) return;
+        lost = false;
+        if (!background || !backgroundCycleComplete) play('reconnected');
+        if (background) backgroundCycleComplete = true;
+      },
     };
   }
   if (typeof module !== 'undefined') module.exports = { createConnectionSounds };
