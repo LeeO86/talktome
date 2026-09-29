@@ -442,6 +442,18 @@ fn open_stream_with_period(
     }
 }
 
+/// cpal recovers an underrun or overrun on the same stream (`prepare`, then
+/// continue). Marking the stream failed would drop it for `reopen_ms` and
+/// turn one missed period into a long silence.
+fn note_stream_error(direction: &'static str, error: cpal::Error, failed: &AtomicBool) {
+    if error.kind() == cpal::ErrorKind::Xrun {
+        tracing::warn!(event = "audio-xrun", direction, error = %error);
+        return;
+    }
+    tracing::warn!(event = "audio-stream-error", direction, error = %error);
+    failed.store(true, Ordering::Relaxed);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_capture_stream(
     device: &cpal::Device,
@@ -460,8 +472,7 @@ fn build_capture_stream(
     let frames = frames.clone();
     let error_flag = Arc::clone(failed);
     let err_fn = move |error: cpal::Error| {
-        tracing::warn!(event = "audio-stream-error", direction = "capture", error = %error);
-        error_flag.store(true, Ordering::Relaxed);
+        note_stream_error("capture", error, &error_flag);
     };
 
     let mut resampler = ToInternal::new(rate, SAMPLE_RATE)?;
@@ -542,8 +553,7 @@ fn build_playback_stream(
     let control = Arc::clone(control);
     let error_flag = Arc::clone(failed);
     let err_fn = move |error: cpal::Error| {
-        tracing::warn!(event = "audio-stream-error", direction = "playback", error = %error);
-        error_flag.store(true, Ordering::Relaxed);
+        note_stream_error("playback", error, &error_flag);
     };
 
     let mut resampler = FromInternal::new(SAMPLE_RATE, rate)?;
@@ -704,7 +714,25 @@ fn open_playback(
 
 #[cfg(test)]
 mod tests {
-    use super::{requested_buffer_size, tone_frequency, wav_sink_path};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::{note_stream_error, requested_buffer_size, tone_frequency, wav_sink_path};
+
+    #[test]
+    fn xrun_stays_open_and_other_errors_reopen() {
+        let failed = AtomicBool::new(false);
+        note_stream_error("playback", cpal::ErrorKind::Xrun.into(), &failed);
+        assert!(
+            !failed.load(Ordering::Relaxed),
+            "an underrun must not drop the stream"
+        );
+        note_stream_error(
+            "playback",
+            cpal::ErrorKind::DeviceNotAvailable.into(),
+            &failed,
+        );
+        assert!(failed.load(Ordering::Relaxed));
+    }
 
     #[test]
     fn period_frames_follow_the_requested_milliseconds() {
