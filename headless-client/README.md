@@ -225,11 +225,12 @@ audio. `audio.device_period_ms` (default 10) is the ALSA period; the
 device buffer is two of those. `0` keeps the driver default, which on
 many cards is several times larger.
 
-On a NanoPi NEO Core LTS, leave the period at 10 ms. If the log shows
-`audio-period-rejected` or `audio-stream-error`, or the audio crackles,
-raise the period (20) and set `audio.profile` to `low` or `standard`.
-A faster host on a quiet LAN can try `device_period_ms = 5` and
-`jitter_min_ms = 10`.
+On a NanoPi NEO Core LTS, leave the period at 10 ms. A single
+`audio-xrun` is one missed period; the stream stays open. If those
+warnings keep coming, the log shows `audio-period-rejected` or
+`audio-stream-error`, or the audio crackles, raise the period (20) and
+set `audio.profile` to `low` or `standard`. A faster host on a quiet LAN
+can try `device_period_ms = 5` and `jitter_min_ms = 10`.
 
 ## Conference member mix
 

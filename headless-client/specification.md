@@ -495,9 +495,11 @@ written to WAV by the second instance (289 packets for a 6 s tone; the first
 - **VOX** (`vox.enabled`, `vox.target`, `vox.threshold_db`,
   `vox.hang_ms`): a level trigger that acts like holding a key for the
   configured target; mirrors `voiceTriggerEnabled/Target/ThresholdDb`.
-- **Hot-plug**: if a stream errors or the device disappears, the pipeline
-  keeps running (silence in, drop out) and retries opening the device every
-  `audio.reopen_ms` (default 2000); surfaces show "no audio device".
+- **Hot-plug**: a buffer underrun or overrun (`cpal::ErrorKind::Xrun`, log
+  event `audio-xrun`) is left to cpal, which prepares the same stream and
+  continues. Any other stream error, or a device that disappears, drops
+  that direction and retries every `audio.reopen_ms` (default 2000);
+  surfaces show "no audio device".
 - **Processing** (`audio.auto_processing`, default off; same boolean as
   browser `audioAutoProcessing`): in-process sonora (WebRTC M145 APM) at
   10 ms / 48 kHz — high-pass, Wiener NS, AGC2, and AEC3 when **both**
