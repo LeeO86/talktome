@@ -15,6 +15,10 @@ import type { SessionController } from './sessionController';
 
 /** Press/lock/release talk, the main button, and conference listen. */
 export class TalkCoordinator {
+  private localHolds = new Set<string>();
+  private remoteHolds = new Map<string, { target: TalkTarget }>();
+  private generation = 0;
+
   constructor(private readonly c: SessionController) {}
 
   canTalkTo(target: TalkTarget): boolean {
@@ -22,63 +26,117 @@ export class TalkCoordinator {
   }
 
   async pressTalk(target: TalkTarget): Promise<void> {
-    if (!this.canTalkTo(target)) {
-      useSessionStore.setState({
-        error: target.type === 'user' ? 'This target is currently offline.' : 'This target is listen-only.',
-      });
+    if (!this.canTalkTo(target) || !this.c.media) {
+      useSessionStore.setState({ error: !this.c.media ? 'Media is not ready.' : target.type === 'user' ? 'This target is currently offline.' : 'This target is listen-only.' });
       return;
     }
-    const media = this.c.media;
-    if (!media) {
-      useSessionStore.setState({ error: 'Media is not ready.' });
-      return;
-    }
-
-    await this.c.background.prepareAudioForTalk();
-
-    const key = talkTargetIdentity(target);
-    const state = useSessionStore.getState();
-    if (state.talkLocked && state.lockedTargetKeys.includes(key) && this.c.overrideFrom === null) {
-      // Tapping a locked target: with multi-lock drop just that lock,
-      // otherwise stop talking entirely (single-lock web behavior).
-      if (state.lockMultipleTargets && this.c.lockedTargets.length > 1) {
-        await this.removeLock(target);
-        return;
-      }
-      await this.unlockTalk();
-      return;
-    }
-
-    if (state.talkLocked && !state.talkingTargetKeys.includes(key)) {
-      if (state.lockMultipleTargets) {
-        // Multi-lock: hold an extra target on top of the locked set.
-        this.c.talkingTargets = addTalkTarget(this.c.talkingTargets, target);
-        this.publishTalkState(true);
-        try {
-          await media.startTalking(this.c.talkingTargets, true);
-        } catch (error) {
-          this.failTalk(error);
-        }
-        return;
-      }
-      this.c.overrideFrom = this.c.lockedTargets.length > 0 ? this.c.lockedTargets : this.c.talkingTargets;
-      this.c.talkingTargets = [target];
-      this.publishTalkState(true);
-      try {
-        await media.startTalking(this.c.talkingTargets, false);
-      } catch (error) {
-        this.failTalk(error);
-      }
-      return;
-    }
-
-    this.c.talkingTargets = addTalkTarget(this.c.talkingTargets, target);
-    this.publishTalkState(state.talkLocked);
+    const generation = this.generation;
     try {
-      await media.startTalking(this.c.talkingTargets, state.talkLocked);
+      const state = useSessionStore.getState();
+      if (state.talkLocked && this.isLocked(target) && this.c.overrideFrom === null) {
+        if (state.lockMultipleTargets && this.c.lockedTargets.length > 1) await this.removeLock(target);
+        else await this.unlockTalk();
+        return;
+      }
+      const key = talkTargetIdentity(target);
+      this.localHolds.add(key);
+      await this.startHold(target, () => this.localHolds.has(key));
     } catch (error) {
-      this.failTalk(error);
+      if (generation === this.generation) this.failTalk(error);
     }
+  }
+
+  private async startHold(target: TalkTarget, stillHeld: () => boolean): Promise<void> {
+    if (!this.canTalkTo(target)) throw new Error('This target is currently unavailable.');
+    const media = this.c.media;
+    if (!media) throw new Error('Media is not ready.');
+    const generation = this.generation;
+    await this.c.background.prepareAudioForTalk();
+    if (generation !== this.generation || !stillHeld() || media !== this.c.media) return;
+
+    if (this.isLocked(target) && this.c.overrideFrom === null) return;
+    const state = useSessionStore.getState();
+    if (this.c.lockedTargets.length && !state.lockMultipleTargets && this.c.overrideFrom === null) {
+      this.c.overrideFrom = this.c.lockedTargets;
+      this.c.talkingTargets = [];
+    }
+    this.c.talkingTargets = addTalkTarget(this.c.talkingTargets, target);
+    this.publishTalkState(this.c.lockedTargets.length > 0);
+    await media.startTalking(this.c.talkingTargets, this.mediaTalkState().lockActive, () => this.mediaTalkState());
+  }
+
+  async pressRemote(inputKey: string, target: TalkTarget): Promise<void> {
+    if (this.remoteHolds.has(inputKey)) return;
+    const hold = { target };
+    this.remoteHolds.set(inputKey, hold);
+    try {
+      await this.startHold(target, () => this.remoteHolds.get(inputKey) === hold);
+    } catch (error) {
+      if (this.remoteHolds.get(inputKey) === hold) await this.releaseRemote(inputKey);
+      throw error;
+    }
+  }
+
+  async releaseRemote(inputKey: string): Promise<void> {
+    const hold = this.remoteHolds.get(inputKey);
+    if (!hold) return;
+    this.remoteHolds.delete(inputKey);
+    if (!this.hasHold(hold.target)) await this.finishRelease(hold.target);
+  }
+
+  async lockRemote(target: TalkTarget): Promise<void> {
+    if (this.isLocked(target)) return;
+    if (!this.canTalkTo(target) || !this.c.media) throw new Error('Talk target is not available.');
+    const generation = this.generation;
+    await this.c.background.prepareAudioForTalk();
+    if (generation !== this.generation) return;
+    this.c.lockedTargets = useSessionStore.getState().lockMultipleTargets
+      ? addTalkTarget(this.c.lockedTargets, target) : [target];
+    this.c.overrideFrom = null;
+    this.c.talkingTargets = this.c.lockedTargets.reduce(addTalkTarget, this.c.talkingTargets.filter(item => this.hasHold(item)));
+    this.publishTalkState(true);
+    try {
+      await this.c.media.startTalking(this.c.talkingTargets, true, () => this.mediaTalkState());
+    } catch (error) {
+      if (generation === this.generation) this.failTalk(error);
+      throw error;
+    }
+  }
+
+  async unlockRemote(target: TalkTarget): Promise<void> {
+    if (!this.isLocked(target)) return;
+    if (this.c.overrideFrom) this.c.overrideFrom = removeTalkTarget(this.c.overrideFrom, target);
+    await this.removeLock(target);
+  }
+
+  /** A lost socket discards panel presses; local presses and deliberate locks survive. */
+  discardRemoteHolds(): void {
+    const owned = [...this.remoteHolds.values()].map(hold => talkTargetIdentity(hold.target));
+    this.remoteHolds.clear();
+    this.generation++;
+    if (!owned.length) return;
+    this.c.talkingTargets = this.c.talkingTargets.filter(target =>
+      !owned.includes(talkTargetIdentity(target)) || this.hasHold(target) || this.isLocked(target));
+    if (this.c.overrideFrom && !this.c.talkingTargets.some(target => this.hasHold(target))) {
+      this.c.talkingTargets = this.c.lockedTargets;
+      this.c.overrideFrom = null;
+    }
+    this.publishTalkState(this.c.lockedTargets.length > 0);
+    if (this.c.talkingTargets.length) this.c.media?.syncTalkTargets(this.c.talkingTargets, this.mediaTalkState().lockActive);
+    else void this.c.media?.stopTalking().catch(() => {});
+  }
+
+  private hasHold(target: TalkTarget): boolean {
+    const key = talkTargetIdentity(target);
+    return this.localHolds.has(key) || [...this.remoteHolds.values()].some(hold => talkTargetIdentity(hold.target) === key);
+  }
+
+  private isLocked(target: TalkTarget): boolean {
+    return this.c.lockedTargets.some(item => talkTargetIdentity(item) === talkTargetIdentity(target));
+  }
+
+  private mediaTalkState(): { targets: TalkTarget[]; lockActive: boolean } {
+    return { targets: this.c.talkingTargets, lockActive: this.c.overrideFrom === null && this.c.lockedTargets.length > 0 };
   }
 
   async lockTalk(target: TalkTarget): Promise<void> {
@@ -86,7 +144,9 @@ export class TalkCoordinator {
     if (!this.canTalkTo(target) || !media) {
       return;
     }
+    const generation = this.generation;
     await this.c.background.prepareAudioForTalk();
+    if (generation !== this.generation || media !== this.c.media) return;
     this.c.talkingTargets = addTalkTarget(this.c.talkingTargets, target);
     // Multi-lock adds this target to the existing lock set; single-lock
     // locks the whole current talking set (previous locks were already
@@ -98,61 +158,46 @@ export class TalkCoordinator {
     this.c.overrideFrom = null;
     this.publishTalkState(true);
     try {
-      await media.startTalking(this.c.talkingTargets, true);
+      await media.startTalking(this.c.talkingTargets, true, () => this.mediaTalkState());
       useSessionStore.setState({
         statusMessage: `Locked to ${this.c.talkingTargets.map((item) => item.label).join(', ')}.`,
       });
     } catch (error) {
-      this.failTalk(error);
+      if (generation === this.generation) this.failTalk(error);
     }
   }
 
   async releaseTalk(target?: TalkTarget): Promise<void> {
-    if (this.c.overrideFrom) {
-      this.c.talkingTargets = this.c.overrideFrom;
-      this.c.lockedTargets = this.c.overrideFrom;
-      this.c.overrideFrom = null;
-      this.publishTalkState(true);
-      this.c.media?.syncTalkTargets(this.c.talkingTargets, true);
-      useSessionStore.setState({
-        statusMessage: `Locked to ${this.c.talkingTargets.map((item) => item.label).join(', ')}.`,
-      });
-      return;
-    }
-
-    const lockedState = useSessionStore.getState();
-    if (lockedState.talkLocked) {
-      // Multi-lock: releasing a held (unlocked) target drops only that
-      // target; the locked set keeps transmitting.
-      if (
-        target &&
-        lockedState.lockMultipleTargets &&
-        !lockedState.lockedTargetKeys.includes(talkTargetIdentity(target)) &&
-        lockedState.talkingTargetKeys.includes(talkTargetIdentity(target))
-      ) {
-        this.c.talkingTargets = removeTalkTarget(this.c.talkingTargets, target);
-        this.publishTalkState(true);
-        this.c.media?.syncTalkTargets(this.c.talkingTargets, true);
-      }
-      return;
-    }
-
     if (target) {
+      this.localHolds.delete(talkTargetIdentity(target));
+      if (this.hasHold(target)) return;
+      await this.finishRelease(target);
+    } else {
+      this.localHolds.clear();
+      for (const current of [...this.c.talkingTargets]) {
+        if (!this.hasHold(current)) await this.finishRelease(current);
+      }
+    }
+  }
+
+  private async finishRelease(target: TalkTarget): Promise<void> {
+    if (this.c.overrideFrom) {
       this.c.talkingTargets = removeTalkTarget(this.c.talkingTargets, target);
-      if (this.c.talkingTargets.length > 0) {
-        this.publishTalkState(false);
+      if (this.c.talkingTargets.some(item => this.hasHold(item))) {
+        this.publishTalkState(true);
         this.c.media?.syncTalkTargets(this.c.talkingTargets, false);
         return;
       }
+      this.c.talkingTargets = this.c.lockedTargets;
+      this.c.overrideFrom = null;
+    } else if (!this.isLocked(target)) {
+      this.c.talkingTargets = removeTalkTarget(this.c.talkingTargets, target);
     }
-
-    try {
+    this.publishTalkState(this.c.lockedTargets.length > 0);
+    if (this.c.talkingTargets.length) {
+      this.c.media?.syncTalkTargets(this.c.talkingTargets, this.mediaTalkState().lockActive);
+    } else {
       await this.c.media?.stopTalking();
-    } finally {
-      this.c.talkingTargets = [];
-      this.c.lockedTargets = [];
-      this.publishTalkState(false);
-      useSessionStore.setState({ statusMessage: HOLD_HINT });
     }
   }
 
@@ -249,7 +294,7 @@ export class TalkCoordinator {
       userId,
       listening,
     );
-    this.applyConferenceListen(next);
+    void this.applyConferenceListen(next);
   }
 
   setConferenceMemberLevel(conferenceId: number | string, userId: number, level: number): void {
@@ -259,13 +304,13 @@ export class TalkCoordinator {
       userId,
       level,
     );
-    this.applyConferenceListen(next);
+    void this.applyConferenceListen(next);
   }
 
-  private applyConferenceListen(next: ConferenceListenState): void {
+  async applyConferenceListen(next: ConferenceListenState): Promise<void> {
     useSessionStore.setState({ conferenceListen: next });
     this.c.media?.setConferenceListen(next);
-    void saveConferenceListen(next);
+    await saveConferenceListen(next);
   }
 
   refreshReplyTarget(): void {
@@ -286,13 +331,13 @@ export class TalkCoordinator {
   /** Drops one lock from a multi-lock set; stops talking if it was the last. */
   private async removeLock(target: TalkTarget): Promise<void> {
     this.c.lockedTargets = removeTalkTarget(this.c.lockedTargets, target);
-    this.c.talkingTargets = removeTalkTarget(this.c.talkingTargets, target);
+    if (!this.hasHold(target)) this.c.talkingTargets = removeTalkTarget(this.c.talkingTargets, target);
     if (this.c.talkingTargets.length === 0) {
       await this.unlockTalk();
       return;
     }
     this.publishTalkState(this.c.lockedTargets.length > 0);
-    this.c.media?.syncTalkTargets(this.c.talkingTargets, this.c.lockedTargets.length > 0);
+    this.c.media?.syncTalkTargets(this.c.talkingTargets, this.mediaTalkState().lockActive);
   }
 
   /** Called when multi-lock is switched off while several locks are active. */
@@ -318,18 +363,20 @@ export class TalkCoordinator {
       await this.removeLock(target);
       return;
     }
-    try {
-      await this.c.media?.stopTalking();
-    } finally {
-      this.c.talkingTargets = [];
-      this.c.lockedTargets = [];
-      this.c.overrideFrom = null;
-      this.publishTalkState(false);
-      useSessionStore.setState({ statusMessage: HOLD_HINT });
-    }
+    this.generation++;
+    this.localHolds.clear();
+    this.remoteHolds.clear();
+    this.c.talkingTargets = [];
+    this.c.lockedTargets = [];
+    this.c.overrideFrom = null;
+    this.publishTalkState(false);
+    await this.c.media?.stopTalking();
   }
 
   private failTalk(error: unknown): void {
+    this.generation++;
+    this.localHolds.clear();
+    this.remoteHolds.clear();
     this.c.talkingTargets = [];
     this.c.lockedTargets = [];
     this.c.overrideFrom = null;

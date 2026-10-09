@@ -2,6 +2,12 @@
 
 export const SocketEvent = {
   registerUser: 'register-user',
+  panelCommand: 'panel-command',
+  panelStateRequest: 'panel-state-request',
+  panelClientState: 'panel-client-state',
+  targetAudioStateSnapshot: 'target-audio-state-snapshot',
+  userAudioSettingsUpdate: 'user-audio-settings-update',
+  userAudioSettingsUpdated: 'user-audio-settings-updated',
   requestSnapshot: 'request-snapshot',
   userList: 'user-list',
   userTargetsUpdated: 'user-targets-updated',

@@ -1,0 +1,46 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { Socket } from 'socket.io-client';
+import { SignalingClient } from './client';
+import { PANEL_AUDIO_DEFAULTS, type PanelClientReport } from '../protocol/remotePanel';
+
+function fixture() {
+  const listeners = new Map<string, (...args: any[]) => void>();
+  const socket = { connected: true, on: (event: string, listener: (...args: any[]) => void) => listeners.set(event, listener), volatile: { emit: vi.fn() }, emit: vi.fn() };
+  const client = new SignalingClient('https://example.test', () => ({}), 'android');
+  const internal = client as unknown as { socket: Socket; bindPersistentHandlers(socket: Socket): void };
+  internal.socket = socket as unknown as Socket; internal.bindPersistentHandlers(internal.socket);
+  return { client, socket, listeners };
+}
+const report: PanelClientReport = { revision: 1, storage: {}, audioStates: [], runtime: { devices: [], inputDeviceId: '', outputDeviceId: '', outputSupported: false, talking: false, targets: [], lockedTargets: [] } };
+
+describe('mobile panel signaling', () => {
+  it('acknowledges only after native application completes, including its state report', async () => {
+    const f = fixture(); let finish!: () => void;
+    f.client.handlers.onPanelCommand = () => new Promise(resolve => { finish = () => resolve({ ok: true, report }); });
+    const ack = vi.fn(); f.listeners.get('panel-command')!({ kind: 'order' }, ack);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function')); expect(ack).not.toHaveBeenCalled(); finish();
+    await vi.waitFor(() => expect(ack).toHaveBeenCalledWith({ ok: true, report }));
+  });
+
+  it('acknowledges handler failures and an unavailable native session', async () => {
+    const f = fixture(); const ack = vi.fn(); f.client.handlers.onPanelCommand = async () => { throw new Error('microphone denied'); };
+    f.listeners.get('panel-command')!({}, ack); await vi.waitFor(() => expect(ack).toHaveBeenCalledWith({ ok: false, error: 'microphone denied' }));
+    f.client.handlers.onPanelCommand = undefined; f.listeners.get('panel-command')!({}, ack);
+    await vi.waitFor(() => expect(ack).toHaveBeenLastCalledWith({ ok: false, error: 'Mobile panel control is not ready.' }));
+  });
+
+  it('emits volatile revisioned state while connected and does not queue it during outages', async () => {
+    const f = fixture(); f.client.emitPanelReport(report); f.client.emitTargetAudioSnapshot([], 1);
+    expect(f.socket.volatile.emit).toHaveBeenCalledWith('panel-client-state', report);
+    expect(f.socket.volatile.emit).toHaveBeenCalledWith('target-audio-state-snapshot', { states: [], revision: 1, reason: 'mobile-panel-state' });
+    f.socket.connected = false; f.socket.volatile.emit.mockClear(); f.client.emitPanelReport(report); f.client.emitTargetAudioSnapshot([], 1);
+    expect(f.socket.volatile.emit).not.toHaveBeenCalled();
+    await expect(f.client.saveUserAudioSettings(PANEL_AUDIO_DEFAULTS, 1)).rejects.toThrow('not connected');
+  });
+
+  it('forwards state requests and server audio-setting notifications', () => {
+    const f = fixture(); f.client.handlers.onPanelStateRequest = vi.fn(); f.client.handlers.onUserAudioSettingsUpdated = vi.fn();
+    f.listeners.get('panel-state-request')!(); f.listeners.get('user-audio-settings-updated')!({ settings: PANEL_AUDIO_DEFAULTS });
+    expect(f.client.handlers.onPanelStateRequest).toHaveBeenCalledOnce(); expect(f.client.handlers.onUserAudioSettingsUpdated).toHaveBeenCalledWith(PANEL_AUDIO_DEFAULTS);
+  });
+});

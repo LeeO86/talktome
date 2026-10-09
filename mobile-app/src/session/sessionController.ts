@@ -13,6 +13,7 @@ import {
 import type { MediaEngine } from '../media/engine';
 import {
   EMPTY_CAMERA_TALLY,
+  parseProductions,
   type ActiveProducer,
   type OperatorIdentity,
   type Production,
@@ -62,6 +63,9 @@ import { mainButtonStorageKey } from './mainButton';
 import { targetOrderPayload } from './targetOrder';
 import { createServerHeartbeat } from './serverHeartbeat';
 import { BackgroundCoordinator } from './backgroundCoordinator';
+import { RemotePanelCoordinator } from './remotePanelCoordinator';
+import { parsePanelSettings, positiveId } from '../protocol/remotePanel';
+import { talkOpusProfile } from '../media/opus';
 import { MediaCoordinator } from './mediaCoordinator';
 import { TalkCoordinator } from './talkCoordinator';
 import {
@@ -117,6 +121,48 @@ export class SessionController {
   readonly talk = new TalkCoordinator(this);
   readonly mediaCoordinator = new MediaCoordinator(this);
   readonly background = new BackgroundCoordinator(this);
+  readonly remotePanel = new RemotePanelCoordinator({
+    state: () => useSessionStore.getState(),
+    subscribe: listener => useSessionStore.subscribe(listener),
+    defaultAudioProfile: () => this.serverClientDefaults.audioProfile ?? 'standard',
+    applyAudioSettings: async settings => {
+      this.setLeftHanded(settings.leftHandMode);
+      this.setLockMultipleTargets(settings.lockMultipleTargets);
+      await this.mediaCoordinator.setOperatorAudio({
+        feedDimDb: settings.dimAmountDb, feedDimSelf: settings.dimFeedsWhileSpeaking,
+        feedDimIncoming: settings.dimWhenAddressed, playConnectionSounds: settings.playConnectionSounds,
+        echoCancellation: settings.audioAutoProcessing, noiseSuppression: settings.audioAutoProcessing,
+        autoGainControl: settings.audioAutoProcessing,
+      });
+      await this.media?.applyTalkOpusProfile(talkOpusProfile(settings.audioProfile), () => ({
+        targets: this.talkingTargets, lockActive: this.overrideFrom === null && this.lockedTargets.length > 0,
+      }));
+    },
+    applyAudioStates: (states, replace) => this.mediaCoordinator.applyTargetAudioStates(states, replace),
+    applyConferenceListen: state => this.talk.applyConferenceListen(state),
+    applyStoppedFeeds: keys => this.mediaCoordinator.applyStoppedFeedKeys(keys),
+    applyMainButtons: async mainButtonTargets => {
+      useSessionStore.setState({ mainButtonTargets });
+      this.background.syncPresence();
+      await this.persistCurrentProfile();
+    },
+    selectAudioRoute: id => this.mediaCoordinator.selectAudioDevice(id),
+    selectProduction: async id => {
+      const production = useSessionStore.getState().productions.find(item => item.id === id);
+      if (!production) throw new Error('Production is not assigned.');
+      await this.mediaCoordinator.enterOperator(production);
+    },
+    refreshTargets: () => this.mediaCoordinator.refreshTargets(),
+    press: (key, target) => this.talk.pressRemote(key, target),
+    release: key => this.talk.releaseRemote(key),
+    lock: target => this.talk.lockRemote(target),
+    unlock: target => this.talk.unlockRemote(target),
+    stopTalk: () => this.talk.unlockTalk(),
+    discardRemoteHolds: () => this.talk.discardRemoteHolds(),
+    report: report => this.signaling?.emitPanelReport(report),
+    audioSnapshot: (states, revision) => this.signaling?.emitTargetAudioSnapshot(states, revision),
+    saveAudioSettings: (settings, revision) => this.signaling?.saveUserAudioSettings(settings, revision) ?? Promise.resolve({ ok: false }),
+  });
 
   async hydrate(): Promise<void> {
     const [bundle, audioPreferences, blePreferences, conferenceListen, operatorAudioOverrides] = await Promise.all([
@@ -308,7 +354,7 @@ export class SessionController {
       return;
     }
     try {
-      await signaling.setActiveProduction(productionId);
+      this.remotePanel.noteProduction(await signaling.setActiveProduction(productionId));
     } catch (error) {
       if (supported === true) {
         throw error;
@@ -592,11 +638,12 @@ export class SessionController {
 
   private async teardownSession(): Promise<void> {
     this.sessionEnding = true;
+    this.remotePanel.reset();
     this.stopServerHeartbeat();
     this.connectionCues.reset();
     const identity = useSessionStore.getState().identity;
     try {
-      await this.media?.stopTalking();
+      await this.talk.unlockTalk();
     } catch {
       // ignore
     }
@@ -790,6 +837,13 @@ export class SessionController {
 
   private bindSignaling(signaling: SignalingClient): void {
     signaling.handlers = {
+      onPanelCommand: command => this.remotePanel.handleCommand(command),
+      onPanelStateRequest: () => this.remotePanel.publish(),
+      onUserAudioSettingsUpdated: settings => {
+        void this.remotePanel.handleCommand({ kind: 'audio-settings', settings }).then(result => {
+          if (!result.ok) useSessionStore.setState({ audioNotice: result.error || 'Unable to apply remote audio settings.' });
+        });
+      },
       onStateChange: (state) => {
         if (state.status === 'connected') {
           useSessionStore.setState({
@@ -803,6 +857,7 @@ export class SessionController {
             signalingLabel: 'reconnecting',
           });
         } else if (state.status === 'failed') {
+          this.remotePanel.disconnected();
           useSessionStore.setState({
             signalingStatus: 'failed',
             signalingLabel: `failed: ${state.message}`,
@@ -814,6 +869,7 @@ export class SessionController {
             signalingStatus: 'disconnected',
             signalingLabel: 'disconnected',
           });
+          this.remotePanel.disconnected();
           this.stopServerHeartbeat();
         }
       },
@@ -947,6 +1003,17 @@ export class SessionController {
         await this.logout('Could not re-register after reconnect.');
         return;
       }
+      if (parsePanelSettings(register.panelSettings)) {
+        const productions = Array.isArray(register.productions) ? parseProductions(register.productions) : useSessionStore.getState().productions;
+        const productionId = positiveId(register.productionId);
+        const production = productions.find(item => item.id === productionId);
+        useSessionStore.setState({ productions, productionId: production?.id ?? null, productionName: production?.name ?? null });
+      }
+      // The old transports belong to the previous socket. Restore preferences
+      // into state before rebuilding, without sending commands for old producers.
+      try { await this.media?.stop(); } catch { /* Already disconnected. */ }
+      this.media = null;
+      await this.remotePanel.restoreRegistration(register);
       await this.announceActiveProduction(useSessionStore.getState().productionId);
       await this.mediaCoordinator.rebuildMediaAfterReconnect();
       this.reconnectFailures = 0;
@@ -1087,7 +1154,7 @@ export class SessionController {
 
     useSessionStore.setState({ statusMessage: 'Connecting signaling…' });
     await this.signaling.connect();
-    const productions = Array.isArray(identity.productions) ? identity.productions : [];
+    let productions = Array.isArray(identity.productions) ? identity.productions : [];
     const rememberedProductionId = useSessionStore.getState().productionId;
     const rememberedProductionName = useSessionStore.getState().productionName;
     const registerProductionId =
@@ -1114,6 +1181,8 @@ export class SessionController {
       throw new Error(message);
     }
 
+    const panelSettings = parsePanelSettings(register.panelSettings);
+    if (panelSettings && Array.isArray(register.productions)) productions = parseProductions(register.productions);
     this.lastSocketId = this.signaling.socketId;
     await this.refreshServerClientDefaults();
     useSessionStore.setState({
@@ -1126,8 +1195,17 @@ export class SessionController {
       signalingLabel: 'connected',
     });
 
+    await this.remotePanel.restoreRegistration(register);
+    const serverSelectedProduction = panelSettings?.storage[`activeProduction:${identity.id}`]
+      ? productions.find(item => item.id === positiveId(register.productionId)) : undefined;
+
     if (productions.length > 0) {
-      const remembered = productions.find((item) => item.id === rememberedProductionId);
+      if (panelSettings?.storage[`activeProduction:${identity.id}`] && !serverSelectedProduction) {
+        await this.mediaCoordinator.enterOperator(null);
+        this.announceConnectionRecovery();
+        return;
+      }
+      const remembered = serverSelectedProduction ?? productions.find((item) => item.id === rememberedProductionId);
       if (remembered) {
         await this.mediaCoordinator.enterOperator(remembered);
         this.announceConnectionRecovery();
@@ -1263,7 +1341,9 @@ export class SessionController {
   }
 
   setOperatorAudio(patch: Partial<OperatorAudioSettings>): void {
-    this.mediaCoordinator.setOperatorAudio(patch);
+    void this.mediaCoordinator.setOperatorAudio(patch).catch(error => {
+      useSessionStore.setState({ audioNotice: error instanceof Error ? error.message : String(error) });
+    });
   }
 
   async selectAudioDevice(id: string): Promise<void> {

@@ -47,6 +47,9 @@ export class MediaEngine {
   private recvTransport: Transport | null = null;
   private localStream: MediaStream | null = null;
   private talkProducer: Producer | null = null;
+  private warmTalkPromise: Promise<void> | null = null;
+  private mediaGeneration = 0;
+  private talkGeneration = 0;
   private remotes = new Map<string, RemoteConsumer>();
   private iceOverride: IceServer[] = [];
   private audioPreferences: Record<string, TargetAudioPreference> = {};
@@ -122,55 +125,83 @@ export class MediaEngine {
   }
 
   async warmTalkProducer(): Promise<void> {
-    if (this.talkProducer && !this.talkProducer.closed) {
-      return;
-    }
-    if (!this.sendTransport) {
-      throw new Error('Send transport is not ready.');
-    }
-
-    const stream = (await mediaDevices.getUserMedia(
-      talkGumConstraints(this.operatorAudio) as never,
-    )) as MediaStream;
-    this.localStream = stream;
-    const track = stream.getAudioTracks()[0];
-    if (!track) {
-      throw new Error('Microphone did not return an audio track.');
-    }
-
-    const producer = await this.sendTransport.produce({
-      track: track as never,
-      ...this.talkOpus,
-      appData: { type: 'talk' },
-    });
-    this.talkProducer = producer;
-    producer.pause();
-    await this.signaling.pauseProducer(producer.id);
+    if (this.warmTalkPromise) return this.warmTalkPromise;
+    if (this.talkProducer && !this.talkProducer.closed) return;
+    const pending = this.createWarmTalkProducer();
+    this.warmTalkPromise = pending;
+    try { await pending; }
+    finally { if (this.warmTalkPromise === pending) this.warmTalkPromise = null; }
   }
 
-  async startTalking(targets: TalkTarget[], lockActive = false): Promise<void> {
-    await this.warmTalkProducer();
-    const producer = this.talkProducer;
-    if (!producer) {
-      throw new Error('Talk producer is not ready.');
+  private async createWarmTalkProducer(): Promise<void> {
+    const transport = this.sendTransport;
+    if (!transport) throw new Error('Send transport is not ready.');
+    const generation = this.mediaGeneration;
+    const stream = await mediaDevices.getUserMedia(talkGumConstraints(this.operatorAudio) as never) as MediaStream;
+    try {
+      if (generation !== this.mediaGeneration || transport !== this.sendTransport) throw new Error('Media session changed.');
+      const track = stream.getAudioTracks()[0];
+      if (!track) throw new Error('Microphone did not return an audio track.');
+      const producer = await transport.produce({ track: track as never, ...this.talkOpus, appData: { type: 'talk' } });
+      if (generation !== this.mediaGeneration || transport !== this.sendTransport) {
+        producer.close();
+        throw new Error('Media session changed.');
+      }
+      this.localStream = stream;
+      this.talkProducer = producer;
+      producer.pause();
+      await this.signaling.pauseProducer(producer.id);
+    } catch (error) {
+      if (this.localStream !== stream) stream.getTracks().forEach(track => track.stop());
+      throw error;
     }
+  }
 
+  async startTalking(targets: TalkTarget[], lockActive = false,
+    currentState?: () => { targets: TalkTarget[]; lockActive: boolean }): Promise<void> {
+    const generation = this.talkGeneration;
+    await this.warmTalkProducer();
+    if (generation !== this.talkGeneration) return;
+    if (currentState) ({ targets, lockActive } = currentState());
+    if (!targets.length) return;
+    const producer = this.talkProducer;
+    if (!producer || producer.closed) throw new Error('Talk producer is not ready.');
     const alreadyLive = !producer.paused;
     if (!alreadyLive) {
       this.signaling.emitTalkTargetsUpdated('talk-targets-starting', targets);
       producer.resume();
       await this.signaling.resumeProducer(producer.id);
+      if (generation !== this.talkGeneration || producer !== this.talkProducer || producer.paused) return;
+      if (currentState) ({ targets, lockActive } = currentState());
+      if (!targets.length) return;
       this.signaling.emitTalkTargetsUpdated('talk-targets-started', targets);
     } else {
       this.signaling.emitTalkTargetsUpdated('talk-targets-updated', targets);
     }
-    this.signaling.emitPttState({
-      talking: true,
-      lockActive,
-      target: targets[0] ?? null,
-      targets,
-      reason: alreadyLive ? 'talk-targets-updated' : 'talk-started',
-    });
+    this.signaling.emitPttState({ talking: true, lockActive, target: targets[0] ?? null, targets,
+      reason: alreadyLive ? 'talk-targets-updated' : 'talk-started' });
+  }
+
+  async applyTalkOpusProfile(profile: OpusProfile,
+    currentState: () => { targets: TalkTarget[]; lockActive: boolean }): Promise<void> {
+    if (JSON.stringify(profile) === JSON.stringify(this.talkOpus)) return;
+    const generation = this.mediaGeneration;
+    await this.warmTalkPromise;
+    if (generation !== this.mediaGeneration) throw new Error('Media session changed.');
+    this.talkOpus = profile;
+    const producer = this.talkProducer;
+    if (!producer || producer.closed || !this.sendTransport) return;
+    this.talkGeneration++;
+    producer.pause();
+    producer.close();
+    this.talkProducer = null;
+    this.localStream?.getTracks().forEach(track => track.stop());
+    this.localStream = null;
+    await this.signaling.closeProducer(producer.id);
+    if (generation !== this.mediaGeneration) throw new Error('Media session changed.');
+    await this.warmTalkProducer();
+    const state = currentState();
+    if (state.targets.length) await this.startTalking(state.targets, state.lockActive, currentState);
   }
 
   syncTalkTargets(targets: TalkTarget[], lockActive: boolean): void {
@@ -185,6 +216,7 @@ export class MediaEngine {
   }
 
   async stopTalking(): Promise<void> {
+    this.talkGeneration++;
     const producer = this.talkProducer;
     this.signaling.emitTalkTargetsUpdated('talk-targets-cleared', []);
     if (producer && !producer.closed) {
@@ -289,20 +321,22 @@ export class MediaEngine {
 
   async applyCaptureSettings(settings: OperatorAudioSettings): Promise<void> {
     this.operatorAudio = settings;
-    if (!this.sendTransport || !this.talkProducer || this.talkProducer.closed) {
-      return;
+    const producer = this.talkProducer;
+    if (!this.sendTransport || !producer || producer.closed) return;
+    const generation = this.mediaGeneration;
+    const stream = await mediaDevices.getUserMedia(talkGumConstraints(settings) as never) as MediaStream;
+    try {
+      if (generation !== this.mediaGeneration || producer !== this.talkProducer || producer.closed) throw new Error('Media session changed.');
+      const track = stream.getAudioTracks()[0];
+      if (!track) throw new Error('Microphone did not return an audio track.');
+      await producer.replaceTrack({ track: track as never });
+      if (generation !== this.mediaGeneration || producer !== this.talkProducer || producer.closed) throw new Error('Media session changed.');
+      this.localStream?.getTracks().forEach(item => item.stop());
+      this.localStream = stream;
+    } catch (error) {
+      stream.getTracks().forEach(item => item.stop());
+      throw error;
     }
-    const stream = (await mediaDevices.getUserMedia(
-      talkGumConstraints(settings) as never,
-    )) as MediaStream;
-    const track = stream.getAudioTracks()[0];
-    if (!track) {
-      stream.getTracks().forEach((item) => item.stop());
-      return;
-    }
-    await this.talkProducer.replaceTrack({ track: track as never });
-    this.localStream?.getTracks().forEach((item) => item.stop());
-    this.localStream = stream;
   }
 
   captureDebug(): {
@@ -334,6 +368,8 @@ export class MediaEngine {
   }
 
   async stop(): Promise<void> {
+    this.mediaGeneration++;
+    this.talkGeneration++;
     await this.serialize(async () => {
       for (const producerId of [...this.remotes.keys()]) {
         await this.dropProducerLocked(producerId);

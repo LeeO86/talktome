@@ -3,6 +3,7 @@
 // starts on HTTP polling (browser parity) with an explicit Cookie header.
 
 import { io, type Socket } from 'socket.io-client';
+import type { PanelAudioSettings, PanelAudioState, PanelClientReport, PanelCommandResult } from '../protocol/remotePanel';
 
 import { cookieHeader, type CookieMap } from '../auth/cookieJar';
 import { parseIncomingTalkState } from '../protocol/incomingTalk';
@@ -27,6 +28,9 @@ import type {
 } from '../protocol/types';
 
 export type SignalingHandlers = {
+  onPanelCommand?: (command: unknown) => Promise<PanelCommandResult>;
+  onPanelStateRequest?: () => void;
+  onUserAudioSettingsUpdated?: (settings: unknown) => void;
   onStateChange?: (state: SignalingConnectionState) => void;
   onReconnect?: (socketId?: string) => void;
   onUserList?: (peers: PeerSession[]) => void;
@@ -333,6 +337,20 @@ export class SignalingClient {
     });
   }
 
+  emitPanelReport(report: PanelClientReport): void {
+    if (this.socket?.connected) this.socket.volatile.emit(SocketEvent.panelClientState, report);
+  }
+
+  emitTargetAudioSnapshot(states: PanelAudioState[], revision: number): void {
+    if (this.socket?.connected) this.socket.volatile.emit(SocketEvent.targetAudioStateSnapshot, {
+      states, revision, reason: 'mobile-panel-state',
+    });
+  }
+
+  saveUserAudioSettings(settings: PanelAudioSettings, revision: number): Promise<{ ok?: boolean }> {
+    return this.emitAck(SocketEvent.userAudioSettingsUpdate, { settings, revision });
+  }
+
   async logout(): Promise<void> {
     try {
       await this.emitAck(SocketEvent.userLogout);
@@ -355,6 +373,19 @@ export class SignalingClient {
       if (reason && reason !== 'io client disconnect') {
         this.handlers.onStateChange?.({ status: 'failed', message: String(reason) });
       }
+    });
+
+    socket.on(SocketEvent.panelCommand, (payload: unknown, acknowledge?: (result: PanelCommandResult) => void) => {
+      const handler = this.handlers.onPanelCommand;
+      const result = handler ? Promise.resolve().then(() => handler(payload))
+        : Promise.resolve({ ok: false, error: 'Mobile panel control is not ready.' });
+      void result.catch(error => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+        .then(response => { if (typeof acknowledge === 'function') acknowledge(response); });
+    });
+    socket.on(SocketEvent.panelStateRequest, () => this.handlers.onPanelStateRequest?.());
+    socket.on(SocketEvent.userAudioSettingsUpdated, (payload) => {
+      const settings = payload && typeof payload === 'object' ? (payload as { settings?: unknown }).settings : undefined;
+      this.handlers.onUserAudioSettingsUpdated?.(settings);
     });
 
     socket.on(SocketEvent.userList, (payload) => {

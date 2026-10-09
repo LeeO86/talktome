@@ -1,3 +1,4 @@
+import type { PanelAudioState } from '../protocol/remotePanel';
 import { AppState, Platform } from 'react-native';
 
 import { MediaEngine } from '../media/engine';
@@ -72,7 +73,7 @@ export class MediaCoordinator {
     if (!this.c.media) {
       this.c.media = new MediaEngine(signaling);
       this.c.media.onConnectionChange = () => this.publishMediaSnapshot();
-      this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.serverClientDefaults.audioProfile));
+      this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.remotePanel.audioProfile ?? this.c.serverClientDefaults.audioProfile));
       this.c.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
       this.c.media.setConferenceListen(useSessionStore.getState().conferenceListen);
       this.c.media.setOperatorAudio(useSessionStore.getState().operatorAudio);
@@ -96,6 +97,7 @@ export class MediaCoordinator {
       this.syncFeedDucking();
     }
 
+    await this.c.media.setStoppedFeedKeys(useSessionStore.getState().stoppedFeedKeys, this.consumerContext());
     const producers = await signaling.requestActiveProducers();
     await this.syncHeardAudio(producers);
 
@@ -114,6 +116,7 @@ export class MediaCoordinator {
     await this.c.background.syncSystemPtt();
     await this.c.persistCurrentProfile();
     this.c.background.syncPresence();
+    await this.c.remotePanel.operatorReady();
   }
 
   async rebuildMediaAfterReconnect(): Promise<void> {
@@ -131,13 +134,14 @@ export class MediaCoordinator {
     }
     this.c.media = new MediaEngine(signaling);
     this.c.media.onConnectionChange = () => this.publishMediaSnapshot();
-    this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.serverClientDefaults.audioProfile));
+    this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.remotePanel.audioProfile ?? this.c.serverClientDefaults.audioProfile));
     this.c.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
     this.c.media.setConferenceListen(useSessionStore.getState().conferenceListen);
     this.c.media.setOperatorAudio(useSessionStore.getState().operatorAudio);
     await this.prepareAudioForMedia();
     await this.c.media.start();
     await this.c.media.warmTalkProducer();
+    await this.c.media.setStoppedFeedKeys(useSessionStore.getState().stoppedFeedKeys, this.consumerContext());
     await this.refreshTargets();
     await this.c.background.syncAudioSession(AppState.currentState);
     await this.c.background.syncForegroundService();
@@ -145,6 +149,7 @@ export class MediaCoordinator {
     if (resumeTargets.length > 0) {
       await this.c.background.prepareAudioForTalk();
       this.c.talkingTargets = resumeTargets;
+      this.c.overrideFrom = null;
       await this.c.media.startTalking(resumeTargets, true);
       this.c.talk.publishTalkState(true);
     }
@@ -152,6 +157,7 @@ export class MediaCoordinator {
       status: useSessionStore.getState().operatorReady ? 'ready' : useSessionStore.getState().status,
       statusMessage: resumeTargets.length > 0 ? useSessionStore.getState().statusMessage : 'Reconnected.',
     });
+    await this.c.remotePanel.operatorReady();
   }
 
   async refreshTargets(): Promise<void> {
@@ -178,6 +184,16 @@ export class MediaCoordinator {
     );
   }
 
+  async applyTargetAudioStates(states: PanelAudioState[], replace: boolean): Promise<void> {
+    const audioPreferences = replace ? {} : { ...useSessionStore.getState().audioPreferences };
+    for (const state of states) {
+      audioPreferences[talkTargetIdentity({ type: state.targetType, id: state.targetId })] = normalizeAudioPreference(state);
+    }
+    useSessionStore.setState({ audioPreferences });
+    this.c.media?.setAudioPreferences(audioPreferences);
+    await saveAudioPreferences(audioPreferences);
+  }
+
   setTargetVolume(target: TalkTarget, volume: number): void {
     this.updateAudioPreference(target, { volume });
   }
@@ -198,12 +214,14 @@ export class MediaCoordinator {
     } else {
       current.add(key);
     }
-    const stoppedFeedKeys = [...current];
+    void this.applyStoppedFeedKeys([...current]);
+  }
+
+  async applyStoppedFeedKeys(stoppedFeedKeys: string[]): Promise<void> {
     useSessionStore.setState({ stoppedFeedKeys });
     this.c.background.syncPresence();
-    void this.c.media?.setStoppedFeedKeys(stoppedFeedKeys, this.consumerContext()).then(() => {
-      this.publishMediaSnapshot();
-    });
+    await this.c.media?.setStoppedFeedKeys(stoppedFeedKeys, this.consumerContext());
+    this.publishMediaSnapshot();
   }
 
   private updateAudioPreference(target: TalkTarget, patch: Partial<TargetAudioPreference>): void {
@@ -220,27 +238,33 @@ export class MediaCoordinator {
     void saveAudioPreferences(next);
   }
 
-  setOperatorAudio(patch: Partial<OperatorAudioSettings>): void {
+  async setOperatorAudio(patch: Partial<OperatorAudioSettings>): Promise<void> {
     // Every key the user touches becomes an explicit choice that outlives
     // server-configured defaults, matching the web client's precedence.
+    const previous = useSessionStore.getState().operatorAudio;
     this.c.operatorAudioOverrides = { ...this.c.operatorAudioOverrides, ...patch };
     const operatorAudio = resolveOperatorAudio(this.c.operatorAudioOverrides, this.c.serverClientDefaults);
     useSessionStore.setState({ operatorAudio });
     this.c.media?.setOperatorAudio(operatorAudio);
     this.syncFeedDucking();
-    void saveOperatorAudioOverrides(this.c.operatorAudioOverrides);
+    await saveOperatorAudioOverrides(this.c.operatorAudioOverrides);
     if (
-      patch.echoCancellation != null ||
-      patch.noiseSuppression != null ||
-      patch.autoGainControl != null
+      previous.echoCancellation !== operatorAudio.echoCancellation ||
+      previous.noiseSuppression !== operatorAudio.noiseSuppression ||
+      previous.autoGainControl !== operatorAudio.autoGainControl
     ) {
-      void this.c.media?.applyCaptureSettings(operatorAudio).then(() => this.publishCaptureDebug());
+      await this.c.media?.applyCaptureSettings(operatorAudio);
+      this.publishCaptureDebug();
     }
   }
 
   async selectAudioDevice(id: string): Promise<void> {
-    this.setOperatorAudio({ audioRouteId: id });
-    this.publishAudioDevices(await selectAudioRoute(id));
+    const snapshot = await selectAudioRoute(id);
+    this.publishAudioDevices(snapshot);
+    if (snapshot.currentId !== id && !snapshot.routes.some(route => route.id === id && route.selected)) {
+      throw new Error('The device could not select this audio route.');
+    }
+    await this.setOperatorAudio({ audioRouteId: id });
   }
 
   refreshAudioDevices(): void {

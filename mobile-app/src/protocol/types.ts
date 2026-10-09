@@ -109,7 +109,7 @@ export type RegisterUserConflict = {
 };
 
 export type RegisterUserResponse =
-  | { ok: true; targetAudioStates?: unknown }
+  | { ok: true; targetAudioStates?: unknown; panelSettings?: unknown; userAudioSettings?: unknown; productionId?: unknown; productions?: unknown }
   | { conflict: true; existing?: RegisterUserConflict }
   | { error: string };
 
