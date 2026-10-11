@@ -62,6 +62,17 @@
         panel.onState?.(state);
         if (!pendingCommands && Date.now() > feedbackUntil) panel.status(state.online ? state.clientConnected ? 'Client online' : 'Waiting for client state…' : 'Client offline');
       },
+      close() {
+        clearTimeout(patchTimer);
+        pendingPatch = {};
+        heldInputs.clear();
+        socket.disconnect();
+        try { root.close(); } catch {}
+        // Browsers may refuse to close a manually opened or restored tab.
+        setTimeout(() => {
+          if (!root.closed) location.replace('/admin');
+        }, 100);
+      },
       start(onState) {
         panel.onState = onState;
         socket.on('panel-state', panel.receive);

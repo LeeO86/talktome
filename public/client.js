@@ -6651,7 +6651,7 @@ let cachedOperatorTargets = null;
   }
 
   async function hardLogoutAndReload(message = null, { silent = false, notifyServer = true } = {}) {
-    if (remotePanel) { socket.disconnect(); window.close(); return; }
+    if (remotePanel) { remotePanel.close(); return; }
     sessionResetInProgress = true;
     suppressLogoutBeacon = !notifyServer;
     try {
@@ -7449,6 +7449,7 @@ let cachedOperatorTargets = null;
   });
 
   async function handleLogoutClick() {
+    if (remotePanel) { remotePanel.close(); return; }
     sessionResetInProgress = true;
     if (session.kind === 'feed') {
       stopFeedStream({ manual: true });

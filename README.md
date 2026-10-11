@@ -122,7 +122,7 @@ Useful environment overrides:
 - `PORT` / `HTTPS_PORT`: backend UI port (HTTPS by default, HTTP in proxy mode)
 - `TALKTOME_TLS_MODE`: `internal` (default, built-in HTTPS) or `proxy` (HTTP backend behind an HTTPS reverse proxy)
 - `TALKTOME_PUBLIC_URL`: public HTTPS origin for connection links and QR codes
-- `TALKTOME_TRUSTED_PROXIES`: comma-separated proxy IP/CIDR allowlist for forwarded host/protocol headers (falls back to `TALKTOME_SSO_TRUSTED_PROXIES`)
+- `TALKTOME_TRUSTED_PROXIES`: comma-separated proxy IP/CIDR allowlist for forwarded host/protocol and status client-IP headers (falls back to `TALKTOME_SSO_TRUSTED_PROXIES`)
 - `HTTP_PORT`: redirect port, or `off`
 - `PUBLIC_IP`: manual WebRTC announced address
 - `MDNS_HOST`: mDNS hostname, or `off`
@@ -167,6 +167,11 @@ Use the actual reverse-proxy IP or a restricted proxy network CIDR for the
 allowlist. The proxy must overwrite forwarded headers. Without a trusted proxy,
 forwarded host/protocol headers are ignored; the configured public URL still
 provides the correct QR and connection links.
+
+The Status page uses this allowlist to resolve user, feed and Companion client
+IPs from `X-Forwarded-For`. Proxy chains are checked from the server towards the
+client and stop at the first untrusted hop. Headers supplied by an untrusted
+peer are ignored.
 
 Example Nginx location inside your HTTPS virtual host (with a certificate
 configured on Nginx):

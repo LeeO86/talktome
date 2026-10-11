@@ -16,7 +16,7 @@ const {
   normalizeAutomaticBackupSettings,
   createAutomaticConfigBackup,
 } = require("./automaticConfigBackup");
-const { normalizeRegisteredClientType, describeStatusClient } = require("./statusClient");
+const { normalizeRegisteredClientType, describeStatusClient, statusRemoteAddress } = require("./statusClient");
 const { ApplePttPushService } = require("./applePttPushService");
 const { buildGuestLoginUrl, buildLoginUrl, buildMediaNetworkQrTargets, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
@@ -3517,15 +3517,6 @@ function statusIsoTimestamp(value) {
     : null;
 }
 
-function statusRemoteAddress(socket) {
-  const rawAddress = socket?.handshake?.address
-    || socket?.request?.socket?.remoteAddress
-    || null;
-  return typeof rawAddress === "string"
-    ? rawAddress.replace(/^::ffff:/, "")
-    : null;
-}
-
 function normalizeBridgePlatform(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "macos" || normalized === "darwin" || normalized === "mac") return "macos";
@@ -3874,7 +3865,7 @@ function buildAdminStatusSnapshot() {
               ? `${describeBridgeStatusClient(bridge?.platform, bridge?.host)}: ${bridge?.name || peer.bridgeId || "unknown"}`
               : describeStatusClient(peer.socket, peer.clientType))
           : null,
-        remoteAddress: online && !isBridge ? statusRemoteAddress(peer.socket) : null,
+        remoteAddress: online && !isBridge ? statusRemoteAddress(peer.socket, WEB_ACCESS) : null,
         networkStats,
       };
     });
@@ -3907,7 +3898,7 @@ function buildAdminStatusSnapshot() {
             ? `${describeBridgeStatusClient(bridge?.platform, bridge?.host)}: ${bridge?.name || peer.bridgeId || "unknown"}`
             : describeStatusClient(peer.socket, peer.clientType))
         : null,
-      remoteAddress: online && !isBridge ? statusRemoteAddress(peer.socket) : null,
+      remoteAddress: online && !isBridge ? statusRemoteAddress(peer.socket, WEB_ACCESS) : null,
       networkStats,
     };
   });
@@ -3952,7 +3943,7 @@ function buildAdminStatusSnapshot() {
       userId: auth.userId ?? null,
       connectedAt: statusIsoTimestamp(socket.data?.connectedAt),
       lastSeenAt: statusIsoTimestamp(socket.data?.lastSeenAt || socket.data?.connectedAt),
-      remoteAddress: statusRemoteAddress(socket),
+      remoteAddress: statusRemoteAddress(socket, WEB_ACCESS),
       client: describeStatusClient(socket),
     };
   });

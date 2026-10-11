@@ -1,3 +1,5 @@
+const { requestClientAddress } = require("./webAccess");
+
 const REGISTERED_CLIENT_LABELS = Object.freeze({
   "ios-app": "iOS App",
   "android-app": "Android App",
@@ -33,4 +35,11 @@ function describeStatusClient(socket, registeredClientType = null) {
   return platform ? `${platform} ${browser}` : browser;
 }
 
-module.exports = { normalizeRegisteredClientType, describeStatusClient };
+function statusRemoteAddress(socket, access) {
+  return requestClientAddress({
+    socket: { remoteAddress: socket?.request?.socket?.remoteAddress || socket?.handshake?.address },
+    headers: socket?.request?.headers || socket?.handshake?.headers || {},
+  }, access);
+}
+
+module.exports = { normalizeRegisteredClientType, describeStatusClient, statusRemoteAddress };

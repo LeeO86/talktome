@@ -1,6 +1,7 @@
 const http = require('node:http');
 const https = require('node:https');
 const proxyaddr = require('proxy-addr');
+const { isIP } = require('node:net');
 const { installHttpRedirectOnHttpsPort } = require('./httpsRedirect');
 
 function normalizeWebAccess(config = {}) {
@@ -48,6 +49,25 @@ function createWebServer(app, access, getTlsOptions, fallbackHost) {
   return server;
 }
 
+function requestClientAddress(req, access) {
+  const remoteAddress = req?.socket?.remoteAddress;
+  if (typeof remoteAddress !== 'string' || !isIP(remoteAddress)) return null;
+  let address = remoteAddress;
+  const forwarded = req?.headers?.['x-forwarded-for'];
+  if (typeof forwarded === 'string') {
+    try {
+      // Walk from the immediate peer towards the client, stopping at the
+      // first untrusted address rather than accepting an arbitrary leftmost IP.
+      const candidate = proxyaddr({ socket: { remoteAddress }, headers: { 'x-forwarded-for': forwarded } },
+        address => Boolean(access?.isTrustedProxy(address)));
+      if (isIP(candidate)) address = candidate;
+    } catch {
+      // Malformed forwarding data must not replace the actual peer address.
+    }
+  }
+  return address.replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, '');
+}
+
 function requestConnectOrigin(req, access) {
   const trusted = access.isTrustedProxy(req?.socket?.remoteAddress);
   const first = value => typeof value === 'string' ? value.split(',')[0].trim() : '';
@@ -61,4 +81,4 @@ function requestConnectOrigin(req, access) {
   } catch { return ''; }
 }
 
-module.exports = { normalizeWebAccess, resolveWebAccess, createWebServer, requestConnectOrigin };
+module.exports = { normalizeWebAccess, resolveWebAccess, createWebServer, requestConnectOrigin, requestClientAddress };

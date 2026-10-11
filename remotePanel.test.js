@@ -297,3 +297,55 @@ test('Bridge panel release restores an existing Companion lock without claiming 
   await context.handleManagedTalkCommand(session, command('lock-toggle', 4));
   assert.equal(session.talking, false);
 });
+
+test('Close panel button uses panel teardown without logging out the controlled user or reloading', async () => {
+  const source = fs.readFileSync(path.join(__dirname, 'public/client.js'), 'utf8');
+  let closed = 0;
+  const context = vm.createContext({
+    remotePanel: { close() { closed++; } },
+    sessionResetInProgress: false,
+    session: { kind: 'user' },
+    notifyServerLogoutAndDisconnect() { assert.fail('must not log out a user from the panel'); },
+    clearStoredIdentity() { assert.fail('must preserve the local user identity'); },
+    location: { reload() { assert.fail('must not reload the panel'); } },
+  });
+  const start = source.indexOf('  async function handleLogoutClick()');
+  const end = source.indexOf('  // Logout Handler', start);
+  vm.runInContext(source.slice(start, end), context);
+  await context.handleLogoutClick();
+  assert.equal(closed, 1);
+  assert.equal(context.sessionResetInProgress, false);
+});
+
+test('closing a panel cancels buffered preferences, disconnects and falls back when tab closing is denied', () => {
+  for (const closeBehavior of ['allowed', 'denied', 'throws']) {
+    const timers = new Map();
+    const navigations = [];
+    let disconnected = 0;
+    const root = { closed: false, close() {
+      if (closeBehavior === 'allowed') this.closed = true;
+      if (closeBehavior === 'throws') throw new Error('Tab closing denied');
+    } };
+    const socket = { disconnect() { disconnected++; } };
+    const context = vm.createContext({
+      window: root,
+      location: { pathname: '/panel', search: '?userId=7', replace(url) { navigations.push(url); } },
+      URLSearchParams, io: () => socket,
+      TalktomeRemotePanelState: panelState,
+      setTimeout(callback) { const id = Symbol(); timers.set(id, callback); return id; },
+      clearTimeout(id) { timers.delete(id); },
+    });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, 'public/remotePanel.js'), 'utf8'), context);
+    const panel = root.TalktomeRemotePanel.create();
+    panel.state = {};
+    panel.preferenceChanged('mainButtonTarget:user:7:1', 'user-8');
+    panel.heldInputs.set('panel:pointer', { type: 'user', id: 8 });
+    panel.close();
+    assert.equal(disconnected, 1);
+    assert.equal(panel.busy, false);
+    assert.equal(panel.heldInputs.size, 0);
+    assert.equal(timers.size, 1, 'only the close fallback should remain queued');
+    for (const callback of timers.values()) callback();
+    assert.deepEqual(navigations, closeBehavior === 'allowed' ? [] : ['/admin']);
+  }
+});
