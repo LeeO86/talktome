@@ -3690,9 +3690,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function reportMediaTransportEvent(direction, event, state, detail = null) {
-    if (!socket.connected) return;
+    if (remotePanel || !socket.connected) return;
     socket.emit('media-transport-event', {
       direction,
+      transportId: (direction === 'send' ? sendTransport : recvTransport)?.id || null,
       event,
       state: state || 'unknown',
       detail: detail ? String(detail).slice(0, 500) : null,
@@ -3716,6 +3717,7 @@ document.addEventListener("DOMContentLoaded", () => {
     mediaConnectionState[direction] = transport.connectionState || 'new';
     mediaConnectionState[`${direction}Ice`] = transport.iceGatheringState || 'new';
     renderMediaConnectionStatus();
+    reportMediaTransportEvent(direction, 'connection-state', mediaConnectionState[direction]);
 
     transport.on('connectionstatechange', (state) => {
       if (direction === 'send' && transport !== sendTransport) return;
@@ -3757,6 +3759,8 @@ document.addEventListener("DOMContentLoaded", () => {
     mediaConnectionState.receiveIce = 'idle';
     mediaConnectionState.iceError = null;
     renderMediaConnectionStatus();
+    reportMediaTransportEvent('send', 'connection-state', 'idle');
+    reportMediaTransportEvent('receive', 'connection-state', 'idle');
   }
 
   renderMediaConnectionStatus();

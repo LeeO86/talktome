@@ -17,6 +17,7 @@ const {
   createAutomaticConfigBackup,
 } = require("./automaticConfigBackup");
 const { normalizeRegisteredClientType, describeStatusClient, statusRemoteAddress } = require("./statusClient");
+const { resetPeerMediaTransportStatus, updatePeerMediaTransportStatus, describePeerMediaStatus } = require("./mediaStatus");
 const { ApplePttPushService } = require("./applePttPushService");
 const { buildGuestLoginUrl, buildLoginUrl, buildMediaNetworkQrTargets, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
@@ -3866,6 +3867,7 @@ function buildAdminStatusSnapshot() {
               : describeStatusClient(peer.socket, peer.clientType))
           : null,
         remoteAddress: online && !isBridge ? statusRemoteAddress(peer.socket, WEB_ACCESS) : null,
+        mediaStatus: online ? describePeerMediaStatus(peer) : null,
         networkStats,
       };
     });
@@ -3899,6 +3901,7 @@ function buildAdminStatusSnapshot() {
             : describeStatusClient(peer.socket, peer.clientType))
         : null,
       remoteAddress: online && !isBridge ? statusRemoteAddress(peer.socket, WEB_ACCESS) : null,
+      mediaStatus: online ? describePeerMediaStatus(peer) : null,
       networkStats,
     };
   });
@@ -3974,6 +3977,7 @@ function buildAdminStatusSnapshot() {
 }
 
 app.get("/admin/status", requireAdmin, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.json(buildAdminStatusSnapshot());
 });
 
@@ -6891,6 +6895,10 @@ function attachWebRtcTransportDiagnostics(socketId, direction, transport) {
       + `direction=${direction} transport=${transport.id} event=${event} state=${state || "unknown"}`
       + (extra ? ` ${extra}` : "")
     );
+    const peer = peers.get(socketId);
+    if ((direction === "send" ? peer?.sendTransport : peer?.recvTransport) === transport) {
+      scheduleAdminStatusBroadcast("server-media-state-updated");
+    }
   };
   transport.on("icestatechange", (state) => log("ice-state", state));
   transport.on("iceselectedtuplechange", (tuple) => log(
@@ -7803,6 +7811,9 @@ io.on("connection", (socket) => {
 
   socket.on("media-transport-event", (payload = {}) => {
     const peer = peers.get(socket.id);
+    if (updatePeerMediaTransportStatus(peer, payload)) {
+      scheduleAdminStatusBroadcast("client-media-state-updated");
+    }
     const direction = ["send", "receive"].includes(payload?.direction) ? payload.direction : "unknown";
     const event = String(payload?.event || "unknown").slice(0, 80);
     const state = String(payload?.state || "unknown").slice(0, 80);
@@ -8533,7 +8544,9 @@ io.on("connection", (socket) => {
       });
 
       peers.get(socket.id).sendTransport = transport;
+      resetPeerMediaTransportStatus(peers.get(socket.id), "send");
       attachWebRtcTransportDiagnostics(socket.id, "send", transport);
+      scheduleAdminStatusBroadcast("send-transport-created");
       console.log(`[TRANSPORT] Send transport created: ${transport.id}`);
       console.log(`[TRANSPORT] ICE Candidates:`, transport.iceCandidates);
 
@@ -8581,7 +8594,9 @@ io.on("connection", (socket) => {
       });
 
       peers.get(socket.id).recvTransport = transport;
+      resetPeerMediaTransportStatus(peers.get(socket.id), "receive");
       attachWebRtcTransportDiagnostics(socket.id, "receive", transport);
+      scheduleAdminStatusBroadcast("receive-transport-created");
       console.log(`[TRANSPORT] Recv transport created: ${transport.id}`);
       console.log(`[TRANSPORT] ICE Candidates:`, transport.iceCandidates);
 

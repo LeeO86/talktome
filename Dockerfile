@@ -20,6 +20,13 @@ COPY public ./public
 COPY LICENSE ./
 COPY README.md ./
 
+# Preserve the build version independently of runtime environment overrides.
+# Local builds without a version argument retain the existing unknown fallback.
+RUN if [ -n "$TALKTOME_VERSION" ]; then \
+      TALKTOME_BUILD_VERSION="$TALKTOME_VERSION" \
+        node scripts/resolve-build-version.js --version-json build-version.json; \
+    fi
+
 ENV NODE_ENV=production \
   TALKTOME_VERSION=${TALKTOME_VERSION} \
   TALKTOME_NO_WIZARD=1 \
