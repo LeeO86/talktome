@@ -53,16 +53,33 @@ test("Docker and Git-less installs use the embedded version despite stale enviro
   }), "1.5.13");
 });
 
-test("a source server ignores build-time propagation variables at runtime", () => {
+test("a source server ignores build-time propagation variables at runtime", t => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
   const { execFileSync } = require('node:child_process');
-  const { resolveBuildVersion } = require('./scripts/resolve-build-version');
-  const cwd = __dirname;
-  const expected = resolveBuildVersion({ cwd, environment: {} }).appVersion;
+  // Own the Git metadata so this regression also runs in shallow CI checkouts
+  // and source archives without depending on fetched repository tags.
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'talktome-source-version-'));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(cwd, 'scripts'));
+  for (const file of ['server.js', 'appVersion.js', 'mediaNetwork.js', 'dataPaths.js', 'scripts/resolve-build-version.js']) {
+    fs.copyFileSync(path.join(__dirname, file), path.join(cwd, file));
+  }
+  fs.writeFileSync(path.join(cwd, 'package.json'), JSON.stringify({ version: '0.0.0' }));
+  function git(args) {
+    execFileSync('git', args, { cwd, stdio: 'pipe' });
+  }
+  git(['init']);
+  git(['add', '.']);
+  git(['-c', 'user.name=Version Test', '-c', 'user.email=version-test@example.invalid',
+    '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'Version fixture']);
+  git(['-c', 'tag.gpgSign=false', 'tag', 'v1.5.13']);
   const actual = execFileSync(process.execPath, ['server.js', '--version'], {
     cwd, encoding: 'utf8',
     env: { ...process.env, TALKTOME_VERSION: '1.5.9', TALKTOME_BUILD_VERSION: '1.5.9', npm_package_version: '1.5.9' },
   }).trim();
-  assert.equal(actual, expected);
+  assert.equal(actual, '1.5.13');
 });
 
 test("generated Docker build metadata survives stale runtime overrides without Git", t => {
