@@ -263,6 +263,7 @@ impl Mixer {
         for source in self.sources.values() {
             let stats = source.buffer.stats;
             total.packets += stats.packets;
+            total.lost += stats.lost;
             total.concealed += stats.concealed;
             total.dropped_late += stats.dropped_late;
             total.dropped_overflow += stats.dropped_overflow;

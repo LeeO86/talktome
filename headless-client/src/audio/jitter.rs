@@ -37,6 +37,8 @@ pub struct StreamBuffer {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StreamStats {
     pub packets: u64,
+    /// Sequence numbers skipped on arrival (network loss, before FEC/PLC).
+    pub lost: u64,
     pub concealed: u64,
     pub dropped_late: u64,
     pub dropped_overflow: u64,
@@ -96,6 +98,7 @@ impl StreamBuffer {
             if gap == 0 {
                 // in order
             } else if gap < 0x8000 {
+                self.stats.lost += gap as u64;
                 // Lost `gap` frames: conceal all but the last, recover the
                 // last one from this packet's in-band FEC data.
                 let conceal = gap.min(MAX_CONCEAL_FRAMES);
@@ -218,10 +221,15 @@ mod tests {
         // 80 ms would have queued; the target (40 ms) plus one frame trims it.
         buffer.push(4, &packets[3]).unwrap();
         assert_eq!(buffer.stats.concealed, 1);
+        assert_eq!(buffer.stats.lost, 1);
         assert_eq!(buffer.buffered_ms(), 60);
         // Duplicate/late packet is dropped.
         buffer.push(2, &packets[1]).unwrap();
         assert_eq!(buffer.stats.dropped_late, 1);
+        assert_eq!(
+            buffer.stats.lost, 1,
+            "late packets are not counted as lost again"
+        );
 
         let mut out = vec![0f32; 960];
         buffer.mix_into(&mut out, 0.5);

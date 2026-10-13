@@ -100,10 +100,15 @@ pub struct MediaInfo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ice_servers_announced: Vec<String>,
     pub ice_transport_policy: String,
-    /// ICE round-trip time in milliseconds, when a nominated pair reports it.
+    /// Round-trip time in milliseconds (see `rtt_source`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<u32>,
-    /// Sender-reported packet loss (RTCP), percent.
+    /// `media` (RTCP on the send transport, while talking) or `signalling`
+    /// (the `connection-health` heartbeat to the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_source: Option<String>,
+    /// Packet loss over both directions, percent: what mediasoup reports for
+    /// our producer plus sequence gaps on the consumers we receive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packet_loss_pct: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

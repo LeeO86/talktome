@@ -36,6 +36,11 @@ const ACTIVE_PRODUCER_SYNC: Duration = Duration::from_secs(10);
 const SNAPSHOT_DEBOUNCE: Duration = Duration::from_millis(200);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_IDLE_RECV_SECTIONS: usize = 32;
+/// Matches the web client; the server treats stats older than 15 s as stale.
+const NETWORK_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+/// RTCP RTT stays authoritative this long after the last Receiver Report.
+const MEDIA_RTT_FRESH: Duration = Duration::from_secs(10);
+const SIGNALLING_RTT_SMOOTHING: f32 = 0.2;
 
 /// Inputs shared with the audio thread and surfaces.
 pub struct SessionIo {
@@ -136,6 +141,11 @@ pub struct Session {
     alerts: ConnectionAlerts,
     probe_tx: mpsc::Sender<ProbeReply>,
     probe_rx: mpsc::Receiver<ProbeReply>,
+    /// Smoothed `connection-health` round trip, the RTT while not talking.
+    signalling_rtt_ms: Option<f32>,
+    /// Last RTCP RTT and when it was measured.
+    media_rtt: Option<(u32, Instant)>,
+    media_rtt_measurements: u64,
     /// Disconnect / reconnect tones. Starts from config and follows a live
     /// `playConnectionSounds` admin update.
     play_connection_sounds: bool,
@@ -214,6 +224,9 @@ impl Session {
             alerts: ConnectionAlerts::new(),
             probe_tx,
             probe_rx,
+            signalling_rtt_ms: None,
+            media_rtt: None,
+            media_rtt_measurements: 0,
             play_connection_sounds,
         })
     }
@@ -831,6 +844,10 @@ impl Session {
         let mut tick = tokio::time::interval(Duration::from_millis(500));
         let mut last_sync = Instant::now();
         let mut last_stats = Instant::now();
+        let mut last_network_report = Instant::now();
+        self.signalling_rtt_ms = None;
+        self.media_rtt = None;
+        self.media_rtt_measurements = 0;
         let mut targets_reload_due: Option<Instant> = None;
         let mut shutdown = self.io.shutdown.clone();
 
@@ -938,6 +955,10 @@ impl Session {
                         last_stats = Instant::now();
                         self.refresh_media_stats(&connected).await;
                     }
+                    if last_network_report.elapsed() >= NETWORK_REPORT_INTERVAL {
+                        last_network_report = Instant::now();
+                        self.report_network_stats(&connected).await;
+                    }
                     if self.audio_state_dirty
                         && self.last_audio_snapshot.elapsed() >= SNAPSHOT_DEBOUNCE
                     {
@@ -953,6 +974,7 @@ impl Session {
                     self.snapshot_dirty = true;
                 }
                 Event::Probe(reply) => {
+                    self.note_probe_rtt(reply);
                     let (send_blocks, recv_blocks) = transport_blocks(connected.media.as_ref());
                     let cue = self
                         .alerts
@@ -1446,11 +1468,15 @@ impl Session {
         let Some(media) = connected.media.as_ref() else {
             return;
         };
+        // The receive transport has no outbound streams, so its report holds
+        // nothing we use; receive loss comes from the jitter buffers instead.
         let send = crate::rtc::LinkStats::from_report(&media.send.stats_report().await);
-        let recv = crate::rtc::LinkStats::from_report(&media.recv.stats_report().await);
-        let link = send.merge(recv);
-        let conceal = self.io.mixer.lock().ok().and_then(|mixer| {
-            let stats = mixer.receive_stats();
+        let receive = self.io.mixer.lock().ok().map(|mixer| mixer.receive_stats());
+        let link = send.clone().merge(crate::rtc::LinkStats::from_received(
+            receive.map_or(0, |stats| stats.packets),
+            receive.map_or(0, |stats| stats.lost),
+        ));
+        let conceal = receive.and_then(|stats| {
             let den = stats.packets + stats.concealed;
             if den == 0 {
                 None
@@ -1458,12 +1484,65 @@ impl Session {
                 Some(((stats.concealed as f32) / den as f32 * 1000.0).round() / 10.0)
             }
         });
+
+        let now = Instant::now();
+        if send.rtt_measurements < self.media_rtt_measurements {
+            // The send transport was recreated.
+            self.media_rtt = None;
+        }
+        if send.rtt_measurements > self.media_rtt_measurements {
+            if let Some(ms) = send.rtt_ms {
+                self.media_rtt = Some((ms, now));
+            }
+        }
+        self.media_rtt_measurements = send.rtt_measurements;
+        let (rtt_ms, rtt_source) = choose_rtt(self.media_rtt, self.signalling_rtt_ms, now);
+
         if let Some(info) = self.media_info.as_mut() {
-            info.rtt_ms = link.rtt_ms;
+            info.rtt_ms = rtt_ms;
+            info.rtt_source = rtt_source.map(str::to_string);
             info.packet_loss_pct = link.packet_loss_pct;
             info.packets_lost = (link.packets_lost > 0).then_some(link.packets_lost);
             info.packets_received = (link.packets_received > 0).then_some(link.packets_received);
             info.recv_conceal_pct = conceal;
+        }
+    }
+
+    fn note_probe_rtt(&mut self, reply: ProbeReply) {
+        if !reply.ok || reply.generation != self.alerts.generation() {
+            return;
+        }
+        let sample = Instant::now().saturating_duration_since(reply.sent_at);
+        if sample >= super::alerts::PROBE_TIMEOUT {
+            return;
+        }
+        let sample = sample.as_secs_f32() * 1000.0;
+        self.signalling_rtt_ms = Some(match self.signalling_rtt_ms {
+            Some(previous) => previous + (sample - previous) * SIGNALLING_RTT_SMOOTHING,
+            None => sample,
+        });
+    }
+
+    /// Sends the same `media-network-stats` summary as the web client, which
+    /// the server shows as RTT / packet loss on the admin status page.
+    async fn report_network_stats(&self, connected: &Connected) {
+        let Some(info) = self.media_info.as_ref() else {
+            return;
+        };
+        let receive = self.io.mixer.lock().ok().map(|mixer| mixer.receive_stats());
+        let payload = json!({
+            "roundTripMs": info.rtt_ms,
+            "packetLossPercent": info.packet_loss_pct,
+            "packetsLost": info.packets_lost.unwrap_or(0),
+            "packetsReceived": info.packets_received.unwrap_or(0),
+            "packetsDiscarded": receive.map_or(0, |stats| stats.dropped_late),
+        });
+        if let Err(error) = connected
+            .socket
+            .emit("media-network-stats", vec![payload])
+            .await
+        {
+            tracing::debug!(event = "network-stats-failed", error = %error);
         }
     }
 
@@ -1952,6 +2031,24 @@ fn transport_blocks(media: Option<&Media>) -> (bool, bool) {
     (blocks(media.send_state), blocks(media.recv_state))
 }
 
+/// Prefers the media-path RTT while it is fresh. webrtc-rs does not measure
+/// ICE RTT, and RTCP only flows while talking, so the heartbeat fills in.
+fn choose_rtt(
+    media: Option<(u32, Instant)>,
+    signalling_ms: Option<f32>,
+    now: Instant,
+) -> (Option<u32>, Option<&'static str>) {
+    match media {
+        Some((ms, at)) if now.saturating_duration_since(at) < MEDIA_RTT_FRESH => {
+            (Some(ms), Some("media"))
+        }
+        _ => match signalling_ms {
+            Some(ms) => (Some(ms.round() as u32), Some("signalling")),
+            None => (None, None),
+        },
+    }
+}
+
 fn parse_cut_camera(payload: &Value) -> (bool, bool) {
     if let Some(pgm) = payload.as_bool() {
         return (pgm, false);
@@ -1982,8 +2079,24 @@ fn parse_conference_members(values: &[Value]) -> Vec<(i64, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_conference_members, parse_cut_camera};
+    use super::{choose_rtt, parse_conference_members, parse_cut_camera, MEDIA_RTT_FRESH};
     use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn rtt_prefers_fresh_media_then_falls_back_to_heartbeat() {
+        let now = Instant::now();
+        assert_eq!(
+            choose_rtt(Some((18, now)), Some(41.6), now),
+            (Some(18), Some("media"))
+        );
+        let stale = now - MEDIA_RTT_FRESH - Duration::from_secs(1);
+        assert_eq!(
+            choose_rtt(Some((18, stale)), Some(41.6), now),
+            (Some(42), Some("signalling"))
+        );
+        assert_eq!(choose_rtt(None, None, now), (None, None));
+    }
 
     #[test]
     fn parse_cut_camera_accepts_legacy_bool_and_pgm_prv_object() {

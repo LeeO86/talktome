@@ -256,6 +256,8 @@ user-logout              (no payload, on clean shutdown)
 connection-health        (no payload) -> true
                          v1.5.6+. Emitted every 500 ms while registered.
                          A server that never acks does not raise a warning.
+media-network-stats      { roundTripMs, packetLossPercent, packetsLost,
+                           packetsReceived, packetsDiscarded }   (every 5 s, no ack)
 ```
 
 Events **received**:
@@ -451,6 +453,13 @@ written to WAV by the second instance (289 packets for a 6 s tone; the first
 - Renegotiation on the receive transport (new remote offer per consumer,
   answer, `connect-recv-transport` once) works; `on_track` fires with the
   consumer's SSRC.
+- Stats: webrtc-rs leaves the ICE candidate-pair RTT at 0 and has no
+  `packetsLost` on inbound RTP. `remote-inbound-rtp` (from mediasoup's
+  Receiver Reports) carries loss and an RTT that is already in
+  milliseconds, but only once the producer has sent RTP, i.e. while
+  talking. The client therefore reports that RTT while it is fresh (10 s),
+  otherwise the smoothed `connection-health` round trip, and counts
+  receive loss from consumer RTP sequence gaps.
 
 ---
 
@@ -902,7 +911,7 @@ home-screen bookmarks.
 - **Status**: connection (state, detail, server, user id, production,
   registration age, reconnects, send/receive transport state, consumers,
   producer id, ICE URLs announced by the server and the local webrtc-rs
-  façade when TURNS is bridged, ICE RTT and packet loss, receive
+  façade when TURNS is bridged, RTT and packet loss, receive
   concealment, PGM/PRV tally, Talktome server version), audio devices and
   input level, GPIO backend with every configured output (driven state)
   and input (pressed, event count), local control socket (Unix path,

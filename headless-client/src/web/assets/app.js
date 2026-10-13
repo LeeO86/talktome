@@ -484,7 +484,7 @@
       ['ICE (server)', media.ice_servers_announced && media.ice_servers_announced.length ? media.ice_servers_announced.join(', ') : (media.ice_servers && media.ice_servers.length ? media.ice_servers.join(', ') : 'none (direct only)')],
       ['ICE (webrtc)', iceEffectiveLabel(media)],
       ['ICE policy', media.ice_transport_policy || '–'],
-      ['RTT', media.rtt_ms != null ? `${media.rtt_ms} ms` : '–'],
+      ['RTT', media.rtt_ms != null ? `${media.rtt_ms} ms${media.rtt_source ? ` (${media.rtt_source})` : ''}` : '–'],
       ['Packet loss', media.packet_loss_pct != null ? `${media.packet_loss_pct}%${media.packets_lost != null ? ` (${media.packets_lost} lost / ${media.packets_received || 0} recv)` : ''}` : '–'],
       ['Receive concealment', media.recv_conceal_pct != null ? `${media.recv_conceal_pct}%` : '–'],
       ['Camera tally', tallyBadges(snap)],
