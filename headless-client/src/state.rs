@@ -120,6 +120,13 @@ pub struct MediaInfo {
     pub recv_conceal_pct: Option<f32>,
 }
 
+/// A production this user is assigned to, for the Settings dropdown.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProductionInfo {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Snapshot {
     pub instance: String,
@@ -127,6 +134,9 @@ pub struct Snapshot {
     pub user_id: Option<i64>,
     pub server_url: String,
     pub production: Option<String>,
+    /// Productions the user is assigned to (from login, kept current).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub productions: Vec<ProductionInfo>,
     pub connection: ConnectionState,
     pub detail: String,
     pub talking: bool,
@@ -175,6 +185,7 @@ impl Snapshot {
             user_id: None,
             server_url: String::new(),
             production: None,
+            productions: Vec::new(),
             connection: ConnectionState::Disconnected,
             detail: String::new(),
             talking: false,

@@ -150,6 +150,25 @@ impl ServerApi {
         }
         response.json().await.context("parsing targets response")
     }
+
+    /// `GET /users/:id/productions` — the productions this user may join.
+    pub async fn productions(&self, token: &str, user_id: i64) -> Result<Vec<Production>> {
+        let response = self
+            .client
+            .get(self.url(&format!("/users/{user_id}/productions"))?)
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("productions request failed")?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("loading productions failed ({status})");
+        }
+        response
+            .json()
+            .await
+            .context("parsing productions response")
+    }
 }
 
 fn parse_server_app_version(body: &Value) -> Option<String> {

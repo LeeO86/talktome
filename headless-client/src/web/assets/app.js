@@ -472,7 +472,7 @@
     kv($('#conn-details'), [
       ['Server', code(snap.server_url)],
       ['User', `${snap.user_name}${snap.user_id != null ? ` (id ${snap.user_id})` : ''}`],
-      ['Production', snap.production || 'Default'],
+      ['Production', productionLabel(snap)],
       ['Registered for', snap.registered_since_unix ? formatDuration(status.now_unix - snap.registered_since_unix) : '–'],
       ['Reconnects', snap.reconnects],
       ['Server heartbeat', snap.heartbeat || '–'],
@@ -1330,7 +1330,7 @@
       fields: [
         { path: 'user.name', label: 'User name', type: 'text' },
         { path: 'user.password', label: 'Password', type: 'password', help: 'Leave the placeholder to keep the stored password' },
-        { path: 'user.production', label: 'Production (id or name)', type: 'text', nullable: true, help: 'Empty: Default production' },
+        { path: 'user.production', label: 'Production', type: 'production', nullable: true, help: 'Productions this user is assigned to on the server. Restart to apply.' },
         { path: 'registration.conflict', label: 'If the account is already in use', type: 'select', options: [['takeover', 'Take over the session'], ['wait', 'Wait until it is free']] },
         { path: 'registration.takeover_delay_ms', label: 'Takeover delay (ms)', type: 'number' },
         { path: 'registration.retry_ms', label: 'Retry interval (ms)', type: 'number' },
@@ -1586,7 +1586,10 @@
     }
     wrapper.append(el('span', { text: field.label }));
     let input;
-    if (field.type === 'select' || field.type === 'target') {
+    if (field.type === 'production') {
+      input = el('select', { dataset: { path: field.path, type: 'select', nullable: '1', production: '1' }, autocomplete: 'off' });
+      fillProductionSelect(input, value == null ? '' : String(value));
+    } else if (field.type === 'select' || field.type === 'target') {
       const kinds = (field.kinds || []).join(',');
       input = el('select', {
         dataset: {
@@ -1670,7 +1673,46 @@
     select.value = value;
   }
 
+  function productionLabel(snap) {
+    const wanted = String(snap.production || '').trim();
+    if (!wanted) return 'Default';
+    const match = (snap.productions || []).find((production) => production.id === wanted)
+      || (snap.productions || []).find((production) => production.name.toLowerCase() === wanted.toLowerCase());
+    return match ? match.name : wanted;
+  }
+
+  function snapshotProductions() {
+    return (state.status && state.status.snapshot && state.status.snapshot.productions) || [];
+  }
+
+  // Stored as the production id; a name typed in by hand selects its id.
+  function productionSelectOptions(current) {
+    const productions = snapshotProductions();
+    const options = [['', 'Server default (no production set)']];
+    for (const production of productions) options.push([production.id, production.name]);
+    const wanted = String(current || '').trim();
+    if (!wanted) return { options, value: '' };
+    const match = productions.find((production) => production.id === wanted)
+      || productions.find((production) => production.name.toLowerCase() === wanted.toLowerCase());
+    if (match) return { options, value: match.id };
+    const note = productions.length ? 'not assigned to this user' : 'offline, list unavailable';
+    options.push([wanted, `${wanted} (${note})`]);
+    return { options, value: wanted };
+  }
+
+  function fillProductionSelect(select, current) {
+    const { options, value } = productionSelectOptions(current);
+    select.replaceChildren();
+    for (const [optionValue, label] of options) {
+      select.append(el('option', { value: optionValue, text: label }));
+    }
+    select.value = value;
+  }
+
   function refreshSettingsTargetSelects() {
+    for (const select of $$('#settings-form select[data-production="1"]')) {
+      fillProductionSelect(select, select.value);
+    }
     for (const select of $$('#settings-form select[data-path]')) {
       const path = select.dataset.path;
       if (path !== 'vox.target' && path !== 'talk.main_target' && path !== 'streamdeck.pedal_left' && path !== 'streamdeck.pedal_target') continue;

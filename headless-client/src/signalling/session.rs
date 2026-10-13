@@ -26,7 +26,8 @@ use crate::rtc::{
     SIGNAL_TIMEOUT,
 };
 use crate::state::{
-    Command, ConnectionState, IncomingInfo, InputSource, Snapshot, TargetInfo, TargetRef,
+    Command, ConnectionState, IncomingInfo, InputSource, ProductionInfo, Snapshot, TargetInfo,
+    TargetRef,
 };
 use crate::talk::{AudioState, TalkChange, TalkModel, TargetKey};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
@@ -442,10 +443,8 @@ impl Session {
             .map(|l| l.productions.as_slice())
             .unwrap_or(&[]);
         for production in productions {
-            let id_text = match &production.id {
-                Value::Number(n) => n.to_string(),
-                Value::String(s) => s.clone(),
-                _ => continue,
+            let Some(id_text) = production_id_text(&production.id) else {
+                continue;
             };
             if id_text == wanted || production.name.eq_ignore_ascii_case(wanted) {
                 return Some(production.id.clone());
@@ -943,6 +942,7 @@ impl Session {
                             if let Err(error) = self.reload_targets(&connected).await {
                                 tracing::warn!(event = "targets-failed", error = %format!("{error:#}"));
                             }
+                            self.reload_productions(&connected).await;
                             self.sync_active_producers(&mut connected).await;
                         }
                     }
@@ -1696,6 +1696,24 @@ impl Session {
     // Targets and snapshots
     // ------------------------------------------------------------------
 
+    /// Keeps the Settings production list current after admin changes.
+    async fn reload_productions(&mut self, connected: &Connected) {
+        let Some((token, _)) = self.token.clone() else {
+            return;
+        };
+        match self.api.productions(&token, connected.user_id).await {
+            Ok(productions) => {
+                if let Some(login) = self.login.as_mut() {
+                    login.productions = productions;
+                    self.snapshot_dirty = true;
+                }
+            }
+            Err(error) => {
+                tracing::debug!(event = "productions-failed", error = %format!("{error:#}"));
+            }
+        }
+    }
+
     async fn reload_targets(&mut self, connected: &Connected) -> Result<()> {
         let token = self
             .token
@@ -1873,6 +1891,17 @@ impl Session {
             user_id: self.login.as_ref().map(|l| l.user.id),
             server_url: self.config.server.url.clone(),
             production: self.config.user.production.clone(),
+            productions: self
+                .login
+                .iter()
+                .flat_map(|login| &login.productions)
+                .filter_map(|production| {
+                    Some(ProductionInfo {
+                        id: production_id_text(&production.id)?,
+                        name: production.name.clone(),
+                    })
+                })
+                .collect(),
             connection: self.connection,
             detail: self.detail.clone(),
             talking: self.talk.is_talking(),
@@ -2046,6 +2075,15 @@ fn choose_rtt(
             Some(ms) => (Some(ms.round() as u32), Some("signalling")),
             None => (None, None),
         },
+    }
+}
+
+/// Production ids arrive as numbers from the server; config stores text.
+fn production_id_text(id: &Value) -> Option<String> {
+    match id {
+        Value::Number(n) => Some(n.to_string()),
+        Value::String(s) => Some(s.clone()),
+        _ => None,
     }
 }
 

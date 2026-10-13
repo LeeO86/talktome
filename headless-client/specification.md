@@ -213,7 +213,10 @@ register-user { id: user.id, name: user.name, kind: "user", force, productionId 
   misconfigured with the same account do not flap every second.
 - `productionId`: from `user.production` (name or id) if set, otherwise
   `null` (server picks the Default production). `active-production-reset`
-  and `available-productions-updated` are honoured by reloading targets.
+  and `available-productions-updated` are honoured by reloading targets;
+  the latter also refreshes the user's productions from
+  `GET /users/:id/productions`. The web Settings page offers those
+  productions as a dropdown and stores the chosen id.
 
 ---
 
