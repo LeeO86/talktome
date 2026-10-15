@@ -4,11 +4,19 @@ Local WebRTC intercom app built with Node.js, mediasoup and Socket.IO.
 
 <img src="public/images/iphone_ipad.png" alt="Talktome mobile UI" width="800">
 
+## Community
+
+<a href="https://discord.gg/x5Q27F7HK"><img src="public/images/Discord-Logo-Blurple.svg" alt="Join the Talktome Discord community" width="160"></a>
+
+Join our [Discord server](https://discord.gg/x5Q27F7HK) for discussions, questions,
+feedback and sharing how you use Talktome.
+
 ## Features
 
 - Browser-based intercom with direct targets, conferences, reply and talk lock.
 - Admin UI for users, feeds, conferences, target order, network config, RTC port range, backups and Guest login.
 - Remote user panels open from Admin Users or Status in a separate browser tab. They use the normal browser interface for talk, locks, receive levels, conference member settings, audio settings, device selection, shortcuts and target ordering, without opening audio on the admin device. Persistent changes also apply after reconnect. Bridge panels support talk and receive controls; Bridge device assignments stay in Admin Users, and browser-specific audio settings are saved for the user's browser sessions.
+- Admin Status distinguishes a connected web session from its audio connection: failed WebRTC shows a red “Media failed” indicator, interruptions and connection attempts show a warning, and the status tooltip includes send/receive and ICE details. Unused audio transports are not treated as failures.
 - Program-audio feeds with volume and mute controls.
 - Camera tally and remote control through Bitfocus Companion, HTTP API, module and keyboard shortcuts.
 - Bridge Desktop Application to integrate NDI, OMT, hardware intercom systems, audio interfaces and mixing consoles.
@@ -96,6 +104,23 @@ Package, Cargo and Tauri manifests intentionally contain only the neutral
 `0.0.0` placeholder and must not be edited for a release. The shared
 `scripts/resolve-build-version.js` resolver supplies the version to local and
 GitHub builds.
+
+The displayed Server version comes from the running Git checkout or the
+version embedded in the executable/Docker image. `TALKTOME_VERSION` is only a
+fallback when neither is available; a stale environment value cannot relabel
+an installed build. Custom Docker builds should pass
+`--build-arg TALKTOME_VERSION=<resolved-version>` to embed their build version.
+
+## Repository layout
+
+- `server.js`: stable entry point for `npm start` and packaged server builds.
+- `src/server/`: server startup, application logic and supporting modules.
+- `tests/`: automated JavaScript tests; run with `npm test`.
+- `public/`: browser client, Admin UI and shared browser/server settings models.
+- `scripts/`: build, release, container healthcheck and maintenance tools.
+- `server-app/` and `bridge-client/`: native desktop applications.
+- `gateway/`: radio gateway tools.
+- `vendor/`: locally maintained third-party patches.
 
 ## Configuration
 

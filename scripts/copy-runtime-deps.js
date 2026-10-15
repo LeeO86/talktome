@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { resolveBetterSqliteBinding } = require("../betterSqliteBinding");
+const { resolveBetterSqliteBinding } = require("../src/server/betterSqliteBinding");
 
 const target = String(process.argv[2] || "").trim().toLowerCase();
 

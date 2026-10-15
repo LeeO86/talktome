@@ -117,8 +117,10 @@ function formatProcessResult(result) {
 
 function verifyPackagedServerVersion(executable, expectedVersion) {
   const environment = { ...process.env };
-  delete environment.TALKTOME_VERSION;
-  delete environment.npm_package_version;
+  // Launchers and services can retain values from an earlier installation.
+  // The executable must identify itself even in that environment.
+  environment.TALKTOME_VERSION = "0.0.0-stale";
+  environment.npm_package_version = "0.0.0-stale";
 
   const result = spawnSync(executable, ["--version"], {
     cwd: path.dirname(executable),

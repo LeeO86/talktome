@@ -1382,16 +1382,29 @@ function statusTimeHtml(value, { suffix = true, empty = 'Never' } = {}) {
 
 const STATUS_TALKING_PULSE_MS = 1350;
 
-function statusIndicatorHtml({ online, talking = false, talkingLabel = 'Talking', warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning' }) {
-  const label = talking ? talkingLabel : warning ? warningLabel : online ? onlineLabel : offlineLabel;
-  const stateClass = talking ? 'is-talking' : warning ? 'is-warning' : online ? 'is-online' : '';
-  const animationPhase = talking
+function statusIndicatorHtml({ online, talking = false, talkingLabel = 'Talking', warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning', mediaStatus = null }) {
+  const mediaIssue = online && ['failed', 'interrupted', 'connecting', 'warning'].includes(mediaStatus?.state);
+  const label = mediaIssue ? mediaStatus.label : talking ? talkingLabel : warning ? warningLabel : online ? onlineLabel : offlineLabel;
+  const stateClass = mediaIssue ? mediaStatus.state === 'failed' ? 'is-failed' : 'is-warning'
+    : talking ? 'is-talking' : warning ? 'is-warning' : online ? 'is-online' : '';
+  const title = online && mediaStatus ? [
+    'Signaling: online',
+    mediaStatus.label,
+    `Send media: ${mediaStatus.send?.state || 'unknown'}`,
+    `Receive media: ${mediaStatus.receive?.state || 'unknown'}`,
+    mediaStatus.send?.iceGatheringState ? `Send ICE: ${mediaStatus.send.iceGatheringState}` : null,
+    mediaStatus.receive?.iceGatheringState ? `Receive ICE: ${mediaStatus.receive.iceGatheringState}` : null,
+    mediaStatus.send?.iceError ? `Send ICE error: ${mediaStatus.send.iceError}` : null,
+    mediaStatus.receive?.iceError ? `Receive ICE error: ${mediaStatus.receive.iceError}` : null,
+    talking ? talkingLabel : null,
+  ].filter(Boolean).join('\n') : label;
+  const animationPhase = talking && !mediaIssue
     ? ` style="--status-talking-animation-delay: -${Date.now() % STATUS_TALKING_PULSE_MS}ms"`
     : '';
   return `
-    <span class="status-indicator">
+    <span class="status-indicator" title="${escapeHtml(title)}">
       <span class="status-indicator__dot ${stateClass}"${animationPhase} aria-hidden="true"></span>
-      <span title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+      <span>${escapeHtml(label)}</span>
     </span>
   `;
 }
@@ -1686,7 +1699,7 @@ async function loadAdminStatus({ silent = false } = {}) {
   if (statusLoadPromise) return statusLoadPromise;
   statusLoadPromise = (async () => {
     try {
-      const payload = await fetchJSON('/admin/status');
+      const payload = await fetchJSON('/admin/status', { cache: 'no-store' });
       setServerReachability(true);
       updateBridgeRegistryFromStatus(payload);
       renderAdminStatus(payload);

@@ -12,6 +12,11 @@ if [[ -n "$expected_version" ]]; then
     echo "Expected Docker server version $expected_version, found $actual_version." >&2
     exit 1
   fi
+  overridden_version="$(docker run --rm --env TALKTOME_VERSION=0.0.0-stale "$image" node server.js --version)"
+  if [[ "$overridden_version" != "$expected_version" ]]; then
+    echo "Runtime override changed Docker server version to $overridden_version (expected $expected_version)." >&2
+    exit 1
+  fi
 fi
 
 cleanup() {
