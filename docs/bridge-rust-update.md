@@ -2,7 +2,7 @@
 
 This change carries forward the dependency group from the closed PR #150, with
 Tauri 2.12.4 and its matching build tools. The JavaScript and Rust URL opener
-components now both use 2.7.0. The Server's Rust dependency update (#153) remains
+components now both use 2.7.1. The Server's Rust dependency update (#153) remains
 separate.
 
 ## macOS tray compatibility
