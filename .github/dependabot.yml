@@ -9,6 +9,13 @@ updates:
       time: "06:00"
       timezone: "Europe/Berlin"
     open-pull-requests-limit: 5
+    # mediasoup-client aliases @types/events under this local name. It is not
+    # published in npm; looking it up directly fails with a registry 404.
+    # Keep the alias in the lockfile and update it with mediasoup-client.
+    # Remove this exception when Dependabot supports this alias correctly.
+    # https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#ignore
+    ignore:
+      - dependency-name: "@types/events-alias"
     groups:
       minor-and-patch:
         applies-to: "version-updates"
