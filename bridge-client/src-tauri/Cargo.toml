@@ -19,7 +19,9 @@ libloading = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2.11.2", features = ["macos-private-api", "tray-icon"] }
+# Capabilities are static; the small local UI does not need Brotli assets.
+# Keep the existing desktop backends and native window/tray integrations.
+tauri = { version = "2.11.2", default-features = false, features = ["wry", "common-controls-v6", "x11", "dbus", "macos-private-api", "tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
