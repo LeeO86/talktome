@@ -12,9 +12,10 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Keep all root-level runtime modules together so a newly required module cannot
-# be omitted from the image by an incomplete list of COPY instructions.
-COPY *.js ./
+# Copy the complete server source tree, including shared path resolution.
+COPY server.js ./
+COPY src ./src
+COPY scripts/container-healthcheck.js ./scripts/container-healthcheck.js
 COPY scripts/resolve-build-version.js ./scripts/resolve-build-version.js
 COPY public ./public
 COPY LICENSE ./
@@ -40,6 +41,6 @@ VOLUME ["/data"]
 EXPOSE 8443 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD ["node", "containerHealthcheck.js"]
+  CMD ["node", "scripts/container-healthcheck.js"]
 
 CMD ["node", "server.js"]

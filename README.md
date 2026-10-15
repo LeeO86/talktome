@@ -111,6 +111,17 @@ fallback when neither is available; a stale environment value cannot relabel
 an installed build. Custom Docker builds should pass
 `--build-arg TALKTOME_VERSION=<resolved-version>` to embed their build version.
 
+## Repository layout
+
+- `server.js`: stable entry point for `npm start` and packaged server builds.
+- `src/server/`: server startup, application logic and supporting modules.
+- `tests/`: automated JavaScript tests; run with `npm test`.
+- `public/`: browser client, Admin UI and shared browser/server settings models.
+- `scripts/`: build, release, container healthcheck and maintenance tools.
+- `server-app/` and `bridge-client/`: native desktop applications.
+- `gateway/`: radio gateway tools.
+- `vendor/`: locally maintained third-party patches.
+
 ## Configuration
 
 On first interactive start, Talktome creates `config.json` and asks for:
