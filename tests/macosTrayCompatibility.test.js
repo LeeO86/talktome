@@ -2,15 +2,26 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-test('both native apps resolve the shared macOS tray backport', () => {
-  for (const app of ['server-app', 'bridge-client']) {
-    const manifest = fs.readFileSync(`${app}/src-tauri/Cargo.toml`, 'utf8');
-    assert.match(manifest, /\[patch\.crates-io\][\s\S]*tray-icon = \{ path = "\.\.\/\.\.\/vendor\/tray-icon" \}/);
-    const lock = fs.readFileSync(`${app}/src-tauri/Cargo.lock`, 'utf8');
-    const entry = lock.split('[[package]]').find(entry => entry.includes('name = "tray-icon"'));
-    assert.ok(entry);
-    assert.doesNotMatch(entry, /source =/);
-  }
+test('the server app resolves the macOS tray backport', () => {
+  const manifest = fs.readFileSync('server-app/src-tauri/Cargo.toml', 'utf8');
+  assert.match(manifest, /\[patch\.crates-io\][\s\S]*tray-icon = \{ path = "\.\.\/\.\.\/vendor\/tray-icon" \}/);
+  const lock = fs.readFileSync('server-app/src-tauri/Cargo.lock', 'utf8');
+  const entry = lock.split('[[package]]').find(entry => entry.includes('name = "tray-icon"'));
+  assert.ok(entry);
+  assert.doesNotMatch(entry, /source =/);
+});
+
+test('the Bridge uses the published macOS tray fix', () => {
+  const manifest = fs.readFileSync('bridge-client/src-tauri/Cargo.toml', 'utf8');
+  assert.doesNotMatch(manifest, /\[patch\.crates-io\]/);
+  const lock = fs.readFileSync('bridge-client/src-tauri/Cargo.lock', 'utf8');
+  const entries = lock.split('[[package]]').filter(entry => /^\s*name = "tray-icon"\s*$/m.test(entry));
+  assert.equal(entries.length, 1);
+  // Upstream 0.25.1 includes the exact menu-presentation fix backported below:
+  // https://github.com/tauri-apps/tray-icon/releases/tag/tray-icon-v0.25.1
+  // Review a new minor release before relaxing this version guard.
+  assert.match(entries[0], /^version = "0\.25\.([1-9]\d*)"$/m);
+  assert.match(entries[0], /^source = "registry\+https:\/\/github\.com\/rust-lang\/crates.io-index"$/m);
 });
 
 test('tray menu is attached only during presentation', () => {
