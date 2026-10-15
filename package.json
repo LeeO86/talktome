@@ -57,6 +57,6 @@
   "allowScripts": {
     "better-sqlite3@13.0.3": true,
     "esbuild@0.28.2": true,
-    "mediasoup@3.26.0": true
+    "mediasoup@3.29.0": true
   }
 }
