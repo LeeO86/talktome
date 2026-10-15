@@ -4,6 +4,13 @@ Local WebRTC intercom app built with Node.js, mediasoup and Socket.IO.
 
 <img src="public/images/iphone_ipad.png" alt="Talktome mobile UI" width="800">
 
+## Community
+
+<a href="https://discord.gg/x5Q27F7HK"><img src="public/images/Discord-Logo-Blurple.svg" alt="Join the Talktome Discord community" width="160"></a>
+
+Join our [Discord server](https://discord.gg/x5Q27F7HK) for discussions, questions,
+feedback and sharing how you use Talktome.
+
 ## Features
 
 - Browser-based intercom with direct targets, conferences, reply and talk lock.
