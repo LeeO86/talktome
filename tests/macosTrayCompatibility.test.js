@@ -2,11 +2,38 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
+function cargoPackageEntries(lock) {
+  return lock.split(/(?=^\[\[)/m).filter(section => /^\[\[package\]\]\r?\n/.test(section));
+}
+
+test('unused Cargo patches are not counted as resolved packages', () => {
+  const lock = `version = 4
+
+[[package]]
+name = "tray-icon"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "zvariant_utils"
+version = "4.2.0"
+
+[[patch.unused]]
+name = "tray-icon"
+version = "0.24.2"
+`;
+  const entries = cargoPackageEntries(lock);
+  const trays = entries.filter(entry => /^\s*name = "tray-icon"\s*$/m.test(entry));
+  assert.equal(trays.length, 1);
+  assert.match(trays[0], /^version = "0\.25\.1"$/m);
+  assert.doesNotMatch(entries.join('\n'), /\[\[patch\.unused\]\]/);
+});
+
 test('the server app resolves the macOS tray backport', () => {
   const manifest = fs.readFileSync('server-app/src-tauri/Cargo.toml', 'utf8');
   assert.match(manifest, /\[patch\.crates-io\][\s\S]*tray-icon = \{ path = "\.\.\/\.\.\/vendor\/tray-icon" \}/);
   const lock = fs.readFileSync('server-app/src-tauri/Cargo.lock', 'utf8');
-  const entry = lock.split('[[package]]').find(entry => entry.includes('name = "tray-icon"'));
+  const entry = cargoPackageEntries(lock).find(entry => entry.includes('name = "tray-icon"'));
   assert.ok(entry);
   assert.doesNotMatch(entry, /source =/);
 });
@@ -15,7 +42,7 @@ test('the Bridge uses the published macOS tray fix', () => {
   const manifest = fs.readFileSync('bridge-client/src-tauri/Cargo.toml', 'utf8');
   assert.doesNotMatch(manifest, /\[patch\.crates-io\]/);
   const lock = fs.readFileSync('bridge-client/src-tauri/Cargo.lock', 'utf8');
-  const entries = lock.split('[[package]]').filter(entry => /^\s*name = "tray-icon"\s*$/m.test(entry));
+  const entries = cargoPackageEntries(lock).filter(entry => /^\s*name = "tray-icon"\s*$/m.test(entry));
   assert.equal(entries.length, 1);
   // Upstream 0.25.1 includes the exact menu-presentation fix backported below:
   // https://github.com/tauri-apps/tray-icon/releases/tag/tray-icon-v0.25.1
