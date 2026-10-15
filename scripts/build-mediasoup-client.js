@@ -27,10 +27,8 @@ esbuild.buildSync({
 
 const versionPlaceholder = "__MEDIASOUP_CLIENT_VERSION__";
 const bundledSource = fs.readFileSync(outputFile, "utf8");
-if (!bundledSource.includes(versionPlaceholder)) {
-  throw new Error("The mediasoup-client bundle did not contain its version placeholder");
-}
-
+// Recent releases already embed their version; older ones use this placeholder.
+// tests/mediasoupClientBundle.test.js verifies the actual exported bundle version.
 fs.writeFileSync(
   outputFile,
   bundledSource.replaceAll(versionPlaceholder, packageMetadata.version)

@@ -4,7 +4,7 @@ const path = require("node:path");
 const {
   getBetterSqlitePackageRoot,
   resolveBetterSqliteBinding,
-} = require("../betterSqliteBinding");
+} = require("../src/server/betterSqliteBinding");
 
 const packageRoot = getBetterSqlitePackageRoot();
 const sourcePath = resolveBetterSqliteBinding({ packageRoot });

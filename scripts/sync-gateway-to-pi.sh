@@ -9,7 +9,9 @@ if [[ -z "$target" ]]; then
   exit 1
 fi
 
-rsync -az package.json package-lock.json README.md serverCore.js webrtcConfig.js "${target}:${dest}/"
+rsync -az package.json package-lock.json README.md server.js "${target}:${dest}/"
+rsync -az src/ "${target}:${dest}/src/"
+rsync -az scripts/resolve-build-version.js "${target}:${dest}/scripts/"
 rsync -az \
   --exclude radio-config.json \
   --exclude rx-segments/ \
