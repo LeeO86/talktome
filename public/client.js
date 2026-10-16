@@ -305,7 +305,9 @@ let recoverExistingIncomingPlayback = () => {};
 let attemptPlayAudio = () => Promise.resolve();
 let persistUserAudioSettingsHandler = () => {};
 let syncIncomingLevelMeters = () => {};
-let showIncomingLevelsEnabled = false;
+let showIncomingLevelsEnabled = hasServerDefaultClientSetting('showIncomingLevels')
+  ? serverDefaultClientSettings.showIncomingLevels === true
+  : false;
 let loadedTargetHotkeyStorageKey = null;
 
 let feedDuckingDb = hasServerDefaultClientSetting('dimAmountDb')

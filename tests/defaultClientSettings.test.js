@@ -7,9 +7,11 @@ const {
   resolveDefaultClientSettings,
   serializeDefaultClientSettingsScript,
 } = require("../src/server/defaultClientSettings");
+const { resolve: resolveUserAudioSettings } = require("../public/userAudioSettings");
 
 test("resolves built-in client defaults when no server settings exist", () => {
   assert.deepEqual(resolveDefaultClientSettings(null), BUILTIN_DEFAULT_CLIENT_SETTINGS);
+  assert.equal(resolveDefaultClientSettings(null).showIncomingLevels, false);
 });
 
 test("keeps only valid configured client defaults", () => {
@@ -17,11 +19,13 @@ test("keeps only valid configured client defaults", () => {
     audioProfile: "standard",
     dimAmountDb: -18,
     dimFeedsWhileSpeaking: true,
+    showIncomingLevels: true,
     unknown: "ignored",
   }), {
     audioProfile: "standard",
     dimAmountDb: -18,
     dimFeedsWhileSpeaking: true,
+    showIncomingLevels: true,
   });
 });
 
@@ -34,15 +38,28 @@ test("rejects invalid admin client defaults in strict mode", () => {
     () => normalizeConfiguredDefaultClientSettings({ leftHandMode: "yes" }, { strict: true }),
     /Invalid boolean value/
   );
+  assert.throws(
+    () => normalizeConfiguredDefaultClientSettings({ showIncomingLevels: "true" }, { strict: true }),
+    /Invalid boolean value/
+  );
 });
 
 test("serializes client defaults as a safe browser script", () => {
   const script = serializeDefaultClientSettingsScript({
     audioProfile: "low",
     lockMultipleTargets: true,
+    showIncomingLevels: true,
   });
   assert.equal(
     script,
-    'window.TALKTOME_DEFAULT_CLIENT_SETTINGS = {"audioProfile":"low","lockMultipleTargets":true};\n'
+    'window.TALKTOME_DEFAULT_CLIENT_SETTINGS = {"audioProfile":"low","showIncomingLevels":true,"lockMultipleTargets":true};\n'
   );
+});
+
+test("incoming meter defaults apply until a user saves an explicit preference", () => {
+  const enabled = resolveDefaultClientSettings({ showIncomingLevels: true });
+  assert.equal(resolveUserAudioSettings({}, enabled).showIncomingLevels, true);
+  assert.equal(resolveUserAudioSettings({ showIncomingLevels: false }, enabled).showIncomingLevels, false);
+  const disabled = resolveDefaultClientSettings({ showIncomingLevels: false });
+  assert.equal(resolveUserAudioSettings({ showIncomingLevels: true }, disabled).showIncomingLevels, true);
 });

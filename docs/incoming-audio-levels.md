@@ -3,6 +3,8 @@
 Enable **Application menu → Controls → Incoming level meters** in the browser
 client. The option defaults to off and is saved in the user's audio settings.
 Admins and remote panels can also change that preference for a user.
+Admins can enable it as a client default under **Admin → Config → Client defaults**.
+Saved user preferences take precedence over that default.
 
 Each user, conference and feed target has a 6 × 36 px vertical meter between its
 icon and name. The display covers −90 to 0 dBFS so quiet background noise remains

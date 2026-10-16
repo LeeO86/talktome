@@ -123,6 +123,7 @@ const defaultClientDimSelf = document.getElementById('default-client-dim-self');
 const defaultClientDimIncoming = document.getElementById('default-client-dim-incoming');
 const defaultClientAudioProcessing = document.getElementById('default-client-audio-processing');
 const defaultClientConnectionSounds = document.getElementById('default-client-connection-sounds');
+const defaultClientIncomingLevels = document.getElementById('default-client-incoming-levels');
 const defaultClientLeftHand = document.getElementById('default-client-left-hand');
 const defaultClientLockMultiple = document.getElementById('default-client-lock-multiple');
 const adminImageLightbox = document.getElementById('admin-image-lightbox');
@@ -3151,6 +3152,7 @@ async function loadDefaultClientSettings() {
   if (defaultClientDimIncoming) defaultClientDimIncoming.checked = settings.dimWhenAddressed === true;
   if (defaultClientAudioProcessing) defaultClientAudioProcessing.checked = settings.audioAutoProcessing === true;
   if (defaultClientConnectionSounds) defaultClientConnectionSounds.checked = settings.playConnectionSounds !== false;
+  if (defaultClientIncomingLevels) defaultClientIncomingLevels.checked = settings.showIncomingLevels === true;
   if (defaultClientLeftHand) defaultClientLeftHand.checked = settings.leftHandMode === true;
   if (defaultClientLockMultiple) defaultClientLockMultiple.checked = settings.lockMultipleTargets === true;
   return payload;
@@ -4421,6 +4423,7 @@ if (defaultClientSettingsForm) {
       dimWhenAddressed: Boolean(defaultClientDimIncoming?.checked),
       audioAutoProcessing: Boolean(defaultClientAudioProcessing?.checked),
       playConnectionSounds: Boolean(defaultClientConnectionSounds?.checked),
+      showIncomingLevels: Boolean(defaultClientIncomingLevels?.checked),
       leftHandMode: Boolean(defaultClientLeftHand?.checked),
       lockMultipleTargets: Boolean(defaultClientLockMultiple?.checked),
     };
