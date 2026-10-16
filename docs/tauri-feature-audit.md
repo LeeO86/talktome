@@ -46,7 +46,9 @@ macros for the selected target, rather than every entry in `Cargo.lock`.
 
 Each app drops `brotli`, `brotli-decompressor`, `alloc-stdlib` and
 `alloc-no-stdlib`. Lockfile changes only prune those four packages and their
-references; the local `tray-icon` patch is retained.
+references; the local `tray-icon` patch was retained at the time of this audit.
+The subsequent [Server Rust update](server-rust-update.md) removes the last
+backport after both apps adopt the published fix.
 
 ## Executable measurement
 

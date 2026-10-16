@@ -10,7 +10,7 @@ name = "talktome_server_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2", features = [] }
+tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -19,13 +19,10 @@ chrono = "0.4"
 if-addrs = "0.13"
 # Capabilities are static; the small local UI does not need Brotli assets.
 # Keep the existing desktop backends and native window/tray integrations.
-tauri = { version = "2.11.2", default-features = false, features = ["wry", "common-controls-v6", "x11", "dbus", "macos-private-api", "tray-icon"] }
+tauri = { version = "2.12.4", default-features = false, features = ["wry", "common-controls-v6", "x11", "dbus", "macos-private-api", "tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSButton", "NSControl", "NSView", "NSWindow"] }
 window-vibrancy = "=0.6.0"
-
-[patch.crates-io]
-tray-icon = { path = "../../vendor/tray-icon" }

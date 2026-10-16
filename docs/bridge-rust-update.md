@@ -2,8 +2,8 @@
 
 This change carries forward the dependency group from the closed PR #150, with
 Tauri 2.12.4 and its matching build tools. The JavaScript and Rust URL opener
-components now both use 2.7.1. The Server's Rust dependency update (#153) remains
-separate.
+components now both use 2.7.1. The Server's Rust dependency update (#156) is
+[documented separately](server-rust-update.md).
 
 ## macOS tray compatibility
 
@@ -17,9 +17,10 @@ previously backported into `vendor/tray-icon`:
 
 The [0.25.1 release notes](https://github.com/tauri-apps/tray-icon/releases/tag/tray-icon-v0.25.1)
 confirm inclusion of this fix. Bridge therefore drops its obsolete Cargo patch.
-Server still uses Tauri 2.11 and retains the local backport and its regression
-test. The Bridge regression test separately requires the reviewed upstream
-0.25 patch series starting at 0.25.1; a future minor release requires review.
+The separate Server Rust update (#156) also moves Server to Tauri 2.12.4 and
+removes the remaining local backport. Both regression tests require the reviewed
+upstream 0.25 patch series starting at 0.25.1; a future minor release requires
+review. See [Server Rust update](server-rust-update.md).
 
 ## Retained behavior
 
