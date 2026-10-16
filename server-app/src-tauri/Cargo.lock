@@ -4989,7 +4989,3 @@ dependencies = [
  "syn 3.0.3",
  "winnow 1.0.3",
 ]
-
-[[patch.unused]]
-name = "tray-icon"
-version = "0.24.2"
