@@ -14,6 +14,7 @@ test('normalizes complete per-user audio settings', () => {
     dimWhenAddressed: false,
     audioAutoProcessing: true,
     playConnectionSounds: false,
+    showIncomingLevels: true,
     leftHandMode: true,
     lockMultipleTargets: true,
     userInputGainDb: 12.5,
@@ -27,6 +28,7 @@ test('normalizes complete per-user audio settings', () => {
     dimWhenAddressed: false,
     audioAutoProcessing: true,
     playConnectionSounds: false,
+    showIncomingLevels: true,
     leftHandMode: true,
     lockMultipleTargets: true,
     userInputGainDb: 12.5,
@@ -38,6 +40,9 @@ test('normalizes complete per-user audio settings', () => {
 
 test('resolves missing values and rejects unsafe settings', () => {
   assert.deepEqual(resolve(null), DEFAULTS);
+  assert.equal(resolve({}).showIncomingLevels, false);
+  assert.equal(resolve({ showIncomingLevels: true }).showIncomingLevels, true);
+  assert.throws(() => normalize({ showIncomingLevels: 'true' }, { strict: true }), /boolean/);
   assert.throws(() => normalize({ userInputGainDb: 80 }, { strict: true }), /mic gain/);
   assert.throws(() => normalize({ voiceTriggerTarget: 'feed:1' }, { strict: true }), /trigger target/);
 });

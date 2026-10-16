@@ -12,6 +12,7 @@
     dimWhenAddressed: true,
     audioAutoProcessing: false,
     playConnectionSounds: true,
+    showIncomingLevels: false,
     leftHandMode: false,
     lockMultipleTargets: false,
     userInputGainDb: 18,
@@ -40,7 +41,7 @@
       if (DIM_AMOUNT_DB_OPTIONS.includes(number)) output.dimAmountDb = number;
       else reject('Invalid dim amount.');
     }
-    ['dimFeedsWhileSpeaking', 'dimWhenAddressed', 'audioAutoProcessing', 'playConnectionSounds', 'leftHandMode', 'lockMultipleTargets', 'voiceTriggerEnabled']
+    ['dimFeedsWhileSpeaking', 'dimWhenAddressed', 'audioAutoProcessing', 'playConnectionSounds', 'showIncomingLevels', 'leftHandMode', 'lockMultipleTargets', 'voiceTriggerEnabled']
       .forEach((key) => {
         if (!has(key)) return;
         if (typeof value[key] === 'boolean') output[key] = value[key];

@@ -1076,12 +1076,49 @@
         background: #1f2937;
         border-radius: 6px;
         border: 1px solid transparent;
-        transition: all 0.2s ease;
+        transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
         cursor: pointer;
         user-select: none;
         touch-action: manipulation;
         overflow: hidden;
         position: relative;
+      }
+
+      /* Receive-only meters do not reserve space while disabled. */
+      .target-level-meter { display: none; }
+
+      body.show-incoming-levels #targets-list li.target-item {
+        grid-template-columns: auto 6px minmax(0, 1fr) auto;
+        grid-template-areas: "icon meter info actions";
+        column-gap: 0.45rem;
+      }
+
+      body.show-incoming-levels #targets-list .target-level-meter {
+        display: block;
+        grid-area: meter;
+        align-self: center;
+        width: 6px;
+        height: 36px;
+        position: relative;
+        overflow: hidden;
+        border-radius: 3px;
+        background: #0f172a;
+        box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.22);
+      }
+
+      .target-level-meter__fill {
+        position: absolute;
+        inset: 1px;
+        border-radius: 2px;
+        background: linear-gradient(to top, #4ade80 0% 81.33%, #facc15 90%, #f87171 97.33%);
+        clip-path: inset(calc(100% - var(--incoming-level, 0%)) 0 0);
+        transition: clip-path 90ms linear;
+      }
+
+      .target-level-meter.is-unavailable { opacity: 0.35; }
+
+      @media (prefers-reduced-motion: reduce) {
+        .target-level-meter__fill { transition: none; }
       }
 
       .conference-members-modal {
@@ -1559,6 +1596,11 @@
 
       body.left-hand-mode #targets-list li.target-item {
         grid-template-areas: "actions info icon";
+      }
+
+      body.left-hand-mode.show-incoming-levels #targets-list li.target-item {
+        grid-template-columns: auto minmax(0, 1fr) 6px auto;
+        grid-template-areas: "actions info meter icon";
       }
 
       body.left-hand-mode #targets-list .user-icon,
@@ -2571,6 +2613,13 @@
                   <span>Lock multiple targets</span>
                 </label>
               </div>
+              <div class="processing-options processing-options--close-to-previous">
+                <label class="settings-switch" title="Show received audio before playback volume and dimming.">
+                  <input type="checkbox" id="toggle-incoming-levels" role="switch" />
+                  <span class="settings-switch__track" aria-hidden="true"></span>
+                  <span>Incoming level meters</span>
+                </label>
+              </div>
               <button type="button" class="settings-nav-button feed-optional" id="shortcut-settings-open">
                 <span class="settings-nav-button__title">Keyboard shortcuts</span>
                 <span class="settings-nav-button__arrow" aria-hidden="true">&#8250;</span>
@@ -2832,6 +2881,7 @@
   <script src="/connectionHealth.js"></script>
   <script src="/remotePanelState.js"></script>
   <script src="/remotePanel.js"></script>
+  <script src="/incomingAudioLevels.js"></script>
   <script src="/client.js"></script>
   <script>
     (function () {

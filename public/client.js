@@ -175,6 +175,7 @@ const FEED_DIM_INCOMING_STORAGE_KEY = 'feedDimIncoming';
 const AUDIO_PROCESSING_STORAGE_KEY = 'audioProcessingEnabled';
 const AUDIO_PROCESSING_EXPLICIT_STORAGE_KEY = 'audioProcessingEnabledExplicit';
 const CONNECTION_SOUNDS_STORAGE_KEY = 'playConnectionSounds';
+const INCOMING_LEVELS_STORAGE_KEY = 'showIncomingLevels';
 const LEFT_HAND_MODE_STORAGE_KEY = 'leftHandModeEnabled';
 const LOCK_MULTIPLE_TARGETS_STORAGE_KEY = 'lockMultipleTargetsEnabled';
 const FEED_INPUT_GAIN_DB_STORAGE_KEY = 'feedInputGainDb';
@@ -303,6 +304,8 @@ const pendingOfflineUserTimers = new Map();
 let recoverExistingIncomingPlayback = () => {};
 let attemptPlayAudio = () => Promise.resolve();
 let persistUserAudioSettingsHandler = () => {};
+let syncIncomingLevelMeters = () => {};
+let showIncomingLevelsEnabled = false;
 let loadedTargetHotkeyStorageKey = null;
 
 let feedDuckingDb = hasServerDefaultClientSetting('dimAmountDb')
@@ -647,6 +650,8 @@ if (typeof window !== 'undefined') {
     if (storedConnectionSounds !== null) {
       playConnectionSoundsEnabled = storedConnectionSounds === 'true';
     }
+    const storedIncomingLevels = clientLocalStorage?.getItem(INCOMING_LEVELS_STORAGE_KEY);
+    if (storedIncomingLevels !== null) showIncomingLevelsEnabled = storedIncomingLevels === 'true';
     const storedLeftHandMode = clientLocalStorage?.getItem(LEFT_HAND_MODE_STORAGE_KEY);
     if (storedLeftHandMode !== null) {
       leftHandModeEnabled = storedLeftHandMode === 'true';
@@ -979,6 +984,7 @@ let dimWhileSpeakingToggle;
 let dimWhenAddressedToggle;
 let audioProcessingToggle;
 let connectionSoundsToggle;
+let incomingLevelsToggle;
 let leftHandModeToggle;
 let lockMultipleTargetsToggle;
 let userLevelControls;
@@ -3218,6 +3224,7 @@ document.addEventListener("DOMContentLoaded", () => {
   dimWhenAddressedToggle = document.getElementById('toggle-incoming-dim');
   audioProcessingToggle = document.getElementById('toggle-processing');
   connectionSoundsToggle = document.getElementById('toggle-connection-sounds');
+  incomingLevelsToggle = document.getElementById('toggle-incoming-levels');
   leftHandModeToggle = document.getElementById('toggle-left-hand-mode');
   lockMultipleTargetsToggle = document.getElementById('toggle-lock-multiple-targets');
   userLevelControls = document.getElementById('user-level-controls');
@@ -3361,6 +3368,26 @@ document.addEventListener("DOMContentLoaded", () => {
       setPlayConnectionSounds(connectionSoundsToggle.checked);
     });
   }
+
+  function setShowIncomingLevels(value, { persist = true } = {}) {
+    showIncomingLevelsEnabled = Boolean(value);
+    document.body.classList.toggle('show-incoming-levels', showIncomingLevelsEnabled && !remotePanel);
+    if (incomingLevelsToggle) incomingLevelsToggle.checked = showIncomingLevelsEnabled;
+    syncIncomingLevelMeters();
+    if (persist) {
+      try {
+        clientLocalStorage?.setItem(INCOMING_LEVELS_STORAGE_KEY, String(showIncomingLevelsEnabled));
+      } catch (error) {
+        console.warn('Unable to persist incoming level meters:', error);
+      }
+      persistUserAudioSettingsHandler();
+    }
+  }
+
+  setShowIncomingLevels(showIncomingLevelsEnabled, { persist: false });
+  incomingLevelsToggle?.addEventListener('change', () => {
+    setShowIncomingLevels(incomingLevelsToggle.checked);
+  });
 
   function setLeftHandMode(value, { persist = true } = {}) {
     leftHandModeEnabled = Boolean(value);
@@ -3792,6 +3819,67 @@ document.addEventListener("DOMContentLoaded", () => {
   const stoppedFeedKeys = new Set();
   const listenOnlyConferenceKeys = new Set();
   const activeFeedKeys = new Set();
+  const incomingLevelMonitor = window.TalktomeIncomingAudioLevels.createMonitor({
+    getTransport: () => recvTransport,
+    getBindings: () => {
+      const bindings = [];
+      for (const [streamKey, consumers] of peerConsumers) {
+        const entry = audioElements.get(streamKey);
+        if (!entry) continue;
+        for (const consumer of consumers) {
+          if (consumer.closed) continue;
+          let sources = [];
+          try { sources = consumer.rtpReceiver?.getSynchronizationSources?.() || []; } catch {}
+          bindings.push({
+            id: consumer.id,
+            targetKey: entry.key,
+            trackId: consumer.track?.id,
+            ssrcs: (consumer.rtpParameters?.encodings || []).map((encoding) => encoding.ssrc),
+            sources,
+            paused: consumer.paused,
+          });
+        }
+      }
+      return bindings;
+    },
+    onLevels: (levels) => {
+      document.querySelectorAll('#targets-list .target-level-meter').forEach((meter) => {
+        const level = levels.get(meter.parentElement.id) ?? 0;
+        const unavailable = levels.has(meter.parentElement.id) && levels.get(meter.parentElement.id) === null;
+        const percent = window.TalktomeIncomingAudioLevels.levelToPercent(level);
+        meter.style.setProperty('--incoming-level', `${percent.toFixed(1)}%`);
+        meter.classList.toggle('is-unavailable', unavailable);
+        meter.setAttribute('aria-valuenow', String(Math.round(percent)));
+        const description = unavailable ? 'Incoming level unavailable in this browser'
+          : percent > 0 ? `Incoming audio: ${Math.round(20 * Math.log10(level))} dBFS`
+          : 'No incoming audio';
+        meter.setAttribute('aria-valuetext', description);
+        meter.title = `${description}. Measured before playback volume and dimming.`;
+      });
+    },
+  });
+  syncIncomingLevelMeters = () => {
+    incomingLevelMonitor.setEnabled(showIncomingLevelsEnabled && !remotePanel
+      && isOperatorSession() && document.visibilityState !== 'hidden');
+  };
+  document.addEventListener('visibilitychange', syncIncomingLevelMeters);
+
+  function createTargetLevelMeter() {
+    const meter = document.createElement('span');
+    meter.className = 'target-level-meter';
+    meter.setAttribute('role', 'meter');
+    meter.setAttribute('aria-label', 'Incoming audio level');
+    meter.setAttribute('aria-valuemin', '0');
+    meter.setAttribute('aria-valuemax', '100');
+    meter.setAttribute('aria-valuenow', '0');
+    meter.setAttribute('aria-valuetext', 'No incoming audio');
+    meter.title = 'Incoming audio before playback volume and dimming';
+    const fill = document.createElement('span');
+    fill.className = 'target-level-meter__fill';
+    meter.append(fill);
+    return meter;
+  }
+
   collectMediaConsumerNetworkStats = async () => {
     const consumerEntries = [];
     for (const [streamKey, consumers] of peerConsumers.entries()) {
@@ -5476,6 +5564,7 @@ let cachedOperatorTargets = null;
       const audioEl = stored.audio;
       disposePlaybackEntry(stored);
       audioElements.delete(streamKey);
+      syncIncomingLevelMeters();
 
       if (stored.type === 'feed') {
         const feedId = Number(targetKey.split('-')[1]);
@@ -5506,6 +5595,7 @@ let cachedOperatorTargets = null;
     targetStreamMap.clear();
     peerConsumers.clear();
     audioElements.clear();
+    syncIncomingLevelMeters();
     earlyClosedConsumerIds.clear();
     earlyClosedStreamKeys.clear();
     pendingAutoplayAudios.clear();
@@ -6371,6 +6461,7 @@ let cachedOperatorTargets = null;
         if (entry) {
           disposePlaybackEntry(entry);
           audioElements.delete(streamKey);
+          syncIncomingLevelMeters();
           const feedId = Number(session.feedId);
           feedAudioElements.get(feedId)?.delete(entry.audio);
         }
@@ -8763,6 +8854,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       dimWhenAddressed: feedDimIncoming,
       audioAutoProcessing: audioProcessingEnabled,
       playConnectionSounds: playConnectionSoundsEnabled,
+      showIncomingLevels: showIncomingLevelsEnabled,
       leftHandMode: leftHandModeEnabled,
       lockMultipleTargets: lockMultipleTargetsEnabled,
       userInputGainDb,
@@ -8798,6 +8890,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     setFeedDimIncoming(settings.dimWhenAddressed, { persist: false });
     setAudioProcessingEnabled(settings.audioAutoProcessing, { persist: false });
     setPlayConnectionSounds(settings.playConnectionSounds, { persist: false });
+    setShowIncomingLevels(settings.showIncomingLevels, { persist: false });
     setLeftHandMode(settings.leftHandMode, { persist: false });
     setLockMultipleTargets(settings.lockMultipleTargets, { persist: false });
     setUserInputGainDb(Number(settings.userInputGainDb), { persist: false });
@@ -9347,9 +9440,9 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       applyMuteVisualState(li, initialMuted);
 
       if (isOnline) {
-        li.append(icon, info, actions, hint);
+        li.append(icon, createTargetLevelMeter(), info, actions, hint);
       } else {
-        li.append(icon, info, actions);
+        li.append(icon, createTargetLevelMeter(), info, actions);
       }
 
       if (isOnline) {
@@ -9913,7 +10006,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
       if (!canTalk) {
         actions.append(muteBtn);
-        li.append(icon, info, actions);
+        li.append(icon, createTargetLevelMeter(), info, actions);
         list.appendChild(li);
         return;
       }
@@ -9990,7 +10083,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
       actions.append(muteBtn, talkBtn);
 
-      li.append(icon, info, actions, hint);
+      li.append(icon, createTargetLevelMeter(), info, actions, hint);
 
       const lockEntry = getTalkLockEntry({ type: 'conference', id });
       if (lockEntry) {
@@ -10161,7 +10254,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       actions.classList.add('ptt-actions');
       actions.append(muteBtn, receptionBtn);
 
-      li.append(icon, info, actions);
+      li.append(icon, createTargetLevelMeter(), info, actions);
       list.appendChild(li);
     };
 
@@ -10237,6 +10330,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
     if (feedsToRemove.length) {
       applyFeedDucking();
+      syncIncomingLevelMeters();
     }
 
     let removedUnavailableLock = false;
@@ -10685,6 +10779,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
           : Number(cachedUsers.find((candidate) => String(candidate?.socketId) === String(peerId))?.userId) || null,
       };
       audioElements.set(streamKey, entry);
+      syncIncomingLevelMeters();
       if (!usesSharedAudioElement) {
         audioEntryMap.set(audio, entry);
       }
@@ -10756,6 +10851,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
         disposePlaybackEntry(entry);
         audioElements.delete(streamKey);
+        syncIncomingLevelMeters();
 
         if (entry.type === 'feed') {
           const feedId = Number(normalizedAppData.id);
@@ -11208,6 +11304,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       }
     }
 
+    syncIncomingLevelMeters();
   });
 
 

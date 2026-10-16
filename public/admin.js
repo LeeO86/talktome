@@ -5244,6 +5244,7 @@ function renderUserAudioSettingsFields(settings, targets = []) {
     <label class="user-audio-settings-switch"><span>Dim when addressed</span><span class="admin-switch"><input id="admin-dim-addressed" type="checkbox" role="switch" ${checked('dimWhenAddressed')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Audio auto processing</span><span class="admin-switch"><input id="admin-auto-processing" type="checkbox" role="switch" ${checked('audioAutoProcessing')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Play connection sounds</span><span class="admin-switch"><input id="admin-connection-sounds" type="checkbox" role="switch" ${checked('playConnectionSounds')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Incoming level meters</span><span class="admin-switch"><input id="admin-incoming-levels" type="checkbox" role="switch" ${checked('showIncomingLevels')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Left-hand mode</span><span class="admin-switch"><input id="admin-left-hand" type="checkbox" role="switch" ${checked('leftHandMode')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Lock multiple targets</span><span class="admin-switch"><input id="admin-lock-multiple" type="checkbox" role="switch" ${checked('lockMultipleTargets')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-mic-gain"><span>Manual mic gain</span><output id="admin-mic-gain-value">${Number(settings.userInputGainDb).toFixed(1)} dB</output></label><input id="admin-mic-gain" type="range" min="-30" max="40" step="0.5" value="${settings.userInputGainDb}"></div>
@@ -5297,6 +5298,7 @@ userAudioSettingsForm?.addEventListener('submit', async (event) => {
     dimWhenAddressed: document.getElementById('admin-dim-addressed').checked,
     audioAutoProcessing: document.getElementById('admin-auto-processing').checked,
     playConnectionSounds: document.getElementById('admin-connection-sounds').checked,
+    showIncomingLevels: document.getElementById('admin-incoming-levels').checked,
     leftHandMode: document.getElementById('admin-left-hand').checked,
     lockMultipleTargets: document.getElementById('admin-lock-multiple').checked,
     userInputGainDb: Number(document.getElementById('admin-mic-gain').value),
