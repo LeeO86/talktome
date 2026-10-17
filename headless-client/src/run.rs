@@ -98,6 +98,7 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
 
     let session = Session::new(
         config.clone(),
+        config_path.clone(),
         SessionIo {
             commands: cmd_rx,
             snapshots: snapshot_tx,
@@ -105,6 +106,7 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
             frames: frames_rx,
             audio_status: audio_io.status.clone(),
             processing,
+            audio_devices: audio_io.devices.clone(),
             shutdown: shutdown_rx,
         },
     )?;

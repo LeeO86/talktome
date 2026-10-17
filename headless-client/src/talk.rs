@@ -184,6 +184,18 @@ impl TalkModel {
         self.vox_target = target;
     }
 
+    pub fn vox_target(&self) -> Option<TargetKey> {
+        self.vox_target
+    }
+
+    pub fn lock_multiple(&self) -> bool {
+        self.lock_multiple
+    }
+
+    pub fn set_lock_multiple(&mut self, enabled: bool) {
+        self.lock_multiple = enabled;
+    }
+
     pub fn locked(&self) -> &BTreeSet<TargetKey> {
         &self.locked
     }
@@ -287,6 +299,36 @@ impl TalkModel {
             true
         };
         Some(self.change(Some((key, now_locked))))
+    }
+
+    /// Releases every key `source` holds, without the tap-to-lock rule: the
+    /// admin remote panel sends its own `lock` after a tap.
+    pub fn release_source(&mut self, source: &InputSource) -> Option<TalkChange> {
+        let before = self.held.len();
+        self.held.retain(|(held_by, _), _| held_by != source);
+        (self.held.len() != before).then(|| self.change(None))
+    }
+
+    /// Locks or unlocks a target. `None` when it is already in that state or
+    /// cannot be talked to.
+    pub fn set_lock(&mut self, target: TargetRef, locked: bool) -> Option<TalkChange> {
+        let key = self.resolve(target)?;
+        if self.locked.contains(&key) == locked {
+            return None;
+        }
+        if locked {
+            self.lock(key);
+        } else {
+            self.locked.remove(&key);
+        }
+        Some(self.change(Some((key, locked))))
+    }
+
+    /// Stops all held and locked talk; an active VOX keeps talking.
+    pub fn stop(&mut self) -> TalkChange {
+        self.held.clear();
+        self.locked.clear();
+        self.change(None)
     }
 
     pub fn clear_locks(&mut self) -> TalkChange {
@@ -401,6 +443,23 @@ impl AudioState {
     pub fn set_volume(&mut self, key: TargetKey, volume: f32) -> AudioLevel {
         let mut level = self.level(key);
         level.volume = volume.clamp(0.0, 1.0);
+        self.levels.insert(key, level.clone());
+        level
+    }
+
+    pub fn set_level(
+        &mut self,
+        key: TargetKey,
+        volume: Option<f32>,
+        muted: Option<bool>,
+    ) -> AudioLevel {
+        let mut level = self.level(key);
+        if let Some(volume) = volume {
+            level.volume = volume.clamp(0.0, 1.0);
+        }
+        if let Some(muted) = muted {
+            level.muted = muted;
+        }
         self.levels.insert(key, level.clone());
         level
     }
@@ -640,6 +699,27 @@ mod tests {
             TalkModel::resolve_reply_target(None, [conference]),
             conference
         );
+    }
+
+    #[test]
+    fn panel_release_never_locks_and_lock_is_explicit() {
+        let mut model = TalkModel::new(250, false);
+        let conf = TargetKey::Conference(1);
+        let panel = InputSource::Companion("panel:a:main".into());
+        let now = Instant::now();
+        model
+            .press(panel.clone(), TargetRef::Key(conf), now)
+            .unwrap();
+        // A tap: the panel releases and then sends its own lock.
+        let change = model.release_source(&panel).unwrap();
+        assert!(!change.talking);
+        assert!(model.release_source(&panel).is_none());
+        let change = model.set_lock(TargetRef::Key(conf), true).unwrap();
+        assert_eq!(change.lock_toggled, Some((conf, true)));
+        assert!(model.set_lock(TargetRef::Key(conf), true).is_none());
+        assert!(model.is_talking());
+        let change = model.stop();
+        assert!(!change.talking && !change.lock_active);
     }
 
     #[test]

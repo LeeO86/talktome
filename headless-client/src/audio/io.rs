@@ -37,9 +37,45 @@ impl AudioStatus {
 }
 
 /// Handle to the audio thread.
+/// Device switch requests for the audio thread (remote panel), applied
+/// without a restart. `Some(None)` means the system default device.
+#[derive(Debug, Clone, Default)]
+pub struct DeviceSwitch(Arc<Mutex<PendingSwitch>>);
+
+/// Requested (capture, playback) devices not yet applied.
+type PendingSwitch = (Option<Option<String>>, Option<Option<String>>);
+
+impl DeviceSwitch {
+    pub fn request_input(&self, device: Option<String>) {
+        if let Ok(mut pending) = self.0.lock() {
+            pending.0 = Some(device);
+        }
+    }
+
+    pub fn request_output(&self, device: Option<String>) {
+        if let Ok(mut pending) = self.0.lock() {
+            pending.1 = Some(device);
+        }
+    }
+
+    fn take(&self) -> PendingSwitch {
+        self.0
+            .lock()
+            .map(|mut pending| std::mem::take(&mut *pending))
+            .unwrap_or_default()
+    }
+}
+
+/// True for `tone`, `wav:` and `none`, which run without an ALSA device and
+/// cannot be switched while running.
+pub fn is_virtual_device(device: &Option<String>) -> bool {
+    !wanted(device) || tone_frequency(device).is_some() || wav_sink_path(device).is_some()
+}
+
 pub struct AudioIo {
     stop: Arc<AtomicBool>,
     pub status: watch::Receiver<AudioStatus>,
+    pub devices: DeviceSwitch,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -66,6 +102,8 @@ impl AudioIo {
             delay_ms: snapshot.delay_ms,
         });
         let thread_stop = stop.clone();
+        let devices = DeviceSwitch::default();
+        let thread_devices = devices.clone();
         let thread = thread::Builder::new()
             .name("talktome-audio".into())
             .spawn(move || {
@@ -77,12 +115,14 @@ impl AudioIo {
                     processing,
                     status_tx,
                     thread_stop,
+                    thread_devices,
                 )
             })
             .expect("spawning audio thread");
         Self {
             stop,
             status: status_rx,
+            devices,
             thread: Some(thread),
         }
     }
@@ -196,14 +236,16 @@ fn run_wav_sink(path: std::path::PathBuf, mixer: Arc<Mutex<Mixer>>, stop: Arc<At
     let _ = writer.finalize();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_supervisor(
-    config: AudioConfig,
+    mut config: AudioConfig,
     frame_samples: usize,
     mixer: Arc<Mutex<Mixer>>,
     frames: mpsc::Sender<Vec<f32>>,
     processing: Arc<ProcessingControl>,
     status_tx: watch::Sender<AudioStatus>,
     stop: Arc<AtomicBool>,
+    devices: DeviceSwitch,
 ) {
     let mut capture_wanted = wanted(&config.input_device);
     let mut playback_wanted = wanted(&config.output_device);
@@ -232,6 +274,23 @@ fn run_supervisor(
 
     while !stop.load(Ordering::Relaxed) {
         let now = Instant::now();
+
+        // The session only sends real ALSA devices here, never tone/wav.
+        let (input, output) = devices.take();
+        if let Some(device) = input {
+            tracing::info!(event = "audio-device-switch", direction = "capture", device = ?device);
+            config.input_device = device;
+            capture = None;
+            capture_wanted = true;
+            next_attempt = now;
+        }
+        if let Some(device) = output {
+            tracing::info!(event = "audio-device-switch", direction = "playback", device = ?device);
+            config.output_device = device;
+            playback = None;
+            playback_wanted = true;
+            next_attempt = now;
+        }
 
         if let Some(open) = capture.as_ref() {
             if open.failed.load(Ordering::Relaxed) {

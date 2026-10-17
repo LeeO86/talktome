@@ -7,5 +7,6 @@ pub const REGISTERED_CLIENT_TYPE: &str = "headless";
 
 pub mod alerts;
 pub mod http;
+pub mod panel;
 pub mod session;
 pub mod socketio;

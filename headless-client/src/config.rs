@@ -1005,6 +1005,25 @@ pub fn write_document(path: &Path, doc: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Sets `section.key` values in the configuration file, keeping the rest.
+/// A null value removes the key.
+pub fn update_values(path: &Path, values: &[(&str, &str, Value)]) -> Result<()> {
+    let mut document = read_document(path)?;
+    let root = document
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("configuration file is not an object"))?;
+    for (section, key, value) in values {
+        let table = root
+            .entry(section.to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if !table.is_object() {
+            *table = Value::Object(Default::default());
+        }
+        table[*key] = value.clone();
+    }
+    write_document(path, &document)
+}
+
 /// Reads the raw configuration document currently stored in `path` (without
 /// environment overrides).
 pub fn read_document(path: &Path) -> Result<Value> {
