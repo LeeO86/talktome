@@ -96,69 +96,73 @@
 
       <section id="view-status" class="view">
         <div class="grid status-grid">
-          <article class="card card-connection">
-            <header class="card-header">
-              <h2>Connection</h2>
-              <span id="conn-state" class="badge">offline</span>
-            </header>
-            <dl class="kv" id="conn-details"></dl>
-          </article>
+          <div class="status-col status-col-connection">
+            <article class="card card-connection">
+              <header class="card-header">
+                <h2>Connection</h2>
+                <span id="conn-state" class="badge">offline</span>
+              </header>
+              <dl class="kv" id="conn-details"></dl>
+            </article>
+          </div>
+          <div class="status-col status-col-io">
+            <article class="card card-audio">
+              <header class="card-header">
+                <h2>Audio</h2>
+                <span id="audio-state" class="badge">unknown</span>
+              </header>
+              <dl class="kv" id="audio-details"></dl>
+              <div class="meter" aria-label="Input level">
+                <div id="input-meter" class="meter__bar"></div>
+                <span id="input-level" class="meter__label">-∞ dBFS</span>
+              </div>
+            </article>
 
-          <article class="card card-audio">
-            <header class="card-header">
-              <h2>Audio</h2>
-              <span id="audio-state" class="badge">unknown</span>
-            </header>
-            <dl class="kv" id="audio-details"></dl>
-            <div class="meter" aria-label="Input level">
-              <div id="input-meter" class="meter__bar"></div>
-              <span id="input-level" class="meter__label">-∞ dBFS</span>
-            </div>
-          </article>
+            <article class="card card-gpio">
+              <header class="card-header">
+                <h2>GPIO</h2>
+                <span id="gpio-state" class="badge">disabled</span>
+              </header>
+              <div id="gpio-error" class="form-message"></div>
+              <h3 class="subheading">Outputs</h3>
+              <table class="table" id="gpio-outputs">
+                <thead><tr><th>Output</th><th>Line</th><th>State</th></tr></thead>
+                <tbody></tbody>
+              </table>
+              <h3 class="subheading">Inputs</h3>
+              <table class="table" id="gpio-inputs">
+                <thead><tr><th>Line</th><th>Action</th><th>Target</th><th>State</th><th>Events</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </article>
+          </div>
+          <div class="status-col status-col-system">
+            <article class="card card-service">
+              <header class="card-header">
+                <h2>Service</h2>
+                <span id="service-state" class="badge">running</span>
+              </header>
+              <dl class="kv" id="service-details"></dl>
+            </article>
 
-          <article class="card card-gpio">
-            <header class="card-header">
-              <h2>GPIO</h2>
-              <span id="gpio-state" class="badge">disabled</span>
-            </header>
-            <div id="gpio-error" class="form-message"></div>
-            <h3 class="subheading">Outputs</h3>
-            <table class="table" id="gpio-outputs">
-              <thead><tr><th>Output</th><th>Line</th><th>State</th></tr></thead>
-              <tbody></tbody>
-            </table>
-            <h3 class="subheading">Inputs</h3>
-            <table class="table" id="gpio-inputs">
-              <thead><tr><th>Line</th><th>Action</th><th>Target</th><th>State</th><th>Events</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </article>
+            <article class="card card-deck">
+              <header class="card-header">
+                <h2>Stream Deck</h2>
+                <span id="deck-state" class="badge">disabled</span>
+              </header>
+              <dl class="kv" id="deck-details"></dl>
+              <a href="#deck" class="btn btn-small" data-view="deck">Open deck view</a>
+            </article>
 
-          <article class="card card-socket">
-            <header class="card-header">
-              <h2>Local socket</h2>
-              <span id="socket-state" class="badge">disabled</span>
-            </header>
-            <div id="socket-error" class="form-message"></div>
-            <dl class="kv" id="socket-details"></dl>
-          </article>
-
-          <article class="card card-deck">
-            <header class="card-header">
-              <h2>Stream Deck</h2>
-              <span id="deck-state" class="badge">disabled</span>
-            </header>
-            <dl class="kv" id="deck-details"></dl>
-            <a href="#deck" class="btn btn-small" data-view="deck">Open deck view</a>
-          </article>
-
-          <article class="card card-service">
-            <header class="card-header">
-              <h2>Service</h2>
-              <span id="service-state" class="badge">running</span>
-            </header>
-            <dl class="kv" id="service-details"></dl>
-          </article>
+            <article class="card card-socket">
+              <header class="card-header">
+                <h2>Local socket</h2>
+                <span id="socket-state" class="badge">disabled</span>
+              </header>
+              <div id="socket-error" class="form-message"></div>
+              <dl class="kv" id="socket-details"></dl>
+            </article>
+          </div>
         </div>
       </section>
 

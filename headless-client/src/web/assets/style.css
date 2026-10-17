@@ -157,8 +157,14 @@ main {
   padding: 5.25rem 0 3rem;
 }
 
+/* The remote control uses the whole window: a wide screen fits every
+   intercom button in one row. */
+body[data-view='remote'] .topbar {
+  width: calc(100% - 0.5rem);
+}
+
 body[data-view='remote'] main {
-  width: min(calc(100% - 0.5rem), 1100px);
+  width: calc(100% - 0.5rem);
   padding: 5.25rem 0 0;
   height: 100dvh;
   display: flex;
@@ -177,44 +183,39 @@ body[data-view='remote'] #flash {
   align-items: start;
 }
 
+/* Status page: three columns that each stack their own cards, so a tall
+   Connection card never leaves holes next to the shorter ones. */
+.status-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.status-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.card-deck .btn {
+  margin-top: 0.9rem;
+}
+
 @media (min-width: 761px) and (max-width: 959px) {
   .status-grid {
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      'connection audio'
-      'gpio deck'
-      'service service';
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .status-col-system {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
   }
 }
 
 @media (min-width: 960px) {
   .status-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-template-areas:
-      'connection audio gpio'
-      'deck service service';
-  }
-}
-
-@media (min-width: 761px) {
-  .status-grid .card-connection {
-    grid-area: connection;
-  }
-
-  .status-grid .card-audio {
-    grid-area: audio;
-  }
-
-  .status-grid .card-gpio {
-    grid-area: gpio;
-  }
-
-  .status-grid .card-deck {
-    grid-area: deck;
-  }
-
-  .status-grid .card-service {
-    grid-area: service;
   }
 }
 
@@ -484,12 +485,6 @@ body[data-view='remote'] #flash {
 @media (min-width: 900px) and (max-width: 1366px) and (orientation: landscape) and (pointer: coarse) {
   #targets-list {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 1367px) and (max-width: 1599px) {
-  #targets-list {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -1318,6 +1313,7 @@ body:not([data-view='remote']) .reply-bar {
 
 .field {
   display: grid;
+  align-content: start;
   gap: 0.3rem;
   margin: 0;
   min-width: 0;
@@ -1361,15 +1357,26 @@ body:not([data-view='remote']) .reply-bar {
 
 .field .help {
   font-size: 0.76rem;
+  font-weight: 400;
+  line-height: 1.35;
   color: var(--muted);
 }
 
+/* Checkboxes sit on the same line as the input boxes next to them,
+   below the space a label takes. */
 .field-check {
   display: flex;
   align-items: center;
+  align-self: start;
   gap: 0.6rem;
   min-height: var(--control-height);
+  margin-top: calc(0.82rem * 1.5 + 0.3rem);
   font-weight: 600;
+}
+
+.list-row .field-check {
+  align-self: end;
+  margin-top: 0;
 }
 
 .field-check input {
@@ -1389,12 +1396,28 @@ body:not([data-view='remote']) .reply-bar {
 .settings-form summary {
   cursor: pointer;
   padding: 0.75rem 1rem;
+  border-radius: var(--radius);
   font-weight: 600;
   list-style: none;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.15rem 0.85rem;
   align-items: center;
+}
+
+.settings-form summary:focus {
+  outline: none;
+}
+
+.settings-form summary:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.6);
+  outline-offset: -2px;
+}
+
+.settings-form details[open] summary {
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  margin-bottom: 1rem;
 }
 
 .settings-form summary::-webkit-details-marker {
@@ -1439,10 +1462,10 @@ body:not([data-view='remote']) .reply-bar {
 
 .fields {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 20rem));
-  gap: 0.75rem 1rem;
-  padding: 0 1rem 1rem;
-  justify-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 1rem 1.25rem;
+  padding: 0 1rem 1.1rem;
+  align-items: start;
 }
 
 .fields .wide {
