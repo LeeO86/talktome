@@ -424,6 +424,7 @@ ensureColumn("users", "login_token_hash", "TEXT");
 ensureColumn("users", "last_online_at", "TEXT");
 ensureColumn("users", "audio_settings", "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn("users", "panel_settings", "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("users", "allow_target_rearrange", "INTEGER");
 ensureColumn("feeds", "login_token_hash", "TEXT");
 ensureColumn("user_bridge_endpoints", "trigger_mode", "TEXT NOT NULL DEFAULT 'external'");
 ensureColumn("user_bridge_endpoints", "trigger_target_type", "TEXT NOT NULL DEFAULT ''");
@@ -431,6 +432,8 @@ ensureColumn("user_bridge_endpoints", "trigger_target_id", "INTEGER");
 ensureColumn("user_bridge_endpoints", "trigger_threshold_db", "REAL NOT NULL DEFAULT -45");
 ensureColumn("user_bridge_endpoints", "production_id", "INTEGER REFERENCES productions(id) ON DELETE SET NULL");
 ensureColumn("feed_bridge_endpoints", "production_id", "INTEGER REFERENCES productions(id) ON DELETE SET NULL");
+ensureColumn("user_bridge_endpoints", "audio_levels", "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("feed_bridge_endpoints", "audio_levels", "TEXT NOT NULL DEFAULT '{}'");
 
 // Bridge endpoints are global inputs/outputs. Production membership only
 // controls which browser clients can see and use the associated user/feed.

@@ -126,6 +126,7 @@ const defaultClientConnectionSounds = document.getElementById('default-client-co
 const defaultClientIncomingLevels = document.getElementById('default-client-incoming-levels');
 const defaultClientLeftHand = document.getElementById('default-client-left-hand');
 const defaultClientLockMultiple = document.getElementById('default-client-lock-multiple');
+const defaultClientAllowTargetRearrange = document.getElementById('default-client-allow-target-rearrange');
 const adminImageLightbox = document.getElementById('admin-image-lightbox');
 const adminImageLightboxClose = document.getElementById('admin-image-lightbox-close');
 const adminImageLightboxTitle = document.getElementById('admin-image-lightbox-title');
@@ -2630,6 +2631,27 @@ async function refreshAdminLists({ users: refreshUsers = false, conferences: ref
   }
 }
 
+async function saveUserTargetRearrange(userId, toggle) {
+  const allowed = toggle.checked;
+  toggle.disabled = true;
+  try {
+    const response = await authedFetch(`/admin/users/${userId}/target-rearrange`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allowTargetRearrange: allowed }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Failed to save target rearrange permission');
+    toggle.checked = payload.allowTargetRearrange;
+    showMessage('✅ Target rearrange permission saved', 'success', 'users');
+  } catch (error) {
+    toggle.checked = !allowed;
+    showMessage(`❌ ${error.message}`, 'error', 'users');
+  } finally {
+    toggle.disabled = false;
+  }
+}
+
 async function renderUserList(users, conferences, feeds, bridges = currentBridgeRegistry) {
   currentBridgeRegistry = Array.isArray(bridges) ? bridges : [];
   targetAssignmentsByUser.clear();
@@ -2692,7 +2714,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
 
     const bridgeControls = !isSuperadmin && !isGuestProfile
       ? `
-        <div class="nested-block">
+        <div class="nested-block user-bridge-controls">
           <form class="bridge-config-form" id="bridge-config-${user.id}" data-bridge-config-user-id="${user.id}" onsubmit="saveBridgeEndpoint(event, ${user.id})">
             <label class="admin-switch bridge-input-switch" for="bridge-enabled-${user.id}">
               <input type="checkbox" id="bridge-enabled-${user.id}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
@@ -2753,12 +2775,13 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
         </div>
       `
       : '';
-    const targetControls = isSuperadmin || multipleProductionsEnabled
+    const targetControls = isSuperadmin
       ? ''
       : `
-        <div class="nested-block">
+        <div class="nested-block user-target-controls">
           <strong>Target Buttons</strong>
           <div class="inline-controls">
+            ${multipleProductionsEnabled ? '' : `
             <select id="add-target-type-${user.id}">
               <option value="user">User</option>
               <option value="conference">Conference</option>
@@ -2766,8 +2789,14 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
             </select>
             <select id="add-target-id-${user.id}"></select>
             <button type="button" id="add-target-btn-${user.id}" class="small" onclick="addTarget(${user.id})">Add target</button>
+            `}
+            <label class="admin-switch" title="Allow this user to change the order of their target buttons">
+              <input type="checkbox" role="switch" onchange="saveUserTargetRearrange(${user.id}, this)" ${user.allowTargetRearrange ? 'checked' : ''} ${isGuestProfile ? 'disabled' : ''}>
+              <span class="admin-switch__track" aria-hidden="true"></span>
+              <span>Allow target rearrange</span>
+            </label>
           </div>
-          <ul id="user-targets-${user.id}"></ul>
+          ${multipleProductionsEnabled ? '' : `<ul id="user-targets-${user.id}"></ul>`}
         </div>
       `;
     const detailControls = targetControls || bridgeControls
@@ -3155,6 +3184,7 @@ async function loadDefaultClientSettings() {
   if (defaultClientIncomingLevels) defaultClientIncomingLevels.checked = settings.showIncomingLevels === true;
   if (defaultClientLeftHand) defaultClientLeftHand.checked = settings.leftHandMode === true;
   if (defaultClientLockMultiple) defaultClientLockMultiple.checked = settings.lockMultipleTargets === true;
+  if (defaultClientAllowTargetRearrange) defaultClientAllowTargetRearrange.checked = settings.allowTargetRearrange !== false;
   return payload;
 }
 
@@ -4426,6 +4456,7 @@ if (defaultClientSettingsForm) {
       showIncomingLevels: Boolean(defaultClientIncomingLevels?.checked),
       leftHandMode: Boolean(defaultClientLeftHand?.checked),
       lockMultipleTargets: Boolean(defaultClientLockMultiple?.checked),
+      allowTargetRearrange: Boolean(defaultClientAllowTargetRearrange?.checked),
     };
 
     if (submitButton) submitButton.disabled = true;
@@ -4438,6 +4469,7 @@ if (defaultClientSettingsForm) {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'Failed to save default client settings');
       await loadDefaultClientSettings();
+      await refreshAdminLists({ users: true });
       showMessage('✅ Default client settings saved', 'success', 'config');
     } catch (error) {
       console.error('Failed to save default client settings:', error);
@@ -5244,13 +5276,13 @@ function renderUserAudioSettingsFields(settings, targets = []) {
     <div class="user-audio-settings-row"><label for="admin-audio-profile">Audio profile</label><select id="admin-audio-profile">${options(settingsApi.AUDIO_PROFILES, settings.audioProfile, (value) => ({ 'ultra-low': 'Ultra low (5 ms frame)', low: 'Low (10 ms frame)', standard: 'Standard (20 ms frame)' }[value]))}</select></div>
     <div class="user-audio-settings-row"><label for="admin-dim-amount">Dim amount</label><select id="admin-dim-amount">${options(settingsApi.DIM_AMOUNT_DB_OPTIONS, settings.dimAmountDb, (value) => `${value} dB`)}</select></div>
     <label class="user-audio-settings-switch"><span>Dim feeds while speaking</span><span class="admin-switch"><input id="admin-dim-speaking" type="checkbox" role="switch" ${checked('dimFeedsWhileSpeaking')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
-    <label class="user-audio-settings-switch"><span>Dim when addressed</span><span class="admin-switch"><input id="admin-dim-addressed" type="checkbox" role="switch" ${checked('dimWhenAddressed')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Dim feeds when addressed</span><span class="admin-switch"><input id="admin-dim-addressed" type="checkbox" role="switch" ${checked('dimWhenAddressed')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Audio auto processing</span><span class="admin-switch"><input id="admin-auto-processing" type="checkbox" role="switch" ${checked('audioAutoProcessing')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Play connection sounds</span><span class="admin-switch"><input id="admin-connection-sounds" type="checkbox" role="switch" ${checked('playConnectionSounds')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Incoming level meters</span><span class="admin-switch"><input id="admin-incoming-levels" type="checkbox" role="switch" ${checked('showIncomingLevels')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Left-hand mode</span><span class="admin-switch"><input id="admin-left-hand" type="checkbox" role="switch" ${checked('leftHandMode')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Lock multiple targets</span><span class="admin-switch"><input id="admin-lock-multiple" type="checkbox" role="switch" ${checked('lockMultipleTargets')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
-    <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-mic-gain"><span>Manual mic gain</span><output id="admin-mic-gain-value">${Number(settings.userInputGainDb).toFixed(1)} dB</output></label><input id="admin-mic-gain" type="range" min="-30" max="40" step="0.5" value="${settings.userInputGainDb}"></div>
+    <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-mic-gain"><span>Manual mic gain</span><output id="admin-mic-gain-value">${Number(settings.userInputGainDb).toFixed(1)} dB</output></label><input id="admin-mic-gain" type="range" min="-40" max="40" step="0.5" value="${settings.userInputGainDb}"></div>
     <label class="user-audio-settings-switch"><span>Level trigger</span><span class="admin-switch"><input id="admin-level-trigger" type="checkbox" role="switch" ${checked('voiceTriggerEnabled')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <div class="user-audio-settings-row"><label for="admin-level-target">Target</label><select id="admin-level-target"><option value="">Select target</option>${targetOptions}</select></div>
     <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-level-threshold"><span>Threshold</span><output id="admin-level-threshold-value">${Number(settings.voiceTriggerThresholdDb).toFixed(1)} dB</output></label><input id="admin-level-threshold" type="range" min="-60" max="-6" step="1" value="${settings.voiceTriggerThresholdDb}"></div>

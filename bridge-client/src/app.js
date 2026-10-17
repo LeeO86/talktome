@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { audioLevels, audioMeter, gainLabel, renderPortAudioControl } from './portAudioControls.js';
 
 const deviceList = document.getElementById("device-list");
 const deviceSummary = document.getElementById("device-summary");
@@ -42,6 +43,7 @@ const MANAGED_INVENTORY_WATCH_MS = 5_000;
 const MANAGED_INVENTORY_RETRY_MS = 30_000;
 const MANAGED_RETRY_MS = 2_000;
 const MANAGED_LEVEL_TRIGGER_POLL_MS = 50;
+const MANAGED_LEVEL_TEXT_REFRESH_MS = 250;
 const MANAGED_LEVEL_TRIGGER_ATTACK_MS = 45;
 const MANAGED_LEVEL_TRIGGER_RELEASE_MS = 450;
 const MANAGED_INPUT_ACTIVITY_GRACE_MS = 2000;
@@ -99,6 +101,10 @@ const managedPortDraftRevisions = new Map();
 const managedPortAutoSaveTimers = new Map();
 const managedPortSaveInFlight = new Set();
 const managedPortSaveQueued = new Set();
+const managedAudioEdits = new Map();
+let managedAudioPopover = null;
+let managedAudioMeterTimer = null;
+let managedAudioMeterBusy = false;
 
 function withTimeout(promise, milliseconds, label) {
   return new Promise((resolve, reject) => {
@@ -1044,6 +1050,228 @@ function formatManagedReturnPathStatus(session) {
   return base;
 }
 
+function audioEditKey(port, direction) { return `${bridgePortKey(port)}:${direction}`; }
+
+function getManagedAudioLevel(port, direction) {
+  const edit = managedAudioEdits.get(audioEditKey(port, direction));
+  return audioLevels.normalizeLevel(edit?.dirty ? edit.level : port.audioLevels?.[direction], direction);
+}
+
+async function applyManagedPortAudioLevel(port, direction, level = getManagedAudioLevel(port, direction)) {
+  if (!invoke) throw new Error('Native audio control is unavailable');
+  await invoke('set_bridge_port_audio_level', { request: { portId: port.id, direction, level } });
+}
+
+async function syncManagedPortAudioLevels(port) {
+  for (const direction of ['input', 'output']) {
+    if (direction === 'output' && !bridgePortHasOutput(port)) continue;
+    const edit = managedAudioEdits.get(audioEditKey(port, direction));
+    if (edit?.dirty) continue;
+    const session = managedSessions.get(bridgePortKey(port));
+    const level = getManagedAudioLevel(port, direction);
+    const signature = JSON.stringify(level);
+    session.appliedAudioLevels ||= {};
+    if (session.appliedAudioLevels[direction] !== signature) {
+      await applyManagedPortAudioLevel(port, direction, level);
+      session.appliedAudioLevels[direction] = signature;
+    }
+  }
+}
+
+function managedAudioControl(port, direction) {
+  return getManagedPortElement(bridgePortKey(port))?.querySelector(`[data-audio-direction="${direction}"]`);
+}
+
+function updateManagedAudioControl(port, direction) {
+  const control = managedAudioControl(port, direction);
+  if (!control) return;
+  const level = getManagedAudioLevel(port, direction);
+  const edit = managedAudioEdits.get(audioEditKey(port, direction));
+  const button = control.querySelector('[data-audio-open]');
+  button.title = `${direction === 'input' ? 'Input gain' : 'Output volume'}: ${gainLabel(level)}`;
+  button.classList.toggle('is-adjusted', level.gainDb !== 0 || level.muted);
+  for (const selector of ['[data-audio-range]', '[data-audio-number]']) {
+    const input = control.querySelector(selector);
+    if (input !== document.activeElement) input.value = String(level.gainDb);
+  }
+  control.querySelector('[data-audio-mute]').checked = level.muted;
+  control.querySelector('[data-audio-mute-label]').textContent = level.muted ? 'Muted' : 'Mute';
+  const [min, max] = audioLevels.LIMITS[direction];
+  control.querySelector('[data-audio-step="-0.5"]').disabled = level.gainDb <= min;
+  control.querySelector('[data-audio-step="0.5"]').disabled = level.gainDb >= max;
+  const status = control.querySelector('[data-audio-save]');
+  status.textContent = edit?.error || (edit?.dirty || edit?.saving ? 'Saving…' : 'Saved');
+  status.classList.toggle('is-error', Boolean(edit?.error));
+  control.querySelector('[data-audio-retry]').hidden = !edit?.error;
+}
+
+async function persistManagedAudioLevel(port, direction) {
+  const edit = managedAudioEdits.get(audioEditKey(port, direction));
+  if (!edit?.dirty || edit.saving) return;
+  edit.saving = true;
+  const revision = edit.revision;
+  const level = { ...edit.level };
+  try {
+    await edit.nativePromise;
+    const result = await bridgeApi('PUT', `/api/v1/bridge/${encodeURIComponent(managedBridgeConfig.bridgeId)}/ports/${port.kind}/${bridgePortTargetId(port)}/levels/${direction}`, level);
+    port.audioLevels = { ...port.audioLevels, [direction]: result.audioLevels[direction] };
+    const current = (managedBridgeConfig?.ports || []).find(entry => bridgePortKey(entry) === bridgePortKey(port));
+    if (current) current.audioLevels = { ...current.audioLevels, [direction]: result.audioLevels[direction] };
+    if (edit.revision === revision) { edit.dirty = false; edit.error = null; }
+  } catch (error) {
+    edit.error = String(error?.message || error);
+  } finally {
+    edit.saving = false;
+    updateManagedAudioControl(port, direction);
+    if (edit.revision !== revision) {
+      clearTimeout(edit.timer);
+      edit.timer = setTimeout(() => persistManagedAudioLevel(port, direction), 0);
+    }
+  }
+}
+
+function changeManagedAudioLevel(port, direction, value) {
+  const key = audioEditKey(port, direction);
+  const edit = managedAudioEdits.get(key) || { revision: 0 };
+  const normalized = audioLevels.normalizeLevel(value, direction);
+  const previous = getManagedAudioLevel(port, direction);
+  if (!edit.error && normalized.gainDb === previous.gainDb && normalized.muted === previous.muted) return;
+  edit.level = normalized;
+  edit.revision++;
+  edit.dirty = true;
+  edit.error = null;
+  // Preserve the ordering of drag updates at the native command boundary.
+  const level = { ...edit.level };
+  edit.nativePromise = (edit.nativePromise || Promise.resolve()).catch(() => {}).then(() => applyManagedPortAudioLevel(port, direction, level));
+  edit.nativePromise.catch(() => {});
+  managedAudioEdits.set(key, edit);
+  clearTimeout(edit.timer);
+  edit.timer = setTimeout(() => persistManagedAudioLevel(port, direction), 250);
+  updateManagedAudioControl(port, direction);
+}
+
+function closeManagedAudioPopover(restoreFocus = true) {
+  if (!managedAudioPopover) return;
+  const { panel, button } = managedAudioPopover;
+  managedAudioPopover = null;
+  panel.hidden = true;
+  button.setAttribute('aria-expanded', 'false');
+  clearInterval(managedAudioMeterTimer);
+  managedAudioMeterTimer = null;
+  if (restoreFocus) button.focus({ preventScroll: true });
+}
+
+function positionManagedAudioPopover() {
+  if (!managedAudioPopover) return;
+  const { panel, button } = managedAudioPopover;
+  const box = button.getBoundingClientRect();
+  panel.style.left = `${Math.max(8, Math.min(innerWidth - panel.offsetWidth - 8, box.right - panel.offsetWidth))}px`;
+  panel.style.top = `${Math.max(8, box.bottom + panel.offsetHeight + 8 > innerHeight ? box.top - panel.offsetHeight - 8 : box.bottom + 8)}px`;
+}
+
+async function pollManagedAudioMeter() {
+  const open = managedAudioPopover;
+  if (!open || !invoke || managedAudioMeterBusy || document.hidden) return;
+  managedAudioMeterBusy = true;
+  try {
+    const status = await invoke('get_bridge_media_status');
+    if (managedAudioPopover !== open) return;
+    const rows = open.direction === 'input'
+      ? (status.inputStreamStats || []).filter(row => row.streamId === `${open.port.id}:input`)
+      : (status.outputStreamStats || []).filter(row => row.streamId.startsWith(`${open.port.id}:consumer:`));
+    const now = Date.now();
+    let rmsDb = -120;
+    let active = false;
+    for (const row of rows) {
+      const frames = row.capturedFrames ?? row.decodedFrames;
+      const previous = open.meters.get(row.streamId);
+      const changed = frames > 0 && frames !== previous?.frames;
+      const at = changed ? now : previous?.at || 0;
+      const clipped = Number(row.clippedSamples || 0);
+      if (previous && clipped > previous.clipped) open.clipUntil = now + 1200;
+      open.meters.set(row.streamId, { frames, at, clipped });
+      if (now - at > 500 || !Number.isFinite(row.rmsDb)) continue;
+      active = true;
+      rmsDb = Math.max(rmsDb, row.rmsDb);
+    }
+    const meter = open.panel.querySelector('[role="meter"]');
+    const meterMinDb = Number(meter.getAttribute('aria-valuemin'));
+    const displayedDb = Math.max(meterMinDb, Math.min(0, rmsDb));
+    meter.setAttribute('aria-valuenow', String(displayedDb));
+    const fill = open.panel.querySelector('[data-audio-meter-fill]');
+    audioMeter.renderLevel(fill, (displayedDb - meterMinDb) / -meterMinDb * 100, meterMinDb);
+    const muted = getManagedAudioLevel(open.port, open.direction).muted;
+    const inputSession = open.direction === 'input' ? managedSessions.get(bridgePortKey(open.port)) : null;
+    if (inputSession) {
+      updateManagedInputLevelDisplay(inputSession, rows[0]);
+    } else if (open.levelTextActive !== active || open.levelTextMuted !== muted
+      || now - (open.lastLevelTextAt || 0) >= MANAGED_LEVEL_TEXT_REFRESH_MS) {
+      const label = open.direction === 'input' ? 'Input level' : 'Output level';
+      open.panel.querySelector('[data-audio-meter-label]').textContent = `${label}: ${active ? `${rmsDb.toFixed(1)} dBFS` : 'No audio'}${muted ? ' - Muted' : ''}`;
+      open.lastLevelTextAt = now;
+      open.levelTextActive = active;
+      open.levelTextMuted = muted;
+    }
+    open.panel.querySelector('[data-audio-clip]').hidden = now > (open.clipUntil || 0);
+  } catch {
+    if (managedAudioPopover === open) {
+      open.panel.querySelector('[data-audio-meter-label]').textContent = 'Meter unavailable';
+      open.lastLevelTextAt = 0;
+    }
+  } finally { managedAudioMeterBusy = false; }
+}
+
+function handleManagedAudioClick(event) {
+  const control = event.target.closest('[data-audio-direction]');
+  if (!control) return;
+  const key = control.closest('[data-managed-port-key]')?.dataset.managedPortKey;
+  const port = (managedBridgeConfig?.ports || []).find(port => bridgePortKey(port) === key);
+  if (!port) return;
+  const direction = control.dataset.audioDirection;
+  if (event.target.closest('[data-audio-open]')) {
+    const button = control.querySelector('[data-audio-open]');
+    const wasOpen = managedAudioPopover?.button === button;
+    closeManagedAudioPopover(false);
+    if (wasOpen) return;
+    const panel = control.querySelector('.port-audio-popover');
+    panel.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    managedAudioPopover = { port, direction, panel, button, meters: new Map() };
+    positionManagedAudioPopover();
+    updateManagedAudioControl(port, direction);
+    panel.querySelector('[data-audio-range]').focus({ preventScroll: true });
+    pollManagedAudioMeter();
+    managedAudioMeterTimer = setInterval(pollManagedAudioMeter, 125);
+  } else if (event.target.closest('[data-audio-close]')) closeManagedAudioPopover();
+  else if (event.target.closest('[data-audio-step]')) {
+    const level = getManagedAudioLevel(port, direction);
+    const step = Number(event.target.closest('[data-audio-step]').dataset.audioStep);
+    changeManagedAudioLevel(port, direction, { ...level, gainDb: level.gainDb + step });
+  }
+  else if (event.target.closest('[data-audio-reset]')) changeManagedAudioLevel(port, direction, { gainDb: 0, muted: false });
+  else if (event.target.closest('[data-audio-retry]')) changeManagedAudioLevel(port, direction, getManagedAudioLevel(port, direction));
+}
+
+function handleManagedAudioInput(event) {
+  const input = event.target;
+  if (!input.matches('[data-audio-range], [data-audio-number], [data-audio-mute]')) return;
+  if (input.matches('[data-audio-mute]') && event.type !== 'change') return;
+  const control = input.closest('[data-audio-direction]');
+  const port = (managedBridgeConfig?.ports || []).find(port => bridgePortKey(port) === control.closest('[data-managed-port-key]').dataset.managedPortKey);
+  if (!port) return;
+  const direction = control.dataset.audioDirection;
+  const level = getManagedAudioLevel(port, direction);
+  if (input.matches('[data-audio-mute]')) level.muted = input.checked;
+  else {
+    if (!input.value.trim() || !Number.isFinite(Number(input.value))) return;
+    level.gainDb = Number(input.value);
+  }
+  changeManagedAudioLevel(port, direction, level);
+  if (event.type === 'change' && input.matches('[data-audio-number]')) {
+    input.value = String(getManagedAudioLevel(port, direction).gainDb);
+  }
+}
+
 function renderManagedAssignmentControls(port, direction, assignment) {
   const device = findDeviceByDirectionAndId(direction, assignment.deviceId);
   const labelPrefix = direction === "output" ? "Output" : "Input";
@@ -1054,6 +1282,7 @@ function renderManagedAssignmentControls(port, direction, assignment) {
         ${buildManagedDeviceOptions(direction, assignment.deviceId)}
       </select>
     </label>
+    ${renderPortAudioControl(escapeHtml(port.id), direction, getManagedAudioLevel(port, direction))}
     <label class="managed-port-control managed-port-control--channel">
       <span>${labelPrefix} channel</span>
       <select data-managed-port-control data-field="${direction}Channel">
@@ -1428,6 +1657,7 @@ function finishManagedRangeInteraction() {
 }
 
 function renderManagedBridgePorts() {
+  if (managedAudioPopover) return;
   const activeElement = document.activeElement;
   const managedControlFocused = (
     activeElement instanceof HTMLElement
@@ -1540,7 +1770,8 @@ async function startManagedConsumer(session, producerPayload) {
     const reserved = await invoke("reserve_bridge_output", {
       request: {
         streamId,
-        assignment: session.port.output
+        assignment: session.port.output,
+        audioLevel: getManagedAudioLevel(session.port, 'output')
       }
     });
     const consumer = await bridgeApi("POST", managedSessionPath(session, "/consumers"), {
@@ -1576,6 +1807,7 @@ async function startManagedConsumer(session, producerPayload) {
       {}
     );
     await applyManagedOutputAudioState(session, output);
+    await applyManagedPortAudioLevel(session.port, 'output');
   } catch (error) {
     session.outputs.delete(producerId);
     await invoke("stop_bridge_output", { streamId }).catch(() => {});
@@ -1786,28 +2018,50 @@ function updateManagedInputLevelDisplay(session, inputStats) {
 
   const rmsDb = Number(inputStats?.rmsDb);
   const capturedFrames = Number(inputStats?.capturedFrames);
-  const elapsed = Date.now() - Number(session.inputStartedAt || Date.now());
-  display.classList.remove("warning");
+  const now = Date.now();
+  const elapsed = now - Number(session.inputStartedAt || now);
+  const muted = getManagedAudioLevel(session.port, 'input').muted;
+  const mode = muted ? 'muted'
+    : Number.isFinite(capturedFrames) && capturedFrames <= 0
+      ? elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS ? 'no-input' : 'waiting'
+      : !Number.isFinite(rmsDb) ? 'unavailable'
+        : elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS && rmsDb <= -119.9 ? 'silent' : 'active';
+  const previous = session.inputLevelTextUpdate;
+  const popoverLabel = managedAudioPopover?.direction === 'input'
+    && bridgePortKey(managedAudioPopover.port) === bridgePortKey(session.port)
+    ? managedAudioPopover.panel.querySelector('[data-audio-meter-label]') : null;
+  if (previous?.display === display && previous.mode === mode
+    && now - previous.at < MANAGED_LEVEL_TEXT_REFRESH_MS) {
+    if (popoverLabel) popoverLabel.textContent = display.textContent;
+    return;
+  }
+  session.inputLevelTextUpdate = { display, mode, at: now };
+  let text;
+  let warning = false;
 
-  if (Number.isFinite(capturedFrames) && capturedFrames <= 0) {
-    display.textContent = elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS
-      ? "No input audio — check microphone permission"
+  if (muted) {
+    text = Number.isFinite(rmsDb)
+      ? `Input level: ${rmsDb.toFixed(1)} dBFS - Muted`
+      : 'Input level: Muted';
+    warning = true;
+  } else if (Number.isFinite(capturedFrames) && capturedFrames <= 0) {
+    text = elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS
+      ? "No input audio - check microphone permission"
       : "Input level: waiting…";
-    display.classList.toggle("warning", elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS);
-    return;
+    warning = elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS;
+  } else if (!Number.isFinite(rmsDb)) {
+    text = "Input level unavailable";
+    warning = true;
+  } else {
+    text = `Input level: ${rmsDb.toFixed(1)} dBFS`;
+    if (elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS && rmsDb <= -119.9) {
+      text += " - check device and channels";
+      warning = true;
+    }
   }
-
-  if (!Number.isFinite(rmsDb)) {
-    display.textContent = "Input level unavailable";
-    display.classList.add("warning");
-    return;
-  }
-
-  display.textContent = `Input level: ${rmsDb.toFixed(1)} dBFS`;
-  if (elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS && rmsDb <= MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB) {
-    display.textContent += " — check device and channels";
-    display.classList.add("warning");
-  }
+  display.textContent = text;
+  display.classList.toggle('warning', warning);
+  if (popoverLabel) popoverLabel.textContent = text;
 }
 
 async function sendManagedCommandResult(session, payload, result) {
@@ -2368,11 +2622,13 @@ async function heartbeatManagedSessions() {
           ? null
           : (input || outputs.length ? { input, outputs } : null),
         networkStats: Number.isFinite(session.lastHeartbeatRoundTripMs)
+          && performance.now() - session.lastHeartbeatMeasuredAt < 30_000
           ? { roundTripMs: session.lastHeartbeatRoundTripMs }
           : null,
         lifecycleEvents: session.lifecycleEvents?.splice(0) || []
       });
       session.lastHeartbeatRoundTripMs = Math.round(performance.now() - heartbeatStartedAt);
+      session.lastHeartbeatMeasuredAt = performance.now();
       if (session.error && session.statusLabel === "Server offline") {
         session.error = null;
         session.statusLabel = null;
@@ -2626,7 +2882,8 @@ async function startManagedInputPath(session, { reason = "input-start" } = {}) {
         rtpIp: transport.ip,
         rtpPort: Number(transport.port),
         payloadType: rtp.payloadType,
-        ssrc: rtp.ssrc
+        ssrc: rtp.ssrc,
+        audioLevel: getManagedAudioLevel(session.port, 'input')
       }
     });
     session.inputStartedAt = Date.now();
@@ -2793,6 +3050,7 @@ async function stopManagedSession(session, { remove = true, reason = "client-sto
 async function reconcileManagedBridgeConfig(config) {
   managedBridgeConfig = config;
   const wanted = new Map((config?.ports || []).map((port) => [bridgePortKey(port), port]));
+  if (managedAudioPopover && !wanted.has(bridgePortKey(managedAudioPopover.port))) closeManagedAudioPopover(false);
 
   for (const [key, session] of [...managedSessions.entries()]) {
     const nextPort = wanted.get(key);
@@ -2808,6 +3066,7 @@ async function reconcileManagedBridgeConfig(config) {
     const levelTriggerWasEnabled = isManagedLevelTriggerEnabled(session.port);
     session.port = nextPort;
     session.signature = nextSignature;
+    await syncManagedPortAudioLevels(nextPort);
     if (
       !isManagedLevelTriggerEnabled(nextPort)
       && (
@@ -3625,8 +3884,8 @@ function renderStoppedPort(row) {
   updatePortControlState(row);
   row.refs.leftDb.textContent = "-120.0 dBFS";
   row.refs.rightDb.textContent = "-120.0 dBFS";
-  row.refs.leftMeter.style.width = "0%";
-  row.refs.rightMeter.style.width = "0%";
+  audioMeter.renderLevel(row.refs.leftMeter, 0);
+  audioMeter.renderLevel(row.refs.rightMeter, 0);
   row.refs.status.textContent = "Stopped";
 }
 
@@ -3635,8 +3894,8 @@ function renderRunningPort(row, status) {
   updatePortControlState(row);
   row.refs.leftDb.textContent = formatDb(status.rms_left_db);
   row.refs.rightDb.textContent = formatDb(status.rms_right_db);
-  row.refs.leftMeter.style.width = `${meterPercent(status.rms_left_db)}%`;
-  row.refs.rightMeter.style.width = `${meterPercent(status.rms_right_db)}%`;
+  audioMeter.renderLevel(row.refs.leftMeter, meterPercent(status.rms_left_db));
+  audioMeter.renderLevel(row.refs.rightMeter, meterPercent(status.rms_right_db));
 
   const inputConfig = status.input_config
     ? `${status.input_config.channels} ch ${status.input_config.sample_rate} Hz ${status.input_config.sample_format}`
@@ -3876,6 +4135,17 @@ omtRuntimeLink?.addEventListener("click", openOmtInformation);
 autostartInput.addEventListener("change", setAutostartState);
 bridgePorts?.addEventListener("change", handleManagedPortControlChange);
 bridgePorts?.addEventListener("input", handleManagedPortControlChange);
+bridgePorts?.addEventListener('click', handleManagedAudioClick);
+bridgePorts?.addEventListener('input', handleManagedAudioInput);
+bridgePorts?.addEventListener('change', handleManagedAudioInput);
+document.addEventListener('pointerdown', event => {
+  if (managedAudioPopover && !event.target.closest('[data-audio-direction]')) closeManagedAudioPopover(false);
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && managedAudioPopover) { event.preventDefault(); closeManagedAudioPopover(); }
+});
+window.addEventListener('resize', positionManagedAudioPopover);
+document.querySelector('.shell')?.addEventListener('scroll', positionManagedAudioPopover);
 bridgePorts?.addEventListener("pointerdown", startManagedRangeInteraction);
 window.addEventListener("pointerup", finishManagedRangeInteraction);
 window.addEventListener("pointercancel", finishManagedRangeInteraction);

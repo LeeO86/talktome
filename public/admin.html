@@ -824,6 +824,14 @@
         margin-top: 1.5rem;
       }
 
+      .user-target-controls + .user-bridge-controls {
+        margin-top: 0.65rem;
+      }
+
+      .user-bridge-controls .bridge-config-form {
+        margin-top: 0;
+      }
+
       .bridge-config-form {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4378,7 +4386,7 @@
                     </span>
                   </label>
                   <label class="default-client-setting-toggle">
-                    <span>Dim when addressed</span>
+                    <span>Dim feeds when addressed</span>
                     <span class="admin-switch">
                       <input type="checkbox" id="default-client-dim-incoming" role="switch" />
                       <span class="admin-switch__track" aria-hidden="true"></span>
@@ -4419,6 +4427,13 @@
                     <span>Lock multiple targets</span>
                     <span class="admin-switch">
                       <input type="checkbox" id="default-client-lock-multiple" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  <label class="default-client-setting-toggle" title="Allow users to change the order of their target buttons. Can be overridden per user.">
+                    <span>Allow target rearrange</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-allow-target-rearrange" role="switch" />
                       <span class="admin-switch__track" aria-hidden="true"></span>
                     </span>
                   </label>

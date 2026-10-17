@@ -46,7 +46,7 @@ const {
   serializeDefaultClientSettingsScript,
 } = require("./defaultClientSettings");
 const { stopPeerTransmission } = require("./transmissionControl");
-const { validateCompleteTargetOrder } = require("./targetOrdering");
+const { canUserRearrangeTargets, validateCompleteTargetOrder } = require("./targetOrdering");
 const { resolveActiveProductionSelection } = require("./productionSelection");
 const { createTallyStateStore, normalizeTallyBus } = require("./tallyState");
 const {
@@ -169,7 +169,10 @@ const {
   updateUserPanelSettings,
   mergeUserTargetAudioStates,
   updateUserAudioSettings,
+  updateUserTargetRearrangePermission,
   getBridgeEndpointsForDevice,
+  getBridgePortAudioLevels,
+  updateBridgePortAudioLevel,
   getFeedBridgeEndpointsForDevice,
   getAllConferences,
   getAllFeeds,
@@ -347,6 +350,8 @@ if (!fs.existsSync(publicDir)) {
 }
 
 function getConfigPath() {
+  const explicitConfigPath = String(process.env.TALKTOME_CONFIG_PATH || '').trim();
+  if (explicitConfigPath) return path.resolve(explicitConfigPath);
   if (!process.pkg && fs.existsSync(legacyConfigPath)) {
     return legacyConfigPath;
   }
@@ -1471,6 +1476,7 @@ function buildBridgeRuntimeConfig(bridgeId) {
       userId: Number(row.user_id),
       feedId: null,
       label: row.user_name || `User ${row.user_id}`,
+      audioLevels: getBridgePortAudioLevels('user', row.user_id),
       enabled: true,
       input: {
         deviceId: row.input_device,
@@ -1505,6 +1511,7 @@ function buildBridgeRuntimeConfig(bridgeId) {
       userId: null,
       feedId: Number(row.feed_id),
       label: row.feed_name || `Feed ${row.feed_id}`,
+      audioLevels: getBridgePortAudioLevels('feed', row.feed_id),
       enabled: true,
       input: {
         deviceId: row.input_device,
@@ -2811,7 +2818,34 @@ function emitCompanionTallyEvent(productionId, payload) {
 
 // === GET ===
 app.get("/users", requireAdmin, (req, res) => {
-  res.json(getAllUsers());
+  const defaults = resolveDefaultClientSettings((loadRuntimeConfig() || {}).defaultClientSettings);
+  res.json(getAllUsers().map(user => ({
+    ...user,
+    allowTargetRearrange: canUserRearrangeTargets(user, defaults),
+  })));
+});
+
+function isTargetRearrangeAllowed(user) {
+  return canUserRearrangeTargets(user, (loadRuntimeConfig() || {}).defaultClientSettings);
+}
+
+function emitTargetRearrangePermission(user) {
+  findUserPeerByUserId(user.id)?.peer?.socket?.emit('target-rearrange-permission-updated', {
+    allowed: isTargetRearrangeAllowed(user),
+  });
+}
+
+app.put('/admin/users/:id/target-rearrange', requireAdmin, (req, res) => {
+  const user = getUserById(req.params.id);
+  if (!user || user.is_superadmin) return res.status(404).json({ error: 'User not found' });
+  const allowed = req.body?.allowTargetRearrange;
+  if (allowed !== null && typeof allowed !== 'boolean') {
+    return res.status(400).json({ error: 'allowTargetRearrange must be boolean or null' });
+  }
+  updateUserTargetRearrangePermission(user.id, allowed);
+  const updated = getUserById(user.id);
+  emitTargetRearrangePermission(updated);
+  res.json({ ok: true, allowTargetRearrange: isTargetRearrangeAllowed(updated) });
 });
 
 function getResolvedUserAudioSettings(userId) {
@@ -2929,7 +2963,7 @@ app.put('/api/v1/client/targets/order', (req, res) => {
   }
   const userId = Number(browserSession.userId);
   const user = getUserById(userId);
-  if (!user || user.is_superadmin || user.is_guest_profile) {
+  if (!isTargetRearrangeAllowed(user)) {
     return res.status(403).json({ error: 'User cannot arrange targets' });
   }
 
@@ -3737,23 +3771,54 @@ function getFreshBrowserMediaStats(peer, now = Date.now()) {
   };
 }
 
+function isFreshBridgeNetworkMetric(stats, timestampKey, now) {
+  const reportedAt = stats?.[timestampKey] ?? stats?.reportedAt;
+  return Number.isFinite(reportedAt) && now - reportedAt <= BRIDGE_NETWORK_STATS_STALE_MS;
+}
+
+function recordBridgeNetworkStats(session, reportedStats, packetStats, now = Date.now()) {
+  const previous = session.networkStats || {};
+  const stats = {
+    ...previous,
+    roundTripReportedAt: previous.roundTripReportedAt ?? previous.reportedAt ?? null,
+    packetStatsReportedAt: previous.packetStatsReportedAt ?? previous.reportedAt ?? null,
+    reportedAt: now,
+  };
+  const roundTripMs = reportedStats?.roundTripMs;
+  if (Number.isFinite(roundTripMs) && roundTripMs >= 0 && roundTripMs <= 60_000) {
+    stats.roundTripMs = Math.round(roundTripMs);
+    stats.roundTripReportedAt = now;
+  }
+  if (packetStats) {
+    stats.packetsReceived = packetStats.packetsReceived;
+    stats.packetsLost = packetStats.packetsLost;
+    const total = stats.packetsReceived + stats.packetsLost;
+    stats.packetLossPercent = total > 0 ? Math.round(1000 * stats.packetsLost / total) / 10 : null;
+    stats.packetStatsReportedAt = now;
+  }
+  session.networkStats = stats;
+}
+
 function getFreshBridgeNetworkStats(session, now = Date.now()) {
   const stats = session?.networkStats;
-  if (!Number.isFinite(stats?.reportedAt) || now - stats.reportedAt > BRIDGE_NETWORK_STATS_STALE_MS) return null;
+  const roundTripFresh = isFreshBridgeNetworkMetric(stats, 'roundTripReportedAt', now);
+  const packetsFresh = isFreshBridgeNetworkMetric(stats, 'packetStatsReportedAt', now);
+  if (!roundTripFresh && !packetsFresh) return null;
   return {
-    roundTripMs: stats.roundTripMs,
-    packetLossPercent: stats.packetLossPercent,
+    roundTripMs: roundTripFresh && Number.isFinite(stats.roundTripMs) ? stats.roundTripMs : null,
+    packetLossPercent: packetsFresh && Number.isFinite(stats.packetLossPercent) ? stats.packetLossPercent : null,
   };
 }
 
 function getBridgeAggregateNetworkStats(bridgeId, now = Date.now()) {
-  const stats = [...bridgeControlSessions.values()]
+  const sessions = [...bridgeControlSessions.values()]
     .filter((session) => !session.closed && session.bridgeId === bridgeId)
-    .map((session) => session.networkStats)
-    .filter((entry) => Number.isFinite(entry?.reportedAt) && now - entry.reportedAt <= BRIDGE_NETWORK_STATS_STALE_MS);
-  if (!stats.length) return null;
-  const roundTrips = stats.map((entry) => entry.roundTripMs).filter(Number.isFinite);
-  const packetStats = stats.filter((entry) => Number.isFinite(entry.packetsReceived) && Number.isFinite(entry.packetsLost));
+    .filter((session) => getFreshBridgeNetworkStats(session, now));
+  if (!sessions.length) return null;
+  const roundTrips = sessions.map((session) => getFreshBridgeNetworkStats(session, now).roundTripMs).filter(Number.isFinite);
+  const packetStats = sessions.map((session) => session.networkStats)
+    .filter((entry) => isFreshBridgeNetworkMetric(entry, 'packetStatsReportedAt', now)
+      && Number.isFinite(entry.packetsReceived) && Number.isFinite(entry.packetsLost));
   const packetsReceived = packetStats.reduce((total, entry) => total + entry.packetsReceived, 0);
   const packetsLost = packetStats.reduce((total, entry) => total + entry.packetsLost, 0);
   return {
@@ -3778,10 +3843,12 @@ async function collectBridgeInputPacketStats(peer) {
       const received = Number(entry.packetCount);
       const reportedLost = Number(entry.packetsLost);
       // mediasoup can expose a negative loss correction as an unsigned 32-bit value.
-      const lost = reportedLost > 0x7fffffff && reportedLost <= 0xffffffff
-        ? Math.max(0, reportedLost - 0x100000000)
+      if (!Number.isSafeInteger(received) || received < 0 || !Number.isSafeInteger(reportedLost)) continue;
+      const signedLost = reportedLost > 0x7fffffff && reportedLost <= 0xffffffff
+        ? reportedLost - 0x100000000
         : reportedLost;
-      if (!Number.isSafeInteger(received) || received < 0 || !Number.isSafeInteger(lost) || lost < 0) continue;
+      // Duplicate/reordered RTP packets can make the signed cumulative loss negative.
+      const lost = Math.max(0, signedLost);
       packetsReceived += received;
       packetsLost += lost;
       hasPackets = true;
@@ -4505,6 +4572,7 @@ app.put("/admin/settings/default-client", requireAdmin, (req, res) => {
       defaultClientSettings: settings,
     };
     const configPath = saveRuntimeConfig(updatedConfig);
+    getAllUsers().forEach(emitTargetRearrangePermission);
     return res.json({
       settings: resolveDefaultClientSettings(settings),
       configured: true,
@@ -5156,6 +5224,21 @@ app.get("/api/v1/bridge/:bridgeId/config", requireBridgeApiAuth, (req, res) => {
   res.json(buildBridgeRuntimeConfig(req.params.bridgeId));
 });
 
+app.put('/api/v1/bridge/:bridgeId/ports/:kind/:id/levels/:direction', requireBridgeApiAuth, (req, res) => {
+  const bridgeId = normalizeBridgeId(req.params.bridgeId);
+  if (!canBridgeAuthAccessBridge(req.bridgeApiAuth, bridgeId)) return res.status(403).json({ error: 'Bridge access denied' });
+  const { kind, direction } = req.params;
+  const id = Number(req.params.id);
+  const port = buildBridgeRuntimeConfig(bridgeId).ports.find(port => port.kind === kind && Number(port.userId ?? port.feedId) === id);
+  if (!port) return res.status(404).json({ error: 'Bridge port not assigned to this bridge' });
+  try {
+    const audioLevels = updateBridgePortAudioLevel(kind, id, direction, req.body);
+    res.json({ ok: true, audioLevels });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.put("/api/v1/bridge/:bridgeId/ports/:kind/:id", requireBridgeApiAuth, (req, res) => {
   const bridgeId = normalizeBridgeId(req.params.bridgeId);
   if (!canBridgeAuthAccessBridge(req.bridgeApiAuth, bridgeId)) {
@@ -5259,11 +5342,6 @@ app.post(
   requireBridgeControlSession,
   async (req, res) => {
     logBridgeMediaDiagnostics(req.bridgeSession, req.body?.mediaDiagnostics);
-    const reportedRoundTripMs = req.body?.networkStats?.roundTripMs;
-    const roundTripMs = Number.isFinite(reportedRoundTripMs)
-      && reportedRoundTripMs >= 0 && reportedRoundTripMs <= 60_000
-      ? Math.round(reportedRoundTripMs)
-      : null;
     let packetStats = null;
     try {
       packetStats = await collectBridgeInputPacketStats(req.bridgePeer);
@@ -5271,18 +5349,7 @@ app.post(
       console.warn(`[MEDIA][BRIDGE][STATS] Failed to collect input RTP stats: ${error?.message || error}`);
     }
     if (!req.bridgeSession.closed) {
-      const packetsReceived = packetStats?.packetsReceived ?? null;
-      const packetsLost = packetStats?.packetsLost ?? null;
-      const packetTotal = (packetsReceived ?? 0) + (packetsLost ?? 0);
-      req.bridgeSession.networkStats = {
-        roundTripMs,
-        packetsReceived,
-        packetsLost,
-        packetLossPercent: packetTotal > 0
-          ? Math.round(1000 * packetsLost / packetTotal) / 10
-          : null,
-        reportedAt: Date.now(),
-      };
+      recordBridgeNetworkStats(req.bridgeSession, req.body?.networkStats, packetStats);
       scheduleAdminStatusBroadcast("bridge-network-stats");
     }
     for (const entry of Array.isArray(req.body?.lifecycleEvents) ? req.body.lifecycleEvents.slice(-20) : []) {
@@ -8021,6 +8088,7 @@ io.on("connection", (socket) => {
       const profileUserId = normalizedKind === "guest" ? peer.guestProfileUserId : peer.userId;
       callback({
         ok: true,
+        allowTargetRearrange: normalizedKind === 'user' && isTargetRearrangeAllowed(getUserById(peer.userId)),
         productionId: peer.productionId ?? null,
         productions: profileUserId == null
           ? []

@@ -18,6 +18,8 @@ on:
     paths:
       - ".github/workflows/bridge-client-release.yml"
       - "bridge-client/**"
+      - "public/audioMeter.js"
+      - "public/bridgeAudioLevels.js"
       - "vendor/tray-icon/**"
       - "scripts/resolve-build-version.js"
       - "scripts/upload-release-asset.sh"

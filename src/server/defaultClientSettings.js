@@ -11,6 +11,7 @@ const BUILTIN_DEFAULT_CLIENT_SETTINGS = Object.freeze({
   showIncomingLevels: false,
   leftHandMode: false,
   lockMultipleTargets: false,
+  allowTargetRearrange: true,
 });
 
 const DEFAULT_CLIENT_SETTING_KEYS = Object.freeze(Object.keys(BUILTIN_DEFAULT_CLIENT_SETTINGS));

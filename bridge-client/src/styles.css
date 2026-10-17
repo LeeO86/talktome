@@ -383,8 +383,38 @@ h3 {
 .managed-port-routing-grid {
   display: grid;
   gap: 0.45rem 0.55rem;
-  grid-template-columns: minmax(0, 1fr) 8rem;
+  grid-template-columns: minmax(0, 1fr) 2rem 8rem;
 }
+
+.port-audio-control { align-self: end; }
+.port-audio-toggle { width: 2rem; height: 1.75rem; padding: 0; display: grid; place-items: center; position: relative; }
+.port-audio-toggle.is-adjusted::after { content: ''; position: absolute; width: 5px; height: 5px; border-radius: 50%; background: #93c5fd; top: 3px; right: 3px; }
+.port-audio-popover { position: fixed; z-index: 100; width: 320px; max-width: calc(100vw - 16px); padding: 12px; border: 1px solid #62626e; border-radius: 10px; background: #29292f; box-shadow: 0 12px 32px #0008; color: #edf2f7; }
+.port-audio-popover[hidden], .port-audio-popover [hidden] { display: none; }
+.port-audio-heading, .port-audio-value, .port-audio-actions, .port-audio-meter-label, .port-audio-scale { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.port-audio-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; font-size: 0.85rem; }
+.port-audio-heading button { padding: 1px 7px; font-size: 1.1rem; border: 0; background: transparent; }
+.port-audio-value { justify-self: center; justify-content: center; gap: 4px; min-width: 0; font-size: 0.75rem; }
+.port-audio-popover .port-audio-value input[type="number"] { appearance: textfield; width: 3.5rem; max-width: 100%; min-height: 1.5rem; height: 1.5rem; max-height: 1.5rem; padding: 1px 4px; line-height: 1.2; text-align: center; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.port-audio-value input::-webkit-inner-spin-button, .port-audio-value input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.port-audio-popover input[type="range"] { accent-color: #60a5fa; height: 24px; touch-action: none; }
+.port-audio-scale { color: #aeb8c6; font-size: 0.68rem; }
+.port-audio-meter { height: 6px; background: #101116; border-radius: 4px; overflow: hidden; margin-top: 12px; }
+.port-audio-meter > span { display: block; width: 100%; height: 100%; background-color: #22c55e; clip-path: inset(0 calc(100% - var(--meter-level, 0%)) 0 0); transition: clip-path 90ms linear; }
+.port-audio-meter-label { font-size: 0.68rem; color: #aeb8c6; margin-top: 4px; font-variant-numeric: tabular-nums; }
+[data-audio-clip] { color: #fca5a5; font-weight: 800; }
+.port-audio-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; margin: 10px 0 4px; font-size: 0.78rem; }
+.port-audio-actions label { display: flex; align-items: center; gap: 5px; }
+.port-audio-mute .switch-label { flex: 0 0 3rem; width: 3rem; }
+.port-audio-actions .port-audio-mute input:checked + .switch-track { background: #dc2626; border-color: #ef4444; }
+.port-audio-mute input:checked ~ .switch-label { color: #f87171; }
+.port-audio-actions button, [data-audio-retry] { padding: 5px 8px; font-size: 0.72rem; }
+.port-audio-actions button { height: 1.625rem; min-height: 1.625rem; padding: 0 8px; }
+.port-audio-actions .port-audio-step { flex: 0 0 1.625rem; width: 1.625rem; padding: 0; font-size: 1rem; line-height: 1; }
+.port-audio-step:disabled { cursor: default; }
+.port-audio-save { min-width: 0; color: #9fb0c0; font-size: 0.68rem; text-align: right; overflow-wrap: anywhere; }
+.port-audio-save.is-error { color: #fca5a5; }
+.port-audio-popover :focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
 
 .managed-port-trigger-grid {
   align-items: start;
@@ -645,10 +675,11 @@ h3 {
 }
 
 .meter div {
-  background: #2e9ad1;
+  background: #22c55e;
   height: 100%;
-  transition: width 90ms linear;
-  width: 0;
+  clip-path: inset(0 calc(100% - var(--meter-level, 0%)) 0 0);
+  transition: clip-path 90ms linear;
+  width: 100%;
 }
 
 .probe-status {

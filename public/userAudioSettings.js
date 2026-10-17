@@ -49,7 +49,7 @@
       });
     if (has('userInputGainDb')) {
       const number = Number(value.userInputGainDb);
-      if (Number.isFinite(number) && number >= -30 && number <= 40) output.userInputGainDb = Math.round(number * 2) / 2;
+      if (Number.isFinite(number) && number >= -40 && number <= 40) output.userInputGainDb = Math.round(number * 2) / 2;
       else reject('Invalid manual mic gain.');
     }
     if (has('voiceTriggerThresholdDb')) {

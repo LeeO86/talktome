@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio;
 use crate::network_audio;
+use crate::port_audio_level::{AudioGain, PortAudioLevel};
 
 const OUTPUT_QUEUE_LIMIT_FRAMES: usize = 9_600;
 const DECODER_STARTUP_GRACE_MS: u64 = 10;
@@ -155,6 +156,8 @@ pub struct StartBridgeInputRequest {
     pub rtp_port: u16,
     pub payload_type: u8,
     pub ssrc: u32,
+    #[serde(default)]
+    pub audio_level: PortAudioLevel,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -162,6 +165,8 @@ pub struct StartBridgeInputRequest {
 pub struct ReserveBridgeOutputRequest {
     pub stream_id: String,
     pub assignment: BridgeChannelAssignment,
+    #[serde(default)]
+    pub audio_level: PortAudioLevel,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,6 +194,14 @@ pub struct SetBridgeOutputLevelRequest {
     pub stream_id: String,
     pub volume: f32,
     pub muted: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetBridgePortAudioLevelRequest {
+    pub port_id: String,
+    pub direction: String,
+    pub level: PortAudioLevel,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -222,6 +235,8 @@ pub struct BridgeMediaStreamError {
 pub struct BridgeMediaInputStats {
     pub stream_id: String,
     pub rms_db: f32,
+    pub peak_db: f32,
+    pub clipped_samples: u64,
     pub captured_frames: u64,
     pub xrun_count: u64,
     pub dropped_chunks: u64,
@@ -234,6 +249,9 @@ pub struct BridgeMediaInputStats {
 #[serde(rename_all = "camelCase")]
 pub struct BridgeMediaOutputStats {
     pub stream_id: String,
+    pub rms_db: f32,
+    pub peak_db: f32,
+    pub clipped_samples: u64,
     pub decoded_frames: u64,
     pub decoded_bytes: u64,
     pub ffmpeg_warning_count: u64,
@@ -281,7 +299,7 @@ struct BridgeInputRuntime {
     stream: BridgeInputStreamRuntime,
     child: Arc<Mutex<Child>>,
     last_error: Arc<Mutex<Option<String>>>,
-    level_milli_db: Arc<AtomicI32>,
+    audio_gain: Arc<AudioGain>,
     captured_frames: Arc<AtomicU64>,
     xrun_count: Arc<AtomicU64>,
     dropped_chunks: Arc<AtomicU64>,
@@ -295,6 +313,7 @@ struct BridgeInputRuntime {
 
 struct BridgeOutputRuntime {
     mixer_key: OutputMixerKey,
+    audio_gain: Arc<AudioGain>,
     child: Arc<Mutex<Child>>,
     last_error: Arc<Mutex<Option<String>>>,
     decoded_frames: Arc<AtomicU64>,
@@ -358,6 +377,7 @@ impl BridgeMediaManager {
     ) -> Result<BridgeMediaStatus, String> {
         validate_stream_id(&request.stream_id)?;
         validate_assignment(&request.assignment, "input")?;
+        request.audio_level.validate()?;
         if request.rtp_ip.trim().is_empty() || request.rtp_port == 0 {
             return Err("RTP destination is required".to_string());
         }
@@ -385,6 +405,7 @@ impl BridgeMediaManager {
     ) -> Result<ReservedBridgeOutput, String> {
         validate_stream_id(&request.stream_id)?;
         validate_assignment(&request.assignment, "output")?;
+        request.audio_level.validate()?;
         let socket = UdpSocket::bind("0.0.0.0:0")
             .map_err(|err| format!("failed to reserve RTP receive port: {err}"))?;
         let port = socket
@@ -462,12 +483,13 @@ impl BridgeMediaManager {
             .get(&mixer_key)
             .ok_or_else(|| "bridge output mixer was not created".to_string())?;
         let output_sample_rate = mixer.sample_rate;
-        let source_queue = mixer.add_source(stream_id.clone(), &pending.request.assignment)?;
+        let (source_queue, source_level) = mixer.add_source(stream_id.clone(), &pending.request.assignment)?;
         let runtime = match BridgeOutputRuntime::start(
             pending,
             &request,
             mixer_key.clone(),
             source_queue,
+            source_level,
             output_sample_rate,
         ) {
             Ok(runtime) => runtime,
@@ -504,6 +526,27 @@ impl BridgeMediaManager {
             .get_mut(&mixer_key)
             .ok_or_else(|| "Bridge output mixer is not active".to_string())?;
         mixer.set_source_level(stream_id, request.volume, request.muted)?;
+        Ok(status_from(&state))
+    }
+
+    pub fn set_port_audio_level(&self, request: SetBridgePortAudioLevelRequest) -> Result<BridgeMediaStatus, String> {
+        validate_stream_id(&request.port_id)?;
+        if !["input", "output"].contains(&request.direction.as_str()) { return Err("Invalid audio direction".to_string()); }
+        let level = request.level.validate()?;
+        let mut state = self.lock()?;
+        if request.direction == "input" {
+            if let Some(runtime) = state.inputs.get(&format!("{}:input", request.port_id)) {
+                runtime.audio_gain.set(level);
+            }
+        } else {
+            let prefix = format!("{}:consumer:", request.port_id);
+            for (id, runtime) in &state.outputs {
+                if id.starts_with(&prefix) { runtime.audio_gain.set(level); }
+            }
+            for (id, pending) in &mut state.pending_outputs {
+                if id.starts_with(&prefix) { pending.request.audio_level = level; }
+            }
+        }
         Ok(status_from(&state))
     }
 
@@ -590,8 +633,8 @@ impl BridgeInputRuntime {
         let callback_sender = sender.clone();
         let last_error = Arc::new(Mutex::new(None));
         let stream_error = Arc::clone(&last_error);
-        let level_milli_db = Arc::new(AtomicI32::new(-120_000));
-        let callback_level = Arc::clone(&level_milli_db);
+        let callback_level = Arc::new(AtomicI32::new(-120_000));
+        let audio_gain = Arc::new(AudioGain::new(request.audio_level));
         let captured_frames = Arc::new(AtomicU64::new(0));
         let callback_captured_frames = Arc::clone(&captured_frames);
         let xrun_count = Arc::new(AtomicU64::new(0));
@@ -745,8 +788,11 @@ impl BridgeInputRuntime {
             )
         });
         let child = Arc::new(Mutex::new(child));
+        let writer_gain = Arc::clone(&audio_gain);
+        let mut previous_gain = writer_gain.linear();
         let writer = thread::spawn(move || {
-            while let Ok(bytes) = receiver.recv() {
+            while let Ok(mut bytes) = receiver.recv() {
+                writer_gain.process(&mut bytes, &mut previous_gain, 1.0, true);
                 if stdin.write_all(&bytes).is_err() {
                     break;
                 }
@@ -757,7 +803,7 @@ impl BridgeInputRuntime {
             stream,
             child,
             last_error,
-            level_milli_db,
+            audio_gain,
             captured_frames,
             xrun_count,
             dropped_chunks,
@@ -905,7 +951,7 @@ impl BridgeOutputMixerRuntime {
         &self,
         stream_id: String,
         assignment: &BridgeChannelAssignment,
-    ) -> Result<Arc<Mutex<VecDeque<StereoFrame>>>, String> {
+    ) -> Result<(Arc<Mutex<VecDeque<StereoFrame>>>, Arc<Mutex<BridgeOutputLevel>>), String> {
         let queue = Arc::new(Mutex::new(VecDeque::<StereoFrame>::new()));
         let source = BridgeOutputMixerSource {
             queue: Arc::clone(&queue),
@@ -920,8 +966,9 @@ impl BridgeOutputMixerRuntime {
             .sources
             .lock()
             .map_err(|_| "bridge output mixer lock poisoned".to_string())?;
+        let level = Arc::clone(&source.level);
         sources.insert(stream_id, source);
-        Ok(queue)
+        Ok((queue, level))
     }
 
     fn set_source_level(
@@ -970,13 +1017,15 @@ impl BridgeOutputRuntime {
         request: &ActivateBridgeOutputRequest,
         mixer_key: OutputMixerKey,
         queue: Arc<Mutex<VecDeque<StereoFrame>>>,
+        source_level: Arc<Mutex<BridgeOutputLevel>>,
         output_sample_rate: SampleRate,
     ) -> Result<Self, String> {
         let PendingBridgeOutput {
-            request: _,
+            request: pending_request,
             port,
             socket,
         } = pending;
+        let audio_gain = Arc::new(AudioGain::new(pending_request.audio_level));
         match (
             request.handshake_ip.as_deref().map(str::trim),
             request.handshake_port,
@@ -1104,6 +1153,8 @@ impl BridgeOutputRuntime {
         let decoded_bytes = Arc::new(AtomicU64::new(0));
         let reader_decoded_frames = Arc::clone(&decoded_frames);
         let reader_decoded_bytes = Arc::clone(&decoded_bytes);
+        let reader_gain = Arc::clone(&audio_gain);
+        let mut previous_gain = reader_gain.linear();
         let reader = thread::spawn(move || {
             let mut read_buffer = [0_u8; 8192];
             let mut pending_bytes = Vec::<u8>::new();
@@ -1123,6 +1174,8 @@ impl BridgeOutputRuntime {
                 if complete_bytes == 0 {
                     continue;
                 }
+                let meter_scale = source_level.lock().map(|level| if level.muted { 0.0 } else { level.volume }).unwrap_or(1.0);
+                reader_gain.process(&mut pending_bytes[..complete_bytes], &mut previous_gain, meter_scale, false);
                 reader_decoded_frames.fetch_add((complete_bytes / 8) as u64, Ordering::Relaxed);
                 reader_decoded_bytes.fetch_add(complete_bytes as u64, Ordering::Relaxed);
                 if let Ok(mut queue) = reader_queue.lock() {
@@ -1141,6 +1194,7 @@ impl BridgeOutputRuntime {
         });
         Ok(Self {
             mixer_key,
+            audio_gain,
             child,
             last_error,
             decoded_frames,
@@ -1314,7 +1368,9 @@ fn status_from(state: &BridgeMediaState) -> BridgeMediaStatus {
         .iter()
         .map(|(stream_id, runtime)| BridgeMediaInputStats {
             stream_id: stream_id.clone(),
-            rms_db: runtime.level_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            rms_db: runtime.audio_gain.rms_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            peak_db: runtime.audio_gain.peak_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            clipped_samples: runtime.audio_gain.clipped_samples.load(Ordering::Relaxed),
             captured_frames: runtime.captured_frames.load(Ordering::Relaxed),
             xrun_count: runtime.xrun_count.load(Ordering::Relaxed),
             dropped_chunks: runtime.dropped_chunks.load(Ordering::Relaxed),
@@ -1328,6 +1384,9 @@ fn status_from(state: &BridgeMediaState) -> BridgeMediaStatus {
         .iter()
         .map(|(stream_id, runtime)| BridgeMediaOutputStats {
             stream_id: stream_id.clone(),
+            rms_db: runtime.audio_gain.rms_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            peak_db: runtime.audio_gain.peak_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            clipped_samples: runtime.audio_gain.clipped_samples.load(Ordering::Relaxed),
             decoded_frames: runtime.decoded_frames.load(Ordering::Relaxed),
             decoded_bytes: runtime.decoded_bytes.load(Ordering::Relaxed),
             ffmpeg_warning_count: runtime.ffmpeg_warning_count.load(Ordering::Relaxed),

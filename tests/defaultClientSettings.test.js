@@ -12,6 +12,7 @@ const { resolve: resolveUserAudioSettings } = require("../public/userAudioSettin
 test("resolves built-in client defaults when no server settings exist", () => {
   assert.deepEqual(resolveDefaultClientSettings(null), BUILTIN_DEFAULT_CLIENT_SETTINGS);
   assert.equal(resolveDefaultClientSettings(null).showIncomingLevels, false);
+  assert.equal(resolveDefaultClientSettings(null).allowTargetRearrange, true);
 });
 
 test("keeps only valid configured client defaults", () => {
@@ -20,12 +21,14 @@ test("keeps only valid configured client defaults", () => {
     dimAmountDb: -18,
     dimFeedsWhileSpeaking: true,
     showIncomingLevels: true,
+    allowTargetRearrange: false,
     unknown: "ignored",
   }), {
     audioProfile: "standard",
     dimAmountDb: -18,
     dimFeedsWhileSpeaking: true,
     showIncomingLevels: true,
+    allowTargetRearrange: false,
   });
 });
 

@@ -1,3 +1,4 @@
+const audioMeter = window.TalktomeAudioMeter;
 const remotePanel = window.TalktomeRemotePanel?.create() || null;
 let clientPanelRevision = 0;
 let applyingClientPanelSettings = false;
@@ -182,12 +183,12 @@ const FEED_INPUT_GAIN_DB_STORAGE_KEY = 'feedInputGainDb';
 const MIC_DEVICE_STORAGE_KEY = 'preferredAudioInputDeviceId';
 const OUTPUT_DEVICE_STORAGE_KEY = 'preferredAudioOutputDeviceId';
 const MIC_DEVICE_EXPLICIT_STORAGE_KEY = 'preferredAudioInputDeviceExplicit';
-const FEED_INPUT_GAIN_DB_MIN = -30;
+const FEED_INPUT_GAIN_DB_MIN = -40;
 const FEED_INPUT_GAIN_DB_MAX = 40;
 const FEED_METER_MIN_DB = -60;
 const FEED_CLIP_THRESHOLD_DB = -0.5;
 const USER_INPUT_GAIN_DB_STORAGE_KEY = 'userInputGainDb';
-const USER_INPUT_GAIN_DB_MIN = -30;
+const USER_INPUT_GAIN_DB_MIN = -40;
 const USER_INPUT_GAIN_DB_MAX = 40;
 const USER_METER_MIN_DB = -60;
 const USER_CLIP_THRESHOLD_DB = -0.5;
@@ -333,6 +334,17 @@ let leftHandModeEnabled = hasServerDefaultClientSetting('leftHandMode')
 let lockMultipleTargetsEnabled = hasServerDefaultClientSetting('lockMultipleTargets')
   ? serverDefaultClientSettings.lockMultipleTargets === true
   : false;
+let allowTargetRearrange = false;
+
+function canArrangeTargets() {
+  return session.kind === 'user' && (Boolean(remotePanel) || allowTargetRearrange);
+}
+
+function applyTargetRearrangePermission(allowed) {
+  allowTargetRearrange = allowed === true;
+  if (arrangeTargetsOpenButton) arrangeTargetsOpenButton.hidden = !canArrangeTargets();
+  if (!canArrangeTargets() && activeSettingsView === 'arrange') setActiveSettingsView('main');
+}
 let feedInputProcessingEnabled = false;
 let feedPtimeMs = DEFAULT_FEED_PTIME_MS;
 const audioProcessingOptions = {
@@ -1600,8 +1612,8 @@ function updateFeedProcessingUI() {
     feedInputGainSlider.disabled = !feedInputProcessingEnabled;
   }
   if (!feedInputProcessingEnabled) {
-    setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-    setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+    setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, { forceText: true });
+    setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, { forceText: true });
   } else if (feedProcessingChain) {
     scheduleFeedMeterUpdate();
   }
@@ -1690,10 +1702,10 @@ function hasSignificantDbChange(lastDb, nextDb) {
   return Math.abs(nextDb - lastDb) >= METER_TEXT_DB_THRESHOLD;
 }
 
-function setFeedMeterDisplayFor(barEl, valueEl, clipEl, state, fraction, text, showClip, clipFraction = null, { forceText = false } = {}) {
+function setFeedMeterDisplayFor(barEl, valueEl, clipEl, state, fraction, text, showClip, { forceText = false } = {}) {
   const clampedFraction = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0));
   if (barEl) {
-    barEl.style.width = `${(clampedFraction * 100).toFixed(1)}%`;
+    audioMeter.renderLevel(barEl, clampedFraction * 100, FEED_METER_MIN_DB);
   }
   if (valueEl && state) {
     const now = nowMs();
@@ -1712,14 +1724,7 @@ function setFeedMeterDisplayFor(barEl, valueEl, clipEl, state, fraction, text, s
     valueEl.classList.toggle('is-clipping', !!showClip);
   }
   if (clipEl) {
-    if (showClip) {
-      const raw = clipFraction == null ? 1 : Number(clipFraction);
-      const clampedClip = Math.max(0, Math.min(1, Number.isFinite(raw) ? raw : 1));
-      clipEl.style.left = `${(clampedClip * 100).toFixed(1)}%`;
-      clipEl.style.opacity = '1';
-    } else {
-      clipEl.style.opacity = '0';
-    }
+    clipEl.style.opacity = showClip ? '1' : '0';
   }
 }
 
@@ -1755,8 +1760,8 @@ function destroyFeedProcessing({ resetUI = true } = {}) {
   feedProcessingChain = null;
 
   if (resetUI) {
-    setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-    setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+    setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, { forceText: true });
+    setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, { forceText: true });
   }
 }
 
@@ -1821,8 +1826,7 @@ function updateFeedMeterFromAnalyser() {
     feedMeterStateL,
     left.fraction,
     textL,
-    showClipL,
-    left.fraction
+    showClipL
   );
   setFeedMeterDisplayFor(
     feedMeterBarREl,
@@ -1831,8 +1835,7 @@ function updateFeedMeterFromAnalyser() {
     feedMeterStateR,
     right.fraction,
     textR,
-    showClipR,
-    right.fraction
+    showClipR
   );
 }
 
@@ -1948,8 +1951,8 @@ function ensureFeedProcessingChain(track) {
     clipHoldFramesR: 0,
   };
 
-  setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-  setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, { forceText: true });
+  setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, { forceText: true });
   scheduleFeedMeterUpdate();
 
   if (typeof outputTrack.addEventListener === 'function') {
@@ -2235,7 +2238,7 @@ function handleSettingsMenuClosed() {
 }
 
 function setActiveSettingsView(nextView = 'main') {
-  const resolvedView = nextView === 'shortcuts' || nextView === 'arrange' ? nextView : 'main';
+  const resolvedView = nextView === 'shortcuts' || (nextView === 'arrange' && canArrangeTargets()) ? nextView : 'main';
   if (resolvedView === activeSettingsView && settingsMainView && settingsShortcutsView && settingsArrangeView) {
     return;
   }
@@ -2335,10 +2338,10 @@ function setUserInputGainDb(dbValue, { persist = true, apply = true } = {}) {
   }
 }
 
-function setUserMeterDisplay(fraction, text, showClip, clipFraction = null, { forceText = false } = {}) {
+function setUserMeterDisplay(fraction, text, showClip, { forceText = false } = {}) {
   const clampedFraction = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0));
   if (userMeterBarEl) {
-    userMeterBarEl.style.width = `${(clampedFraction * 100).toFixed(1)}%`;
+    audioMeter.renderLevel(userMeterBarEl, clampedFraction * 100, USER_METER_MIN_DB);
   }
   if (userMeterValueEl) {
     const now = nowMs();
@@ -2357,14 +2360,7 @@ function setUserMeterDisplay(fraction, text, showClip, clipFraction = null, { fo
     userMeterValueEl.classList.toggle('is-clipping', !!showClip);
   }
   if (userMeterClipEl) {
-    if (showClip) {
-      const raw = clipFraction == null ? 1 : Number(clipFraction);
-      const clampedClip = Math.max(0, Math.min(1, Number.isFinite(raw) ? raw : 1));
-      userMeterClipEl.style.left = `${(clampedClip * 100).toFixed(1)}%`;
-      userMeterClipEl.style.opacity = '1';
-    } else {
-      userMeterClipEl.style.opacity = '0';
-    }
+    userMeterClipEl.style.opacity = showClip ? '1' : '0';
   }
 }
 
@@ -2382,7 +2378,7 @@ function destroyUserMeterMonitorChain({ resetUI = true } = {}) {
   userMeterMonitorChain = null;
 
   if (resetUI) {
-    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, { forceText: true });
   }
 }
 
@@ -2451,7 +2447,7 @@ function ensureUserMeterMonitorChain(track) {
     rafId: null,
     clipHoldFrames: 0,
   };
-  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, { forceText: true });
   return userMeterMonitorChain;
 }
 
@@ -2481,7 +2477,7 @@ function destroyUserProcessing({ resetUI = true } = {}) {
   userProcessingChain = null;
 
   if (resetUI && !userMeterMonitorChain) {
-    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, { forceText: true });
   }
 }
 
@@ -2537,7 +2533,7 @@ function updateUserMeterFromAnalyser() {
     ? formatDbDisplay(peakDb)
     : '-inf dB';
 
-  setUserMeterDisplay(fraction, displayText, showClip, fraction);
+  setUserMeterDisplay(fraction, displayText, showClip);
 }
 
 function ensureUserProcessingChain(track) {
@@ -3256,12 +3252,12 @@ document.addEventListener("DOMContentLoaded", () => {
   syncManagedOutputSelects(preferredOutputDeviceId);
 
   updateUserGainUI();
-  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, { forceText: true });
   updateFeedGainUI();
   updateFeedProcessingUI();
   updateFeedPtimeUI();
-  setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-  setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, { forceText: true });
+  setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, { forceText: true });
   applyUserGainControlState();
   ensureCustomTargetHotkeysLoaded();
 
@@ -3849,7 +3845,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const level = levels.get(meter.parentElement.id) ?? 0;
         const unavailable = levels.has(meter.parentElement.id) && levels.get(meter.parentElement.id) === null;
         const percent = window.TalktomeIncomingAudioLevels.levelToPercent(level);
-        meter.style.setProperty('--incoming-level', `${percent.toFixed(1)}%`);
+        audioMeter.renderLevel(meter.firstElementChild, percent, window.TalktomeIncomingAudioLevels.MIN_DB, true);
         meter.classList.toggle('is-unavailable', unavailable);
         meter.setAttribute('aria-valuenow', String(Math.round(percent)));
         const description = unavailable ? 'Incoming level unavailable in this browser'
@@ -4249,7 +4245,7 @@ let cachedOperatorTargets = null;
   }
 
   function moveArrangeTarget(sourceIndex, destinationIndex, restoreFocus = false) {
-    if (arrangeTargetsSaving || destinationIndex < 0 || destinationIndex >= arrangeTargetsDraft.length
+    if (!canArrangeTargets() || arrangeTargetsSaving || destinationIndex < 0 || destinationIndex >= arrangeTargetsDraft.length
       || sourceIndex === destinationIndex) return;
     const [target] = arrangeTargetsDraft.splice(sourceIndex, 1);
     arrangeTargetsDraft.splice(destinationIndex, 0, target);
@@ -4262,7 +4258,7 @@ let cachedOperatorTargets = null;
 
   arrangeTargetsList?.addEventListener('pointerdown', (event) => {
     const handle = event.target.closest('.arrange-targets__handle');
-    if (!handle || !event.isPrimary || event.button !== 0 || arrangeTargetsSaving || arrangeTargetsDrag) return;
+    if (!canArrangeTargets() || !handle || !event.isPrimary || event.button !== 0 || arrangeTargetsSaving || arrangeTargetsDrag) return;
     const row = handle.closest('.arrange-targets__row');
     const sourceIndex = [...arrangeTargetsList.children].indexOf(row);
     if (sourceIndex < 0 || arrangeTargetsDraft.length < 2) return;
@@ -4305,7 +4301,7 @@ let cachedOperatorTargets = null;
   });
 
   async function loadArrangeTargets() {
-    if (session.kind !== 'user' || !session.userId) return;
+    if (!canArrangeTargets() || !session.userId) return;
     clearArrangeTargetsDrag();
     const generation = ++arrangeTargetsLoadGeneration;
     const userId = session.userId;
@@ -4337,7 +4333,7 @@ let cachedOperatorTargets = null;
 
   loadArrangeTargetsHandler = loadArrangeTargets;
   async function persistArrangeTargets() {
-    if (arrangeTargetsSaving || session.kind !== 'user' || !session.userId) return;
+    if (arrangeTargetsSaving || !canArrangeTargets() || !session.userId) return;
     const userId = arrangeTargetsForUserId;
     const productionId = arrangeTargetsForProductionId;
     if (session.userId !== userId || session.productionId !== productionId) {
@@ -6293,9 +6289,9 @@ let cachedOperatorTargets = null;
       shortcutSettingsOpenButton.hidden = !isOperator;
     }
     if (arrangeTargetsOpenButton) {
-      arrangeTargetsOpenButton.hidden = session.kind !== 'user';
+      arrangeTargetsOpenButton.hidden = !canArrangeTargets();
     }
-    if (session.kind !== 'user' && activeSettingsView === 'arrange') {
+    if (!canArrangeTargets() && activeSettingsView === 'arrange') {
       setActiveSettingsView('main');
     }
 
@@ -6965,6 +6961,7 @@ let cachedOperatorTargets = null;
             return false;
           }
           if (session.kind === 'user') {
+            applyTargetRearrangePermission(registration.allowTargetRearrange);
             await applyClientPanelSettings(registration.panelSettings);
             applyPersistedTargetAudioStates(registration.targetAudioStates || []);
             if (registration.userAudioSettings) applyUserAudioSettings(registration.userAudioSettings);
@@ -7243,6 +7240,7 @@ let cachedOperatorTargets = null;
     shouldStartFeedWhenReady = kind === 'feed';
 
     if (kind === 'user') {
+      applyTargetRearrangePermission(reg.allowTargetRearrange);
       await applyClientPanelSettings(reg.panelSettings);
       applyPersistedTargetAudioStates(reg.targetAudioStates || []);
       if (reg.userAudioSettings) applyUserAudioSettings(reg.userAudioSettings);
@@ -7590,7 +7588,7 @@ let cachedOperatorTargets = null;
         outputDeviceId: preferredOutputDeviceId, outputSupported: supportsAudioOutputSelection(),
         ...getCurrentPttState(), lockedTargets: getActiveTalkLockTargets(),
         micLevel: document.getElementById('user-meter-value')?.textContent || '-inf dB',
-        micMeterWidth: parseFloat(meter?.style.width) || 0,
+        micMeterWidth: parseFloat(meter?.style.getPropertyValue('--meter-level')) || 0,
       },
     };
   }
@@ -7722,7 +7720,9 @@ let cachedOperatorTargets = null;
       const micLevel = document.getElementById('user-meter-value');
       if (micLevel) micLevel.textContent = runtime?.micLevel || '-inf dB';
       const micBar = document.getElementById('user-meter-bar');
-      if (micBar) micBar.style.width = `${runtime?.micMeterWidth || 0}%`;
+      if (micBar) {
+        audioMeter.renderLevel(micBar, runtime?.micMeterWidth || 0, USER_METER_MIN_DB);
+      }
     });
   }
 
@@ -8907,6 +8907,10 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   socket.on('user-audio-settings-updated', ({ settings } = {}) => {
     if (session.kind === 'user') applyUserAudioSettings(settings);
+  });
+
+  socket.on('target-rearrange-permission-updated', ({ allowed } = {}) => {
+    if (session.kind === 'user') applyTargetRearrangePermission(allowed);
   });
 
   restartVoiceTriggerMonitorHandler = () => {

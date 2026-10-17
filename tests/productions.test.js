@@ -19,6 +19,12 @@ test('keeps production layouts separate from the global target matrix', () => {
     const regie = Number(db.createConference('Regie'));
     const program = Number(db.createFeed('Program', 'test-password'));
 
+    assert.equal(db.getUserById(anna).allow_target_rearrange, null);
+    db.updateUserTargetRearrangePermission(anna, false);
+    db.updateUserTargetRearrangePermission(daniel, true);
+    assert.equal(db.getAllUsers().find(user => user.id === anna).allow_target_rearrange, 0);
+    assert.throws(() => db.updateUserTargetRearrangePermission(anna, 'false'), /boolean/);
+
     db.addUserTargetToUser(anna, daniel);
     db.addUserToConference(daniel, regie);
     assert.deepEqual(
@@ -122,6 +128,11 @@ test('keeps production layouts separate from the global target matrix', () => {
     snapshot.userBridgeEndpoints[0].production_id = production;
     snapshot.feedBridgeEndpoints[0].production_id = production;
     db.importDatabaseSnapshot(snapshot);
+    assert.equal(db.getUserById(anna).allow_target_rearrange, 0);
+    assert.equal(db.getUserById(daniel).allow_target_rearrange, 1);
+    assert.equal(db.getUserById(luis).allow_target_rearrange, null);
+    db.updateUserTargetRearrangePermission(anna, null);
+    assert.equal(db.getUserById(anna).allow_target_rearrange, null);
     assert.equal(db.getProductionById(production).name, 'Morning show');
     assert.equal(db.getProductionTargets(anna, production).length, 2);
     assert.equal('bridge_production_id' in db.getUserById(anna), false);

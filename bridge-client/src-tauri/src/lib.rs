@@ -5,12 +5,13 @@ mod ndi;
 mod network_audio;
 mod omt;
 mod probe;
+mod port_audio_level;
 
 use audio::{AudioDeviceSnapshot, AudioInventory};
 use bridge_media::{
     ActivateBridgeOutputRequest, BridgeMediaManager, BridgeMediaStatus,
     EnsureBridgeOutputEndpointRequest, ReserveBridgeOutputRequest, ReservedBridgeOutput,
-    SetBridgeOutputLevelRequest, StartBridgeInputRequest,
+    SetBridgeOutputLevelRequest, SetBridgePortAudioLevelRequest, StartBridgeInputRequest,
 };
 use futures_util::StreamExt;
 use model::BridgeStatus;
@@ -609,6 +610,14 @@ fn set_bridge_output_level(
 }
 
 #[tauri::command]
+fn set_bridge_port_audio_level(
+    request: SetBridgePortAudioLevelRequest,
+    manager: tauri::State<'_, BridgeMediaManager>,
+) -> Result<BridgeMediaStatus, String> {
+    manager.set_port_audio_level(request)
+}
+
+#[tauri::command]
 fn stop_all_bridge_media(
     manager: tauri::State<'_, BridgeMediaManager>,
 ) -> Result<BridgeMediaStatus, String> {
@@ -745,6 +754,17 @@ fn bridge_media_diagnostics(
     }))
 }
 
+fn bridge_health_report_payload(
+    diagnostics: Option<serde_json::Value>,
+    round_trip_ms: Option<u64>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "mediaDiagnostics": diagnostics,
+        "networkStats": round_trip_ms.map(|value| serde_json::json!({ "roundTripMs": value })),
+        "lifecycleEvents": [],
+    })
+}
+
 async fn run_bridge_health_reporter(
     app: tauri::AppHandle,
     client: reqwest::Client,
@@ -755,6 +775,7 @@ async fn run_bridge_health_reporter(
     output_stream_prefix: String,
     stop_flag: Arc<AtomicBool>,
 ) {
+    let mut last_round_trip: Option<(Instant, u64)> = None;
     loop {
         tokio::time::sleep(Duration::from_secs(10)).await;
         if stop_flag.load(Ordering::SeqCst) {
@@ -767,21 +788,30 @@ async fn run_bridge_health_reporter(
                 eprintln!(
                     "[bridge-health][{input_stream_id}] failed to read media status: {error}"
                 );
-                continue;
+                None
             }
         };
+        let round_trip_ms = last_round_trip
+            .filter(|(measured_at, _)| measured_at.elapsed() < Duration::from_secs(30))
+            .map(|(_, value)| value);
+        let started_at = Instant::now();
         let response = client
             .post(format!("{server_url}{heartbeat_path}"))
             .bearer_auth(&api_key)
-            .json(&serde_json::json!({
-                "mediaDiagnostics": diagnostics,
-                "lifecycleEvents": [],
-            }))
+            .json(&bridge_health_report_payload(diagnostics, round_trip_ms))
             .timeout(BRIDGE_HTTP_REQUEST_TIMEOUT)
             .send()
             .await;
         match response {
-            Ok(response) if response.status().is_success() => {}
+            Ok(response) if response.status().is_success() => match response.bytes().await {
+                Ok(_) => {
+                    last_round_trip =
+                        Some((Instant::now(), started_at.elapsed().as_millis() as u64));
+                }
+                Err(error) => eprintln!(
+                    "[bridge-health][{input_stream_id}] heartbeat response failed: {error}"
+                ),
+            },
             Ok(response) => eprintln!(
                 "[bridge-health][{input_stream_id}] heartbeat failed with HTTP {}",
                 response.status()
@@ -1053,6 +1083,7 @@ pub fn run() {
             release_bridge_output_endpoint,
             resize_main_window_to_content,
             set_bridge_output_level,
+            set_bridge_port_audio_level,
             set_autostart_enabled,
             start_audio_probe,
             start_bridge_input,
@@ -1071,7 +1102,19 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{bridge_event_stream_heartbeat_path, normalize_server_url};
+    use super::{
+        bridge_event_stream_heartbeat_path, bridge_health_report_payload, normalize_server_url,
+    };
+
+    #[test]
+    fn native_health_reports_include_rtt_without_webview_timers() {
+        let payload = bridge_health_report_payload(None, Some(24));
+        assert_eq!(payload["networkStats"]["roundTripMs"], 24);
+        assert!(payload["mediaDiagnostics"].is_null());
+
+        let first_report = bridge_health_report_payload(None, None);
+        assert!(first_report["networkStats"].is_null());
+    }
 
     #[test]
     fn normalizes_supported_server_urls_without_inventing_a_port() {

@@ -2,6 +2,7 @@ const db = require('./db');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { normalize: normalizeUserAudioSettings } = require('../../public/userAudioSettings');
+const bridgeAudioLevels = require('../../public/bridgeAudioLevels');
 
 const BRIDGE_ENDPOINT_TEXT_LIMIT = 200;
 const BRIDGE_TRIGGER_DEFAULT_THRESHOLD_DB = -45;
@@ -217,6 +218,7 @@ function getAllUsers() {
       users.is_superadmin,
       users.is_guest_profile,
       users.last_online_at,
+      users.allow_target_rearrange,
       COALESCE(user_bridge_endpoints.enabled, 0) AS bridge_enabled,
       COALESCE(user_bridge_endpoints.bridge_device, '') AS bridge_device,
       COALESCE(user_bridge_endpoints.input_device, '') AS bridge_input_device,
@@ -246,6 +248,7 @@ function getUserById(id) {
       users.admin_must_change,
       users.is_guest_profile,
       users.last_online_at,
+      users.allow_target_rearrange,
       COALESCE(user_bridge_endpoints.enabled, 0) AS bridge_enabled,
       COALESCE(user_bridge_endpoints.bridge_device, '') AS bridge_device,
       COALESCE(user_bridge_endpoints.input_device, '') AS bridge_input_device,
@@ -263,6 +266,14 @@ function getUserById(id) {
     LEFT JOIN user_bridge_endpoints ON user_bridge_endpoints.user_id = users.id
     WHERE users.id = ?
   `).get(id);
+}
+
+function updateUserTargetRearrangePermission(userId, allowed) {
+  if (allowed !== null && typeof allowed !== 'boolean') {
+    throw new Error('allowTargetRearrange must be boolean or null');
+  }
+  return db.prepare('UPDATE users SET allow_target_rearrange = ? WHERE id = ?')
+    .run(allowed === null ? null : allowed ? 1 : 0, userId).changes > 0;
 }
 
 function getUserAudioSettings(userId) {
@@ -303,6 +314,27 @@ function mergeUserTargetAudioStates(userId, states = []) {
       insert.run(Number(userId), state.targetType, state.targetId, state.muted ? 1 : 0, state.volume, new Date().toISOString());
     }
   })();
+}
+
+function bridgeEndpointTable(kind) {
+  if (!['user', 'feed'].includes(kind)) throw new Error('Invalid bridge port kind');
+  return `${kind}_bridge_endpoints`;
+}
+
+function getBridgePortAudioLevels(kind, id) {
+  const row = db.prepare(`SELECT audio_levels FROM ${bridgeEndpointTable(kind)} WHERE ${kind}_id = ?`).get(id);
+  try { return bridgeAudioLevels.normalize(JSON.parse(row?.audio_levels || '{}')); }
+  catch { return bridgeAudioLevels.normalize(); }
+}
+
+function updateBridgePortAudioLevel(kind, id, direction, value) {
+  if (kind === 'feed' && direction === 'output') throw new Error('Feeds have no output');
+  const level = bridgeAudioLevels.normalizeLevel(value, direction, { strict: true });
+  const levels = { ...getBridgePortAudioLevels(kind, id), [direction]: level };
+  const result = db.prepare(`UPDATE ${bridgeEndpointTable(kind)} SET audio_levels = ? WHERE ${kind}_id = ?`)
+    .run(JSON.stringify(levels), id);
+  if (!result.changes) throw new Error('Bridge endpoint not found');
+  return levels;
 }
 
 function getBridgeEndpointsForDevice(bridgeDevice) {
@@ -979,7 +1011,7 @@ function exportDatabaseSnapshot() {
       ORDER BY production_id, user_id, position
     `).all(),
     users: db.prepare(`
-      SELECT id, name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile, login_token_hash, last_online_at, audio_settings, panel_settings
+      SELECT id, name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile, login_token_hash, last_online_at, audio_settings, panel_settings, allow_target_rearrange
       FROM users
       ORDER BY id
     `).all(),
@@ -1039,6 +1071,7 @@ function exportDatabaseSnapshot() {
         trigger_target_type,
         trigger_target_id,
         trigger_threshold_db,
+        audio_levels,
         updated_at
       FROM user_bridge_endpoints
       ORDER BY user_id
@@ -1052,6 +1085,7 @@ function exportDatabaseSnapshot() {
         input_device,
         input_left_channel,
         input_right_channel,
+        audio_levels,
         updated_at
       FROM feed_bridge_endpoints
       ORDER BY feed_id
@@ -1134,8 +1168,8 @@ function importDatabaseSnapshot(snapshot) {
     }
 
     const insertUser = db.prepare(`
-      INSERT INTO users (id, name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile, login_token_hash, last_online_at, audio_settings, panel_settings)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile, login_token_hash, last_online_at, audio_settings, panel_settings, allow_target_rearrange)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertConference = db.prepare(`
       INSERT INTO conferences (id, name)
@@ -1254,7 +1288,8 @@ function importDatabaseSnapshot(snapshot) {
           typeof row.audio_settings === 'string' ? JSON.parse(row.audio_settings || '{}') : row.audio_settings,
           { partial: true }
         )),
-        JSON.stringify(typeof row.panel_settings === 'string' ? JSON.parse(row.panel_settings || '{}') : row.panel_settings || {})
+        JSON.stringify(typeof row.panel_settings === 'string' ? JSON.parse(row.panel_settings || '{}') : row.panel_settings || {}),
+        row.allow_target_rearrange == null ? null : row.allow_target_rearrange ? 1 : 0
       );
     });
 
@@ -1436,6 +1471,9 @@ function importDatabaseSnapshot(snapshot) {
         normalized.triggerThresholdDb,
         String(row.updated_at || new Date().toISOString())
       );
+      const levels = bridgeAudioLevels.normalize(typeof row.audio_levels === 'string' ? JSON.parse(row.audio_levels) : row.audio_levels);
+      updateBridgePortAudioLevel('user', Number(row.user_id), 'input', levels.input);
+      updateBridgePortAudioLevel('user', Number(row.user_id), 'output', levels.output);
     });
 
     feedBridgeEndpoints.forEach((row) => {
@@ -1457,6 +1495,8 @@ function importDatabaseSnapshot(snapshot) {
         normalized.inputRightChannel,
         String(row.updated_at || new Date().toISOString())
       );
+      const levels = bridgeAudioLevels.normalize(typeof row.audio_levels === 'string' ? JSON.parse(row.audio_levels) : row.audio_levels);
+      updateBridgePortAudioLevel('feed', Number(row.feed_id), 'input', levels.input);
     });
 
     ensureDefaultAdmin();
@@ -2325,7 +2365,10 @@ module.exports = {
   updateUserPanelSettings,
   mergeUserTargetAudioStates,
   updateUserAudioSettings,
+  updateUserTargetRearrangePermission,
   getBridgeEndpointsForDevice,
+  getBridgePortAudioLevels,
+  updateBridgePortAudioLevel,
   getFeedBridgeEndpointsForDevice,
   getGuestProfileUser,
   getOrCreateGuestProfile,

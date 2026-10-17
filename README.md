@@ -156,6 +156,7 @@ Useful environment overrides:
 - `TALKTOME_ICE_TRANSPORT_POLICY`: browser ICE policy, `all` (default) or `relay`
 - `TALKTOME_TURN_URLS`, `TALKTOME_TURN_USERNAME` and `TALKTOME_TURN_CREDENTIAL`: simple TURN-only alternative to the JSON setting
 - `TALKTOME_DATA_DIR`: data directory override
+- `TALKTOME_CONFIG_PATH`: explicit config file, taking precedence over the project and data-directory configs
 - `TALKTOME_SSO_ENABLED`: enable trusted reverse-proxy header SSO (`true`, default: disabled)
 - `TALKTOME_SSO_HEADER`: identity header set by the proxy (default: `X-Forwarded-User`)
 - `TALKTOME_SSO_TRUSTED_PROXIES`: required comma-separated proxy IP/CIDR allowlist when SSO is enabled

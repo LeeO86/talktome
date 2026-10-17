@@ -1,3 +1,10 @@
+function canUserRearrangeTargets(user, defaultSettings = {}) {
+  if (!user || user.is_superadmin || user.is_guest_profile) return false;
+  return user.allow_target_rearrange == null
+    ? defaultSettings?.allowTargetRearrange !== false
+    : Boolean(user.allow_target_rearrange);
+}
+
 function validateCompleteTargetOrder(items, availableTargets) {
   if (!Array.isArray(items)) {
     const error = new Error('items array required');
@@ -33,4 +40,4 @@ function validateCompleteTargetOrder(items, availableTargets) {
   return normalized;
 }
 
-module.exports = { validateCompleteTargetOrder };
+module.exports = { canUserRearrangeTargets, validateCompleteTargetOrder };

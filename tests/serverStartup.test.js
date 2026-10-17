@@ -43,9 +43,12 @@ test('server starts without Git from another working directory and serves its bu
     mediaNetworkMode: 'manual', mediaAnnouncedAddress: '127.0.0.1',
   });
   fs.writeFileSync(path.join(appDir, 'config.json'), config);
-  fs.writeFileSync(path.join(dataDir, 'config.json'), config);
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
+    ...JSON.parse(config), defaultClientSettings: { allowTargetRearrange: false },
+  }));
   const env = {
     ...process.env, TALKTOME_DATA_DIR: dataDir, TALKTOME_NO_WIZARD: '1',
+    TALKTOME_CONFIG_PATH: path.join(dataDir, 'config.json'),
     TALKTOME_TLS_MODE: 'proxy', HTTPS_PORT: String(port), PORT: String(port),
     HTTP_PORT: 'off', MDNS_HOST: 'off', PUBLIC_IP: '127.0.0.1',
     TALKTOME_VERSION: '1.5.9', TALKTOME_BUILD_VERSION: '1.5.9',
@@ -80,6 +83,8 @@ test('server starts without Git from another working directory and serves its bu
   const admin = await fetch(`${origin}/admin.html`);
   assert.equal(admin.status, 200);
   assert.match(await admin.text(), /id="status-section"/);
+  const defaults = await fetch(`${origin}/default-client-settings.js`);
+  assert.match(await defaults.text(), /"allowTargetRearrange":false/);
   const model = await fetch(`${origin}/remotePanelState.js`);
   assert.equal(model.status, 200);
   assert.equal(await model.text(), fs.readFileSync(path.join(projectRoot, 'public/remotePanelState.js'), 'utf8'));

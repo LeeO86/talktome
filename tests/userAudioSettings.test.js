@@ -44,6 +44,12 @@ test('resolves missing values and rejects unsafe settings', () => {
   assert.equal(resolve({ showIncomingLevels: true }).showIncomingLevels, true);
   assert.throws(() => normalize({ showIncomingLevels: 'true' }, { strict: true }), /boolean/);
   assert.throws(() => normalize({ userInputGainDb: 80 }, { strict: true }), /mic gain/);
+  for (const gain of [-40, 40]) {
+    assert.equal(normalize({ userInputGainDb: gain }, { strict: true }).userInputGainDb, gain);
+  }
+  for (const gain of [-41, 41]) {
+    assert.throws(() => normalize({ userInputGainDb: gain }, { strict: true }), /mic gain/);
+  }
   assert.throws(() => normalize({ voiceTriggerTarget: 'feed:1' }, { strict: true }), /trigger target/);
 });
 

@@ -22,11 +22,13 @@ const legacyConfigPath = path.join(projectRoot, "config.json");
 const legacyPkgConfigPath = path.join(execDir, "config.json");
 const DEFAULT_RTC_PORT_START = 40000;
 const DEFAULT_RTC_PORT_COUNT = 10000;
-let configPath = dataConfigPath;
+const explicitConfigPath = String(process.env.TALKTOME_CONFIG_PATH || '').trim();
+let configPath = explicitConfigPath ? path.resolve(explicitConfigPath) : dataConfigPath;
 
-if (!process.pkg && fs.existsSync(legacyConfigPath)) {
+if (!explicitConfigPath && !process.pkg && fs.existsSync(legacyConfigPath)) {
   configPath = legacyConfigPath;
 } else if (
+  !explicitConfigPath &&
   process.pkg &&
   fs.existsSync(legacyPkgConfigPath) &&
   !fs.existsSync(dataConfigPath)
