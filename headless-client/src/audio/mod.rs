@@ -44,6 +44,86 @@ where
     })
 }
 
+/// One entry of the settings device dropdown.
+pub struct PcmChoice {
+    pub id: String,
+    pub label: String,
+    /// `hw:`/`plughw:`/`dmix:`… on a sound card, as opposed to a PCM defined
+    /// in asound.conf (`ravenna_shared_in`, `in_ch1`, …).
+    pub card: bool,
+}
+
+/// The ALSA PCMs `aplay -L` (playback) or `arecord -L` (capture) lists,
+/// including dmix/dsnoop/route devices from asound.conf. ALSA gives no
+/// direction hint for those, so each one is opened non-blocking to see
+/// whether it works that way round (a dmix only plays, a dsnoop only records).
+/// A busy device is kept: it is usually the one this client has open.
+pub fn alsa_pcm_devices(input: bool) -> Vec<PcmChoice> {
+    let direction = if input {
+        alsa::Direction::Capture
+    } else {
+        alsa::Direction::Playback
+    };
+    let Ok(hints) = alsa::device_name::HintIter::new_str(None, "pcm") else {
+        return Vec::new();
+    };
+    let _quiet = QuietAlsa::new();
+    hints
+        .filter_map(|hint| {
+            let id = hint.name?;
+            if let Some(only) = hint.direction {
+                if only != direction {
+                    return None;
+                }
+            } else if let Err(error) = alsa::PCM::new(&id, direction, true) {
+                let busy = std::io::Error::from_raw_os_error(error.errno().abs()).kind()
+                    == std::io::ErrorKind::ResourceBusy;
+                if !busy {
+                    return None;
+                }
+            }
+            let label = match hint.desc {
+                Some(desc) => desc.lines().map(str::trim).collect::<Vec<_>>().join(" – "),
+                None => id.clone(),
+            };
+            Some(PcmChoice {
+                card: id.contains(':'),
+                id,
+                label,
+            })
+        })
+        .collect()
+}
+
+/// Mutes ALSA's stderr messages on this thread while probing ("The dmix
+/// plugin supports only playback stream" for every output device).
+struct QuietAlsa(alsa_sys::snd_local_error_handler_t);
+
+impl QuietAlsa {
+    fn new() -> Self {
+        unsafe extern "C" fn ignore(
+            _file: *const std::ffi::c_char,
+            _line: std::ffi::c_int,
+            _func: *const std::ffi::c_char,
+            _err: std::ffi::c_int,
+            _fmt: *const std::ffi::c_char,
+            _arg: *mut alsa_sys::__va_list_tag,
+        ) {
+        }
+        // SAFETY: sets a thread-local handler; `ignore` never touches its arguments.
+        Self(unsafe { alsa_sys::snd_lib_error_set_local(Some(ignore)) })
+    }
+}
+
+impl Drop for QuietAlsa {
+    fn drop(&mut self) {
+        // SAFETY: restores the handler that was active before `new`.
+        unsafe {
+            alsa_sys::snd_lib_error_set_local(self.0);
+        }
+    }
+}
+
 /// Prints the audio devices cpal/ALSA exposes, for provisioning.
 pub fn list_devices() -> Result<()> {
     let host = cpal::default_host();

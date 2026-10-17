@@ -42,6 +42,9 @@ toml = "1"
 # Media
 webrtc = "0.17"
 cpal = "0.18"
+# Same versions as cpal's ALSA backend; used to list asound.conf PCMs like `aplay -L`.
+alsa = "0.11"
+alsa-sys = "0.4"
 opus = "0.4"
 rubato = "0.16"
 sonora = "0.2"

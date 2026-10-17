@@ -1615,17 +1615,25 @@
       }
       input.value = current;
     } else if (field.type === 'device') {
-      const listId = `devices-${field.path.replace(/\W/g, '-')}`;
-      input = el('input', { type: 'text', list: listId, placeholder: 'default device', dataset: { path: field.path, type: 'text', nullable: '1' }, autocomplete: 'off' });
-      input.value = value == null ? '' : value;
-      const list = el('datalist', { id: listId });
-      for (const device of state.audioDevices[field.direction] || []) {
-        list.append(el('option', { value: device.id, text: device.label }));
+      input = el('select', { dataset: { path: field.path, type: 'select', nullable: '1' }, autocomplete: 'off' });
+      const current = value == null ? '' : String(value);
+      const devices = state.audioDevices[field.direction] || [];
+      const special = field.direction === 'inputs'
+        ? [['none', 'none (no capture)'], ['tone', 'tone (test tone)'], ['tone:440', 'tone:440'], ['tone:1000', 'tone:1000']]
+        : [['none', 'none (no playback)'], ['wav:/tmp/talktome-out.wav', 'wav:/tmp/talktome-out.wav (record to file)']];
+      const known = new Set(['', ...devices.map((device) => device.id), ...special.map(([id]) => id)]);
+      const option = (id, label) => el('option', { value: id, text: label && label !== id ? `${id} — ${label}` : id });
+      input.append(el('option', { value: '', text: 'System default' }));
+      if (!known.has(current)) input.append(option(current, 'not found'));
+      const groups = [
+        ['Configured devices (asound.conf)', devices.filter((device) => !device.card)],
+        ['Sound cards', devices.filter((device) => device.card)],
+      ];
+      for (const [label, list] of groups) {
+        if (list.length) input.append(el('optgroup', { label }, list.map((device) => option(device.id, device.label))));
       }
-      for (const special of field.direction === 'inputs' ? ['none', 'tone', 'tone:440', 'tone:1000'] : ['none', 'wav:/tmp/talktome-out.wav']) {
-        list.append(el('option', { value: special }));
-      }
-      wrapper.append(list);
+      input.append(el('optgroup', { label: 'Testing' }, special.map(([id, label]) => el('option', { value: id, text: label }))));
+      input.value = current;
     } else if (field.type === 'json') {
       input = el('textarea', { rows: 3, dataset: { path: field.path, type: 'json', nullable: field.nullable ? '1' : '' } });
       input.value = value == null ? '' : JSON.stringify(value, null, 1);

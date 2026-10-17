@@ -3157,6 +3157,8 @@ name = "talktome-headless"
 version = "0.0.0"
 dependencies = [
  "ab_glyph",
+ "alsa",
+ "alsa-sys",
  "anyhow",
  "axum",
  "bytes",

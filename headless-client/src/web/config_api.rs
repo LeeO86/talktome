@@ -236,25 +236,13 @@ pub fn update_web_password(path: &Path, password: &str) -> Result<()> {
 
 pub async fn audio_devices() -> Response {
     let devices = tokio::task::spawn_blocking(|| {
-        use cpal::traits::HostTrait;
-        let host = cpal::default_host();
-        let inputs: Vec<Value> = host
-            .input_devices()
-            .map(|devices| {
-                devices
-                    .map(|d| json!({ "id": crate::audio::device_pcm_id(&d), "label": crate::audio::device_label(&d) }))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let outputs: Vec<Value> = host
-            .output_devices()
-            .map(|devices| {
-                devices
-                    .map(|d| json!({ "id": crate::audio::device_pcm_id(&d), "label": crate::audio::device_label(&d) }))
-                    .collect()
-            })
-            .unwrap_or_default();
-        json!({ "inputs": inputs, "outputs": outputs })
+        let list = |input| -> Vec<Value> {
+            crate::audio::alsa_pcm_devices(input)
+                .into_iter()
+                .map(|d| json!({ "id": d.id, "label": d.label, "card": d.card }))
+                .collect()
+        };
+        json!({ "inputs": list(true), "outputs": list(false) })
     })
     .await;
     match devices {
