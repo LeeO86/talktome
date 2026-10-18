@@ -183,6 +183,7 @@ pub fn initial_status(config: &GpioConfig, backend: &str) -> GpioStatus {
                 active_low: input.active_low,
                 pressed: false,
                 events: 0,
+                error: None,
             })
             .collect(),
     }
@@ -318,6 +319,7 @@ impl Debouncer {
 
 pub async fn run(
     config: GpioConfig,
+    instance: String,
     volume_step_db: f32,
     bus: Bus,
     shutdown: watch::Receiver<bool>,
@@ -330,7 +332,16 @@ pub async fn run(
     let result = if mock {
         run_mock(config, volume_step_db, &bus, &mut status, shutdown).await
     } else {
-        run_real(config, volume_step_db, &bus, &mut status, shutdown).await
+        let consumer = consumer_label(&instance);
+        run_real(
+            config,
+            &consumer,
+            volume_step_db,
+            &bus,
+            &mut status,
+            shutdown,
+        )
+        .await
     };
     if let Err(error) = result {
         tracing::error!(event = "gpio-failed", error = %format!("{error:#}"));
@@ -385,6 +396,91 @@ fn resolve_line(config: &GpioConfig, line: &str) -> Result<ResolvedLine> {
     })
 }
 
+/// `talktome-headless@<instance>`: shown by `gpioinfo` and in our own
+/// "already used by" errors, so two instances can tell their lines apart.
+pub fn consumer_label(instance: &str) -> String {
+    format!("talktome-headless@{instance}")
+}
+
+/// Explains a failed line request; names the holder when the line is taken.
+fn line_error(line: &str, resolved: &ResolvedLine, error: gpiocdev::Error) -> anyhow::Error {
+    let holder = gpiocdev::Chip::from_path(&resolved.chip)
+        .and_then(|chip| chip.line_info(resolved.offset))
+        .ok()
+        .filter(|info| info.used);
+    match holder {
+        Some(info) if !info.consumer.is_empty() => {
+            anyhow!("{line} is already used by {}", info.consumer)
+        }
+        Some(_) => anyhow!("{line} is already used by another program"),
+        None => anyhow!("requesting {line}: {error}"),
+    }
+}
+
+fn request_output(
+    config: &GpioConfig,
+    consumer: &str,
+    output: &crate::config::GpioOutputConfig,
+) -> Result<(Request, ResolvedLine)> {
+    let resolved = resolve_line(config, &output.line)?;
+    let mut builder = Request::builder();
+    builder
+        .on_chip(&resolved.chip)
+        .with_consumer(consumer)
+        .with_line(resolved.offset)
+        .as_output(Value::Inactive);
+    if output.active_low {
+        builder.as_active_low();
+    }
+    match builder.request() {
+        Ok(request) => Ok((request, resolved)),
+        Err(error) => Err(line_error(&output.line, &resolved, error)),
+    }
+}
+
+fn request_input(
+    config: &GpioConfig,
+    consumer: &str,
+    input: &GpioInputConfig,
+) -> Result<(Request, Offset)> {
+    let resolved = resolve_line(config, &input.line)?;
+    let build = |debounce: bool| {
+        let mut builder = Request::builder();
+        builder
+            .on_chip(&resolved.chip)
+            .with_consumer(consumer)
+            .with_line(resolved.offset)
+            .as_input()
+            .with_edge_detection(EdgeDetection::BothEdges)
+            .with_bias(if input.active_low {
+                Bias::PullUp
+            } else {
+                Bias::PullDown
+            });
+        if input.active_low {
+            builder.as_active_low();
+        } else {
+            builder.as_active_high();
+        }
+        if debounce && input.debounce_ms > 0 {
+            builder.with_debounce_period(Duration::from_millis(input.debounce_ms as u64));
+        }
+        builder.request()
+    };
+    let result = build(true).or_else(|error| {
+        if input.debounce_ms == 0 {
+            return Err(error);
+        }
+        // Older kernels lack debounce support in the uAPI; retry without it.
+        tracing::warn!(event = "gpio-input-retry", line = %input.line, error = %error);
+        build(false)
+    });
+    match result {
+        Ok(request) => Ok((request, resolved.offset)),
+        Err(error) => Err(line_error(&input.line, &resolved, error)),
+    }
+}
+
 struct OutputLine {
     request: Request,
     offset: Offset,
@@ -393,12 +489,15 @@ struct OutputLine {
 
 async fn run_real(
     config: GpioConfig,
+    consumer: &str,
     volume_step_db: f32,
     bus: &Bus,
     status: &mut GpioStatus,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    // Outputs: one request per line (lines may live on different chips).
+    // Every line is requested on its own: another instance may hold some
+    // lines of the same chip, and a line that is taken only disables itself.
+    let mut problems: Vec<String> = Vec::new();
     let mut outputs: HashMap<String, OutputLine> = HashMap::new();
     let mut named: Vec<(String, crate::config::GpioOutputConfig)> = config
         .outputs
@@ -416,116 +515,58 @@ async fn run_real(
         ));
     }
     for (name, output) in &named {
-        let resolved = resolve_line(&config, &output.line)?;
-        let mut builder = Request::builder();
-        builder
-            .on_chip(&resolved.chip)
-            .with_consumer("talktome-headless")
-            .with_line(resolved.offset)
-            .as_output(Value::Inactive);
-        if output.active_low {
-            builder.as_active_low();
+        match request_output(&config, consumer, output) {
+            Ok((request, resolved)) => {
+                tracing::info!(event = "gpio-output", name, line = %output.line, chip = %resolved.chip.display(), offset = resolved.offset);
+                outputs.insert(
+                    name.clone(),
+                    OutputLine {
+                        request,
+                        offset: resolved.offset,
+                        current: None,
+                    },
+                );
+            }
+            Err(error) => {
+                let error = format!("{error:#}");
+                tracing::warn!(event = "gpio-line-unavailable", name, line = %output.line, error = %error);
+                record_output(status, name, None, Some(error.clone()));
+                problems.push(format!("output {name}: {error}"));
+            }
         }
-        let request = builder
-            .request()
-            .with_context(|| format!("requesting output {} ({})", name, output.line))?;
-        tracing::info!(event = "gpio-output", name, line = %output.line, chip = %resolved.chip.display(), offset = resolved.offset);
-        outputs.insert(
-            name.clone(),
-            OutputLine {
-                request,
-                offset: resolved.offset,
-                current: None,
-            },
-        );
     }
 
-    // Inputs: grouped per chip in one request each, with edge detection.
-    let mut per_chip: HashMap<PathBuf, Vec<(usize, Offset)>> = HashMap::new();
-    for (index, input) in config.inputs.iter().enumerate() {
-        let resolved = resolve_line(&config, &input.line)?;
-        per_chip
-            .entry(resolved.chip.clone())
-            .or_default()
-            .push((index, resolved.offset));
-    }
     let (event_tx, mut event_rx) = mpsc::channel::<InputEvent>(64);
     let inputs = Arc::new(config.inputs.clone());
     let mut initial_levels: Vec<(usize, bool)> = Vec::new();
-    for (chip, lines) in per_chip {
-        let mut builder = Request::builder();
-        builder.on_chip(&chip).with_consumer("talktome-headless");
-        for (index, offset) in &lines {
-            let input = &config.inputs[*index];
-            builder
-                .with_line(*offset)
-                .as_input()
-                .with_edge_detection(EdgeDetection::BothEdges)
-                .with_bias(if input.active_low {
-                    Bias::PullUp
-                } else {
-                    Bias::PullDown
-                });
-            if input.active_low {
-                builder.as_active_low();
-            } else {
-                builder.as_active_high();
-            }
-            if input.debounce_ms > 0 {
-                builder.with_debounce_period(Duration::from_millis(input.debounce_ms as u64));
-            }
-        }
-        let request = match builder.request() {
-            Ok(request) => request,
+    for (index, input) in config.inputs.iter().enumerate() {
+        let (request, offset) = match request_input(&config, consumer, input) {
+            Ok(requested) => requested,
             Err(error) => {
-                // Older kernels lack debounce support in the uAPI; retry without it.
-                tracing::warn!(event = "gpio-input-retry", chip = %chip.display(), error = %error);
-                let mut builder = Request::builder();
-                builder.on_chip(&chip).with_consumer("talktome-headless");
-                for (index, offset) in &lines {
-                    let input = &config.inputs[*index];
-                    builder
-                        .with_line(*offset)
-                        .as_input()
-                        .with_edge_detection(EdgeDetection::BothEdges);
-                    if input.active_low {
-                        builder.as_active_low();
-                    } else {
-                        builder.as_active_high();
-                    }
+                let error = format!("{error:#}");
+                tracing::warn!(event = "gpio-line-unavailable", line = %input.line, error = %error);
+                if let Some(view) = status.inputs.get_mut(index) {
+                    view.error = Some(error.clone());
                 }
-                builder
-                    .request()
-                    .with_context(|| format!("requesting inputs on {}", chip.display()))?
+                problems.push(format!("input {}: {error}", input.line));
+                continue;
             }
         };
-        for (index, offset) in &lines {
-            match request.value(*offset) {
-                Ok(value) => {
-                    let pressed = matches!(value, Value::Active);
-                    initial_levels.push((*index, pressed));
-                    tracing::info!(
-                        event = "gpio-input-initial",
-                        line = %config.inputs[*index].line,
-                        pressed,
-                        active_low = config.inputs[*index].active_low
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        event = "gpio-input-initial-failed",
-                        line = %config.inputs[*index].line,
-                        error = %error
-                    );
-                }
+        tracing::info!(event = "gpio-input", line = %input.line, offset, action = ?input.action);
+        match request.value(offset) {
+            Ok(value) => {
+                let pressed = matches!(value, Value::Active);
+                initial_levels.push((index, pressed));
+                tracing::info!(
+                    event = "gpio-input-initial",
+                    line = %input.line,
+                    pressed,
+                    active_low = input.active_low
+                );
             }
-        }
-        let offsets: HashMap<Offset, usize> = lines
-            .iter()
-            .map(|(index, offset)| (*offset, *index))
-            .collect();
-        for (index, offset) in &lines {
-            tracing::info!(event = "gpio-input", line = %config.inputs[*index].line, chip = %chip.display(), offset, action = ?config.inputs[*index].action);
+            Err(error) => {
+                tracing::warn!(event = "gpio-input-initial-failed", line = %input.line, error = %error);
+            }
         }
         let tx = event_tx.clone();
         let async_request = AsyncRequest::new(request);
@@ -533,18 +574,8 @@ async fn run_real(
             loop {
                 match async_request.read_edge_event().await {
                     Ok(event) => {
-                        let Some(index) = offsets.get(&event.offset) else {
-                            continue;
-                        };
                         let pressed = matches!(event.kind, EdgeKind::Rising);
-                        if tx
-                            .send(InputEvent {
-                                index: *index,
-                                pressed,
-                            })
-                            .await
-                            .is_err()
-                        {
+                        if tx.send(InputEvent { index, pressed }).await.is_err() {
                             break;
                         }
                     }
@@ -557,6 +588,7 @@ async fn run_real(
         });
     }
     drop(event_tx);
+    status.error = (!problems.is_empty()).then(|| problems.join("; "));
 
     let mut snapshots = bus.snapshots.clone();
     let mut debouncer = Debouncer::new(

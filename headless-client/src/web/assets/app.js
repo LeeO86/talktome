@@ -539,7 +539,9 @@
           el('td', {}, code(input.line)),
           el('td', { text: input.action.replace('_', ' ') }),
           el('td', { text: input.target || '–' }),
-          el('td', {}, [el('span', { class: `led ${input.pressed ? 'led-on' : ''}` }), ' ', input.pressed ? 'pressed' : 'released']),
+          el('td', {}, input.error
+            ? [el('span', { class: 'led led-amber' }), ' ', `error: ${input.error}`]
+            : [el('span', { class: `led ${input.pressed ? 'led-on' : ''}` }), ' ', input.pressed ? 'pressed' : 'released']),
           el('td', { text: input.events }),
         ])
       );

@@ -465,6 +465,8 @@ pub struct GpioInputView {
     pub active_low: bool,
     pub pressed: bool,
     pub events: u64,
+    /// Why the line could not be requested (e.g. used by another instance).
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]

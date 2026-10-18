@@ -372,6 +372,16 @@ status = { line = "GPIO24" }   # active_low = true for an LED wired to 3.3 V
 
 It can also be picked in Settings → GPIO (*status light*).
 
+**Several instances on one Pi** can share a GPIO chip, for example one
+instance for the buttons (GPI) and another for the lamps (GPO). Each line
+can belong to only one instance: give every instance its own lines and
+remove the example `tally` / `talking` outputs (GPIO17 / GPIO27) from the
+instance that should not drive them. Every line is requested separately,
+so a line that is already taken only disables that line; the status page
+shows it as *error: GPIO17 is already used by talktome-headless@cam1* and
+everything else keeps working. `talktome-headless list-gpio` (or
+`gpioinfo`) shows which instance holds which line.
+
 ## Local control socket (display / rotaries)
 
 The Stream Deck and GPIO surfaces are optional. A custom OLED, encoder

@@ -42,10 +42,12 @@ impl Renderer {
             _ => appearance.background,
         };
         let margin = (w as f32 * 0.07) as u32;
-        let mut image = match accent_fill(background) {
-            Some(fill) => {
-                let mut image = RgbImage::from_pixel(w, h, to_pixel(fill));
-                draw_frame(&mut image, 0, 0, w, h, margin.max(3), background);
+        let mut image = match accent(background) {
+            Some(accent) => {
+                let mut image = RgbImage::from_pixel(w, h, to_pixel(accent.fill));
+                if accent.frame {
+                    draw_frame(&mut image, 0, 0, w, h, margin.max(3), background);
+                }
                 image
             }
             None => RgbImage::from_pixel(w, h, to_pixel(background)),
@@ -186,19 +188,21 @@ impl Renderer {
             let margin = (seg_h.min(seg_w) as f32 * 0.1) as u32;
             let (seg_x, seg_y) = (x0 + 1, y0 + 1);
             let (inner_w, inner_h) = (seg_w.saturating_sub(2), seg_h.saturating_sub(2));
-            match accent_fill(segment.background) {
-                Some(fill) => {
-                    fill_rect(&mut image, seg_x, seg_y, inner_w, inner_h, fill);
-                    let frame = (margin / 2).max(3);
-                    draw_frame(
-                        &mut image,
-                        seg_x,
-                        seg_y,
-                        inner_w,
-                        inner_h,
-                        frame,
-                        segment.background,
-                    );
+            match accent(segment.background) {
+                Some(accent) => {
+                    fill_rect(&mut image, seg_x, seg_y, inner_w, inner_h, accent.fill);
+                    if accent.frame {
+                        let frame = (margin / 2).max(3);
+                        draw_frame(
+                            &mut image,
+                            seg_x,
+                            seg_y,
+                            inner_w,
+                            inner_h,
+                            frame,
+                            segment.background,
+                        );
+                    }
                 }
                 None => fill_rect(
                     &mut image,
@@ -275,26 +279,38 @@ pub struct StripSegment {
     pub background: Rgb,
 }
 
-/// How strongly a state colour tints the dark key inside its frame. The web
-/// client uses 12% on a card; a key needs more to read from a distance.
-const ACCENT_TINT: f32 = 0.35;
+/// How strongly a state colour tints the dark key. The web client uses 12%
+/// on a card; a key needs more to read from a distance.
+const TALK_TINT: f32 = 0.35;
+/// Incoming green: a bit lighter and without a frame.
+const INCOMING_TINT: f32 = 0.45;
+
+struct Accent {
+    fill: Rgb,
+    /// Draw a frame in the full state colour around the tinted fill.
+    frame: bool,
+}
 
 /// Talking, locked and incoming are drawn like the web client's target
-/// cards: dark fill tinted with the state colour inside a frame of the full
-/// colour, instead of a solid neon key. Returns the tinted fill.
-fn accent_fill(color: Rgb) -> Option<Rgb> {
-    if ![palette::TALKING, palette::LOCKED, palette::INCOMING].contains(&color) {
-        return None;
-    }
-    let mix = |base: u8, accent: u8| {
-        (base as f32 * (1.0 - ACCENT_TINT) + accent as f32 * ACCENT_TINT).round() as u8
+/// cards: a dark key tinted with the state colour instead of a solid neon
+/// key. Talking / locked keep a frame of the full colour.
+fn accent(color: Rgb) -> Option<Accent> {
+    let (tint, frame) = match color {
+        c if c == palette::TALKING || c == palette::LOCKED => (TALK_TINT, true),
+        c if c == palette::INCOMING => (INCOMING_TINT, false),
+        _ => return None,
     };
+    let mix =
+        |base: u8, accent: u8| (base as f32 * (1.0 - tint) + accent as f32 * tint).round() as u8;
     let base = palette::IDLE;
-    Some(Rgb(
-        mix(base.0, color.0),
-        mix(base.1, color.1),
-        mix(base.2, color.2),
-    ))
+    Some(Accent {
+        fill: Rgb(
+            mix(base.0, color.0),
+            mix(base.1, color.1),
+            mix(base.2, color.2),
+        ),
+        frame,
+    })
 }
 
 fn draw_frame(image: &mut RgbImage, x: u32, y: u32, w: u32, h: u32, width: u32, color: Rgb) {
@@ -468,11 +484,12 @@ mod tests {
         incoming.blink = Some(palette::IDLE);
         let talk = renderer.key(&talking, (96, 96), false);
         let listen = renderer.key(&incoming, (96, 96), false);
-        // Web client look: full colour frame, dark tinted inside.
+        // Web client look: talking has a full colour frame around a dark
+        // tint; incoming is a lighter green tint without a frame.
         assert_eq!(talk.get_pixel(1, 1).0, [139, 92, 246]);
-        assert_eq!(listen.get_pixel(1, 1).0, [34, 197, 94]);
         assert_eq!(talk.get_pixel(8, 8).0, [73, 60, 117]);
-        assert_eq!(listen.get_pixel(8, 8).0, [37, 96, 64]);
+        assert_eq!(listen.get_pixel(1, 1).0, [36, 112, 69]);
+        assert_eq!(listen.get_pixel(8, 8).0, [36, 112, 69]);
         if let Ok(dir) = std::env::var("TALKTOME_COLOUR_SWATCH_DIR") {
             let dir = std::path::PathBuf::from(dir);
             let _ = std::fs::create_dir_all(&dir);

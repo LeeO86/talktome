@@ -753,7 +753,13 @@ Every command is answered with the matching `-result` event carrying the
   kernel debounce where available. Talk/lock to an offline **user** is
   ignored.
 - GPIO-only instances (the two-instances-per-Pi case) simply omit the
-  `streamdeck` section; two instances must not share lines.
+  `streamdeck` section; two instances must not share lines. Several
+  instances may use different lines of the same chip (e.g. one for inputs,
+  one for outputs): every output and every input is a separate line request
+  with consumer `talktome-headless@<instance>`. A line that cannot be
+  requested (typically "already used by talktome-headless@<other>", read
+  from the kernel's line info) is marked on that output/input in the status
+  view and summarised in the GPIO error; the remaining lines keep working.
 - A `mock` GPIO backend (env `TALKTOME_GPIO_BACKEND=mock`) writes line
   states to a file and reads input events from a FIFO for tests.
 
