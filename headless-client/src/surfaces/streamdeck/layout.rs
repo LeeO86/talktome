@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use crate::audio::mixer::format_volume_db;
-use crate::state::{ConferenceMemberInfo, ConnectionState, Snapshot, TargetInfo};
+use crate::state::{ConferenceMemberInfo, ConnectionState, ProductionInfo, Snapshot, TargetInfo};
 use crate::talk::TargetKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +98,10 @@ pub enum Role {
     Status,
     Reply,
     Target(TargetKey),
-    Member { conference: TargetKey, user_id: i64 },
+    Member {
+        conference: TargetKey,
+        user_id: i64,
+    },
     NextPage,
     NextEncoderPage,
     VolumeToggle,
@@ -106,6 +109,9 @@ pub enum Role {
     VolumeUp,
     VolumeDown,
     MuteSelected,
+    /// Index into `Snapshot::productions` on the production page.
+    Production(usize),
+    ClearLocks,
     Empty,
 }
 
@@ -148,6 +154,10 @@ pub struct DeckState {
     pub member_conference: Option<TargetKey>,
     pub member_selected: Option<i64>,
     pub member_page: usize,
+    /// Production picker opened from the status key.
+    pub production_layer: bool,
+    pub production_layer_touched: Instant,
+    pub production_page: usize,
     pub selected: Option<TargetKey>,
     pub blink_phase: bool,
 }
@@ -164,6 +174,9 @@ impl Default for DeckState {
             member_conference: None,
             member_selected: None,
             member_page: 0,
+            production_layer: false,
+            production_layer_touched: Instant::now(),
+            production_page: 0,
             selected: None,
             blink_phase: false,
         }
@@ -201,6 +214,57 @@ impl DeckState {
             return true;
         }
         false
+    }
+
+    /// Opens the production picker; the other layers close.
+    pub fn open_production_layer(&mut self) {
+        self.close_volume_layer();
+        self.close_member_layer();
+        self.production_layer = true;
+        self.production_page = 0;
+        self.production_layer_touched = Instant::now();
+    }
+
+    pub fn close_production_layer(&mut self) {
+        self.production_layer = false;
+    }
+
+    pub fn expire_production_layer(&mut self, timeout: Duration) -> bool {
+        if self.production_layer && self.production_layer_touched.elapsed() >= timeout {
+            self.close_production_layer();
+            return true;
+        }
+        false
+    }
+
+    /// Key page of whatever the target keys currently show.
+    pub fn key_page(&self) -> usize {
+        if self.production_layer {
+            self.production_page
+        } else if self.member_layer {
+            self.member_page
+        } else {
+            self.page
+        }
+    }
+
+    pub fn key_page_mut(&mut self) -> &mut usize {
+        if self.production_layer {
+            &mut self.production_page
+        } else if self.member_layer {
+            &mut self.member_page
+        } else {
+            &mut self.page
+        }
+    }
+
+    /// Keeps an open production or member layer from timing out.
+    pub fn touch_layer(&mut self) {
+        if self.production_layer {
+            self.production_layer_touched = Instant::now();
+        } else if self.member_layer {
+            self.touch_member_layer();
+        }
     }
 
     pub fn toggle_volume_layer(&mut self, snapshot: &Snapshot) {
@@ -271,6 +335,8 @@ impl DeckState {
         };
         let encoder_pages = encoder_page_count(geometry, encoder_count);
         self.encoder_page = self.encoder_page.min(encoder_pages.saturating_sub(1));
+        let production_pages = page_count(geometry, snapshot.productions.len());
+        self.production_page = self.production_page.min(production_pages.saturating_sub(1));
     }
 }
 
@@ -423,12 +489,31 @@ pub fn page_members<'a>(
         .collect()
 }
 
+/// Productions shown on the current production page.
+pub fn page_productions<'a>(
+    geometry: &Geometry,
+    state: &DeckState,
+    productions: &'a [ProductionInfo],
+) -> Vec<(usize, &'a ProductionInfo)> {
+    let per_page = target_slots(geometry).len().max(1);
+    let pages = page_count(geometry, productions.len());
+    let page = state.production_page.min(pages.saturating_sub(1));
+    productions
+        .iter()
+        .enumerate()
+        .skip(page * per_page)
+        .take(per_page)
+        .collect()
+}
+
 fn layer_page_counts(
     geometry: &Geometry,
     snapshot: &Snapshot,
     state: &DeckState,
 ) -> (usize, usize) {
-    if state.member_layer {
+    if state.production_layer {
+        (page_count(geometry, snapshot.productions.len()), 1)
+    } else if state.member_layer {
         let count = state
             .member_conference
             .map(|key| conference_members(snapshot, key).len())
@@ -501,7 +586,16 @@ fn command_roles(
         }
     };
 
-    if state.member_layer {
+    if state.production_layer {
+        // A page of its own: status = back, clear locks, paging; nothing else.
+        row[0] = Some(Role::Status);
+        if cols > 1 {
+            row[1] = Some(Role::ClearLocks);
+        }
+        if key_pages > 1 && cols > 2 {
+            row[cols - 1] = Some(Role::NextPage);
+        }
+    } else if state.member_layer {
         overlay(&mut row, Role::MembersToggle);
     } else if state.volume_layer {
         overlay(&mut row, Role::VolumeToggle);
@@ -586,7 +680,21 @@ fn target_appearance(target: &TargetInfo, state: &DeckState, snapshot: &Snapshot
     appearance
 }
 
+fn production_appearance(production: &ProductionInfo, snapshot: &Snapshot) -> Appearance {
+    let mut appearance = Appearance::simple(&production.name, palette::IDLE);
+    if snapshot.is_current_production(production) {
+        appearance.background = palette::SELECTED;
+        appearance.subtitle = "current".into();
+    }
+    appearance
+}
+
 fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
+    if state.production_layer {
+        let mut appearance = Appearance::simple("PRODUCTION", palette::SELECTED);
+        appearance.subtitle = "back".into();
+        return appearance;
+    }
     let mut appearance = Appearance::simple(
         &snapshot.user_name,
         if snapshot.connection == ConnectionState::Ready
@@ -613,13 +721,8 @@ fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
         snapshot.connection.label().to_string()
     } else if !snapshot.audio_ok {
         "no audio".to_string()
-    } else if let Some(production) = snapshot
-        .production
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        production.to_string()
+    } else if let Some(production) = snapshot.production_name() {
+        production
     } else {
         "ready".to_string()
     };
@@ -838,6 +941,21 @@ fn appearance_for_role(
             })
             .map(|member| member_appearance(member, state))
             .unwrap_or_else(Appearance::blank),
+        Role::Production(index) => snapshot
+            .productions
+            .get(index)
+            .map(|production| production_appearance(production, snapshot))
+            .unwrap_or_else(Appearance::blank),
+        Role::ClearLocks => {
+            let mut a = Appearance::simple("CLEAR", palette::REPLY);
+            a.subtitle = "locks".into();
+            if snapshot.lock_active {
+                a.badge = Some(Badge::Lock);
+            } else {
+                a.foreground = palette::OFFLINE_TEXT;
+            }
+            a
+        }
         Role::Empty => Appearance::blank(),
     }
 }
@@ -866,7 +984,23 @@ pub fn layout(
         slot.role = role;
         slot.appearance = appearance_for_role(role, snapshot, state, key_pages, encoder_pages);
     }
-    if state.member_layer {
+    if state.production_layer {
+        let shown = page_productions(geometry, state, &snapshot.productions);
+        let slots = occupied_target_slots(geometry, shown.len().max(1));
+        if shown.is_empty() {
+            if let Some(key) = slots.first().and_then(|slot| keys.get_mut(*slot as usize)) {
+                let mut a = Appearance::simple("No productions", palette::OFFLINE);
+                a.foreground = palette::OFFLINE_TEXT;
+                key.appearance = a;
+            }
+        }
+        for (slot, (index, production)) in slots.iter().zip(shown.iter()) {
+            if let Some(key) = keys.get_mut(*slot as usize) {
+                key.role = Role::Production(*index);
+                key.appearance = production_appearance(production, snapshot);
+            }
+        }
+    } else if state.member_layer {
         if let Some(conference) = state.member_conference {
             let shown = page_members(geometry, state, conference_members(snapshot, conference));
             let slots = occupied_target_slots(geometry, shown.len());
@@ -933,6 +1067,9 @@ pub fn encoder_bindings<'a>(
 ) -> Vec<Option<EncoderBinding<'a>>> {
     if geometry.encoders == 0 {
         return Vec::new();
+    }
+    if state.production_layer {
+        return vec![None; geometry.encoders as usize];
     }
     if state.member_layer {
         let Some(conference) = state.member_conference else {
@@ -1144,6 +1281,91 @@ mod tests {
         );
         assert_eq!(keys[0].appearance.title, "Cam 1");
         assert_eq!(keys[0].appearance.subtitle, "SRF News");
+    }
+
+    fn with_productions(count: usize) -> Snapshot {
+        let mut snapshot = snapshot(4);
+        snapshot.productions = (1..=count)
+            .map(|id| crate::state::ProductionInfo {
+                id: id.to_string(),
+                name: format!("Prod {id}"),
+            })
+            .collect();
+        snapshot.production = Some("2".into());
+        snapshot
+    }
+
+    #[test]
+    fn production_page_replaces_the_whole_deck() {
+        let snapshot = with_productions(3);
+        let mut state = DeckState::default();
+        state.open_production_layer();
+        let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
+        assert_eq!(keys[0].role, Role::Status);
+        assert_eq!(keys[0].appearance.title, "PRODUCTION");
+        assert_eq!(keys[0].appearance.subtitle, "back");
+        assert_eq!(keys[1].role, Role::ClearLocks);
+        // No VOL, NEXT, MEMBERS, Reply or targets on this page.
+        assert!(keys[2..5].iter().all(|key| key.role == Role::Empty));
+        assert!(!keys
+            .iter()
+            .any(|key| matches!(key.role, Role::Target(_) | Role::Reply)));
+        // Productions sit on the lowest row, left to right; the current one is marked.
+        assert_eq!(keys[10].role, Role::Production(0));
+        assert_eq!(keys[11].role, Role::Production(1));
+        assert_eq!(keys[12].role, Role::Production(2));
+        assert_eq!(keys[11].appearance.subtitle, "current");
+        assert_eq!(keys[11].appearance.background, palette::SELECTED);
+        assert_eq!(keys[10].appearance.background, palette::IDLE);
+    }
+
+    #[test]
+    fn production_page_pages_and_closes_other_layers() {
+        let snapshot = with_productions(6);
+        let geometry = geometry("neo");
+        let mut state = DeckState {
+            volume_layer: true,
+            ..Default::default()
+        };
+        state.open_production_layer();
+        assert!(!state.volume_layer && !state.member_layer);
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        // Neo: 4 production keys per page, NEXT at the far right of the command row.
+        assert_eq!(keys[3].role, Role::NextPage);
+        assert_eq!(keys[3].appearance.subtitle, "1/2");
+        *state.key_page_mut() = 1;
+        state.clamp_pages(&geometry, &snapshot);
+        let keys = layout(&geometry, &snapshot, &state, &options());
+        assert_eq!(keys[4].role, Role::Production(4));
+        assert_eq!(keys[5].role, Role::Production(5));
+        assert_eq!(state.page, 0, "target page is untouched");
+    }
+
+    #[test]
+    fn production_page_without_productions_says_so() {
+        let snapshot = snapshot(4);
+        let mut state = DeckState::default();
+        state.open_production_layer();
+        let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
+        assert_eq!(keys[10].appearance.title, "No productions");
+        assert_eq!(keys[10].role, Role::Empty);
+    }
+
+    #[test]
+    fn status_shows_production_name_for_an_id() {
+        let mut snapshot = snapshot(1);
+        snapshot.production = Some("4".into());
+        snapshot.productions = vec![crate::state::ProductionInfo {
+            id: "4".into(),
+            name: "Andys-Superproduktion".into(),
+        }];
+        let keys = layout(
+            &geometry("neo"),
+            &snapshot,
+            &DeckState::default(),
+            &options(),
+        );
+        assert_eq!(keys[0].appearance.subtitle, "Andys-Superproduktion");
     }
 
     #[test]

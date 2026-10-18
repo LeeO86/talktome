@@ -210,6 +210,44 @@ impl Snapshot {
         }
     }
 
+    /// The configured production: `user.production` may be an id or a
+    /// name, matched against this user's productions.
+    pub fn current_production(&self) -> Option<&ProductionInfo> {
+        let wanted = self
+            .production
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())?;
+        self.productions
+            .iter()
+            .find(|p| p.id == wanted)
+            .or_else(|| {
+                self.productions
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case(wanted))
+            })
+    }
+
+    pub fn is_current_production(&self, production: &ProductionInfo) -> bool {
+        self.current_production()
+            .is_some_and(|current| current.id == production.id)
+    }
+
+    /// Display name of the configured production, or the raw value when it
+    /// is not in the list.
+    pub fn production_name(&self) -> Option<String> {
+        let wanted = self
+            .production
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())?;
+        Some(
+            self.current_production()
+                .map_or(wanted, |p| p.name.as_str())
+                .to_string(),
+        )
+    }
+
     pub fn target(&self, key: TargetKey) -> Option<&TargetInfo> {
         self.targets.iter().find(|t| t.key == key)
     }
@@ -400,6 +438,8 @@ pub enum Command {
         conference: TargetKey,
         user_id: i64,
     },
+    /// Switch to another assigned production (Stream Deck production page).
+    SetProduction(String),
     /// Request a fresh snapshot broadcast (e.g. after a deck reconnects).
     Refresh,
     Shutdown,
@@ -484,6 +524,7 @@ pub struct DeckStatus {
     pub encoder_pages: usize,
     pub volume_layer: bool,
     pub member_layer: bool,
+    pub production_layer: bool,
     pub keys: Vec<DeckKeyView>,
     pub dials: Vec<DeckDialView>,
     pub error: Option<String>,

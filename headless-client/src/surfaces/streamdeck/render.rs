@@ -41,9 +41,16 @@ impl Renderer {
             (Some(alt), true) => alt,
             _ => appearance.background,
         };
-        let mut image = RgbImage::from_pixel(w, h, to_pixel(background));
-
         let margin = (w as f32 * 0.07) as u32;
+        let mut image = match accent_fill(background) {
+            Some(fill) => {
+                let mut image = RgbImage::from_pixel(w, h, to_pixel(fill));
+                draw_frame(&mut image, 0, 0, w, h, margin.max(3), background);
+                image
+            }
+            None => RgbImage::from_pixel(w, h, to_pixel(background)),
+        };
+
         let mut text_bottom = h - margin;
         if let Some(bar) = appearance.bar {
             let bar_h = (h as f32 * 0.09).max(3.0) as u32;
@@ -177,14 +184,31 @@ impl Renderer {
                 (0, index as u32 * seg_h)
             };
             let margin = (seg_h.min(seg_w) as f32 * 0.1) as u32;
-            fill_rect(
-                &mut image,
-                x0 + 1,
-                y0 + 1,
-                seg_w.saturating_sub(2),
-                seg_h.saturating_sub(2),
-                segment.background,
-            );
+            let (seg_x, seg_y) = (x0 + 1, y0 + 1);
+            let (inner_w, inner_h) = (seg_w.saturating_sub(2), seg_h.saturating_sub(2));
+            match accent_fill(segment.background) {
+                Some(fill) => {
+                    fill_rect(&mut image, seg_x, seg_y, inner_w, inner_h, fill);
+                    let frame = (margin / 2).max(3);
+                    draw_frame(
+                        &mut image,
+                        seg_x,
+                        seg_y,
+                        inner_w,
+                        inner_h,
+                        frame,
+                        segment.background,
+                    );
+                }
+                None => fill_rect(
+                    &mut image,
+                    seg_x,
+                    seg_y,
+                    inner_w,
+                    inner_h,
+                    segment.background,
+                ),
+            }
             let bar_h = (seg_h as f32 * 0.14).max(4.0) as u32;
             let bar_y = y0 + seg_h - margin - bar_h;
             fill_rect(
@@ -249,6 +273,36 @@ pub struct StripSegment {
     pub volume: f32,
     pub muted: bool,
     pub background: Rgb,
+}
+
+/// How strongly a state colour tints the dark key inside its frame. The web
+/// client uses 12% on a card; a key needs more to read from a distance.
+const ACCENT_TINT: f32 = 0.35;
+
+/// Talking, locked and incoming are drawn like the web client's target
+/// cards: dark fill tinted with the state colour inside a frame of the full
+/// colour, instead of a solid neon key. Returns the tinted fill.
+fn accent_fill(color: Rgb) -> Option<Rgb> {
+    if ![palette::TALKING, palette::LOCKED, palette::INCOMING].contains(&color) {
+        return None;
+    }
+    let mix = |base: u8, accent: u8| {
+        (base as f32 * (1.0 - ACCENT_TINT) + accent as f32 * ACCENT_TINT).round() as u8
+    };
+    let base = palette::IDLE;
+    Some(Rgb(
+        mix(base.0, color.0),
+        mix(base.1, color.1),
+        mix(base.2, color.2),
+    ))
+}
+
+fn draw_frame(image: &mut RgbImage, x: u32, y: u32, w: u32, h: u32, width: u32, color: Rgb) {
+    let width = width.min(w / 2).min(h / 2);
+    fill_rect(image, x, y, w, width, color);
+    fill_rect(image, x, (y + h).saturating_sub(width), w, width, color);
+    fill_rect(image, x, y, width, h, color);
+    fill_rect(image, (x + w).saturating_sub(width), y, width, h, color);
 }
 
 fn to_pixel(rgb: Rgb) -> ImgRgb<u8> {
@@ -414,8 +468,11 @@ mod tests {
         incoming.blink = Some(palette::IDLE);
         let talk = renderer.key(&talking, (96, 96), false);
         let listen = renderer.key(&incoming, (96, 96), false);
-        assert_eq!(talk.get_pixel(8, 8).0, [139, 92, 246]);
-        assert_eq!(listen.get_pixel(8, 8).0, [34, 197, 94]);
+        // Web client look: full colour frame, dark tinted inside.
+        assert_eq!(talk.get_pixel(1, 1).0, [139, 92, 246]);
+        assert_eq!(listen.get_pixel(1, 1).0, [34, 197, 94]);
+        assert_eq!(talk.get_pixel(8, 8).0, [73, 60, 117]);
+        assert_eq!(listen.get_pixel(8, 8).0, [37, 96, 64]);
         if let Ok(dir) = std::env::var("TALKTOME_COLOUR_SWATCH_DIR") {
             let dir = std::path::PathBuf::from(dir);
             let _ = std::fs::create_dir_all(&dir);

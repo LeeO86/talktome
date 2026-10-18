@@ -135,6 +135,10 @@ talking = { line = "GPIO27" }
 # tally_preview = { line = "GPIO23" }
 # incoming = { line = "GPIO18" }
 # connected = { line = "GPIO25" }
+# Status light: short flash each second = running but not registered,
+# 1 s on / 1 s off = registered with an error (no media / audio / heartbeat),
+# steady on = media OK, off = client not running.
+# status = { line = "GPIO24" }
 
 # Drive a pin when a specific conference, user, or feed is playing audio (`receiving`)
 # or is currently addressing this client (`incoming`). Add more tables as needed.

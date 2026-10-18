@@ -32,7 +32,54 @@ pub const OUTPUT_NAMES: &[&str] = &[
     "incoming",
     "connected",
     "locked",
+    "status",
 ];
+
+/// How often a configured `status` light is re-evaluated.
+const STATUS_TICK: Duration = Duration::from_millis(50);
+/// Length of the heartbeat flash while the client runs but is not registered.
+const STATUS_FLASH_MS: u64 = 100;
+
+/// `gpio.outputs.status`: a status light readable without a screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusLight {
+    /// Running, not registered on the server: a short flash once a second.
+    Running,
+    /// Registered, but media not connected or another error: 1 s on, 1 s off.
+    Degraded,
+    /// Registered with media and audio up: steady on.
+    Ok,
+}
+
+impl StatusLight {
+    pub fn from_snapshot(snapshot: &Snapshot) -> Self {
+        if !snapshot.connection.is_online() {
+            return StatusLight::Running;
+        }
+        let media_down = matches!(
+            snapshot.media_status.as_deref(),
+            Some("Media interrupted") | Some("Media failed")
+        );
+        if snapshot.connection.is_ready()
+            && snapshot.audio_ok
+            && !snapshot.server_not_responding
+            && !media_down
+        {
+            StatusLight::Ok
+        } else {
+            StatusLight::Degraded
+        }
+    }
+
+    /// Line level `phase_ms` milliseconds into the pattern.
+    pub fn level(self, phase_ms: u64) -> bool {
+        match self {
+            StatusLight::Running => phase_ms % 1000 < STATUS_FLASH_MS,
+            StatusLight::Degraded => phase_ms % 2000 < 1000,
+            StatusLight::Ok => true,
+        }
+    }
+}
 
 pub fn output_states(snapshot: &Snapshot) -> HashMap<&'static str, bool> {
     let mut states = HashMap::new();
@@ -62,8 +109,16 @@ pub fn target_output_active(snapshot: &Snapshot, output: &GpioTargetOutputConfig
     }
 }
 
-fn desired_output_states(config: &GpioConfig, snapshot: &Snapshot) -> HashMap<String, bool> {
-    let named = output_states(snapshot);
+fn desired_output_states(
+    config: &GpioConfig,
+    snapshot: &Snapshot,
+    phase_ms: u64,
+) -> HashMap<String, bool> {
+    let mut named = output_states(snapshot);
+    named.insert(
+        "status",
+        StatusLight::from_snapshot(snapshot).level(phase_ms),
+    );
     let mut states = HashMap::new();
     for name in OUTPUT_NAMES {
         if config.outputs.contains_key(*name) {
@@ -512,7 +567,11 @@ async fn run_real(
             .max()
             .unwrap_or(20),
     );
-    apply_outputs(&config, &mut outputs, &snapshots.borrow(), status);
+    let started = Instant::now();
+    let phase = || started.elapsed().as_millis() as u64;
+    let blinking = config.outputs.contains_key("status");
+    let mut status_tick = tokio::time::interval(STATUS_TICK);
+    apply_outputs(&config, &mut outputs, &snapshots.borrow(), phase(), status);
     let now = Instant::now();
     for (index, pressed) in initial_levels {
         set_input_pressed(status, index, pressed);
@@ -534,7 +593,13 @@ async fn run_real(
             changed = snapshots.changed() => {
                 if changed.is_err() { break; }
                 let snapshot = snapshots.borrow().clone();
-                if apply_outputs(&config, &mut outputs, &snapshot, status) {
+                if apply_outputs(&config, &mut outputs, &snapshot, phase(), status) {
+                    publish_status(bus, status);
+                }
+            }
+            _ = status_tick.tick(), if blinking => {
+                let snapshot = snapshots.borrow().clone();
+                if apply_outputs(&config, &mut outputs, &snapshot, phase(), status) {
                     publish_status(bus, status);
                 }
             }
@@ -600,9 +665,10 @@ fn apply_outputs(
     config: &GpioConfig,
     outputs: &mut HashMap<String, OutputLine>,
     snapshot: &Snapshot,
+    phase_ms: u64,
     status: &mut GpioStatus,
 ) -> bool {
-    let states = desired_output_states(config, snapshot);
+    let states = desired_output_states(config, snapshot, phase_ms);
     let mut changed = false;
     for (name, output) in outputs.iter_mut() {
         let active = states.get(name).copied().unwrap_or(false);
@@ -655,8 +721,15 @@ async fn run_mock(
     let mut debouncer = Debouncer::new(0);
     tracing::info!(event = "gpio-mock", dir = %dir.display());
 
-    let write_outputs = |snapshot: &Snapshot, status: &mut GpioStatus| {
-        let states = desired_output_states(&config, snapshot);
+    let started = Instant::now();
+    let mut written: Option<HashMap<String, bool>> = None;
+    let mut write_outputs = |snapshot: &Snapshot, status: &mut GpioStatus| {
+        let states = desired_output_states(&config, snapshot, started.elapsed().as_millis() as u64);
+        // The status light is re-evaluated every poll; write only changes.
+        if written.as_ref() == Some(&states) {
+            return;
+        }
+        written = Some(states.clone());
         let mut map = serde_json::Map::new();
         for (name, active) in &states {
             record_output(status, name, Some(*active), None);
@@ -696,6 +769,10 @@ async fn run_mock(
                 write_outputs(&snapshot, status);
             }
             _ = poll.tick() => {
+                if config.outputs.contains_key("status") {
+                    let snapshot = snapshots.borrow().clone();
+                    write_outputs(&snapshot, status);
+                }
                 let Ok(text) = std::fs::read_to_string(&inputs_path) else { continue };
                 if (text.len() as u64) < offset { offset = 0; }
                 let new_text = &text[offset as usize..];
@@ -894,6 +971,58 @@ mod tests {
         assert!(!output_states(&snapshot)["connected"]);
         snapshot.connection = ConnectionState::Disconnected;
         assert!(!output_states(&snapshot)["connected"]);
+    }
+
+    #[test]
+    fn status_light_follows_registration_and_media() {
+        let mut snapshot = Snapshot::initial("cam1", "Cam 1");
+        snapshot.connection = ConnectionState::Connecting;
+        assert_eq!(StatusLight::from_snapshot(&snapshot), StatusLight::Running);
+        snapshot.connection = ConnectionState::Registered;
+        snapshot.audio_ok = true;
+        assert_eq!(StatusLight::from_snapshot(&snapshot), StatusLight::Degraded);
+        snapshot.connection = ConnectionState::Ready;
+        assert_eq!(StatusLight::from_snapshot(&snapshot), StatusLight::Ok);
+        snapshot.audio_ok = false;
+        assert_eq!(StatusLight::from_snapshot(&snapshot), StatusLight::Degraded);
+        snapshot.audio_ok = true;
+        snapshot.server_not_responding = true;
+        assert_eq!(StatusLight::from_snapshot(&snapshot), StatusLight::Degraded);
+        snapshot.server_not_responding = false;
+        snapshot.media_status = Some("Media interrupted".into());
+        assert_eq!(StatusLight::from_snapshot(&snapshot), StatusLight::Degraded);
+    }
+
+    #[test]
+    fn status_light_patterns() {
+        // Running: a 100 ms flash at the start of every second.
+        assert!(StatusLight::Running.level(0));
+        assert!(StatusLight::Running.level(1050));
+        assert!(!StatusLight::Running.level(150));
+        assert!(!StatusLight::Running.level(999));
+        // Degraded: one second on, one second off.
+        assert!(StatusLight::Degraded.level(500));
+        assert!(!StatusLight::Degraded.level(1500));
+        assert!(StatusLight::Degraded.level(2100));
+        // Ok: steady.
+        assert!((0..4000).step_by(50).all(|ms| StatusLight::Ok.level(ms)));
+    }
+
+    #[test]
+    fn status_output_is_driven_only_when_configured() {
+        let mut snapshot = Snapshot::initial("cam1", "Cam 1");
+        snapshot.connection = ConnectionState::Ready;
+        snapshot.audio_ok = true;
+        let mut config = GpioConfig::default();
+        assert!(!desired_output_states(&config, &snapshot, 0).contains_key("status"));
+        config.outputs.insert(
+            "status".into(),
+            crate::config::GpioOutputConfig {
+                line: "GPIO23".into(),
+                active_low: false,
+            },
+        );
+        assert!(desired_output_states(&config, &snapshot, 1500)["status"]);
     }
 
     #[test]

@@ -174,6 +174,9 @@ pub struct Session {
     output_device: Option<String>,
     /// Wanted production (`user.production`); the remote panel can change it.
     production: Option<String>,
+    /// Production the server put this client in (its default when none is
+    /// configured), for1 the status key and production page.
+    active_production: Option<String>,
 }
 
 impl Session {
@@ -271,6 +274,7 @@ impl Session {
             input_device,
             output_device,
             production,
+            active_production: None,
             saved_profile: serde_json::to_value(profile)
                 .ok()
                 .and_then(|p| p.as_str().map(str::to_string))
@@ -442,6 +446,8 @@ impl Session {
                 self.pending_talk_change = Some(change);
                 self.snapshot_dirty = true;
             }
+            // Used on the next registration.
+            Command::SetProduction(id) => self.save_production(&id),
             Command::Refresh => self.snapshot_dirty = true,
             _ => {}
         }
@@ -633,6 +639,10 @@ impl Session {
             let server_audio = ack.get("userAudioSettings").filter(|s| s.is_object());
             if let Some(settings) = server_audio {
                 self.apply_user_audio_settings(settings, false);
+            }
+            if let Some(id) = ack.get("productionId").and_then(production_id_text) {
+                connected.production_id = ack.get("productionId").cloned();
+                self.active_production = Some(id);
             }
             self.panel = ack
                 .get("panelSettings")
@@ -970,6 +980,11 @@ impl Session {
                                 .get("productionId")
                                 .cloned()
                                 .filter(|v| !v.is_null());
+                            self.active_production = connected
+                                .production_id
+                                .as_ref()
+                                .and_then(production_id_text);
+                            self.snapshot_dirty = true;
                             let change = self.talk.reset();
                             self.send_talk_change(&mut connected, &change, "production-reset")
                                 .await;
@@ -1364,6 +1379,12 @@ impl Session {
                 self.apply_member_level(conference_id, user_id, level);
             }
             Command::MemberVolumeSet { .. } | Command::MemberMuteToggle { .. } => {}
+            Command::SetProduction(id) => {
+                if let Err(error) = self.change_production(connected, &id).await {
+                    self.detail = error.to_string();
+                    self.snapshot_dirty = true;
+                }
+            }
             Command::Refresh => self.snapshot_dirty = true,
             Command::Shutdown => {}
         }
@@ -1979,6 +2000,20 @@ impl Session {
             .get("productionId")
             .and_then(production_id_text)
             .ok_or("Invalid production")?;
+        self.change_production(connected, &id).await
+    }
+
+    /// Switches the active production like the web client's selector and
+    /// saves it as `user.production`.
+    async fn change_production(
+        &mut self,
+        connected: &mut Connected,
+        id: &str,
+    ) -> Result<(), &'static str> {
+        let id = id.trim().to_string();
+        if id.is_empty() {
+            return Err("Invalid production");
+        }
         if connected
             .production_id
             .as_ref()
@@ -2009,7 +2044,21 @@ impl Session {
             .filter(|v| !v.is_null())
             .or_else(|| Some(json!(id)));
         tracing::info!(event = "production-changed", production = %id);
-        self.production = Some(id.clone());
+        self.active_production = connected
+            .production_id
+            .as_ref()
+            .and_then(production_id_text);
+        self.save_production(&id);
+        if let Err(error) = self.reload_targets(connected).await {
+            tracing::warn!(event = "targets-failed", error = %format!("{error:#}"));
+        }
+        self.snapshot_dirty = true;
+        Ok(())
+    }
+
+    fn save_production(&mut self, id: &str) {
+        self.production = Some(id.to_string());
+        self.snapshot_dirty = true;
         if let Some(path) = &self.config_path {
             if let Err(error) =
                 crate::config::update_values(path, &[("user", "production", json!(id))])
@@ -2017,11 +2066,6 @@ impl Session {
                 tracing::warn!(event = "config-save-failed", error = %format!("{error:#}"));
             }
         }
-        if let Err(error) = self.reload_targets(connected).await {
-            tracing::warn!(event = "targets-failed", error = %format!("{error:#}"));
-        }
-        self.snapshot_dirty = true;
-        Ok(())
     }
 
     fn panel_target_audio(&mut self, command: &Value) -> Result<(), &'static str> {
@@ -2389,7 +2433,10 @@ impl Session {
                 .unwrap_or_else(|| self.config.user.name.clone()),
             user_id: self.login.as_ref().map(|l| l.user.id),
             server_url: self.config.server.url.clone(),
-            production: self.production.clone(),
+            production: self
+                .active_production
+                .clone()
+                .or_else(|| self.production.clone()),
             productions: self
                 .login
                 .iter()

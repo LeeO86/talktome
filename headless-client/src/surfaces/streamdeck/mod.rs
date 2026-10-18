@@ -490,12 +490,16 @@ fn role_label(role: Role) -> String {
         Role::VolumeUp => "volume-up".into(),
         Role::VolumeDown => "volume-down".into(),
         Role::MuteSelected => "mute-selected".into(),
+        Role::Production(index) => format!("production:{index}"),
+        Role::ClearLocks => "clear-locks".into(),
         Role::Empty => "empty".into(),
     }
 }
 
 fn key_item_count(snapshot: &Snapshot, state: &DeckState) -> usize {
-    if state.member_layer {
+    if state.production_layer {
+        snapshot.productions.len()
+    } else if state.member_layer {
         state
             .member_conference
             .map(|key| conference_members(snapshot, key).len())
@@ -659,6 +663,7 @@ async fn run_device(
                 state.blink_phase = !state.blink_phase;
                 if state.expire_volume_layer(volume_timeout)
                     || state.expire_member_layer(volume_timeout)
+                    || state.expire_production_layer(volume_timeout)
                 {
                     relayout = true;
                 }
@@ -744,12 +749,8 @@ async fn run_device(
                         }
                         Role::NextPage => {
                             let pages = page_count(&geometry, key_item_count(&snapshot, &state));
-                            if state.member_layer {
-                                cycle_page(&mut state.member_page, pages, true);
-                                state.touch_member_layer();
-                            } else {
-                                cycle_page(&mut state.page, pages, true);
-                            }
+                            cycle_page(state.key_page_mut(), pages, true);
+                            state.touch_layer();
                             relayout = true;
                         }
                         Role::NextEncoderPage => {
@@ -835,6 +836,23 @@ async fn run_device(
                                 }
                             }
                         }
+                        Role::Production(index) => {
+                            if let Some(production) = snapshot.productions.get(index) {
+                                if !snapshot.is_current_production(production) {
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::SetProduction(production.id.clone()))
+                                        .await;
+                                    state.page = 0;
+                                }
+                            }
+                            state.close_production_layer();
+                            relayout = true;
+                        }
+                        Role::ClearLocks => {
+                            let _ = bus.commands.send(Command::ClearLocks).await;
+                            state.touch_layer();
+                        }
                         Role::Empty => {}
                     }
                 }
@@ -848,16 +866,14 @@ async fn run_device(
                             if held >= STATUS_HOLD {
                                 let pages =
                                     page_count(&geometry, key_item_count(&snapshot, &state));
-                                if state.member_layer {
-                                    cycle_page(&mut state.member_page, pages, true);
-                                    state.touch_member_layer();
-                                } else {
-                                    cycle_page(&mut state.page, pages, true);
-                                }
-                                relayout = true;
+                                cycle_page(state.key_page_mut(), pages, true);
+                                state.touch_layer();
+                            } else if state.production_layer {
+                                state.close_production_layer();
                             } else {
-                                let _ = bus.commands.send(Command::ClearLocks).await;
+                                state.open_production_layer();
                             }
+                            relayout = true;
                         }
                         Role::Reply => {
                             let _ = bus
@@ -982,12 +998,8 @@ async fn run_device(
                 }
                 DeviceStateUpdate::TouchPointDown(point) => {
                     let pages = page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
-                    if state.member_layer {
-                        cycle_page(&mut state.member_page, pages, point != 0);
-                        state.touch_member_layer();
-                    } else {
-                        cycle_page(&mut state.page, pages, point != 0);
-                    }
+                    cycle_page(state.key_page_mut(), pages, point != 0);
+                    state.touch_layer();
                     relayout = true;
                 }
                 DeviceStateUpdate::TouchPointUp(_) => {}
@@ -1001,12 +1013,8 @@ async fn run_device(
                         || encoder_page_count(&geometry, key_item_count(&snapshot, &state)) <= 1
                     {
                         let pages = page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
-                        if state.member_layer {
-                            cycle_page(&mut state.member_page, pages, forward);
-                            state.touch_member_layer();
-                        } else {
-                            cycle_page(&mut state.page, pages, forward);
-                        }
+                        cycle_page(state.key_page_mut(), pages, forward);
+                        state.touch_layer();
                     } else {
                         let pages =
                             encoder_page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
@@ -1355,16 +1363,13 @@ fn publish_deck_view(
         encoders: geometry.encoders,
         touchpoints: geometry.touchpoints,
         key_size: key_size.0,
-        page: if state.member_layer {
-            state.member_page
-        } else {
-            state.page
-        },
+        page: state.key_page(),
         pages: page_count(geometry, key_item_count(snapshot, state)),
         encoder_page: state.encoder_page,
         encoder_pages: encoder_page_count(geometry, key_item_count(snapshot, state)),
         volume_layer: state.volume_layer,
         member_layer: state.member_layer,
+        production_layer: state.production_layer,
         keys: keys
             .iter()
             .enumerate()

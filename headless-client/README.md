@@ -244,6 +244,17 @@ server-side mute. The conference fader still scales the whole conference.
   the left, **VOL** next to it, **NEXT** (when there are more targets than
   keys) one left of **Reply**, and **Reply** at the far right. Reply shows
   the conference (or target) being talked to, not the caller name.
+- **Tap status to change the production.** The deck switches to a blank
+  page that lists your productions on the target keys; the active one is
+  highlighted ("current"). Tap another production to switch to it: talking
+  stops, the targets of the new production load, and the choice is saved
+  as `user.production`, so it survives a restart. Tap status again (now
+  **PRODUCTION / back**) to leave without changing; the page also closes
+  after `streamdeck.volume_layer_timeout_s`. **CLEAR** on that page clears
+  all talk locks (this used to be a tap on status). **NEXT** appears when
+  there are more productions than keys. Holding status 2 s still pages
+  the keys. The list needs multiple productions enabled on the server;
+  otherwise the page shows "No productions".
 - Remaining keys are targets in the same order as the web client: **left to
   right, top to bottom**. If there are fewer targets than keys, used rows sit
   on the **lowest available rows** (empty rows above the block). Hold to talk,
@@ -334,7 +345,7 @@ layout = { "0" = "user:4", "1" = "conference:1" }
 Outputs (`gpio.outputs`): `tally` (PGM / camera on air), `tally_preview`
 (PRV / preview), `talking`, `incoming`,
 `connected` (only while registered **and** both media transports are up),
-`locked`. Extra `[[gpio.target_outputs]]` rows drive a pin when a chosen
+`locked`, `status`. Extra `[[gpio.target_outputs]]` rows drive a pin when a chosen
 user, conference or feed is playing audio (`when = "receiving"`) or is
 addressing this client (`when = "incoming"`). Inputs (`gpio.inputs`):
 `talk` (hold = talk, tap = lock), `reply`, `lock_toggle`, `clear_locks`,
@@ -343,6 +354,23 @@ client samples the current level, so an already-held inverted button starts
 talking immediately instead of waiting for the next edge. Lines are
 addressed by kernel name (`GPIO17` on Raspberry Pi OS) or by `gpio.chip`
 plus offset. Volume +/− steps use `streamdeck.volume_step_db`.
+
+**Status light** (`gpio.outputs.status`): one LED that shows how the
+client is doing without a screen:
+
+| LED | Meaning |
+|---|---|
+| short flash (100 ms) once a second | the client is running but not registered on the server (offline, connecting, logging in, account in use, kicked) |
+| 1 s on, 1 s off | registered, but media is not connected yet, audio devices are not open, the server heartbeat is missing, or media is interrupted |
+| steady on | registered, media connected, audio OK |
+| off | the client is not running |
+
+```toml
+[gpio.outputs]
+status = { line = "GPIO24" }   # active_low = true for an LED wired to 3.3 V
+```
+
+It can also be picked in Settings → GPIO (*status light*).
 
 ## Local control socket (display / rotaries)
 
