@@ -1,6 +1,6 @@
 import { Modal, Platform, Pressable, ScrollView, Text, View, useColorScheme } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
 import { describeAudioRouteKind } from '../audio/routes';
@@ -15,6 +15,7 @@ import { session, useSessionStore } from '../session/store';
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
 import { describeWatchRemoteStatus, watchRemoteShortStatus, watchRemoteStatus } from '../watch/native';
 import { androidSafeArea } from './androidSafeArea';
+import { PageStack, type PageStackHandle } from './PageStack';
 import { PttAddDevicePage, PttDeviceDetailPage, PttDevicesPage } from './PttSettingsScreens';
 import {
   SettingsActionRow,
@@ -52,7 +53,9 @@ export function SettingsScreen({ visible, onClose }: Props) {
   const scheme = useColorScheme();
   const [page, setPage] = useState<SettingsPage>({ kind: 'root' });
   const [sliderDragging, setSliderDragging] = useState(false);
-  const showPttList = useCallback(() => setPage({ kind: 'ptt' }), []);
+  const stack = useRef<PageStackHandle>(null);
+  // Every way back (header, edge swipe, after pairing or deleting an accessory) slides like iOS.
+  const back = useCallback(() => stack.current?.pop(), []);
 
   useEffect(() => {
     if (visible) {
@@ -68,42 +71,79 @@ export function SettingsScreen({ visible, onClose }: Props) {
     page,
     store.bleBindings.find((item) => page.kind === 'ptt-device' && item.id === page.id)?.name,
   );
+  const parent = parentPage(page);
 
-  const goBack = () => {
-    if (page.kind === 'ptt-add' || page.kind === 'ptt-device') {
-      setPage({ kind: 'ptt' });
-      return;
-    }
-    if (page.kind === 'main-button' || page.kind === 'arrange') {
-      setPage({ kind: 'layout' });
-      return;
-    }
-    setPage({ kind: 'root' });
+  const goBack = () => setPage(parent ?? { kind: 'root' });
+
+  const pageActions = {
+    showPttList: back,
+    onClose,
+    onOpenLayout: () => setPage({ kind: 'layout' }),
+    onOpenMainButton: () => setPage({ kind: 'main-button' }),
+    onOpenArrange: () => setPage({ kind: 'arrange' }),
+    onOpenAudio: () => setPage({ kind: 'audio' }),
+    onOpenAccessories: () => setPage({ kind: 'ptt' }),
+    onOpenDebug: () => setPage({ kind: 'debug' }),
+    onAddDevice: () => setPage({ kind: 'ptt-add' }),
+    onOpenDevice: (id: string) => setPage({ kind: 'ptt-device', id }),
   };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SettingsThemeProvider scheme={scheme}>
-        <SettingsSheet
-          header={header}
-          page={page}
-          onBack={page.kind === 'root' ? undefined : goBack}
-          onClose={onClose}
-          scrollEnabled={!sliderDragging}
-          onDimSliding={setSliderDragging}
-          onOpenLayout={() => setPage({ kind: 'layout' })}
-          onOpenMainButton={() => setPage({ kind: 'main-button' })}
-          onOpenArrange={() => setPage({ kind: 'arrange' })}
-          onOpenAudio={() => setPage({ kind: 'audio' })}
-          onOpenAccessories={() => setPage({ kind: 'ptt' })}
-          onOpenDebug={() => setPage({ kind: 'debug' })}
-          onAddDevice={() => setPage({ kind: 'ptt-add' })}
-          onOpenDevice={(id) => setPage({ kind: 'ptt-device', id })}
-          showPttList={showPttList}
-        />
+        <PageStack
+          ref={stack}
+          animated={Platform.OS === 'ios'}
+          swipeEnabled={Platform.OS === 'ios' && parent !== null && !sliderDragging}
+          onBack={goBack}
+          pageKey={page.kind === 'ptt-device' ? `${page.kind}:${page.id}` : page.kind}
+          depth={pageDepth(page)}
+          underlay={
+            parent ? (
+              <SettingsSheet
+                {...pageActions}
+                header={headerForPage(parent)}
+                page={parent}
+                onBack={parent.kind === 'root' ? undefined : back}
+                scrollEnabled={false}
+                onDimSliding={setSliderDragging}
+              />
+            ) : null
+          }
+        >
+          <SettingsSheet
+            {...pageActions}
+            header={header}
+            page={page}
+            onBack={parent ? back : undefined}
+            scrollEnabled={!sliderDragging}
+            onDimSliding={setSliderDragging}
+          />
+        </PageStack>
       </SettingsThemeProvider>
     </Modal>
   );
+}
+
+function pageDepth(page: SettingsPage): number {
+  const parent = parentPage(page);
+  return parent ? pageDepth(parent) + 1 : 0;
+}
+
+/** The page "‹ Back" and the edge swipe return to; null on the root page. */
+function parentPage(page: SettingsPage): SettingsPage | null {
+  switch (page.kind) {
+    case 'root':
+      return null;
+    case 'main-button':
+    case 'arrange':
+      return { kind: 'layout' };
+    case 'ptt-add':
+    case 'ptt-device':
+      return { kind: 'ptt' };
+    default:
+      return { kind: 'root' };
+  }
 }
 
 function SettingsSheet({
