@@ -41,11 +41,15 @@ function installRemotePanelControl(deps) {
     const isBridge = Boolean(found?.peer?.isBridgePeer);
     const report = reports.get(Number(userId));
     const fresh = Boolean(found && report?.socketId === found.socketId && Date.now() - report.at < 10000);
+    const targets = isBridge ? getBridgeTargetsForUser(userId) : productionId == null ? [] : buildOperatorTargetsForUser(userId, productionId);
+    const activeFeedIds = new Set(deps.getActiveFeedIds?.() || []);
     return {
       userId: Number(userId), name: user.name, online: Boolean(found), clientConnected: fresh,
       connectionType: isBridge ? 'bridge' : 'browser', productionId,
       productions, productionName: productions.find(p => Number(p.id) === Number(productionId))?.name || null,
-      targets: isBridge ? getBridgeTargetsForUser(userId) : productionId == null ? [] : buildOperatorTargetsForUser(userId, productionId),
+      targets,
+      activeFeedKeys: targets.filter(target => target.targetType === 'feed' && activeFeedIds.has(Number(target.targetId)))
+        .map(target => `feed-${target.targetId}`),
       users: getUserList(), settings: getResolvedUserAudioSettings(userId),
       targetAudioStates: getUserTargetAudioStates(userId), panelSettings: settings,
       incomingTalkState: found ? buildIncomingTalkStateForUser(userId) : { addressedNow: [], replyTarget: null },

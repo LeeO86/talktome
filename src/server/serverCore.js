@@ -7824,6 +7824,17 @@ const remotePanels = require('./remotePanelControl').installRemotePanelControl({
   app, io, publicDir, requireAdmin, getAdminSession, getUserById, findUserPeerByUserId,
   getUserList, getEnabledProductionsForUser, getPrimaryProduction, isUserInProduction, buildOperatorTargetsForUser,
   getBridgeTargetsForUser, buildIncomingTalkStateForUser, getUserTargetAudioStates,
+  getActiveFeedIds() {
+    const ids = new Set();
+    for (const peer of peers.values()) {
+      for (const producer of peer.producers.values()) {
+        if (!producer.closed && !producer.paused && producer.appData?.type === 'feed') {
+          ids.add(Number(producer.appData.id));
+        }
+      }
+    }
+    return [...ids];
+  },
   mergeUserTargetAudioStates, getUserPanelSettings, updateUserPanelSettings,
   getResolvedUserAudioSettings, updateUserAudioSettings, updateProductionTargetOrder, notifyTargetChange,
   targetAudioChanged(userId) {

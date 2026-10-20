@@ -26,6 +26,7 @@ async function fixture(t) {
   const user = { id: 7, name: 'Camera' };
   const productions = [{ id: 1, name: 'Show' }];
   const behavior = { failPress: false };
+  const activeFeedIds = new Set();
   const targets = [{ targetType: 'user', targetId: 8, name: 'Director' }, { targetType: 'conference', targetId: 4, name: 'Crew', canTalk: true }];
   const getAdminSession = req => req.headers.cookie === 'admin_session=test-admin' ? { session: { isGlobalAdmin: true } } : null;
   const control = installRemotePanelControl({
@@ -37,6 +38,7 @@ async function fixture(t) {
     isUserInProduction: (userId, productionId) => Number(userId) === 7 && Number(productionId) === 1,
     getPrimaryProduction: () => ({ id: 1 }), buildOperatorTargetsForUser: () => targets,
     getBridgeTargetsForUser: () => targets, buildIncomingTalkStateForUser: () => ({ addressedNow: [], replyTarget: null }),
+    getActiveFeedIds: () => [...activeFeedIds],
     getUserTargetAudioStates: id => audio.get(Number(id)) || [],
     mergeUserTargetAudioStates(id, rows) {
       const current = new Map((audio.get(id) || []).map(row => [`${row.targetType}:${row.targetId}`, row]));
@@ -74,8 +76,22 @@ async function fixture(t) {
     });
     return socket;
   }
-  return { app, url, control, settings, audio, peers, commands, openPanel, openUser, clients, productions, behavior };
+  return { app, url, control, settings, audio, peers, commands, openPanel, openUser, clients, productions, behavior, targets, activeFeedIds };
 }
+
+test('remote panels see sending feeds independently of local reception and client runtime reports', async t => {
+  const f = await fixture(t);
+  f.targets.push({ targetType: 'feed', targetId: 3, name: 'Program' });
+  f.activeFeedIds.add(3);
+  f.activeFeedIds.add(99);
+  f.settings.set(7, { storage: { 'stoppedFeeds:user:7': '{"feed-3":true}' } });
+  const state = f.control.snapshot(7);
+  assert.equal(state.runtime, null);
+  assert.deepEqual(state.activeFeedKeys, ['feed-3'], 'only assigned sending feeds are exposed');
+  assert.equal(JSON.parse(state.panelSettings.storage['stoppedFeeds:user:7'])['feed-3'], true);
+  f.activeFeedIds.clear();
+  assert.deepEqual(f.control.snapshot(7).activeFeedKeys, []);
+});
 
 test('panel namespace and HTML require an admin session', async t => {
   const f = await fixture(t);

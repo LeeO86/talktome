@@ -147,3 +147,89 @@ test('RTP source levels avoid additional getStats requests when available', () =
   h.monitor.setEnabled(false);
   assert.equal(h.timers.size, 0);
 });
+
+function meterContext() {
+  const nodes = [];
+  const channels = [0.2, -0.4];
+  const context = { state: 'running',
+    createMediaStreamSource(stream) {
+      assert.equal(stream.track.enabled, true);
+      return node();
+    },
+    createChannelSplitter(count) { assert.equal(count, 2); return node(); },
+    createAnalyser() {
+      const channel = nodes.filter((entry) => entry.getFloatTimeDomainData).length;
+      return Object.assign(node(), { getFloatTimeDomainData(samples) { samples.fill(channels[channel % 2]); } });
+    },
+  };
+  function node() {
+    const entry = { connections: [], disconnected: false,
+      connect(destination, channel) { this.connections.push({ destination, channel }); },
+      disconnect() { this.disconnected = true; },
+    };
+    nodes.push(entry);
+    return entry;
+  }
+  return { context, nodes, channels };
+}
+
+test('measures decoded stereo samples independently of playback gain, including volume zero', () => {
+  const { createTrackMeter } = require('../public/incomingAudioLevels');
+  const h = meterContext();
+  const track = { enabled: true, muted: false, readyState: 'live' };
+  const meter = createTrackMeter(h.context, track, (value) => ({ track: value }));
+  const sampler = createSampler();
+  for (const playbackVolume of [1, 0.5, 0]) {
+    // Chromium receive statistics can follow the native playback gain.
+    const stats = inbound('a', { audioLevel: 0.4 * playbackVolume, totalAudioEnergy: playbackVolume ** 2 });
+    const levels = sampler.sample(report(stats), [binding('a', 'user-1', { measuredLevel: meter.read() })]);
+    assert(Math.abs(levels.get('user-1') - 0.4) < 1e-6);
+  }
+  assert.equal(h.nodes.some((node) => node.connections.some(({ destination }) => destination === h.context.destination)), false);
+  h.channels.fill(0);
+  assert.equal(meter.read(), 0);
+  h.context.state = 'suspended';
+  assert.equal(meter.read(), null);
+  track.muted = true;
+  assert.equal(meter.read(), 0);
+  meter.close();
+  assert(h.nodes.every((node) => node.disconnected));
+});
+
+test('track monitoring skips post-fader stats and releases nodes on pause, replacement and disable', () => {
+  const h = meterContext();
+  const timers = new Map();
+  let track = { enabled: true, readyState: 'live' };
+  let paused = false;
+  const updates = [];
+  const monitor = createMonitor({
+    getTransport: () => ({ getStats() { assert.fail('track metering must not use post-fader stats'); } }),
+    getBindings: () => [binding('a', 'user-1', { track, paused })],
+    getAudioContext: () => h.context,
+    makeStream: (value) => ({ track: value }),
+    onLevels: (levels) => updates.push(levels),
+    schedule(fn) { const id = Symbol(); timers.set(id, fn); return id; },
+    cancel(id) { timers.delete(id); },
+  });
+  const tick = () => { const [id, fn] = timers.entries().next().value; timers.delete(id); fn(); };
+  assert.equal(h.nodes.length, 0);
+  monitor.setEnabled(true);
+  assert(Math.abs(updates.at(-1).get('user-1') - 0.4) < 1e-6);
+  paused = true;
+  tick();
+  assert.equal(updates.at(-1).get('user-1'), 0);
+  assert(h.nodes.every((node) => node.disconnected));
+  paused = false;
+  tick();
+  const oldNodes = [...h.nodes];
+  track = { enabled: true, readyState: 'live' };
+  tick();
+  assert(oldNodes.every((node) => node.disconnected));
+  h.context.state = 'suspended';
+  tick();
+  assert.equal(updates.at(-1).get('user-1'), null);
+  monitor.setEnabled(false);
+  assert.equal(timers.size, 0);
+  assert(h.nodes.every((node) => node.disconnected));
+  assert.equal(track.readyState, 'live', 'meter cleanup must not stop the received track');
+});

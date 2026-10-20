@@ -10,6 +10,51 @@
     return Math.max(0, Math.min(100, (20 * Math.log10(level) - MIN_DB) / -MIN_DB * 100));
   }
 
+  // MediaStreamAudioSource receives decoded samples before Chromium's native
+  // playout gain. Receiver energy statistics, in contrast, include that gain.
+  function createTrackMeter(context, track, makeStream = (value) => new MediaStream([value])) {
+    const source = context.createMediaStreamSource(makeStream(track));
+    let splitter;
+    const analysers = [];
+    try {
+      splitter = context.createChannelSplitter(2);
+      source.connect(splitter);
+      for (let channel = 0; channel < 2; channel += 1) {
+        const analyser = context.createAnalyser();
+        analysers.push(analyser);
+        analyser.fftSize = 2048;
+        splitter.connect(analyser, channel);
+      }
+    } catch (error) {
+      source.disconnect();
+      splitter?.disconnect();
+      analysers.forEach((analyser) => analyser.disconnect());
+      throw error;
+    }
+    const samples = new Float32Array(2048);
+    return {
+      track,
+      context,
+      read() {
+        if (track.readyState === 'ended' || track.muted || !track.enabled) return 0;
+        if (context.state !== 'running') return null;
+        let level = 0;
+        for (const analyser of analysers) {
+          analyser.getFloatTimeDomainData(samples);
+          let energy = 0;
+          for (const sample of samples) energy += sample * sample;
+          level = Math.max(level, Math.sqrt(energy / samples.length));
+        }
+        return level;
+      },
+      close() {
+        source.disconnect();
+        splitter.disconnect();
+        analysers.forEach((analyser) => analyser.disconnect());
+      },
+    };
+  }
+
   function createSampler() {
     const previous = new Map();
     return {
@@ -28,6 +73,12 @@
           if (!binding.targetKey) continue;
           if (!levels.has(binding.targetKey)) levels.set(binding.targetKey, 0);
           if (binding.paused) continue;
+          if (binding.measuredLevel !== undefined) {
+            const current = levels.get(binding.targetKey);
+            levels.set(binding.targetKey, binding.measuredLevel === null
+              ? (current || null) : Math.max(current || 0, binding.measuredLevel));
+            continue;
+          }
           const stat = byTrack.get(binding.trackId)
             || (binding.ssrcs || []).map((ssrc) => bySsrc.get(String(ssrc))).find(Boolean);
           const key = binding.id;
@@ -71,7 +122,7 @@
     };
   }
 
-  function createMonitor({ getTransport, getBindings, onLevels, intervalMs = 100,
+  function createMonitor({ getTransport, getBindings, onLevels, getAudioContext, makeStream, intervalMs = 100,
     schedule = setTimeout, cancel = clearTimeout }) {
     const sampler = createSampler();
     let enabled = false;
@@ -79,6 +130,33 @@
     let timer = null;
     let running = false;
     let generation = 0;
+    const meters = new Map();
+
+    function measureBindings(bindings) {
+      const context = bindings.some((binding) => binding.track && !binding.paused) ? getAudioContext?.() : null;
+      const active = new Set();
+      const measured = bindings.map((binding) => {
+        if (!binding.track || binding.paused || !getAudioContext) return binding;
+        active.add(binding.id);
+        let meter = meters.get(binding.id);
+        if (meter && (meter.track !== binding.track || meter.context !== context)) {
+          meter.close();
+          meters.delete(binding.id);
+          meter = null;
+        }
+        if (!meter && context && context.state !== 'closed') {
+          try {
+            meter = createTrackMeter(context, binding.track, makeStream);
+            meters.set(binding.id, meter);
+          } catch { /* Report unavailable rather than a post-fader level. */ }
+        }
+        return { ...binding, measuredLevel: meter ? meter.read() : null };
+      });
+      for (const [id, meter] of meters) {
+        if (!active.has(id)) { meter.close(); meters.delete(id); }
+      }
+      return measured;
+    }
 
     function stop() {
       generation += 1;
@@ -87,6 +165,8 @@
       timer = null;
       transport = null;
       sampler.reset();
+      for (const meter of meters.values()) meter.close();
+      meters.clear();
       onLevels(new Map());
     }
 
@@ -103,10 +183,10 @@
       const token = generation;
       async function poll() {
         timer = null;
-        const bindings = getBindings();
+        const bindings = measureBindings(getBindings());
         if (!bindings.length || next.closed) { stop(); return; }
         try {
-          const needsStats = bindings.some((binding) => !binding.paused
+          const needsStats = bindings.some((binding) => !binding.paused && binding.measuredLevel === undefined
             && !(binding.sources || []).some((source) => Number.isFinite(source.audioLevel)
               && Number.isFinite(source.timestamp)));
           const report = needsStats ? await next.getStats() : new Map();
@@ -128,5 +208,5 @@
     };
   }
 
-  return Object.freeze({ MIN_DB, levelToPercent, createSampler, createMonitor });
+  return Object.freeze({ MIN_DB, levelToPercent, createTrackMeter, createSampler, createMonitor });
 }));

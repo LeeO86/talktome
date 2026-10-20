@@ -3819,6 +3819,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const activeFeedKeys = new Set();
   const incomingLevelMonitor = window.TalktomeIncomingAudioLevels.createMonitor({
     getTransport: () => recvTransport,
+    getAudioContext: () => {
+      const context = ensureAudioContext();
+      if (context?.state === 'suspended') context.resume().catch(() => {});
+      return context;
+    },
     getBindings: () => {
       const bindings = [];
       for (const [streamKey, consumers] of peerConsumers) {
@@ -3826,14 +3831,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!entry) continue;
         for (const consumer of consumers) {
           if (consumer.closed) continue;
-          let sources = [];
-          try { sources = consumer.rtpReceiver?.getSynchronizationSources?.() || []; } catch {}
           bindings.push({
             id: consumer.id,
             targetKey: entry.key,
-            trackId: consumer.track?.id,
-            ssrcs: (consumer.rtpParameters?.encodings || []).map((encoding) => encoding.ssrc),
-            sources,
+            track: consumer.track,
             paused: consumer.paused,
           });
         }
@@ -5249,6 +5250,7 @@ let cachedOperatorTargets = null;
   targetHasActiveStreams = hasActiveStreams;
 
   function isTargetSpeaking(targetKey) {
+    if (isFeedKey(targetKey)) return activeFeedKeys.has(targetKey) && !stoppedFeedKeys.has(targetKey);
     return speakingPeers.has(targetKey) || activeFeedKeys.has(targetKey);
   }
 
@@ -5324,6 +5326,7 @@ let cachedOperatorTargets = null;
     const stopped = stoppedFeedKeys.has(targetKey);
     const targetEl = document.getElementById(targetKey);
     targetEl?.classList.toggle('feed-stopped', stopped);
+    updateSpeakerHighlight(targetKey, isTargetSpeaking(targetKey));
 
     const button = targetEl?.querySelector('.feed-reception-btn');
     if (!button) return;
@@ -7682,6 +7685,8 @@ let cachedOperatorTargets = null;
         applyPersistedTargetAudioStates(state.targetAudioStates);
       }
       const runtime = state.runtime;
+      activeFeedKeys.clear();
+      for (const key of state.activeFeedKeys || []) activeFeedKeys.add(key);
       const devices = runtime?.devices || [];
       const selectedInput = runtime?.inputDeviceId || clientLocalStorage.getItem(MIC_DEVICE_STORAGE_KEY) || '';
       const selectedOutput = runtime?.outputDeviceId || clientLocalStorage.getItem(OUTPUT_DEVICE_STORAGE_KEY) || '';
@@ -7704,6 +7709,7 @@ let cachedOperatorTargets = null;
       if (outputDeviceSelector) outputDeviceSelector.hidden = false;
       incomingTalkState = normalizeIncomingTalkState(state.incomingTalkState);
       applyIncomingTalkState();
+      syncRenderedTargetStateUi();
       for (const entry of activeTalkLocks.values()) setTalkButtonLocked(entry.button, false);
       activeTalkLocks.clear();
       for (const target of runtime?.lockedTargets || []) {
@@ -10568,7 +10574,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
       if (!peerConsumers.has(streamKey)) peerConsumers.set(streamKey, new Set());
       peerConsumers.get(streamKey).add(consumer);
-      if (mutedPeers.has(targetKey) && !isFeedKey(targetKey)) consumer.pause();
+      if (isFeedKey(targetKey) ? stoppedFeedKeys.has(targetKey) : mutedPeers.has(targetKey)) consumer.pause();
 
       const stream = new MediaStream([consumer.track]);
       const adaptivePlainReceive = shouldUseAdaptivePlainReceivePlayback();
@@ -10796,7 +10802,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       }
 
       if (isFeed) {
-        if (mutedPeers.has(targetKey)) {
+        if (mutedPeers.has(targetKey) || stoppedFeedKeys.has(targetKey)) {
           muteFeedEntry(entry);
         } else {
           setFeedEntryLevel(entry, entry.volume);
@@ -10923,7 +10929,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         targetKey,
       });
       await new Promise((res) =>
-        socket.emit('resume-consumer', { consumerId: consumer.id }, res)
+        socket.emit(isFeed && stoppedFeedKeys.has(targetKey) ? 'pause-consumer' : 'resume-consumer', { consumerId: consumer.id }, res)
       );
       logReceiveDiagnostic('resume-consumer-done', {
         producerId: effectiveProducerId,
@@ -11366,9 +11372,6 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   function getSpeakerStatusText(targetKey, isSpeaking) {
     if (!isSpeaking) return '';
-    if (targetKey.startsWith('feed-')) {
-      return 'Streaming';
-    }
     if (targetKey.startsWith('conf-')) {
       return getConferenceSpeakerStatusText(targetKey);
     }
@@ -11396,6 +11399,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   }
 
   function updateSpeakerHighlight(targetKey, isSpeaking) {
+    if (isFeedKey(targetKey)) isSpeaking = isTargetSpeaking(targetKey);
     const el = document.getElementById(targetKey);
     const iconCls = targetKey.startsWith("conf-") ? ".conf-icon" : targetKey.startsWith("feed-") ? ".feed-icon" : ".user-icon";
     const icon    = el?.querySelector(iconCls);
@@ -11670,7 +11674,6 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   function applyMuteVisualState(targetEl, nowMuted) {
     if (!targetEl) return;
-    const key = targetEl.id || '';
     targetEl.classList.toggle('muted', nowMuted);
     const muteBtn = targetEl?.querySelector('.mute-btn');
     if (muteBtn) {
@@ -11682,8 +11685,6 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         muteIcon.src = nowMuted ? UI_ICONS.speakerMuted : UI_ICONS.speakerOn;
       }
     }
-
-    getTargetIconElement(targetEl, key)?.classList.toggle('muted', nowMuted);
   }
 
   function setMuteState(rawId) {

@@ -18,21 +18,29 @@ Pausing reception stops the incoming level; existing user mute controls may paus
 the consumer as well.
 
 `public/incomingAudioLevels.js` samples at 10 Hz while enabled and visible, with
-an active receive transport and consumers. It first reads timestamped receiver
-levels from [`getSynchronizationSources()`](https://www.w3.org/TR/webrtc/#dom-rtcrtpreceiver-getsynchronizationsources).
-This also handles stereo feeds for which Chrome was observed to return zero
-in inbound audio energy statistics despite nonzero decoded audio. If source
-levels are unavailable, one transport `getStats()` request supplies all target
-levels, using interval deltas of
-[`totalAudioEnergy` and `totalSamplesDuration`](https://www.w3.org/TR/webrtc-stats/#dom-rtcinboundrtpstreamstats-totalaudioenergy),
-or `audioLevel`. Frozen source timestamps or packet counters clear the display.
-Unsupported level statistics are marked as unavailable in the meter's tooltip.
+an active receive transport and consumers. The browser client measures decoded
+incoming tracks with a `MediaStreamAudioSourceNode` and separate left/right
+`AnalyserNode`s, showing the strongest channel's RMS. Separating channels avoids
+cancellation for opposite-phase stereo audio. The measurement branch has no
+connection to an audio output and uses the shared AudioContext; it creates no
+microphone stream or server telemetry and does not change playback routing.
 
-Metering creates no AudioContext, microphone stream, playback connection or
-server telemetry. Remote panels never run the meter monitor themselves.
+This bypasses Chromium's native playout gain, which affects inbound RTP
+`audioLevel` and energy statistics when a media element's volume changes. Meters
+therefore remain active at playback volume zero and during feed dimming. A
+suspended or unsupported analysis context is shown as unavailable rather than
+falling back to post-fader statistics. Paused, muted or ended tracks show zero.
+Measurement nodes are disconnected when consumers disappear, reception pauses,
+meters are disabled or the page is hidden. The shared context and received tracks
+remain owned by the existing audio lifecycle. Remote panels never run the monitor.
+
+The standalone sampler also supports timestamped receiver source levels and
+interval deltas of inbound RTP energy statistics for callers without track
+analysis. The browser client always supplies tracks and uses direct analysis.
 
 Validation: `npm test` covers mapping, RMS conversion, stereo source levels,
 silence, paused/replaced consumers, disabled polling and in-flight cancellation.
 The browser audio check uses separate users and a stereo feed to verify direct
 and conference reception, level changes, volume zero, feed stop/resume and
-preference restoration. Check layout at 375 px in both handedness modes.
+preference restoration. A Chrome WebRTC loopback check verifies that direct
+track RMS stays constant at media-element volumes 1, 0.5 and 0. Check layout at 375 px in both handedness modes.
