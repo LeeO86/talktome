@@ -4,9 +4,9 @@ ARG TALKTOME_VERSION=""
 
 WORKDIR /app
 
-# Native modules such as better-sqlite3 may need a compiler toolchain during npm ci.
+# Native modules may need a compiler toolchain; mediasoup's worker build also uses pip.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+  && apt-get install -y --no-install-recommends python3 python3-pip make g++ ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
