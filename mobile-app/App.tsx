@@ -13,6 +13,7 @@ import {
 import { androidSafeArea } from './src/ui/androidSafeArea';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { OperatorScreen } from './src/ui/OperatorScreen';
+import { PageStack } from './src/ui/PageStack';
 import { PausedScreen } from './src/ui/PausedScreen';
 import { ProductionPickerScreen } from './src/ui/ProductionPickerScreen';
 import { ProfilePickerScreen } from './src/ui/ProfilePickerScreen';
@@ -53,32 +54,63 @@ export default function App() {
     return undefined;
   }, [identity]);
 
-  let body;
+  let screen: Screen;
   if (!hydrated || (status === 'connecting' && !identity && !operatorReady && !addingProfile)) {
-    body = <ActivityIndicator color={colors.accent} />;
+    screen = 'loading';
   } else if (identity && operatorReady) {
-    body = <OperatorScreen />;
+    screen = 'operator';
   } else if (identity && status === 'choose-production') {
-    body = <ProductionPickerScreen />;
+    screen = 'production';
   } else if (identity) {
-    body = <ActivityIndicator color={colors.accent} />;
+    screen = 'loading';
   } else if (paused) {
-    body = <PausedScreen />;
+    screen = 'paused';
   } else if (addingProfile || profiles.length === 0) {
-    body = <LoginScreen />;
+    screen = 'login';
   } else {
-    body = <ProfilePickerScreen />;
+    screen = 'profiles';
   }
+  // Add profile is pushed over Profiles, so it slides in and swipes back like an iOS stack.
+  const loginOverProfiles = screen === 'login' && profiles.length > 0;
 
   return (
     <View style={styles.root}>
       <SafeAreaView style={[styles.safe, androidSafeArea]}>
         <StatusBar style="light" />
-        {body}
+        <PageStack
+          animated={Platform.OS === 'ios'}
+          swipeEnabled={Platform.OS === 'ios' && loginOverProfiles}
+          onBack={() => session.cancelAddProfile()}
+          pageKey={screen}
+          depth={loginOverProfiles ? 1 : 0}
+          backgroundColor={colors.bgBottom}
+          underlay={loginOverProfiles ? <ProfilePickerScreen /> : null}
+        >
+          <AppScreen screen={screen} />
+        </PageStack>
       </SafeAreaView>
       {identity && operatorReady && tallyColor ? <TallyScreenFrame color={tallyColor} /> : null}
     </View>
   );
+}
+
+type Screen = 'loading' | 'operator' | 'production' | 'paused' | 'login' | 'profiles';
+
+function AppScreen({ screen }: { screen: Screen }) {
+  switch (screen) {
+    case 'operator':
+      return <OperatorScreen />;
+    case 'production':
+      return <ProductionPickerScreen />;
+    case 'paused':
+      return <PausedScreen />;
+    case 'login':
+      return <LoginScreen />;
+    case 'profiles':
+      return <ProfilePickerScreen />;
+    default:
+      return <ActivityIndicator color={colors.accent} />;
+  }
 }
 
 /**

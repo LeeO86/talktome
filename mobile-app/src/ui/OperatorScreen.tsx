@@ -30,7 +30,6 @@ import {
   targetLayerCount,
   visibleTargets,
 } from './layers';
-import { SessionSheet } from './SessionSheet';
 import { SettingsScreen } from './SettingsScreen';
 import { TargetRow } from './TargetRow';
 import { colors } from './theme';
@@ -44,7 +43,6 @@ export function OperatorScreen() {
   const compact = isCompactOperatorScreen(width, height);
   const tablet = isTabletOperatorScreen(width, height);
   const [layerIndex, setLayerIndex] = useState(0);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [conferenceTarget, setConferenceTarget] = useState<TalkTarget | null>(null);
   const [headerCollapsed, setHeaderCollapsed] = useState(compact);
@@ -321,15 +319,7 @@ export function OperatorScreen() {
         {replyButton}
       </View>
 
-      <SessionSheet
-        visible={sessionOpen}
-        onClose={() => setSessionOpen(false)}
-        onOpenSettings={() => {
-          setSessionOpen(false);
-          setSettingsOpen(true);
-        }}
-      />
-      <SettingsScreen visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsScreen visible={sessionOpen} onClose={() => setSessionOpen(false)} />
       <ConferenceMembersModal target={conferenceTarget} onClose={() => setConferenceTarget(null)} />
     </View>
   );

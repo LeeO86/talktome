@@ -1,4 +1,7 @@
 import {
+  createContext,
+  useCallback,
+  useContext,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -10,6 +13,8 @@ import {
 import { Animated, Dimensions, Easing, PanResponder, StyleSheet, View, type EasingFunction } from 'react-native';
 
 import {
+  EDGE_SWIPE_START_WIDTH,
+  EDGE_SWIPE_TOP_INSET,
   EDGE_SWIPE_UNDERLAY_SHIFT,
   PAGE_TRANSITION_MS,
   edgeSwipeFinishDuration,
@@ -24,6 +29,13 @@ export type PageStackHandle = {
   pop: () => void;
 };
 
+const PageStackBackContext = createContext<(() => void) | null>(null);
+
+/** Animated back for a page inside a `PageStack`; null outside one. */
+export function usePageStackBack(): (() => void) | null {
+  return useContext(PageStackBackContext);
+}
+
 type Props = {
   ref?: Ref<PageStackHandle>;
   /** Slide on push and pop. Off means pages swap instantly and `pop` calls `onBack` directly. */
@@ -36,6 +48,8 @@ type Props = {
   /** Changes with the page; a deeper page slides in, a shallower one replaces it in place. */
   pageKey: string;
   depth: number;
+  /** Paints pages whose own root view is transparent, so the one underneath does not show through. */
+  backgroundColor?: string;
   children: ReactNode;
 };
 
@@ -43,11 +57,20 @@ type Props = {
  * UINavigationController-style page transitions: a deeper page slides in from the right over its
  * parent, going back slides it off again, and a drag from the left edge follows the finger.
  */
-export function PageStack({ ref, animated, swipeEnabled, onBack, underlay, pageKey, depth, children }: Props) {
+export function PageStack({
+  ref,
+  animated,
+  swipeEnabled,
+  onBack,
+  underlay,
+  pageKey,
+  depth,
+  backgroundColor,
+  children,
+}: Props) {
   const translateX = useRef(new Animated.Value(0)).current;
-  const containerRef = useRef<View>(null);
-  const pageLeft = useRef(0);
   const busy = useRef(false);
+  const tracking = useRef(false);
   const generation = useRef(0);
   const shown = useRef({ pageKey, depth });
   const [width, setWidth] = useState(() => Dimensions.get('window').width);
@@ -56,9 +79,10 @@ export function PageStack({ ref, animated, swipeEnabled, onBack, underlay, pageK
   const latest = useRef({ animated, swipeEnabled, onBack, width });
   latest.current = { animated, swipeEnabled, onBack, width };
 
-  const { responder, slideOut, settle } = useMemo(() => {
+  const { edgeResponder, slideOut, settle } = useMemo(() => {
     const settle = () => {
       busy.current = false;
+      tracking.current = false;
       translateX.setValue(0);
       setUnderlayVisible(false);
       setBlockTouches(false);
@@ -87,6 +111,10 @@ export function PageStack({ ref, animated, swipeEnabled, onBack, underlay, pageK
     };
 
     const release = (dx: number, vx: number, allowBack: boolean) => {
+      if (!tracking.current) {
+        return;
+      }
+      tracking.current = false;
       const sheetWidth = latest.current.width;
       if (allowBack && shouldCompleteEdgeSwipe(dx, vx, sheetWidth)) {
         slideOut(edgeSwipeFinishDuration(dx, vx, sheetWidth), Easing.out(Easing.cubic));
@@ -105,35 +133,40 @@ export function PageStack({ ref, animated, swipeEnabled, onBack, underlay, pageK
       });
     };
 
-    const responder = PanResponder.create({
-      onMoveShouldSetPanResponderCapture: (_event, gesture) =>
-        latest.current.swipeEnabled &&
-        !busy.current &&
-        shouldStartEdgeSwipe(gesture.x0 - pageLeft.current, gesture.dx, gesture.dy),
-      onPanResponderGrant: () => {
-        generation.current += 1;
-        busy.current = true;
-        setUnderlayVisible(true);
+    // Claims the touch on landing (before a scroll view can) and only moves the page once the
+    // finger heads right, so a vertical drag or a tap on the strip does nothing.
+    const edgeResponder = PanResponder.create({
+      onStartShouldSetPanResponder: () => latest.current.swipeEnabled && !busy.current,
+      onPanResponderMove: (_event, gesture) => {
+        if (!tracking.current) {
+          if (!shouldStartEdgeSwipe(gesture.dx, gesture.dy)) {
+            return;
+          }
+          tracking.current = true;
+          generation.current += 1;
+          busy.current = true;
+          setUnderlayVisible(true);
+        }
+        translateX.setValue(Math.max(0, gesture.dx));
       },
-      onPanResponderMove: (_event, gesture) => translateX.setValue(Math.max(0, gesture.dx)),
-      onPanResponderTerminationRequest: () => false,
+      onPanResponderTerminationRequest: () => !tracking.current,
       onPanResponderRelease: (_event, gesture) => release(gesture.dx, gesture.vx, true),
       onPanResponderTerminate: (_event, gesture) => release(gesture.dx, gesture.vx, false),
     });
 
-    return { responder, slideOut, settle };
+    return { edgeResponder, slideOut, settle };
   }, [translateX]);
 
-  const pop = () => {
+  const pop = useCallback(() => {
     // Mid-slide (say pairing finishes while the page is still sliding in), go back without animating.
     if (busy.current || !latest.current.animated) {
       latest.current.onBack();
       return;
     }
     slideOut(PAGE_TRANSITION_MS, PAGE_EASING);
-  };
+  }, [slideOut]);
 
-  useImperativeHandle(ref, () => ({ pop }));
+  useImperativeHandle(ref, () => ({ pop }), [pop]);
 
   useLayoutEffect(() => {
     const previous = shown.current;
@@ -164,15 +197,6 @@ export function PageStack({ ref, animated, swipeEnabled, onBack, underlay, pageK
     });
   }, [pageKey, depth, translateX, settle]);
 
-  const measure = () => {
-    containerRef.current?.measure((_x, _y, measuredWidth, _height, pageX) => {
-      pageLeft.current = pageX;
-      if (measuredWidth > 0) {
-        setWidth(measuredWidth);
-      }
-    });
-  };
-
   const underlayX = translateX.interpolate({
     inputRange: [0, width],
     outputRange: [-width * EDGE_SWIPE_UNDERLAY_SHIFT, 0],
@@ -183,33 +207,40 @@ export function PageStack({ ref, animated, swipeEnabled, onBack, underlay, pageK
     outputRange: [0.12, 0],
     extrapolate: 'clamp',
   });
+  const paint = backgroundColor ? { backgroundColor } : null;
 
   return (
-    <View
-      ref={containerRef}
-      style={styles.container}
-      pointerEvents={blockTouches ? 'none' : 'auto'}
-      onLayout={measure}
-    >
-      {underlayVisible ? (
-        <Animated.View
-          pointerEvents="none"
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={[StyleSheet.absoluteFill, { transform: [{ translateX: underlayX }] }]}
-        >
-          {underlay}
-          <Animated.View style={[StyleSheet.absoluteFill, styles.dim, { opacity: dimOpacity }]} />
-        </Animated.View>
-      ) : null}
-      <Animated.View
-        style={[styles.page, underlayVisible && styles.pageLifted, { transform: [{ translateX }] }]}
-        onAccessibilityEscape={swipeEnabled ? pop : undefined}
-        {...responder.panHandlers}
+    <PageStackBackContext.Provider value={pop}>
+      <View
+        style={styles.container}
+        pointerEvents={blockTouches ? 'none' : 'auto'}
+        onLayout={(event) => {
+          const measured = event.nativeEvent.layout.width;
+          if (measured > 0) {
+            setWidth(measured);
+          }
+        }}
       >
-        {children}
-      </Animated.View>
-    </View>
+        {underlayVisible ? (
+          <Animated.View
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={[StyleSheet.absoluteFill, paint, { transform: [{ translateX: underlayX }] }]}
+          >
+            {underlay}
+            <Animated.View style={[StyleSheet.absoluteFill, styles.dim, { opacity: dimOpacity }]} />
+          </Animated.View>
+        ) : null}
+        <Animated.View
+          style={[styles.page, paint, underlayVisible && styles.pageLifted, { transform: [{ translateX }] }]}
+          onAccessibilityEscape={swipeEnabled ? pop : undefined}
+        >
+          {children}
+        </Animated.View>
+        {swipeEnabled ? <View style={styles.edge} {...edgeResponder.panHandlers} /> : null}
+      </View>
+    </PageStackBackContext.Provider>
   );
 }
 
@@ -229,5 +260,12 @@ const styles = StyleSheet.create({
   },
   dim: {
     backgroundColor: '#000',
+  },
+  edge: {
+    position: 'absolute',
+    left: 0,
+    top: EDGE_SWIPE_TOP_INSET,
+    bottom: 0,
+    width: EDGE_SWIPE_START_WIDTH,
   },
 });

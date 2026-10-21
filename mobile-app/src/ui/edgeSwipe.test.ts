@@ -3,22 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { edgeSwipeFinishDuration, shouldCompleteEdgeSwipe, shouldStartEdgeSwipe } from './edgeSwipe';
 
 describe('shouldStartEdgeSwipe', () => {
-  it('starts on a rightward move from the left edge', () => {
-    expect(shouldStartEdgeSwipe(4, 12, 2)).toBe(true);
-    expect(shouldStartEdgeSwipe(24, 12, 0)).toBe(true);
+  it('starts on a short rightward move', () => {
+    expect(shouldStartEdgeSwipe(6, 2)).toBe(true);
+    expect(shouldStartEdgeSwipe(12, -12)).toBe(true);
   });
 
-  it('ignores touches that begin away from the edge', () => {
-    expect(shouldStartEdgeSwipe(40, 30, 0)).toBe(false);
+  it('waits out finger jitter', () => {
+    expect(shouldStartEdgeSwipe(3, 0)).toBe(false);
   });
 
-  it('leaves vertical scrolling and taps alone', () => {
-    expect(shouldStartEdgeSwipe(4, 10, 20)).toBe(false);
-    expect(shouldStartEdgeSwipe(4, 3, 0)).toBe(false);
-  });
-
-  it('ignores leftward moves', () => {
-    expect(shouldStartEdgeSwipe(4, -20, 0)).toBe(false);
+  it('ignores mostly vertical and leftward moves', () => {
+    expect(shouldStartEdgeSwipe(10, 20)).toBe(false);
+    expect(shouldStartEdgeSwipe(-20, 0)).toBe(false);
   });
 });
 

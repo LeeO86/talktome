@@ -20,6 +20,7 @@ import { session, useSessionStore } from '../session/store';
 import { QrIcon } from './icons';
 import { QrScannerModal } from './QrScannerModal';
 import { isCompactOperatorScreen } from './layers';
+import { usePageStackBack } from './PageStack';
 import { colors } from './theme';
 
 type LoginMethod = 'account' | 'link';
@@ -35,6 +36,7 @@ export function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const guest = store.loginOptions?.guestLogin;
   const canGoBack = store.profiles.length > 0;
+  const stackBack = usePageStackBack();
 
   const openLoginScanner = useSessionStore((state) => state.openLoginScanner);
   const setField = useSessionStore((state) => state.setField);
@@ -208,7 +210,11 @@ export function LoginScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {canGoBack ? (
-          <Pressable accessibilityRole="button" onPress={() => session.cancelAddProfile()} style={styles.back}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => (stackBack ? stackBack() : session.cancelAddProfile())}
+            style={styles.back}
+          >
             <Text style={styles.backText}>Profiles</Text>
           </Pressable>
         ) : null}

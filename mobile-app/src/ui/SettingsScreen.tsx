@@ -1,4 +1,14 @@
-import { Modal, Platform, Pressable, ScrollView, Text, View, useColorScheme } from 'react-native';
+import {
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useColorScheme,
+  useWindowDimensions,
+} from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -17,6 +27,7 @@ import { describeWatchRemoteStatus, watchRemoteShortStatus, watchRemoteStatus } 
 import { androidSafeArea } from './androidSafeArea';
 import { PageStack, type PageStackHandle } from './PageStack';
 import { PttAddDevicePage, PttDeviceDetailPage, PttDevicesPage } from './PttSettingsScreens';
+import { SessionPage } from './SessionPage';
 import {
   SettingsActionRow,
   SettingsFootnote,
@@ -38,7 +49,8 @@ type Props = {
 };
 
 type SettingsPage =
-  | { kind: 'root' }
+  | { kind: 'session' }
+  | { kind: 'settings' }
   | { kind: 'layout' }
   | { kind: 'main-button' }
   | { kind: 'arrange' }
@@ -48,10 +60,12 @@ type SettingsPage =
   | { kind: 'ptt-device'; id: string }
   | { kind: 'debug' };
 
+/** The session sheet: Session is the root page and Settings is pushed from it, like an iOS stack. */
 export function SettingsScreen({ visible, onClose }: Props) {
   const store = useSessionStore();
   const scheme = useColorScheme();
-  const [page, setPage] = useState<SettingsPage>({ kind: 'root' });
+  const { width, height } = useWindowDimensions();
+  const [page, setPage] = useState<SettingsPage>({ kind: 'session' });
   const [sliderDragging, setSliderDragging] = useState(false);
   const stack = useRef<PageStackHandle>(null);
   // Every way back (header, edge swipe, after pairing or deleting an accessory) slides like iOS.
@@ -62,7 +76,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
       session.refreshAudioDevices();
       return;
     }
-    setPage({ kind: 'root' });
+    setPage({ kind: 'session' });
     setSliderDragging(false);
     void session.cancelButtonPairing();
   }, [visible]);
@@ -73,11 +87,12 @@ export function SettingsScreen({ visible, onClose }: Props) {
   );
   const parent = parentPage(page);
 
-  const goBack = () => setPage(parent ?? { kind: 'root' });
+  const goBack = () => setPage(parent ?? { kind: 'session' });
 
   const pageActions = {
     showPttList: back,
     onClose,
+    onOpenSettings: () => setPage({ kind: 'settings' }),
     onOpenLayout: () => setPage({ kind: 'layout' }),
     onOpenMainButton: () => setPage({ kind: 'main-button' }),
     onOpenArrange: () => setPage({ kind: 'arrange' }),
@@ -88,42 +103,99 @@ export function SettingsScreen({ visible, onClose }: Props) {
     onOpenDevice: (id: string) => setPage({ kind: 'ptt-device', id }),
   };
 
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SettingsThemeProvider scheme={scheme}>
-        <PageStack
-          ref={stack}
-          animated={Platform.OS === 'ios'}
-          swipeEnabled={Platform.OS === 'ios' && parent !== null && !sliderDragging}
-          onBack={goBack}
-          pageKey={page.kind === 'ptt-device' ? `${page.kind}:${page.id}` : page.kind}
-          depth={pageDepth(page)}
-          underlay={
-            parent ? (
-              <SettingsSheet
-                {...pageActions}
-                header={headerForPage(parent)}
-                page={parent}
-                onBack={parent.kind === 'root' ? undefined : back}
-                scrollEnabled={false}
-                onDimSliding={setSliderDragging}
-              />
-            ) : null
-          }
-        >
+  const stackView = (
+    <PageStack
+      ref={stack}
+      animated={Platform.OS === 'ios'}
+      swipeEnabled={Platform.OS === 'ios' && parent !== null && !sliderDragging}
+      onBack={goBack}
+      pageKey={page.kind === 'ptt-device' ? `${page.kind}:${page.id}` : page.kind}
+      depth={pageDepth(page)}
+      underlay={
+        parent ? (
           <SettingsSheet
             {...pageActions}
-            header={header}
-            page={page}
-            onBack={parent ? back : undefined}
-            scrollEnabled={!sliderDragging}
+            header={headerForPage(parent)}
+            page={parent}
+            onBack={parentPage(parent) ? back : undefined}
+            scrollEnabled={false}
             onDimSliding={setSliderDragging}
           />
-        </PageStack>
-      </SettingsThemeProvider>
+        ) : null
+      }
+    >
+      <SettingsSheet
+        {...pageActions}
+        header={header}
+        page={page}
+        onBack={parent ? back : undefined}
+        scrollEnabled={!sliderDragging}
+        onDimSliding={setSliderDragging}
+      />
+    </PageStack>
+  );
+
+  // iPad page sheets cannot be dismissed by tapping beside them, so draw our own centered sheet
+  // over a backdrop that closes on tap, like the conference member list.
+  if (Platform.OS === 'ios' && Platform.isPad) {
+    return (
+      <Modal
+        visible={visible}
+        transparent
+        animationType="fade"
+        supportedOrientations={ALL_ORIENTATIONS}
+        onRequestClose={onClose}
+      >
+        <SettingsThemeProvider scheme={scheme}>
+          <View style={padStyles.backdrop}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+            />
+            <View
+              style={[
+                padStyles.panel,
+                { width: Math.min(PAD_SHEET_MAX_WIDTH, width - 48), height: Math.round(height * 0.86) },
+              ]}
+            >
+              {stackView}
+            </View>
+          </View>
+        </SettingsThemeProvider>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <SettingsThemeProvider scheme={scheme}>{stackView}</SettingsThemeProvider>
     </Modal>
   );
 }
+
+const PAD_SHEET_MAX_WIDTH = 620;
+
+const ALL_ORIENTATIONS: ('portrait' | 'portrait-upside-down' | 'landscape-left' | 'landscape-right')[] = [
+  'portrait',
+  'portrait-upside-down',
+  'landscape-left',
+  'landscape-right',
+];
+
+const padStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  },
+  panel: {
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+});
 
 function pageDepth(page: SettingsPage): number {
   const parent = parentPage(page);
@@ -133,8 +205,10 @@ function pageDepth(page: SettingsPage): number {
 /** The page "‹ Back" and the edge swipe return to; null on the root page. */
 function parentPage(page: SettingsPage): SettingsPage | null {
   switch (page.kind) {
-    case 'root':
+    case 'session':
       return null;
+    case 'settings':
+      return { kind: 'session' };
     case 'main-button':
     case 'arrange':
       return { kind: 'layout' };
@@ -142,7 +216,7 @@ function parentPage(page: SettingsPage): SettingsPage | null {
     case 'ptt-device':
       return { kind: 'ptt' };
     default:
-      return { kind: 'root' };
+      return { kind: 'settings' };
   }
 }
 
@@ -153,6 +227,7 @@ function SettingsSheet({
   onClose,
   scrollEnabled,
   onDimSliding,
+  onOpenSettings,
   onOpenLayout,
   onOpenMainButton,
   onOpenArrange,
@@ -169,6 +244,7 @@ function SettingsSheet({
   onClose: () => void;
   scrollEnabled: boolean;
   onDimSliding: (active: boolean) => void;
+  onOpenSettings: () => void;
   onOpenLayout: () => void;
   onOpenMainButton: () => void;
   onOpenArrange: () => void;
@@ -194,7 +270,9 @@ function SettingsSheet({
       />
 
       <ScrollView scrollEnabled={scrollEnabled} style={styles.scroll} contentContainerStyle={styles.body}>
-        {page.kind === 'root' ? (
+        {page.kind === 'session' ? <SessionPage onClose={onClose} onOpenSettings={onOpenSettings} /> : null}
+
+        {page.kind === 'settings' ? (
           <>
             <SettingsSection>
               <SettingsNavRow label="Layout" onPress={onOpenLayout} />
@@ -248,6 +326,10 @@ function SettingsSheet({
 
 function headerForPage(page: SettingsPage, deviceName?: string): { title: string; backLabel: string } {
   switch (page.kind) {
+    case 'session':
+      return { title: 'Session', backLabel: 'Session' };
+    case 'settings':
+      return { title: 'Settings', backLabel: 'Session' };
     case 'layout':
       return { title: 'Layout', backLabel: 'Settings' };
     case 'main-button':
@@ -264,8 +346,6 @@ function headerForPage(page: SettingsPage, deviceName?: string): { title: string
       return { title: deviceName || 'Accessory', backLabel: 'Accessories' };
     case 'debug':
       return { title: 'Debug', backLabel: 'Settings' };
-    default:
-      return { title: 'Settings', backLabel: 'Settings' };
   }
 }
 
