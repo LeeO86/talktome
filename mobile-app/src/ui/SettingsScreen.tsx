@@ -10,7 +10,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { ScreenStack, ScreenStackItem } from 'react-native-screens';
 
 import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
 import { describeAudioRouteKind } from '../audio/routes';
@@ -25,9 +26,8 @@ import { session, useSessionStore } from '../session/store';
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
 import { describeWatchRemoteStatus, watchRemoteShortStatus, watchRemoteStatus } from '../watch/native';
 import { androidSafeArea } from './androidSafeArea';
-import { PageStack, type PageStackHandle } from './PageStack';
 import { PttAddDevicePage, PttDeviceDetailPage, PttDevicesPage } from './PttSettingsScreens';
-import { SessionPage } from './SessionPage';
+import { ProfilesPage, SessionPage } from './SessionPage';
 import {
   SettingsActionRow,
   SettingsFootnote,
@@ -41,6 +41,7 @@ import {
   useSettingsStyles,
   useSettingsTheme,
 } from './settingsChrome';
+import { settingsPalette, settingsScheme } from './settingsTheme';
 import { VolumeSlider } from './VolumeSlider';
 
 type Props = {
@@ -51,6 +52,7 @@ type Props = {
 type SettingsPage =
   | { kind: 'session' }
   | { kind: 'settings' }
+  | { kind: 'profiles' }
   | { kind: 'layout' }
   | { kind: 'main-button' }
   | { kind: 'arrange' }
@@ -60,79 +62,109 @@ type SettingsPage =
   | { kind: 'ptt-device'; id: string }
   | { kind: 'debug' };
 
-/** The session sheet: Session is the root page and Settings is pushed from it, like an iOS stack. */
+const ROOT_PATH: SettingsPage[] = [{ kind: 'session' }];
+
+const HIDDEN_HEADER = { hidden: true };
+
+function pageKey(page: SettingsPage): string {
+  return page.kind === 'ptt-device' ? `${page.kind}:${page.id}` : page.kind;
+}
+
+/**
+ * The session sheet: Session is the root and Settings is pushed from it. Pages live in a native
+ * UINavigationController (react-native-screens), so slides and the swipe back are iOS's own.
+ * Swiping back from Session closes the sheet.
+ */
 export function SettingsScreen({ visible, onClose }: Props) {
   const store = useSessionStore();
   const scheme = useColorScheme();
   const { width, height } = useWindowDimensions();
-  const [page, setPage] = useState<SettingsPage>({ kind: 'session' });
+  const [path, setPath] = useState<SettingsPage[]>(ROOT_PATH);
+  const [openCount, setOpenCount] = useState(0);
+  const [shownVisible, setShownVisible] = useState(visible);
   const [sliderDragging, setSliderDragging] = useState(false);
-  const stack = useRef<PageStackHandle>(null);
-  // Every way back (header, edge swipe, after pairing or deleting an accessory) slides like iOS.
-  const back = useCallback(() => stack.current?.pop(), []);
+  const sheetColor = settingsPalette(settingsScheme(scheme)).sheet;
+
+  // Every opening starts on Session with a fresh native stack, so nothing pops while presenting.
+  if (visible !== shownVisible) {
+    setShownVisible(visible);
+    if (visible) {
+      setPath(ROOT_PATH);
+      setOpenCount((count) => count + 1);
+    }
+  }
 
   useEffect(() => {
     if (visible) {
       session.refreshAudioDevices();
       return;
     }
-    setPage({ kind: 'session' });
     setSliderDragging(false);
     void session.cancelButtonPairing();
   }, [visible]);
 
-  const header = headerForPage(
-    page,
-    store.bleBindings.find((item) => page.kind === 'ptt-device' && item.id === page.id)?.name,
-  );
-  const parent = parentPage(page);
-
-  const goBack = () => setPage(parent ?? { kind: 'session' });
+  const push = (page: SettingsPage) => setPath((current) => [...current, page]);
+  const back = useCallback(() => setPath((current) => (current.length > 1 ? current.slice(0, -1) : current)), []);
+  // iOS already removed the page (swipe back); keep our path in step. Index 0 is Session.
+  const dismissedAt = (index: number) => {
+    setPath((current) => current.slice(0, index));
+    if (index === 0) {
+      onClose();
+    }
+  };
+  const requestClose = () => (path.length > 1 ? back() : onClose());
 
   const pageActions = {
     showPttList: back,
     onClose,
-    onOpenSettings: () => setPage({ kind: 'settings' }),
-    onOpenLayout: () => setPage({ kind: 'layout' }),
-    onOpenMainButton: () => setPage({ kind: 'main-button' }),
-    onOpenArrange: () => setPage({ kind: 'arrange' }),
-    onOpenAudio: () => setPage({ kind: 'audio' }),
-    onOpenAccessories: () => setPage({ kind: 'ptt' }),
-    onOpenDebug: () => setPage({ kind: 'debug' }),
-    onAddDevice: () => setPage({ kind: 'ptt-add' }),
-    onOpenDevice: (id: string) => setPage({ kind: 'ptt-device', id }),
+    onOpenSettings: () => push({ kind: 'settings' }),
+    onOpenProfiles: () => push({ kind: 'profiles' }),
+    onOpenLayout: () => push({ kind: 'layout' }),
+    onOpenMainButton: () => push({ kind: 'main-button' }),
+    onOpenArrange: () => push({ kind: 'arrange' }),
+    onOpenAudio: () => push({ kind: 'audio' }),
+    onOpenAccessories: () => push({ kind: 'ptt' }),
+    onOpenDebug: () => push({ kind: 'debug' }),
+    onAddDevice: () => push({ kind: 'ptt-add' }),
+    onOpenDevice: (id: string) => push({ kind: 'ptt-device', id }),
   };
 
   const stackView = (
-    <PageStack
-      ref={stack}
-      animated={Platform.OS === 'ios'}
-      swipeEnabled={Platform.OS === 'ios' && parent !== null && !sliderDragging}
-      onBack={goBack}
-      pageKey={page.kind === 'ptt-device' ? `${page.kind}:${page.id}` : page.kind}
-      depth={pageDepth(page)}
-      underlay={
-        parent ? (
+    <ScreenStack key={openCount} style={stackStyles.stack}>
+      {/* Empty page under Session: swiping Session away lands here and closes the sheet. */}
+      <ScreenStackItem
+        screenId="close"
+        headerConfig={HIDDEN_HEADER}
+        gestureEnabled={false}
+        contentStyle={{ backgroundColor: sheetColor }}
+      >
+        <View />
+      </ScreenStackItem>
+      {path.map((page, index) => (
+        <ScreenStackItem
+          key={pageKey(page)}
+          screenId={pageKey(page)}
+          headerConfig={HIDDEN_HEADER}
+          gestureEnabled
+          // The dim slider drags sideways, so Audio keeps the back swipe on the screen edge only.
+          fullScreenSwipeEnabled={page.kind !== 'audio'}
+          onDismissed={() => dismissedAt(index)}
+          contentStyle={{ backgroundColor: sheetColor }}
+        >
           <SettingsSheet
             {...pageActions}
-            header={headerForPage(parent)}
-            page={parent}
-            onBack={parentPage(parent) ? back : undefined}
-            scrollEnabled={false}
+            header={headerForPage(
+              page,
+              store.bleBindings.find((item) => page.kind === 'ptt-device' && item.id === page.id)?.name,
+            )}
+            page={page}
+            onBack={index > 0 ? back : undefined}
+            scrollEnabled={!sliderDragging}
             onDimSliding={setSliderDragging}
           />
-        ) : null
-      }
-    >
-      <SettingsSheet
-        {...pageActions}
-        header={header}
-        page={page}
-        onBack={parent ? back : undefined}
-        scrollEnabled={!sliderDragging}
-        onDimSliding={setSliderDragging}
-      />
-    </PageStack>
+        </ScreenStackItem>
+      ))}
+    </ScreenStack>
   );
 
   // iPad page sheets cannot be dismissed by tapping beside them, so draw our own centered sheet
@@ -144,7 +176,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
         transparent
         animationType="fade"
         supportedOrientations={ALL_ORIENTATIONS}
-        onRequestClose={onClose}
+        onRequestClose={requestClose}
       >
         <SettingsThemeProvider scheme={scheme}>
           <View style={padStyles.backdrop}>
@@ -169,11 +201,17 @@ export function SettingsScreen({ visible, onClose }: Props) {
   }
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={requestClose}>
       <SettingsThemeProvider scheme={scheme}>{stackView}</SettingsThemeProvider>
     </Modal>
   );
 }
+
+const stackStyles = StyleSheet.create({
+  stack: {
+    flex: 1,
+  },
+});
 
 const PAD_SHEET_MAX_WIDTH = 620;
 
@@ -197,29 +235,6 @@ const padStyles = StyleSheet.create({
   },
 });
 
-function pageDepth(page: SettingsPage): number {
-  const parent = parentPage(page);
-  return parent ? pageDepth(parent) + 1 : 0;
-}
-
-/** The page "‹ Back" and the edge swipe return to; null on the root page. */
-function parentPage(page: SettingsPage): SettingsPage | null {
-  switch (page.kind) {
-    case 'session':
-      return null;
-    case 'settings':
-      return { kind: 'session' };
-    case 'main-button':
-    case 'arrange':
-      return { kind: 'layout' };
-    case 'ptt-add':
-    case 'ptt-device':
-      return { kind: 'ptt' };
-    default:
-      return { kind: 'settings' };
-  }
-}
-
 function SettingsSheet({
   header,
   page,
@@ -228,6 +243,7 @@ function SettingsSheet({
   scrollEnabled,
   onDimSliding,
   onOpenSettings,
+  onOpenProfiles,
   onOpenLayout,
   onOpenMainButton,
   onOpenArrange,
@@ -245,6 +261,7 @@ function SettingsSheet({
   scrollEnabled: boolean;
   onDimSliding: (active: boolean) => void;
   onOpenSettings: () => void;
+  onOpenProfiles: () => void;
   onOpenLayout: () => void;
   onOpenMainButton: () => void;
   onOpenArrange: () => void;
@@ -270,7 +287,10 @@ function SettingsSheet({
       />
 
       <ScrollView scrollEnabled={scrollEnabled} style={styles.scroll} contentContainerStyle={styles.body}>
-        {page.kind === 'session' ? <SessionPage onClose={onClose} onOpenSettings={onOpenSettings} /> : null}
+        {page.kind === 'session' ? (
+          <SessionPage onClose={onClose} onOpenSettings={onOpenSettings} onOpenProfiles={onOpenProfiles} />
+        ) : null}
+        {page.kind === 'profiles' ? <ProfilesPage onClose={onClose} /> : null}
 
         {page.kind === 'settings' ? (
           <>
@@ -330,6 +350,8 @@ function headerForPage(page: SettingsPage, deviceName?: string): { title: string
       return { title: 'Session', backLabel: 'Session' };
     case 'settings':
       return { title: 'Settings', backLabel: 'Session' };
+    case 'profiles':
+      return { title: 'Profiles', backLabel: 'Session' };
     case 'layout':
       return { title: 'Layout', backLabel: 'Settings' };
     case 'main-button':

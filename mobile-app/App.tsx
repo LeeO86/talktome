@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { ActivityIndicator, Linking, Platform, SafeAreaView, StyleSheet, View } from 'react-native';
+import { ScreenStack, ScreenStackItem } from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
@@ -13,7 +14,6 @@ import {
 import { androidSafeArea } from './src/ui/androidSafeArea';
 import { LoginScreen } from './src/ui/LoginScreen';
 import { OperatorScreen } from './src/ui/OperatorScreen';
-import { PageStack } from './src/ui/PageStack';
 import { PausedScreen } from './src/ui/PausedScreen';
 import { ProductionPickerScreen } from './src/ui/ProductionPickerScreen';
 import { ProfilePickerScreen } from './src/ui/ProfilePickerScreen';
@@ -72,22 +72,37 @@ export default function App() {
   }
   // Add profile is pushed over Profiles, so it slides in and swipes back like an iOS stack.
   const loginOverProfiles = screen === 'login' && profiles.length > 0;
+  const pages: Screen[] = loginOverProfiles ? ['profiles', 'login'] : [screen];
 
   return (
     <View style={styles.root}>
       <SafeAreaView style={[styles.safe, androidSafeArea]}>
         <StatusBar style="light" />
-        <PageStack
-          animated={Platform.OS === 'ios'}
-          swipeEnabled={Platform.OS === 'ios' && loginOverProfiles}
-          onBack={() => session.cancelAddProfile()}
-          pageKey={screen}
-          depth={loginOverProfiles ? 1 : 0}
-          backgroundColor={colors.bgBottom}
-          underlay={loginOverProfiles ? <ProfilePickerScreen /> : null}
-        >
-          <AppScreen screen={screen} />
-        </PageStack>
+        <ScreenStack style={styles.stack}>
+          {pages.map((page, index) => {
+            // Only pages pushed on another one slide and swipe back; other screens swap in place.
+            const pushed = index > 0;
+            return (
+              <ScreenStackItem
+                key={page}
+                screenId={page}
+                headerConfig={HIDDEN_HEADER}
+                stackAnimation={pushed ? 'default' : 'none'}
+                gestureEnabled={pushed}
+                fullScreenSwipeEnabled
+                hideKeyboardOnSwipe
+                onDismissed={() => {
+                  if (page === 'login') {
+                    session.cancelAddProfile();
+                  }
+                }}
+                contentStyle={styles.page}
+              >
+                <AppScreen screen={page} />
+              </ScreenStackItem>
+            );
+          })}
+        </ScreenStack>
       </SafeAreaView>
       {identity && operatorReady && tallyColor ? <TallyScreenFrame color={tallyColor} /> : null}
     </View>
@@ -95,6 +110,8 @@ export default function App() {
 }
 
 type Screen = 'loading' | 'operator' | 'production' | 'paused' | 'login' | 'profiles';
+
+const HIDDEN_HEADER = { hidden: true };
 
 function AppScreen({ screen }: { screen: Screen }) {
   switch (screen) {
@@ -145,6 +162,12 @@ const styles = StyleSheet.create({
   },
   safe: {
     flex: 1,
+    backgroundColor: colors.bgBottom,
+  },
+  stack: {
+    flex: 1,
+  },
+  page: {
     backgroundColor: colors.bgBottom,
   },
   tallyFrame: {

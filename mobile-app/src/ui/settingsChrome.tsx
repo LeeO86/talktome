@@ -411,9 +411,12 @@ function makeSettingsStyles(palette: SettingsPalette) {
       fontVariant: ['tabular-nums'],
       paddingTop: 8,
     },
-    actionDivider: {
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: palette.separator,
+    actionTop: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: palette.separator,
+    },
+    profileCurrent: {
+      marginRight: 8,
     },
     orderList: {
       paddingBottom: 0,

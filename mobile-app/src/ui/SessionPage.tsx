@@ -4,7 +4,10 @@ import { productionChoices, visibleProductionName } from '../protocol';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { session, useSessionStore } from '../session/store';
 import { ConnectionStatusBadge } from './ConnectionStatusBadge';
+import { TrashIcon } from './icons';
 import {
+  SettingsActionRow,
+  SettingsHint,
   SettingsNavRow,
   SettingsRow,
   SettingsSection,
@@ -12,13 +15,15 @@ import {
   useSettingsTheme,
 } from './settingsChrome';
 
-/** Root page of the session sheet; Settings is pushed from here. */
+/** Root page of the session sheet; Settings and Profiles are pushed from here. */
 export function SessionPage({
   onClose,
   onOpenSettings,
+  onOpenProfiles,
 }: {
   onClose: () => void;
   onOpenSettings: () => void;
+  onOpenProfiles: () => void;
 }) {
   const store = useSessionStore();
   const styles = useSettingsStyles();
@@ -82,19 +87,89 @@ export function SessionPage({
 
       <SettingsSection>
         <SettingsNavRow label="Settings" onPress={onOpenSettings} />
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => {
-            onClose();
-            void session.leaveToProfiles();
-          }}
-          style={[styles.row, styles.actionDivider]}
-        >
-          <Text style={styles.actionLabel}>Profiles</Text>
-        </Pressable>
-        <Pressable accessibilityRole="button" onPress={disconnect} style={styles.row}>
+        <SettingsNavRow label="Profiles" onPress={onOpenProfiles} />
+        <Pressable accessibilityRole="button" onPress={disconnect} style={[styles.row, styles.actionTop]}>
           <Text style={styles.destructiveLabel}>Disconnect</Text>
         </Pressable>
+      </SettingsSection>
+    </>
+  );
+}
+
+/**
+ * Session › Profiles. Opening it changes nothing; picking another profile, adding one, or scanning
+ * a QR code leaves this session first, then continues on the profile screens.
+ */
+export function ProfilesPage({ onClose }: { onClose: () => void }) {
+  const profiles = useSessionStore((state) => state.profiles);
+  const activeProfileId = useSessionStore((state) => state.activeProfileId);
+  const styles = useSettingsStyles();
+  const { palette } = useSettingsTheme();
+
+  const leaveThen = (next: () => void | Promise<void>) => {
+    onClose();
+    void session.leaveToProfiles().then(next);
+  };
+
+  return (
+    <>
+      <SettingsSection>
+        {profiles.map((profile, index) => {
+          const current = profile.id === activeProfileId;
+          const production = visibleProductionName(profile.productionName);
+          return (
+            <View key={profile.id} style={[styles.orderRow, index > 0 && styles.orderRowDivider]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: current }}
+                disabled={current}
+                onPress={() => leaveThen(() => session.connectProfile(profile.id))}
+                style={styles.orderText}
+              >
+                <Text style={styles.orderName} numberOfLines={1}>
+                  {profile.username}
+                </Text>
+                <Text style={styles.orderKind} numberOfLines={1}>
+                  {production ? `${profile.serverAddress} · ${production}` : profile.serverAddress}
+                </Text>
+              </Pressable>
+              {current ? (
+                <Text style={[styles.rowValue, styles.profileCurrent]}>Connected</Text>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${profile.username}`}
+                  hitSlop={8}
+                  style={styles.orderButton}
+                  onPress={() =>
+                    Alert.alert('Remove profile?', `${profile.username}\n${profile.serverAddress}`, [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Remove',
+                        style: 'destructive',
+                        onPress: () => void session.removeSavedProfile(profile.id),
+                      },
+                    ])
+                  }
+                >
+                  <TrashIcon color={palette.danger} />
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
+        <SettingsHint
+          full="You stay connected until you pick another profile. Picking, adding, or scanning disconnects this session first."
+          compact="You stay connected until you pick another profile."
+        />
+      </SettingsSection>
+
+      <SettingsSection>
+        <SettingsActionRow label="Add profile" onPress={() => leaveThen(() => session.startAddProfile())} />
+        <SettingsActionRow
+          label="Scan QR code"
+          onPress={() => leaveThen(() => session.startAddProfile({ openScanner: true }))}
+        />
       </SettingsSection>
     </>
   );
