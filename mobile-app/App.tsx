@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { ActivityIndicator, Linking, Platform, SafeAreaView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, BackHandler, Linking, Platform, SafeAreaView, StyleSheet, View } from 'react-native';
 import { ScreenStack, ScreenStackItem } from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
@@ -73,6 +73,18 @@ export default function App() {
   // Add profile is pushed over Profiles, so it slides in and swipes back like an iOS stack.
   const loginOverProfiles = screen === 'login' && profiles.length > 0;
   const pages: Screen[] = loginOverProfiles ? ['profiles', 'login'] : [screen];
+
+  // Android back pops Add profile to Profiles, like back inside the session sheet.
+  useEffect(() => {
+    if (!loginOverProfiles) {
+      return undefined;
+    }
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      session.cancelAddProfile();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [loginOverProfiles]);
 
   return (
     <View style={styles.root}>
