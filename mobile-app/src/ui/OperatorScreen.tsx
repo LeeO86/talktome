@@ -30,7 +30,7 @@ import {
   targetLayerCount,
   visibleTargets,
 } from './layers';
-import { SettingsScreen } from './SettingsScreen';
+import { openSessionSheet } from './sessionSheetState';
 import { TargetRow } from './TargetRow';
 import { colors } from './theme';
 
@@ -43,7 +43,6 @@ export function OperatorScreen() {
   const compact = isCompactOperatorScreen(width, height);
   const tablet = isTabletOperatorScreen(width, height);
   const [layerIndex, setLayerIndex] = useState(0);
-  const [sessionOpen, setSessionOpen] = useState(false);
   const [conferenceTarget, setConferenceTarget] = useState<TalkTarget | null>(null);
   const [headerCollapsed, setHeaderCollapsed] = useState(compact);
   const [headerHeight, setHeaderHeight] = useState(96);
@@ -216,7 +215,7 @@ export function OperatorScreen() {
             accessibilityRole="button"
             accessibilityLabel={`Session, ${connection.label}`}
             accessibilityHint="Server, settings, disconnect, and profiles"
-            onPress={() => setSessionOpen(true)}
+            onPress={openSessionSheet}
             style={styles.identity}
           >
             <View style={styles.nameRow}>
@@ -319,7 +318,6 @@ export function OperatorScreen() {
         {replyButton}
       </View>
 
-      <SettingsScreen visible={sessionOpen} onClose={() => setSessionOpen(false)} />
       <ConferenceMembersModal target={conferenceTarget} onClose={() => setConferenceTarget(null)} />
     </View>
   );

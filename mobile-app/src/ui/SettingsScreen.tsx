@@ -1,5 +1,5 @@
 import {
-  Modal,
+  BackHandler,
   Platform,
   Pressable,
   ScrollView,
@@ -9,8 +9,7 @@ import {
   useColorScheme,
   useWindowDimensions,
 } from 'react-native';
-import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScreenStack, ScreenStackItem } from 'react-native-screens';
 
 import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
@@ -25,7 +24,6 @@ import { moveTargetOrder } from '../session/targetOrder';
 import { session, useSessionStore } from '../session/store';
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
 import { describeWatchRemoteStatus, watchRemoteShortStatus, watchRemoteStatus } from '../watch/native';
-import { androidSafeArea } from './androidSafeArea';
 import { PttAddDevicePage, PttDeviceDetailPage, PttDevicesPage } from './PttSettingsScreens';
 import { ProfilesPage, SessionPage } from './SessionPage';
 import {
@@ -43,11 +41,6 @@ import {
 } from './settingsChrome';
 import { settingsPalette, settingsScheme } from './settingsTheme';
 import { VolumeSlider } from './VolumeSlider';
-
-type Props = {
-  visible: boolean;
-  onClose: () => void;
-};
 
 type SettingsPage =
   | { kind: 'session' }
@@ -71,37 +64,25 @@ function pageKey(page: SettingsPage): string {
 }
 
 /**
- * The session sheet: Session is the root and Settings is pushed from it. Pages live in a native
- * UINavigationController (react-native-screens), so slides and the swipe back are iOS's own.
- * Swiping back from Session closes the sheet.
+ * The session sheet: Session is the root and Settings / Profiles are pushed from it. App.tsx
+ * presents it as a native sheet; the pages inside are a nested native stack, so slides and the
+ * swipe back are iOS's own. Swiping back from Session closes the sheet. Mounted only while open,
+ * so every opening starts on Session.
  */
-export function SettingsScreen({ visible, onClose }: Props) {
+export function SessionSheet({ onClose }: { onClose: () => void }) {
   const store = useSessionStore();
   const scheme = useColorScheme();
   const { width, height } = useWindowDimensions();
   const [path, setPath] = useState<SettingsPage[]>(ROOT_PATH);
-  const [openCount, setOpenCount] = useState(0);
-  const [shownVisible, setShownVisible] = useState(visible);
   const [sliderDragging, setSliderDragging] = useState(false);
   const sheetColor = settingsPalette(settingsScheme(scheme)).sheet;
 
-  // Every opening starts on Session with a fresh native stack, so nothing pops while presenting.
-  if (visible !== shownVisible) {
-    setShownVisible(visible);
-    if (visible) {
-      setPath(ROOT_PATH);
-      setOpenCount((count) => count + 1);
-    }
-  }
-
   useEffect(() => {
-    if (visible) {
-      session.refreshAudioDevices();
-      return;
-    }
-    setSliderDragging(false);
-    void session.cancelButtonPairing();
-  }, [visible]);
+    session.refreshAudioDevices();
+    return () => {
+      void session.cancelButtonPairing();
+    };
+  }, []);
 
   const push = (page: SettingsPage) => setPath((current) => [...current, page]);
   const back = useCallback(() => setPath((current) => (current.length > 1 ? current.slice(0, -1) : current)), []);
@@ -112,7 +93,22 @@ export function SettingsScreen({ visible, onClose }: Props) {
       onClose();
     }
   };
-  const requestClose = () => (path.length > 1 ? back() : onClose());
+
+  // Android back goes up one page, and closes the sheet from Session.
+  const latest = useRef({ depth: path.length, back, onClose });
+  latest.current = { depth: path.length, back, onClose };
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      const { depth, back: goBack, onClose: close } = latest.current;
+      if (depth > 1) {
+        goBack();
+      } else {
+        close();
+      }
+      return true;
+    });
+    return () => subscription.remove();
+  }, []);
 
   const pageActions = {
     showPttList: back,
@@ -130,7 +126,7 @@ export function SettingsScreen({ visible, onClose }: Props) {
   };
 
   const stackView = (
-    <ScreenStack key={openCount} style={stackStyles.stack}>
+    <ScreenStack style={stackStyles.stack}>
       {/* Empty page under Session: swiping Session away lands here and closes the sheet. */}
       <ScreenStackItem
         screenId="close"
@@ -167,44 +163,32 @@ export function SettingsScreen({ visible, onClose }: Props) {
     </ScreenStack>
   );
 
-  // iPad page sheets cannot be dismissed by tapping beside them, so draw our own centered sheet
-  // over a backdrop that closes on tap, like the conference member list.
+  // iPad page sheets cannot be dismissed by tapping beside them, so App.tsx presents this one
+  // transparently and we draw a centered panel over a backdrop that closes on tap.
   if (Platform.OS === 'ios' && Platform.isPad) {
     return (
-      <Modal
-        visible={visible}
-        transparent
-        animationType="fade"
-        supportedOrientations={ALL_ORIENTATIONS}
-        onRequestClose={requestClose}
-      >
-        <SettingsThemeProvider scheme={scheme}>
-          <View style={padStyles.backdrop}>
-            <Pressable
-              style={StyleSheet.absoluteFill}
-              onPress={onClose}
-              accessibilityRole="button"
-              accessibilityLabel="Close"
-            />
-            <View
-              style={[
-                padStyles.panel,
-                { width: Math.min(PAD_SHEET_MAX_WIDTH, width - 48), height: Math.round(height * 0.86) },
-              ]}
-            >
-              {stackView}
-            </View>
+      <SettingsThemeProvider scheme={scheme}>
+        <View style={padStyles.backdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          />
+          <View
+            style={[
+              padStyles.panel,
+              { width: Math.min(PAD_SHEET_MAX_WIDTH, width - 48), height: Math.round(height * 0.86) },
+            ]}
+          >
+            {stackView}
           </View>
-        </SettingsThemeProvider>
-      </Modal>
+        </View>
+      </SettingsThemeProvider>
     );
   }
 
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={requestClose}>
-      <SettingsThemeProvider scheme={scheme}>{stackView}</SettingsThemeProvider>
-    </Modal>
-  );
+  return <SettingsThemeProvider scheme={scheme}>{stackView}</SettingsThemeProvider>;
 }
 
 const stackStyles = StyleSheet.create({
@@ -214,13 +198,6 @@ const stackStyles = StyleSheet.create({
 });
 
 const PAD_SHEET_MAX_WIDTH = 620;
-
-const ALL_ORIENTATIONS: ('portrait' | 'portrait-upside-down' | 'landscape-left' | 'landscape-right')[] = [
-  'portrait',
-  'portrait-upside-down',
-  'landscape-left',
-  'landscape-right',
-];
 
 const padStyles = StyleSheet.create({
   backdrop: {
@@ -274,11 +251,10 @@ function SettingsSheet({
 }) {
   const store = useSessionStore();
   const styles = useSettingsStyles();
-  const { scheme } = useSettingsTheme();
 
   return (
-    <View style={[styles.sheet, androidSafeArea]}>
-      {Platform.OS === 'android' ? <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} /> : null}
+    // Android presents the sheet inside the app's padded safe area, so no extra inset or status bar style here.
+    <View style={styles.sheet}>
       <SettingsHeader
         title={header.title}
         backLabel={header.backLabel}

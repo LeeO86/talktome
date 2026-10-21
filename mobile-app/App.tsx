@@ -1,6 +1,11 @@
 import { useEffect } from 'react';
-import { ActivityIndicator, BackHandler, Linking, Platform, SafeAreaView, StyleSheet, View } from 'react-native';
-import { ScreenStack, ScreenStackItem } from 'react-native-screens';
+import { ActivityIndicator, BackHandler, Linking, Platform, SafeAreaView, StyleSheet, View, useColorScheme } from 'react-native';
+import {
+  ScreenStack,
+  ScreenStackItem,
+  type StackAnimationTypes,
+  type StackPresentationTypes,
+} from 'react-native-screens';
 import { StatusBar } from 'expo-status-bar';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
@@ -17,6 +22,9 @@ import { OperatorScreen } from './src/ui/OperatorScreen';
 import { PausedScreen } from './src/ui/PausedScreen';
 import { ProductionPickerScreen } from './src/ui/ProductionPickerScreen';
 import { ProfilePickerScreen } from './src/ui/ProfilePickerScreen';
+import { closeSessionSheet, useSessionSheetOpen } from './src/ui/sessionSheetState';
+import { SessionSheet } from './src/ui/SettingsScreen';
+import { settingsPalette, settingsScheme } from './src/ui/settingsTheme';
 import { colors } from './src/ui/theme';
 
 export default function App() {
@@ -28,6 +36,7 @@ export default function App() {
   const addingProfile = useSessionStore((state) => state.addingProfile);
   const profiles = useSessionStore((state) => state.profiles);
   const tallyColor = useSessionStore((state) => cameraTallyColor(state.cameraTally));
+  const scheme = useColorScheme();
 
   useEffect(() => {
     void session.hydrate();
@@ -72,7 +81,21 @@ export default function App() {
   }
   // Add profile is pushed over Profiles, so it slides in and swipes back like an iOS stack.
   const loginOverProfiles = screen === 'login' && profiles.length > 0;
-  const pages: Screen[] = loginOverProfiles ? ['profiles', 'login'] : [screen];
+  // The session sheet is presented by this stack, not by a React Native Modal (see sessionSheetState).
+  const sheetOpen = useSessionSheetOpen((state) => state.open) && screen === 'operator';
+  const sheetColor = settingsPalette(settingsScheme(scheme)).sheet;
+  let pages: Page[] = [screen];
+  if (loginOverProfiles) {
+    pages = ['profiles', 'login'];
+  } else if (sheetOpen) {
+    pages = ['operator', 'sheet'];
+  }
+
+  useEffect(() => {
+    if (screen !== 'operator') {
+      closeSessionSheet();
+    }
+  }, [screen]);
 
   // Android back pops Add profile to Profiles, like back inside the session sheet.
   useEffect(() => {
@@ -92,6 +115,22 @@ export default function App() {
         <StatusBar style="light" />
         <ScreenStack style={styles.stack}>
           {pages.map((page, index) => {
+            if (page === 'sheet') {
+              return (
+                <ScreenStackItem
+                  key={page}
+                  screenId={page}
+                  headerConfig={HIDDEN_HEADER}
+                  {...sheetPresentation()}
+                  gestureEnabled
+                  fullScreenSwipeEnabled={false}
+                  onDismissed={closeSessionSheet}
+                  contentStyle={Platform.OS === 'ios' && Platform.isPad ? null : { backgroundColor: sheetColor }}
+                >
+                  <SessionSheet onClose={closeSessionSheet} />
+                </ScreenStackItem>
+              );
+            }
             // Only pages pushed on another one slide and swipe back; other screens swap in place.
             const pushed = index > 0;
             return (
@@ -122,6 +161,18 @@ export default function App() {
 }
 
 type Screen = 'loading' | 'operator' | 'production' | 'paused' | 'login' | 'profiles';
+
+type Page = Screen | 'sheet';
+
+/** iPhone: native page sheet (swipe down closes). iPad: transparent, so the sheet can close on a tap outside. */
+function sheetPresentation(): { stackPresentation: StackPresentationTypes; stackAnimation: StackAnimationTypes } {
+  if (Platform.OS === 'ios') {
+    return Platform.isPad
+      ? { stackPresentation: 'transparentModal', stackAnimation: 'fade' }
+      : { stackPresentation: 'pageSheet', stackAnimation: 'default' };
+  }
+  return { stackPresentation: 'modal', stackAnimation: 'slide_from_bottom' };
+}
 
 const HIDDEN_HEADER = { hidden: true };
 
