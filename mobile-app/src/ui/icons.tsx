@@ -16,8 +16,7 @@ export const WEB_FEED_GLYPH = '🎧';
 export const WEB_AVATAR = {
   user: '#446cc2',
   conference: '#4f9b8b',
-  // TalkToMe 1.5.17: feeds have their own green so a sending feed no longer looks offline.
-  feed: '#5f804b',
+  feed: '#475569',
   offline: '#475569',
   glyph: '#ffffff',
   offlineGlyph: '#e2e8f0',

@@ -38,7 +38,7 @@ describe('web client UI icons', () => {
     expect(source).toContain("WEB_FEED_GLYPH = '🎧'");
     expect(source).toContain("user: '#446cc2'");
     expect(source).toContain("conference: '#4f9b8b'");
-    expect(source).toContain("feed: '#5f804b'");
+    expect(source).toContain("feed: '#475569'");
     expect(source).toContain("offline: '#475569'");
   });
 

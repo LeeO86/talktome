@@ -70,8 +70,6 @@ export function TargetRow({
   const tight = compact || (height != null && height < 64);
 
   const speaking = incoming;
-  // TalkToMe 1.5.17: green border only while the feed sends and you have not stopped it.
-  // The border already says it is streaming, so the label just names the feed.
   const streaming = target.type === 'feed' && feedOnline && !feedStopped;
 
   const meta =
@@ -80,7 +78,9 @@ export function TargetRow({
         ? 'Offline'
         : feedStopped
           ? 'Stopped'
-          : 'Feed'
+          : streaming
+            ? 'Streaming'
+            : 'Feed'
       : target.type === 'conference'
         ? listenOnly
           ? 'Listen only'
