@@ -20,6 +20,7 @@ import { FEED_DIM_DB_OPTIONS, dimDbFromSliderPosition, sliderPositionFromDimDb }
 import { mainButtonCandidates, mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
 import { moveTargetOrder } from '../session/targetOrder';
 import { session, useSessionStore } from '../session/store';
+import { useSessionSheetOpen } from './sessionSheetState';
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
 import { describeWatchRemoteStatus, watchRemoteShortStatus, watchRemoteStatus } from '../watch/native';
 import { PttAddDevicePage, PttDeviceDetailPage, PttDevicesPage } from './PttSettingsScreens';
@@ -53,6 +54,7 @@ type SettingsPage =
   | { kind: 'debug' };
 
 const ROOT_PATH: SettingsPage[] = [{ kind: 'session' }];
+const ACCESSORIES_PATH: SettingsPage[] = [{ kind: 'session' }, { kind: 'ptt' }];
 
 const HIDDEN_HEADER = { hidden: true };
 
@@ -64,13 +66,15 @@ function pageKey(page: SettingsPage): string {
  * The session sheet: Session is the root and settings categories / Profiles are pushed from it. App.tsx
  * presents it as a native sheet; the pages inside are a nested native stack, so slides and the
  * swipe back are iOS's own. Swiping back from Session closes the sheet. Mounted only while open,
- * so every opening starts on Session.
+ * so every opening starts on Session, or on Accessories (above Session) from the operator notice.
  */
 export function SessionSheet({ onClose }: { onClose: () => void }) {
   const store = useSessionStore();
   const scheme = useColorScheme();
   const { width, height } = useWindowDimensions();
-  const [path, setPath] = useState<SettingsPage[]>(ROOT_PATH);
+  const [path, setPath] = useState<SettingsPage[]>(() =>
+    useSessionSheetOpen.getState().start === 'accessories' ? ACCESSORIES_PATH : ROOT_PATH,
+  );
   const [sliderDragging, setSliderDragging] = useState(false);
   const sheetColor = settingsPalette(settingsScheme(scheme)).sheet;
 

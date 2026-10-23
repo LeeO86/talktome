@@ -8,6 +8,7 @@ import {
   talkTargetIdentity,
   type TalkTarget,
 } from '../protocol';
+import { missingAccessoryNotice } from '../ble/bindings';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
 import { session, useSessionStore } from '../session/store';
@@ -31,6 +32,23 @@ import {
 import { openSessionSheet } from './sessionSheetState';
 import { TargetRow } from './TargetRow';
 import { colors } from './theme';
+
+/** Launch and short dropouts reconnect on their own; only warn when an accessory stays away. */
+const ACCESSORY_NOTICE_DELAY_MS = 5000;
+
+function useDelayedNotice(text: string | null, delayMs: number): string | null {
+  const [shown, setShown] = useState(false);
+  const active = text != null;
+  useEffect(() => {
+    if (!active) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(true), delayMs);
+    return () => clearTimeout(timer);
+  }, [active, delayMs]);
+  return shown ? text : null;
+}
 
 export function OperatorScreen() {
   const store = useSessionStore();
@@ -102,6 +120,10 @@ export function OperatorScreen() {
   const connection = connectionHealthFromSession(store);
   const mediaNotice =
     connection.kind === 'warning' || connection.kind === 'failed' ? connection.label : store.audioNotice;
+  const accessoryNotice = useDelayedNotice(
+    missingAccessoryNotice(store.bleBindings, store.bleDevices, store.bleKind),
+    ACCESSORY_NOTICE_DELAY_MS,
+  );
   const tallyColor = cameraTallyColor(store.cameraTally);
   const tallyLabel = cameraTallyLabel(store.cameraTally);
   const mainLocked = Boolean(mainKey && store.lockedTargetKeys.includes(mainKey));
@@ -205,7 +227,7 @@ export function OperatorScreen() {
             accessibilityRole="button"
             accessibilityLabel={`Session, ${connection.label}`}
             accessibilityHint="Server, layout, audio, accessories, debug, profiles, and disconnect"
-            onPress={openSessionSheet}
+            onPress={() => openSessionSheet()}
             style={styles.identity}
           >
             <View style={styles.nameRow}>
@@ -247,6 +269,20 @@ export function OperatorScreen() {
       )}
 
       {mediaNotice ? <Text style={styles.warn}>{mediaNotice}</Text> : null}
+      {accessoryNotice ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={accessoryNotice}
+          accessibilityHint="Opens Accessories"
+          onPress={() => openSessionSheet('accessories')}
+          style={styles.accessoryNotice}
+        >
+          <Text style={styles.accessoryNoticeText} numberOfLines={1}>
+            {accessoryNotice}
+          </Text>
+          <Text style={styles.accessoryNoticeChevron}>›</Text>
+        </Pressable>
+      ) : null}
       {store.overBudget ? (
         <Text style={styles.warn}>Too many incoming streams — some feeds paused.</Text>
       ) : null}
@@ -409,6 +445,31 @@ const styles = StyleSheet.create({
   warn: {
     color: colors.danger,
     marginBottom: 8,
+  },
+  accessoryNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginBottom: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(245,194,107,0.35)',
+    backgroundColor: 'rgba(245,194,107,0.10)',
+  },
+  accessoryNoticeText: {
+    flexShrink: 1,
+    color: colors.warning,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  accessoryNoticeChevron: {
+    color: colors.warning,
+    fontSize: 16,
+    fontWeight: '600',
   },
   error: {
     color: colors.danger,

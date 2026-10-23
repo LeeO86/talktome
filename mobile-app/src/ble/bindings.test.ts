@@ -8,6 +8,7 @@ import {
   describeBleReleaseTimeout,
   describePttDevicesSummary,
   mergeLiveBleDevices,
+  missingAccessoryNotice,
   nextBleReleaseTimeoutMs,
   parseBleDeviceBindings,
   parseBleReleaseTimeoutMs,
@@ -94,6 +95,24 @@ describe('BLE device bindings', () => {
         { id: 'bb', name: 'PTT-Z01', kind: 'connecting' },
       ]).map((item) => ({ id: item.id, name: item.name })),
     ).toEqual([{ id: 'aa', name: 'HB9800D' }]);
+  });
+
+  it('warns about saved accessories that are not connected, in plain words', () => {
+    const two = parseBleDeviceBindings([
+      { id: 'aa', name: 'Herda', target: { kind: 'reply' } },
+      { id: 'bb', name: 'PTT-Z', target: { kind: 'reply' } },
+    ]);
+    const herdaUp = { id: 'aa', name: 'Herda', kind: 'connected' } as const;
+    expect(missingAccessoryNotice([], [])).toBeNull();
+    expect(missingAccessoryNotice(two, [herdaUp, { id: 'bb', kind: 'connected' }])).toBeNull();
+    expect(missingAccessoryNotice(two, [herdaUp])).toBe('PTT-Z not connected');
+    expect(missingAccessoryNotice(two, [herdaUp, { id: 'bb', kind: 'connecting' }])).toBe(
+      'PTT-Z not connected · Reconnecting…',
+    );
+    expect(missingAccessoryNotice(two, [])).toBe('2 accessories not connected');
+    expect(missingAccessoryNotice(two, [herdaUp], 'unavailable')).toBe(
+      'Bluetooth unavailable · PTT-Z not connected',
+    );
   });
 
   it('summarizes saved PTT accessories for the Settings row', () => {
