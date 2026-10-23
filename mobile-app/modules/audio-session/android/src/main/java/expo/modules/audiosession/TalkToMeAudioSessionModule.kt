@@ -63,10 +63,6 @@ class TalkToMeAudioSessionModule : Module() {
       true
     }
 
-    AsyncFunction("prepareForSystemManagedIntercom") {
-      activate("intercom")
-    }
-
     AsyncFunction("deactivate") {
       deactivate()
     }

@@ -115,15 +115,6 @@ final class TalkToMeAudioSessionController {
     }
   }
 
-  func prepareForSystemManagedIntercom() throws {
-    let session = AVAudioSession.sharedInstance()
-    try configureIntercom(session)
-    try applyPreferredRoute(session)
-    setWebRTCAudioEnabled(true)
-    activeProfile = "intercom"
-    clearNowPlaying()
-  }
-
   func deactivate() {
     wantsBackgroundReceiveKeepalive = false
     endBackgroundTask()

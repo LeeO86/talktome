@@ -19,8 +19,6 @@ enum TalkToMePresenceStore {
   static let legacyProcessAliveFileName = "talktome.process.alive"
   static let talkNotification = "io.github.leeo86.talktome.talk" as CFString
   static let disconnectNotification = "io.github.leeo86.talktome.disconnect" as CFString
-  /// Posted when the process is about to die. PushToTalk listens and leaves the channel.
-  static let sessionWillTerminateNotification = "io.github.leeo86.talktome.session-will-terminate" as CFString
 
   static func writeDisconnected() {
     write(

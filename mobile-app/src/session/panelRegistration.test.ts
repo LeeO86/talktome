@@ -11,7 +11,6 @@ vi.mock('expo-modules-core', () => ({ requireNativeModule: () => { throw new Err
 vi.mock('expo-secure-store', () => ({ getItemAsync: vi.fn(async () => null), setItemAsync: vi.fn(async () => {}), deleteItemAsync: vi.fn(async () => {}) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}) } }));
 vi.mock('../audio/session', () => ({ audioSessionAvailable: () => false, playConnectionCue: vi.fn() }));
-vi.mock('../ptt/native', () => ({ pttNativeAvailable: () => false, updatePttRemoteParticipant: vi.fn() }));
 vi.mock('../ble/native', () => ({ startBleNative: vi.fn() }));
 vi.mock('./backgroundCoordinator', () => ({ BackgroundCoordinator: class { syncPresence() {} } }));
 vi.mock('./mediaCoordinator', () => ({ MediaCoordinator: class {

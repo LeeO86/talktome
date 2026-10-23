@@ -219,18 +219,6 @@ export class SignalingClient {
     return productionId;
   }
 
-  async requestApplePttBootstrap(): Promise<unknown> {
-    return this.emitAck(SocketEvent.requestApplePttBootstrap);
-  }
-
-  async registerApplePttPushToken(channelUUID: string, pushToken: string): Promise<void> {
-    await this.emitAck(SocketEvent.registerApplePttPushToken, { channelUUID, pushToken });
-  }
-
-  async unregisterApplePttPushToken(channelUUID: string): Promise<void> {
-    await this.emitAck(SocketEvent.unregisterApplePttPushToken, { channelUUID });
-  }
-
   async requestActiveProducers(): Promise<ActiveProducer[]> {
     const payload = await this.emitAck<unknown>(SocketEvent.requestActiveProducers);
     return parseActiveProducers(payload);

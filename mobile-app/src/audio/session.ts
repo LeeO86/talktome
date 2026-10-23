@@ -10,7 +10,6 @@ type NativeAudioSession = {
   reactivateForOutgoingTalkCapture?: () => Promise<boolean>;
   startBackgroundKeepalive?: () => Promise<boolean>;
   stopBackgroundKeepalive?: () => Promise<boolean>;
-  prepareForSystemManagedIntercom?: () => Promise<boolean>;
   deactivate?: () => Promise<boolean>;
   setWebRTCAudioEnabled?: (enabled: boolean) => Promise<boolean>;
   updateNowPlaying?: (title: string, detail: string, active: boolean) => Promise<boolean>;
@@ -50,10 +49,6 @@ export async function startBackgroundKeepalive(): Promise<boolean> {
 
 export async function stopBackgroundKeepalive(): Promise<boolean> {
   return (await loadNative()?.stopBackgroundKeepalive?.()) === true;
-}
-
-export async function prepareForSystemManagedIntercom(): Promise<boolean> {
-  return (await loadNative()?.prepareForSystemManagedIntercom?.()) === true;
 }
 
 export async function deactivateAudioSession(): Promise<boolean> {

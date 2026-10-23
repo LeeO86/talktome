@@ -6,11 +6,10 @@ import {
   setConferenceMemberListening as nextConferenceMemberListening,
   type ConferenceListenState,
 } from './conferenceListen';
-import { updatePttRemoteParticipant } from '../ptt/native';
 import { resolveReplyTalkTarget } from '../talk/replyTarget';
 import { loadTalkLinkToken, talkLinkAuthorizes } from '../talk/talkLink';
 import { addTalkTarget, removeTalkTarget, talkTargetKeys } from '../talk/talkSet';
-import { HOLD_HINT, latestIncomingName, useSessionStore } from './state';
+import { HOLD_HINT, useSessionStore } from './state';
 import type { SessionController } from './sessionController';
 
 /** Press/lock/release talk, the main button, and conference listen. */
@@ -323,8 +322,6 @@ export class TalkCoordinator {
       fallback: this.firstTalkableTarget(),
     });
     useSessionStore.setState({ replyTarget });
-    const incomingName = latestIncomingName(state.incoming);
-    void updatePttRemoteParticipant(incomingName ?? replyTarget?.label ?? null);
     this.c.background.syncPresence();
   }
 

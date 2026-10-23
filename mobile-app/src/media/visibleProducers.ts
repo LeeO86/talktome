@@ -6,7 +6,7 @@ import { talkTargetIdentity, type ActiveProducer, type TalkTarget } from '../pro
  * Direct user/guest talk is still accepted: the server already scoped it to us.
  * Feeds and conferences must appear on this production's target list.
  *
- * Phone, Watch, BLE, and system PTT all share MediaEngine, so this filter
+ * Phone, Watch, and BLE all share MediaEngine, so this filter
  * applies to every listen path.
  */
 export function producerMatchesVisibleTargets(

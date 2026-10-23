@@ -22,16 +22,10 @@ import {
 import {
   activateForIntercom,
   audioSessionAvailable,
-  prepareForSystemManagedIntercom,
   setWebRTCAudioEnabled,
 } from '../audio/session';
-import {
-  iosPttEnabled,
-  shouldPrepareAudioForMedia,
-  shouldPrepareSystemManagedAudioForMedia,
-} from '../audio/policy';
+import { shouldPrepareAudioForMedia } from '../audio/policy';
 import { readAudioRouteSnapshot, selectAudioRoute, type AudioRouteSnapshot } from '../audio/routes';
-import { shouldWaitForPendingSystemPttJoin } from '../ptt/joinGate';
 import { saveAudioPreferences } from './audioPrefs';
 import {
   resolveOperatorAudio,
@@ -113,7 +107,6 @@ export class MediaCoordinator {
     this.c.talk.refreshReplyTarget();
     await this.c.background.syncAudioSession(AppState.currentState);
     await this.c.background.syncForegroundService();
-    await this.c.background.syncSystemPtt();
     await this.c.persistCurrentProfile();
     this.c.background.syncPresence();
     await this.c.remotePanel.operatorReady();
@@ -145,7 +138,6 @@ export class MediaCoordinator {
     await this.refreshTargets();
     await this.c.background.syncAudioSession(AppState.currentState);
     await this.c.background.syncForegroundService();
-    await this.c.background.syncSystemPtt();
     if (resumeTargets.length > 0) {
       await this.c.background.prepareAudioForTalk();
       this.c.talkingTargets = resumeTargets;
@@ -407,50 +399,8 @@ export class MediaCoordinator {
     };
   }
 
-  async refreshProducersFromPtt(): Promise<void> {
-    const signaling = this.c.signaling;
-    const media = this.c.media;
-    if (!signaling || !media) {
-      return;
-    }
-    try {
-      const producers = await signaling.requestActiveProducers();
-      await this.syncHeardAudio(producers);
-    } catch {
-      // Keep the channel; media will retry on the next event.
-    }
-  }
-
   private async prepareAudioForMedia(): Promise<void> {
-    await this.waitForPendingSystemPttJoin();
-    const pttEnabled = iosPttEnabled();
-    const pttJoined = useSessionStore.getState().pttJoined;
-    if (
-      shouldPrepareSystemManagedAudioForMedia({
-        platform: Platform.OS,
-        pttEnabled,
-        pttJoined,
-      })
-    ) {
-      await prepareForSystemManagedIntercom();
-      await setWebRTCAudioEnabled(true);
-      useSessionStore.setState({
-        audioSessionAvailable: audioSessionAvailable(),
-        audioSessionActive: false,
-        capabilityReason: this.c.background.capabilityReason({
-          audioSessionAvailable: audioSessionAvailable(),
-          audioSessionActive: false,
-        }),
-      });
-      return;
-    }
-    if (
-      !shouldPrepareAudioForMedia({
-        platform: Platform.OS,
-        pttEnabled,
-        pttJoined,
-      })
-    ) {
+    if (!shouldPrepareAudioForMedia({ platform: Platform.OS })) {
       return;
     }
     const active = await activateForIntercom();
@@ -465,20 +415,5 @@ export class MediaCoordinator {
         audioSessionActive: active,
       }),
     });
-  }
-
-  private async waitForPendingSystemPttJoin(): Promise<void> {
-    if (
-      !shouldWaitForPendingSystemPttJoin({
-        platform: Platform.OS,
-        pttEnabled: iosPttEnabled(),
-        joinInFlight: this.c.pttJoin.pending,
-        pttJoined: useSessionStore.getState().pttJoined,
-      })
-    ) {
-      return;
-    }
-    useSessionStore.setState({ statusMessage: 'Waiting for system PTT join…' });
-    await this.c.pttJoin.wait();
   }
 }

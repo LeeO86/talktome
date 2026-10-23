@@ -4,8 +4,7 @@ import type { SessionController } from './sessionController';
 import { TalkCoordinator } from './talkCoordinator';
 
 const store = vi.hoisted(() => ({ state: {} as Record<string, unknown> }));
-vi.mock('./state', () => ({ HOLD_HINT: 'Hold to talk', latestIncomingName: () => null, useSessionStore: { getState: () => store.state, setState: (patch: Record<string, unknown>) => { Object.assign(store.state, patch); } } }));
-vi.mock('../ptt/native', () => ({ updatePttRemoteParticipant: vi.fn() }));
+vi.mock('./state', () => ({ HOLD_HINT: 'Hold to talk', useSessionStore: { getState: () => store.state, setState: (patch: Record<string, unknown>) => { Object.assign(store.state, patch); } } }));
 vi.mock('../talk/talkLink', () => ({ loadTalkLinkToken: vi.fn(), talkLinkAuthorizes: vi.fn() }));
 const a: TalkTarget = { type: 'conference', id: 1, label: 'A', canTalk: true };
 const b: TalkTarget = { type: 'conference', id: 2, label: 'B', canTalk: true };

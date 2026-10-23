@@ -4,15 +4,12 @@ import {
   activateForIntercom,
   audioSessionAvailable,
   deactivateAudioSession,
-  prepareForSystemManagedIntercom,
   reactivateForOutgoingTalkCapture,
   setWebRTCAudioEnabled,
   startBackgroundKeepalive,
   stopBackgroundKeepalive,
 } from '../audio/session';
 import {
-  iosPttEnabled,
-  shouldHandOffPlaybackToSystemPtt,
   shouldOwnAudioSession,
   shouldReactivateCaptureForTalk,
   shouldStartBackgroundKeepalive,
@@ -97,15 +94,6 @@ import {
 } from '../hardware/native';
 import { nextTalkableTarget, selectionFromTalkTarget, talkableAtKnob } from '../hardware/rotary';
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
-import { isHexPushToken, parseApplePttBootstrap, shouldUseSystemPtt } from '../ptt/policy';
-import {
-  beginPttJoin,
-  lastPttDiagnostic,
-  leavePttChannel,
-  pttNativeAvailable,
-  subscribePttNative,
-  updatePttChannel,
-} from '../ptt/native';
 import { sessionPresence, presenceNotification } from './presence';
 import { publishSessionPresence, subscribeAppTerminating, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
 import { shouldDisconnectForAppStateChange } from './presenceShutdown';
@@ -114,11 +102,10 @@ import { publishWatchRemote, subscribeWatchRemote, ackWatchTalk, type WatchRemot
 import { bleFieldsFromSelection, bleSelectionFromState, useSessionStore } from './state';
 import type { SessionController } from './sessionController';
 
-/** Background surfaces: FGS, audio-session ownership, BLE button, Watch, presence, and system PTT. */
+/** Background surfaces: FGS, audio-session ownership, BLE button, Watch, and presence. */
 export class BackgroundCoordinator {
   private hardwareBound = false;
   private appStateSubscription: { remove: () => void } | null = null;
-  private pendingPttRegistration: { token: string; channelUUID: string } | null = null;
   private readonly blePolicies = new Map<string, BleButtonPolicy>();
   private readonly bleWatchdogs = new Map<string, BleReleaseWatchdog>();
   private readonly notifySessions = new Map<string, AccessoryNotifySession>();
@@ -129,61 +116,6 @@ export class BackgroundCoordinator {
   private pairingTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly c: SessionController) {}
-
-  /** Apple requires requestJoinChannel from a user action while the app is foreground. */
-  async joinSystemPttChannel(): Promise<void> {
-    if (
-      !shouldUseSystemPtt({
-        platform: Platform.OS,
-        pttEnabled: iosPttEnabled(),
-        operatorReady: useSessionStore.getState().operatorReady,
-        identityKind: useSessionStore.getState().identity?.kind,
-      })
-    ) {
-      return;
-    }
-    const channelUUID = this.c.pttChannelUUID;
-    const channelName = useSessionStore.getState().pttChannelName || 'Talktome';
-    if (!channelUUID) {
-      useSessionStore.setState({
-        pttDiagnostic: 'System PTT join has no channel UUID from the server.',
-        statusMessage: 'System PTT join has no channel UUID from the server.',
-      });
-      return;
-    }
-    await this.beginSystemPttJoin(channelUUID, channelName);
-  }
-
-  private async beginSystemPttJoin(channelUUID: string, channelName: string): Promise<void> {
-    this.c.pttChannelUUID = channelUUID;
-    useSessionStore.setState({
-      pttChannelName: channelName,
-      pttDiagnostic: 'Joining system PTT channel…',
-      statusMessage: 'Joining system PTT channel…',
-    });
-    if (!this.c.media) {
-      this.c.pttJoin.begin();
-    }
-    const joining = beginPttJoin(channelUUID, channelName);
-    void joining.then((ok) => {
-      if (!ok) {
-        this.c.pttJoin.settle();
-      }
-    });
-    await this.finishSystemPttJoin(joining);
-  }
-
-  private async finishSystemPttJoin(joined: Promise<boolean>): Promise<void> {
-    await joined;
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    const nativeNote = lastPttDiagnostic().trim();
-    if (!useSessionStore.getState().pttJoined && nativeNote) {
-      useSessionStore.setState({
-        pttDiagnostic: nativeNote,
-        statusMessage: nativeNote,
-      });
-    }
-  }
 
   bluetoothButtonCandidates(): TalkTarget[] {
     return bleTalkCandidates(useSessionStore.getState().targets);
@@ -528,61 +460,9 @@ export class BackgroundCoordinator {
         void this.syncForegroundService();
       }
     });
-    subscribePttNative({
-      onDiagnostic: (message) => {
-        useSessionStore.setState({ statusMessage: message, pttDiagnostic: message });
-      },
-      onPushToken: (event) => {
-        void this.registerPttToken(event.token, event.channelUUID);
-      },
-      onBeginTransmitting: () => {
-        void this.c.talk.pressMainButton();
-      },
-      onEndTransmitting: () => {
-        void this.c.talk.releaseTalk();
-      },
-      onAudioActivated: () => {
-        void this.handlePttAudioActivated();
-      },
-      onServiceUpdate: () => {
-        void this.c.mediaCoordinator.refreshProducersFromPtt();
-      },
-      onJoined: () => {
-        this.c.pttJoin.settle();
-        useSessionStore.setState({
-          pttJoined: true,
-          capabilityReason: this.capabilityReason({ pttJoined: true }),
-        });
-        void this.syncAudioSession();
-      },
-      onLeft: () => {
-        this.c.pttJoin.settle();
-        useSessionStore.setState({
-          pttJoined: false,
-          capabilityReason: this.capabilityReason({ pttJoined: false }),
-        });
-        void this.syncAudioSession();
-      },
-      onJoinFailed: (message) => {
-        this.c.pttJoin.settle();
-        if (message.trim()) {
-          useSessionStore.setState({
-            pttDiagnostic: message,
-            statusMessage: message,
-          });
-        }
-      },
-      onIncomingPush: () => {
-        useSessionStore.setState({
-          pttVerified: true,
-          capabilityReason: this.capabilityReason({ pttVerified: true }),
-        });
-      },
-    });
     useSessionStore.setState({
       fgsAvailable: foregroundServiceAvailable(),
       audioSessionAvailable: audioSessionAvailable(),
-      pttAvailable: pttNativeAvailable(),
     });
   }
 
@@ -1229,23 +1109,14 @@ export class BackgroundCoordinator {
   }
 
   async syncAudioSession(appState: AppStateStatus = AppState.currentState): Promise<void> {
-    // Own the session until PTChannelManager has joined. After join, iOS owns
-    // AVAudioSession even if no push has arrived yet, so this handoff cannot
-    // wait for pttVerified. Profile connect does not join; only the Join control does.
     const state = useSessionStore.getState();
-    const pttEnabled = iosPttEnabled();
     const available = audioSessionAvailable();
-    const sessionOwnership = {
-      platform: Platform.OS,
-      pttEnabled,
-      pttJoined: state.pttJoined,
-      operatorReady: state.operatorReady,
-    };
-    if (shouldHandOffPlaybackToSystemPtt(sessionOwnership)) {
-      await this.adoptSystemManagedPttAudio();
-      return;
-    }
-    if (shouldTeardownAudioWhenNotOwningSession(sessionOwnership)) {
+    if (
+      shouldTeardownAudioWhenNotOwningSession({
+        platform: Platform.OS,
+        operatorReady: state.operatorReady,
+      })
+    ) {
       if (state.audioSessionActive || state.audioKeepalive) {
         await this.teardownAudioSession();
       } else {
@@ -1260,8 +1131,6 @@ export class BackgroundCoordinator {
     if (
       shouldStartBackgroundKeepalive({
         platform: Platform.OS,
-        pttEnabled,
-        pttJoined: state.pttJoined,
         operatorReady: state.operatorReady,
         appState,
       })
@@ -1303,8 +1172,6 @@ export class BackgroundCoordinator {
     const state = useSessionStore.getState();
     const ownsSession = shouldOwnAudioSession({
       platform: Platform.OS,
-      pttEnabled: iosPttEnabled(),
-      pttJoined: state.pttJoined,
       operatorReady: state.operatorReady,
     });
     if (
@@ -1344,154 +1211,12 @@ export class BackgroundCoordinator {
     });
   }
 
-  async syncSystemPtt(): Promise<void> {
-    const state = useSessionStore.getState();
-    if (
-      !shouldUseSystemPtt({
-        platform: Platform.OS,
-        pttEnabled: iosPttEnabled(),
-        operatorReady: state.operatorReady,
-        identityKind: state.identity?.kind,
-      })
-    ) {
-      await this.leaveSystemPtt();
-      return;
-    }
-    const signaling = this.c.signaling;
-    if (!signaling) {
-      return;
-    }
-    try {
-      const bootstrap = parseApplePttBootstrap(await signaling.requestApplePttBootstrap());
-      if (!bootstrap.enabled) {
-        this.c.pttChannelUUID = null;
-        await updatePttChannel(null, null);
-        useSessionStore.setState({
-          pttAvailable: pttNativeAvailable(),
-          pttBootstrapEnabled: false,
-          pttJoined: false,
-          pttChannelName: '',
-          capabilityReason: this.capabilityReason({ pttBootstrapEnabled: false, pttJoined: false }),
-        });
-        await this.syncAudioSession();
-        return;
-      }
-      const previousUUID = this.c.pttChannelUUID;
-      this.c.pttChannelUUID = bootstrap.channel.channelUUID;
-      if (
-        previousUUID &&
-        previousUUID !== bootstrap.channel.channelUUID &&
-        useSessionStore.getState().pttJoined
-      ) {
-        try {
-          await leavePttChannel();
-        } catch {
-          // Banner join will request the server channel after this leave.
-        }
-        useSessionStore.setState({ pttJoined: false });
-      }
-      useSessionStore.setState({
-        pttAvailable: pttNativeAvailable(),
-        pttBootstrapEnabled: true,
-        pttChannelName: bootstrap.channel.channelName,
-        capabilityReason: this.capabilityReason({ pttBootstrapEnabled: true }),
-      });
-      await this.c.persistCurrentProfile();
-      await this.flushPendingPttRegistration();
-    } catch (error) {
-      useSessionStore.setState({
-        pttAvailable: pttNativeAvailable(),
-        statusMessage: error instanceof Error ? error.message : String(error),
-        capabilityReason: this.capabilityReason(),
-      });
-    }
-  }
-
-  async leaveSystemPtt(): Promise<void> {
-    const channelUUID = this.c.pttChannelUUID;
-    this.c.pttChannelUUID = null;
-    if (channelUUID && this.c.signaling) {
-      try {
-        await this.c.signaling.unregisterApplePttPushToken(channelUUID);
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      await leavePttChannel();
-    } catch {
-      // ignore
-    }
-    useSessionStore.setState({
-      pttJoined: false,
-      pttBootstrapEnabled: false,
-      pttVerified: false,
-      pttChannelName: '',
-    });
-    await this.syncAudioSession();
-  }
-
-  private async registerPttToken(token: string, channelUUID: string): Promise<void> {
-    if (!isHexPushToken(token)) {
-      return;
-    }
-    this.pendingPttRegistration = { token, channelUUID };
-    await this.flushPendingPttRegistration();
-  }
-
-  private async flushPendingPttRegistration(): Promise<void> {
-    const pending = this.pendingPttRegistration;
-    const signaling = this.c.signaling;
-    if (!pending || !signaling) {
-      return;
-    }
-    try {
-      await signaling.registerApplePttPushToken(pending.channelUUID, pending.token);
-      useSessionStore.setState({ statusMessage: 'System PTT push token registered.' });
-    } catch (error) {
-      useSessionStore.setState({
-        statusMessage:
-          error instanceof Error ? error.message : 'System PTT push token registration failed.',
-      });
-    }
-  }
-
-  private async adoptSystemManagedPttAudio(): Promise<void> {
-    try {
-      await stopBackgroundKeepalive();
-    } catch {
-      // Keep configuring around the system session even if keepalive stop fails.
-    }
-    await prepareForSystemManagedIntercom();
-    await setWebRTCAudioEnabled(true);
-    const available = audioSessionAvailable();
-    useSessionStore.setState({
-      audioSessionAvailable: available,
-      audioSessionActive: false,
-      audioKeepalive: false,
-      capabilityReason: this.capabilityReason({
-        audioSessionAvailable: available,
-        audioSessionActive: false,
-        audioKeepalive: false,
-      }),
-    });
-  }
-
-  private async handlePttAudioActivated(): Promise<void> {
-    await this.adoptSystemManagedPttAudio();
-    await this.c.mediaCoordinator.refreshProducersFromPtt();
-  }
-
   capabilityReason(
     overrides: {
       fgsRunning?: boolean;
       audioSessionAvailable?: boolean;
       audioSessionActive?: boolean;
       audioKeepalive?: boolean;
-      pttAvailable?: boolean;
-      pttBootstrapEnabled?: boolean;
-      pttJoined?: boolean;
-      pttVerified?: boolean;
     } = {},
   ): string {
     const state = useSessionStore.getState();
@@ -1500,10 +1225,6 @@ export class BackgroundCoordinator {
       audioSessionAvailable: overrides.audioSessionAvailable ?? state.audioSessionAvailable,
       audioSessionActive: overrides.audioSessionActive ?? state.audioSessionActive,
       audioKeepalive: overrides.audioKeepalive ?? state.audioKeepalive,
-      pttAvailable: overrides.pttAvailable ?? state.pttAvailable,
-      pttBootstrapEnabled: overrides.pttBootstrapEnabled ?? state.pttBootstrapEnabled,
-      pttJoined: overrides.pttJoined ?? state.pttJoined,
-      pttVerified: overrides.pttVerified ?? state.pttVerified,
     }).reason;
   }
 

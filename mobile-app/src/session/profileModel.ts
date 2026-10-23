@@ -13,26 +13,8 @@ export type SavedProfile = {
   allowInsecureLocalTLS?: boolean;
   productionId?: number | null;
   productionName?: string | null;
-  pttChannelUUID?: string;
-  pttChannelName?: string;
   guest?: RememberedGuest;
 };
-
-export type CachedPttChannel = {
-  channelUUID: string;
-  channelName: string;
-};
-
-export function cachedPttChannel(profile: SavedProfile): CachedPttChannel | null {
-  const channelUUID = profile.pttChannelUUID?.trim();
-  if (!channelUUID || profile.guest) {
-    return null;
-  }
-  return {
-    channelUUID,
-    channelName: profile.pttChannelName?.trim() || 'Talktome',
-  };
-}
 
 export type ProfileBundle = {
   profiles: SavedProfile[];

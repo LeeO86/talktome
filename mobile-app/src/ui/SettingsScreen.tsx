@@ -12,9 +12,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScreenStack, ScreenStackItem } from 'react-native-screens';
 
-import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
+import { audioSessionStatusLabel } from '../audio/policy';
 import { describeAudioRouteKind } from '../audio/routes';
-import { pttStatusLabel, shouldShowPttJoinBanner } from '../ptt/policy';
 import { loadTalkLinkToken } from '../talk/talkLink';
 import { fgsStatusLabel } from '../background/fgs';
 import { FEED_DIM_DB_OPTIONS, dimDbFromSliderPosition, sliderPositionFromDimDb } from '../session/operatorAudio';
@@ -290,7 +289,7 @@ function SettingsSheet({
           <PttDeviceDetailPage deviceId={page.id} onDeleted={showPttList} />
         ) : null}
 
-        {page.kind === 'debug' ? <DebugSettingsPage onClose={onClose} /> : null}
+        {page.kind === 'debug' ? <DebugSettingsPage /> : null}
       </ScrollView>
     </View>
   );
@@ -656,7 +655,7 @@ function WatchSettingsSection() {
   );
 }
 
-function DebugSettingsPage({ onClose }: { onClose: () => void }) {
+function DebugSettingsPage() {
   const store = useSessionStore();
   const [talkLinkToken, setTalkLinkToken] = useState('');
 
@@ -690,8 +689,6 @@ function DebugSettingsPage({ onClose }: { onClose: () => void }) {
                   available: store.audioSessionAvailable,
                   active: store.audioSessionActive,
                   keepalive: store.audioKeepalive,
-                  pttEnabled: iosPttEnabled(),
-                  pttJoined: store.pttJoined,
                 })
               : fgsStatusLabel({
                   available: store.fgsAvailable,
@@ -716,39 +713,12 @@ function DebugSettingsPage({ onClose }: { onClose: () => void }) {
         />
       </SettingsSection>
 
-      <SettingsSection title="PushToTalk">
+      <SettingsSection title={Platform.OS === 'ios' ? 'Shortcuts' : 'Hardware PTT'}>
         {Platform.OS === 'ios' ? (
           <>
-            <SettingsRow
-              label="PushToTalk"
-              value={pttStatusLabel({
-                enabledInBuild: iosPttEnabled(),
-                nativeAvailable: store.pttAvailable,
-                bootstrapEnabled: store.pttBootstrapEnabled,
-                joined: store.pttJoined,
-                verified: store.pttVerified,
-              })}
-            />
-            {shouldShowPttJoinBanner({
-              platform: Platform.OS,
-              pttEnabled: iosPttEnabled(),
-              bootstrapEnabled: store.pttBootstrapEnabled,
-              joined: store.pttJoined,
-            }) ? (
-              <SettingsActionRow
-                label="Join PushToTalk channel"
-                onPress={() => {
-                  void session.joinSystemPttChannel();
-                  onClose();
-                }}
-              />
-            ) : null}
-            {store.pttJoined ? (
-              <SettingsActionRow label="Leave PushToTalk channel" onPress={() => void session.leaveSystemPtt()} />
-            ) : null}
             <SettingsHint
-              full="Lock Screen, Dynamic Island, and the home widget have Reply lock and Disconnect without system Push to Talk. Join the system channel only when this server has an Apple push key. On iOS 18, the same controls can be added to Control Center or the Action Button."
-              compact="Lock Screen and the widget do not need system Push to Talk."
+              full="Lock Screen, Dynamic Island, and the home widget have Reply lock and Disconnect. On iOS 18, the same controls can be added to Control Center or the Action Button."
+              compact="Lock Screen and the widget have Reply lock and Disconnect."
             />
             {talkLinkToken ? (
               <SettingsFootnote>
@@ -762,7 +732,6 @@ function DebugSettingsPage({ onClose }: { onClose: () => void }) {
             compact="Hardware PTT: BLE, serial, USB-C, and phone keys."
           />
         )}
-        {store.pttDiagnostic ? <SettingsFootnote>{store.pttDiagnostic}</SettingsFootnote> : null}
       </SettingsSection>
 
       {Platform.OS === 'android' ? (
