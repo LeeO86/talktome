@@ -43,6 +43,17 @@ optional Talktome Bridge app.
 6. In Admin, create users, feeds and conferences, then assign targets to the users who should talk to each other.
 7. Operators log in at `/` with their user credentials and allow microphone access.
 
+Login names are case-insensitive: `David`, `david`, and `DAVID` identify the same
+account. Display names keep their original spelling; passwords remain
+case-sensitive. User and feed login names share one namespace. Creating or
+renaming either must use a name that is unique after Unicode NFC normalization
+and lowercasing.
+
+Existing databases are not renamed or merged. If old users/feeds have conflicting
+login names, password login for that name is rejected for every spelling. Rename
+the conflicting entries in Admin to distinct names; ID-based login links remain
+usable. Configuration imports reject such collisions before replacing any data.
+
 If clients can open the page but audio does not connect, check Admin `Config`,
 the announced media address and the RTC port range/firewall rules.
 
@@ -270,7 +281,7 @@ TALKTOME_SSO_HEADER=X-Forwarded-User
 TALKTOME_SSO_TRUSTED_PROXIES=172.18.0.0/16,127.0.0.1
 ```
 
-The proxy-provided identity is matched exactly and case-sensitively against an
+The proxy-provided identity is matched case-insensitively against a unique
 existing Talktome username. Talktome does not provision users automatically.
 Unknown identities, Guest profiles and Super Admins fall back to the normal
 login page. Because the username is the chosen mapping key, renaming it in
@@ -352,7 +363,7 @@ Guest profiles are intentionally hidden from Companion and cannot be controlled 
 To use SSO, configure the authentication proxy to remove any client-supplied
 copy of the identity header and, after successful authentication, set
 `X-Forwarded-User` (or the header selected with `TALKTOME_SSO_HEADER`) to the
-exact, case-sensitive name of an existing Talktome user. Enable SSO with
+name of an existing Talktome user (case-insensitive). Enable SSO with
 `TALKTOME_SSO_ENABLED=true`, add the proxy IP or network to
 `TALKTOME_SSO_TRUSTED_PROXIES`, and ensure clients cannot reach the Talktome
 backend without passing through that proxy. No user synchronization or
