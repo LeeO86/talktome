@@ -652,20 +652,22 @@ Every command is answered with the matching `-result` event carrying the
     **PRODUCTION / back** or **INFO / back** on a sub-page; a tap goes up one
     level. The root lists three entries on the target keys (lowest rows,
     left to right), so it fits every visual deck down to the Mini:
-    - **PRODUCTION** (subtitle: active production) opens the production
-      page. It lists the user's productions (`GET /productions`, same as
-      Settings) in server order; the active one is highlighted and labelled
-      "current". Tap a production to switch: talk stops, the client sends
-      `set-active-production`, reloads its targets and saves the choice as
-      `user.production` in the configuration file (kept across restarts;
-      offline the choice is saved and used on the next registration). Any
-      production tap closes the menu.
+    **PRODUCTION** and **INFO** show only their title and a › chevron in
+    the bottom-right corner (they open another screen); they carry no
+    status text.
+    - **PRODUCTION** opens the production page. It lists the user's
+      productions (`GET /users/:id/productions`, refreshed after
+      `available-productions-updated`) in server order; the active one is
+      highlighted and labelled "current". Tap a production to switch: talk
+      stops, the client sends `set-active-production`, reloads its targets
+      and saves the choice as `user.production` in the configuration file
+      (kept across restarts; offline the choice is saved and used on the
+      next registration). Any production tap closes the menu.
     - **CLEAR / locks** clears all talk locks; dimmed when none are active.
-    - **INFO** opens a read-only page: link, round trip, packet loss, audio,
-      local IP (the source address of the route to the server, looked up
-      when the page opens), server host, client / server version. Problem values (not ready, RTT
-      ≥ 250 ms, loss ≥ 2 %, no audio) use the warning colour, and the INFO
-      entry shows the first problem as its subtitle.
+    - **INFO** opens a read-only page: round trip, packet loss, server host,
+      client / server version and local IP (the source address of the route
+      to the server, looked up when the page opens). RTT ≥ 250 ms and loss
+      ≥ 2 % use the warning colour.
     The menu closes by itself after `streamdeck.volume_layer_timeout_s`.
     Dials do nothing while it is open. Without productions (server
     multi-production off) the production page shows "No productions".

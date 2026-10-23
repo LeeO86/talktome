@@ -60,6 +60,8 @@ pub enum Badge {
     Muted,
     OnAir,
     Incoming,
+    /// Chevron in the bottom-right corner: the key opens another screen.
+    Submenu,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -543,14 +545,6 @@ pub struct InfoLine {
 pub fn info_lines(snapshot: &Snapshot, local_ip: Option<&str>) -> Vec<InfoLine> {
     let line = |title, value: String, ok| InfoLine { title, value, ok };
     let media = snapshot.media.as_ref();
-    let link_ok = snapshot.connection == ConnectionState::Ready && !snapshot.server_not_responding;
-    let link = if snapshot.server_not_responding {
-        "no reply".to_string()
-    } else if link_ok {
-        "ok".to_string()
-    } else {
-        snapshot.connection.label().to_string()
-    };
     let rtt = media.and_then(|media| media.rtt_ms);
     let loss = media.and_then(|media| media.packet_loss_pct);
     let host = snapshot
@@ -561,7 +555,6 @@ pub fn info_lines(snapshot: &Snapshot, local_ip: Option<&str>) -> Vec<InfoLine> 
         .trim_end_matches('/')
         .to_string();
     vec![
-        line("LINK", link, link_ok),
         line(
             "RTT",
             rtt.map(|ms| format!("{ms} ms"))
@@ -574,12 +567,6 @@ pub fn info_lines(snapshot: &Snapshot, local_ip: Option<&str>) -> Vec<InfoLine> 
                 .unwrap_or_else(|| "–".into()),
             loss.is_none_or(|pct| pct < 2.0),
         ),
-        line(
-            "AUDIO",
-            if snapshot.audio_ok { "ok" } else { "no audio" }.into(),
-            snapshot.audio_ok,
-        ),
-        line("IP", local_ip.unwrap_or("–").to_string(), true),
         line(
             "SERVER",
             if host.is_empty() { "–".into() } else { host },
@@ -594,6 +581,7 @@ pub fn info_lines(snapshot: &Snapshot, local_ip: Option<&str>) -> Vec<InfoLine> 
             ),
             true,
         ),
+        line("IP", local_ip.unwrap_or("–").to_string(), true),
     ]
 }
 
@@ -1075,7 +1063,7 @@ fn appearance_for_role(
             }
             a
         }
-        Role::Menu(page) => menu_entry_appearance(page, snapshot),
+        Role::Menu(page) => menu_entry_appearance(page),
         Role::Info(index) => info_lines(snapshot, state.local_ip.as_deref())
             .get(index)
             .map(info_appearance)
@@ -1084,34 +1072,15 @@ fn appearance_for_role(
     }
 }
 
-fn menu_entry_appearance(page: MenuPage, snapshot: &Snapshot) -> Appearance {
-    match page {
-        MenuPage::Productions => {
-            let mut a = Appearance::simple("PRODUCTION", palette::IDLE);
-            a.subtitle = snapshot
-                .production_name()
-                .unwrap_or_else(|| "choose".into());
-            a
-        }
-        MenuPage::Info => {
-            let lines = info_lines(snapshot, None);
-            let mut a = Appearance::simple("INFO", palette::IDLE);
-            // The first problem, else the round trip, else just "ok".
-            a.subtitle = match lines.iter().find(|line| !line.ok) {
-                Some(line) => format!("{} {}", line.title.to_lowercase(), line.value),
-                None => lines
-                    .iter()
-                    .find(|line| line.title == "RTT" && line.value != "–")
-                    .map(|line| line.value.clone())
-                    .unwrap_or_else(|| "ok".into()),
-            };
-            if lines.iter().any(|line| !line.ok) {
-                a.background = palette::STATUS_BAD;
-            }
-            a
-        }
-        MenuPage::Root => Appearance::blank(),
-    }
+fn menu_entry_appearance(page: MenuPage) -> Appearance {
+    let title = match page {
+        MenuPage::Productions => "PRODUCTION",
+        MenuPage::Info => "INFO",
+        MenuPage::Root => "MENU",
+    };
+    let mut a = Appearance::simple(title, palette::IDLE);
+    a.badge = Some(Badge::Submenu);
+    a
 }
 
 fn info_appearance(line: &InfoLine) -> Appearance {
@@ -1496,7 +1465,16 @@ mod tests {
         // Only status in the command row: no VOL, NEXT, MEMBERS or Reply.
         assert!(keys[1..5].iter().all(|key| key.role == Role::Empty));
         assert_eq!(keys[10].role, Role::Menu(MenuPage::Productions));
-        assert_eq!(keys[10].appearance.subtitle, "Prod 2");
+        // Sub-menus carry no status text, only the "opens a screen" chevron.
+        assert_eq!(keys[10].appearance.subtitle, "");
+        assert_eq!(keys[10].appearance.badge, Some(Badge::Submenu));
+        assert_eq!(keys[12].appearance.subtitle, "");
+        assert_eq!(keys[12].appearance.badge, Some(Badge::Submenu));
+        assert_ne!(
+            keys[11].appearance.badge,
+            Some(Badge::Submenu),
+            "CLEAR is an action"
+        );
         assert_eq!(keys[11].role, Role::ClearLocks);
         assert_eq!(keys[12].role, Role::Menu(MenuPage::Info));
         assert!(!keys.iter().any(|key| matches!(key.role, Role::Target(_))));
@@ -1530,54 +1508,34 @@ mod tests {
     }
 
     #[test]
-    fn info_page_shows_link_and_network_health() {
+    fn info_page_shows_rtt_loss_server_version_and_ip() {
         let mut snapshot = snapshot(2);
-        snapshot.connection = ConnectionState::Ready;
-        snapshot.audio_ok = true;
         snapshot.server_url = "https://intercom.example:8443/".into();
+        snapshot.server_version = Some("1.5.17".into());
         snapshot.media = Some(crate::state::MediaInfo {
             rtt_ms: Some(23),
             packet_loss_pct: Some(4.5),
             ..Default::default()
         });
         let lines = info_lines(&snapshot, Some("192.168.1.20"));
-        let value = |title: &str| {
-            lines
-                .iter()
-                .find(|line| line.title == title)
-                .unwrap()
-                .clone()
-        };
-        assert_eq!(value("LINK").value, "ok");
-        assert_eq!(value("RTT").value, "23 ms");
-        assert!(!value("LOSS").ok, "4.5 % loss is a problem");
-        assert_eq!(value("SERVER").value, "intercom.example:8443");
-        assert_eq!(value("IP").value, "192.168.1.20");
-        assert_eq!(
-            info_lines(&snapshot, None)
-                .iter()
-                .find(|l| l.title == "IP")
-                .unwrap()
-                .value,
-            "–"
-        );
+        let titles: Vec<_> = lines.iter().map(|line| line.title).collect();
+        assert_eq!(titles, ["RTT", "LOSS", "SERVER", "VERSION", "IP"]);
+        assert_eq!(lines[0].value, "23 ms");
+        assert!(!lines[1].ok, "4.5 % loss is a problem");
+        assert_eq!(lines[2].value, "intercom.example:8443");
+        assert!(lines[3].value.ends_with(" / 1.5.17"));
+        assert_eq!(lines[4].value, "192.168.1.20");
+        assert_eq!(info_lines(&snapshot, None)[4].value, "–");
 
         let mut state = DeckState::default();
-        state.open_menu(MenuPage::Root);
-        let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
-        assert_eq!(keys[12].appearance.subtitle, "loss 4.5 %");
-        assert_eq!(keys[12].appearance.background, palette::STATUS_BAD);
-
         state.open_menu(MenuPage::Info);
         let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
         assert_eq!(keys[0].appearance.title, "INFO");
-        assert_eq!(keys[5].role, Role::Info(0));
-        assert_eq!(keys[5].appearance.title, "LINK");
-        // Seven lines fill both target rows: LINK RTT LOSS AUDIO IP / SERVER VERSION.
-        assert_eq!(keys[7].appearance.title, "LOSS");
-        assert_eq!(keys[7].appearance.background, palette::STATUS_BAD);
-        assert_eq!(keys[9].appearance.title, "IP");
-        assert_eq!(keys[11].appearance.title, "VERSION");
+        // Five lines fit the bottom row.
+        assert_eq!(keys[10].role, Role::Info(0));
+        assert_eq!(keys[10].appearance.title, "RTT");
+        assert_eq!(keys[11].appearance.background, palette::STATUS_BAD);
+        assert_eq!(keys[14].appearance.title, "IP");
     }
 
     #[test]

@@ -245,18 +245,17 @@ server-side mute. The conference fader still scales the whole conference.
   keys) one left of **Reply**, and **Reply** at the far right. Reply shows
   the conference (or target) being talked to, not the caller name.
 - **Tap status to open the menu.** The deck switches to a page of its own
-  with three keys:
-  - **PRODUCTION** (subtitle: the current production) opens the production
-    list. The active one is highlighted ("current"). Tap another production
-    to switch to it: talking stops, the targets of the new production load,
-    and the choice is saved as `user.production`, so it survives a restart.
-    The list needs multiple productions enabled on the server; otherwise it
-    shows "No productions".
+  with three keys. **PRODUCTION** and **INFO** carry a › in the corner:
+  they open another screen.
+  - **PRODUCTION** lists your productions. The active one is highlighted
+    ("current"). Tap another production to switch to it: talking stops,
+    the targets of the new production load, and the choice is saved as
+    `user.production`, so it survives a restart. The list needs multiple
+    productions enabled on the server; otherwise it shows "No productions".
   - **CLEAR / locks** clears all talk locks (greyed out when there are none).
-  - **INFO** (subtitle: the round trip, or the first problem) opens a
-    read-only page: link state, round trip, packet loss, audio, the deck's
-    local IP (the address it uses to reach the server), server host and
-    client / server version. Keys turn orange when a value is a problem.
+  - **INFO** shows round trip, packet loss, server host, client / server
+    version and the deck's local IP (the address it uses to reach the
+    server). RTT and loss turn orange when they are a problem.
 
   Status shows **MENU / close** on the menu and **… / back** on a sub-page:
   tap it to go up one level. **NEXT** appears when a page has more entries
