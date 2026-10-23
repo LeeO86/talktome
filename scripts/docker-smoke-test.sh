@@ -6,6 +6,13 @@ image="${1:-talktome:smoke-test}"
 expected_version="${2:-}"
 container_name="talktome-smoke-${RANDOM}-$$"
 
+expected_node_version="$(cat "$(dirname "$0")/../.node-version")"
+actual_node_version="$(docker run --rm "$image" node server.js --node-version)"
+if [[ "$actual_node_version" != "$expected_node_version" ]]; then
+  echo "Expected Docker Node.js $expected_node_version, found $actual_node_version." >&2
+  exit 1
+fi
+
 if [[ -n "$expected_version" ]]; then
   actual_version="$(docker run --rm "$image" node server.js --version)"
   if [[ "$actual_version" != "$expected_version" ]]; then
