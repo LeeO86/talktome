@@ -653,9 +653,9 @@ Every command is answered with the matching `-result` event carrying the
     level. The root lists two entries on the target keys (lowest rows,
     left to right), so it fits every visual deck down to the Mini.
     On the root, **CLEAR / locks** sits next to status in the command row;
-    **PRODUCTION** and **INFO** use the status key's menu colour and show
+    **CHANGE PRODUCTION** and **INFO** use the status key's menu colour and show
     only their title (they open another screen).
-    - **PRODUCTION** opens the production page. It lists the user's
+    - **CHANGE PRODUCTION** opens the production page. It lists the user's
       productions (`GET /users/:id/productions`, refreshed after
       `available-productions-updated`) in server order; the active one is
       highlighted and labelled "current". Tap a production to switch: talk

@@ -1075,7 +1075,7 @@ fn appearance_for_role(
 
 fn menu_entry_appearance(page: MenuPage) -> Appearance {
     let title = match page {
-        MenuPage::Productions => "PRODUCTION",
+        MenuPage::Productions => "CHANGE PRODUCTION",
         MenuPage::Info => "INFO",
         MenuPage::Root => "MENU",
     };
@@ -1467,6 +1467,7 @@ mod tests {
         assert!(keys[2..5].iter().all(|key| key.role == Role::Empty));
         assert_eq!(keys[10].role, Role::Menu(MenuPage::Productions));
         assert_eq!(keys[11].role, Role::Menu(MenuPage::Info));
+        assert_eq!(keys[10].appearance.title, "CHANGE PRODUCTION");
         // Sub-menu keys look like MENU / close: same colour, title only.
         for key in &keys[10..12] {
             assert_eq!(key.appearance.background, keys[0].appearance.background);
