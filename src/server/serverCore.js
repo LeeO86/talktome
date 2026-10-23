@@ -123,7 +123,7 @@ if (process.pkg) {
         if (!windowsRuntimeDllPattern.test(file)) continue;
         const normalizedFile = file.toLowerCase();
         if (copiedRuntimeDlls.has(normalizedFile)) continue;
-        fs.copyFileSync(path.join(sourceDir, file), path.join(runtimeDir, file));
+        fs.writeFileSync(path.join(runtimeDir, file), fs.readFileSync(path.join(sourceDir, file)));
         copiedRuntimeDlls.add(normalizedFile);
       }
     }
@@ -324,7 +324,8 @@ function copyDirRecursive(srcDir, destDir) {
     if (entry.isDirectory()) {
       copyDirRecursive(srcPath, destPath);
     } else if (entry.isFile()) {
-      fs.copyFileSync(srcPath, destPath);
+      // Read through the bundle's virtual filesystem before writing a real file.
+      fs.writeFileSync(destPath, fs.readFileSync(srcPath));
     }
   }
   return true;

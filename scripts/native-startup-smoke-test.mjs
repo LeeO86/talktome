@@ -100,6 +100,34 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+async function verifyStaticAssets(port) {
+  for (const name of ["index.html", "admin.html", "client.js", "admin.js", "mediasoup-client.js"]) {
+    const expected = await readFile(new URL(`../public/${name}`, import.meta.url));
+    await new Promise((resolve, reject) => {
+      const request = https.get({
+        hostname: "127.0.0.1",
+        port,
+        path: `/${name}`,
+        rejectUnauthorized: false,
+        timeout: 5000,
+      }, (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () => {
+          if (response.statusCode === 200 && Buffer.concat(chunks).equals(expected)) {
+            resolve();
+          } else {
+            reject(new Error(`Packaged web asset /${name} is missing or differs from the build source`));
+          }
+        });
+      });
+      request.on("timeout", () => request.destroy(new Error(`Timed out fetching /${name}`)));
+      request.on("error", reject);
+    });
+  }
+}
+
 async function readTextIfPresent(filePath) {
   try {
     return await readFile(filePath, "utf8");
@@ -136,6 +164,24 @@ function verifyPackagedServerVersion(executable, expectedVersion) {
       + `(${formatProcessResult({ code: result.status, signal: result.signal, error: result.error })})`
     );
   }
+}
+
+function verifyPackagedNodeVersion(executable) {
+  const expectedVersion = fs.readFileSync(new URL("../.node-version", import.meta.url), "utf8").trim();
+  const result = spawnSync(executable, ["--node-version"], {
+    cwd: path.dirname(executable),
+    encoding: "utf8",
+    timeout: 15000,
+    windowsHide: true,
+  });
+  const actualVersion = String(result.stdout || "").trim();
+  if (result.status !== 0 || actualVersion !== expectedVersion) {
+    throw new Error(
+      `Expected packaged Node.js ${expectedVersion}, found ${actualVersion || "no version"} `
+      + `(${formatProcessResult({ code: result.status, signal: result.signal, error: result.error })})`
+    );
+  }
+  console.log(`Verified packaged Node.js ${actualVersion}.`);
 }
 
 async function terminateProcessTree(child, processResult) {
@@ -239,8 +285,9 @@ async function main() {
     );
   }
 
-  if (mode === "server" && expectedVersion) {
-    verifyPackagedServerVersion(launchedExecutable, expectedVersion);
+  if (mode === "server") {
+    verifyPackagedNodeVersion(launchedExecutable);
+    if (expectedVersion) verifyPackagedServerVersion(launchedExecutable, expectedVersion);
   }
 
   const httpsPort = await getFreeTcpPort();
@@ -327,9 +374,10 @@ async function main() {
       const healthReady = await requestHealth(httpsPort, expectedVersion);
 
       if (routerReady && healthReady) {
+        await verifyStaticAssets(httpsPort);
         console.log(
           `${mode === "tray" ? "Tray app" : "Server binary"} started successfully: `
-          + `HTTPS ${httpsPort}, mediasoup router ready.`
+          + `HTTPS ${httpsPort}, mediasoup router ready, web assets verified.`
         );
         return;
       }

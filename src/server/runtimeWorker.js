@@ -33,7 +33,8 @@ function syncRuntimeFile(sourcePath, destinationPath, { executable = false } = {
 
   const temporaryPath = `${destinationPath}.tmp-${process.pid}-${Date.now()}`;
   try {
-    fs.copyFileSync(sourcePath, temporaryPath);
+    // SEA's virtual filesystem supports reads, but copyFileSync only sees real files.
+    fs.writeFileSync(temporaryPath, fs.readFileSync(sourcePath));
     if (executable) fs.chmodSync(temporaryPath, 0o755);
     fs.renameSync(temporaryPath, destinationPath);
   } catch (error) {

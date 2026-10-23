@@ -1,3 +1,9 @@
+// Keep the embedded runtime inspectable without starting the server or opening its database.
+if (process.argv.slice(2).includes("--node-version")) {
+  require("node:fs").writeSync(process.stdout.fd, `${process.versions.node}\n`);
+  process.exit(0);
+}
+
 const fs = require("fs");
 const path = require("path");
 const net = require("net");

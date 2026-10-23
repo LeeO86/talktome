@@ -109,6 +109,20 @@ fallback when neither is available; a stale environment value cannot relabel
 an installed build. Custom Docker builds should pass
 `--build-arg TALKTOME_VERSION=<resolved-version>` to embed their build version.
 
+### Node.js runtime and standalone builds
+
+Use Node.js 24.22.1 or a newer Node 24 release for source development. CI reads
+the version from `.node-version`. The Docker base image and the standalone
+targets in `package.json` are pinned to 24.22.1; update these together when
+raising the security baseline, including `engines.node`.
+
+Standalone builds use `pkg`'s SEA mode with the official Node.js binary, so
+Node security updates do not depend on the availability of patched
+`pkg-fetch` binaries. `npm run build:mac_arm64` and `npm run build:win64`
+also stage the native SQLite binding and mediasoup worker. The release smoke
+tests verify the embedded Node version and server startup. Run the executable
+with `--node-version` to inspect its runtime without starting services.
+
 ## Repository layout
 
 - `server.js`: stable entry point for `npm start` and packaged server builds.
