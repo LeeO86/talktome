@@ -19,7 +19,7 @@ const config: ExpoConfig = {
     supportsTablet: true,
     icon: './assets/icon.png',
     bundleIdentifier: 'io.github.leeo86.talktome-mobile',
-    buildNumber: '26',
+    buildNumber: '27',
     appleTeamId: '4876GGFAH9',
     entitlements: {
       'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
