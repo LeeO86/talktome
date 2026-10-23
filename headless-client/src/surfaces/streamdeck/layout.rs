@@ -178,6 +178,8 @@ pub struct DeckState {
     pub menu: Option<MenuPage>,
     pub menu_touched: Instant,
     pub menu_page: usize,
+    /// Local address towards the server, looked up when the info page opens.
+    pub local_ip: Option<String>,
     pub selected: Option<TargetKey>,
     pub blink_phase: bool,
 }
@@ -197,6 +199,7 @@ impl Default for DeckState {
             menu: None,
             menu_touched: Instant::now(),
             menu_page: 0,
+            local_ip: None,
             selected: None,
             blink_phase: false,
         }
@@ -524,7 +527,7 @@ pub fn menu_item_count(snapshot: &Snapshot, menu: MenuPage) -> usize {
     match menu {
         MenuPage::Root => MENU_ENTRIES.len(),
         MenuPage::Productions => snapshot.productions.len(),
-        MenuPage::Info => info_lines(snapshot).len(),
+        MenuPage::Info => info_lines(snapshot, None).len(),
     }
 }
 
@@ -537,7 +540,7 @@ pub struct InfoLine {
 }
 
 /// Info page rows, most useful first so a small deck shows them on page 1.
-pub fn info_lines(snapshot: &Snapshot) -> Vec<InfoLine> {
+pub fn info_lines(snapshot: &Snapshot, local_ip: Option<&str>) -> Vec<InfoLine> {
     let line = |title, value: String, ok| InfoLine { title, value, ok };
     let media = snapshot.media.as_ref();
     let link_ok = snapshot.connection == ConnectionState::Ready && !snapshot.server_not_responding;
@@ -576,6 +579,7 @@ pub fn info_lines(snapshot: &Snapshot) -> Vec<InfoLine> {
             if snapshot.audio_ok { "ok" } else { "no audio" }.into(),
             snapshot.audio_ok,
         ),
+        line("IP", local_ip.unwrap_or("–").to_string(), true),
         line(
             "SERVER",
             if host.is_empty() { "–".into() } else { host },
@@ -1072,7 +1076,7 @@ fn appearance_for_role(
             a
         }
         Role::Menu(page) => menu_entry_appearance(page, snapshot),
-        Role::Info(index) => info_lines(snapshot)
+        Role::Info(index) => info_lines(snapshot, state.local_ip.as_deref())
             .get(index)
             .map(info_appearance)
             .unwrap_or_else(Appearance::blank),
@@ -1090,7 +1094,7 @@ fn menu_entry_appearance(page: MenuPage, snapshot: &Snapshot) -> Appearance {
             a
         }
         MenuPage::Info => {
-            let lines = info_lines(snapshot);
+            let lines = info_lines(snapshot, None);
             let mut a = Appearance::simple("INFO", palette::IDLE);
             // The first problem, else the round trip, else just "ok".
             a.subtitle = match lines.iter().find(|line| !line.ok) {
@@ -1158,7 +1162,7 @@ pub fn layout(
             }
         }
     } else if state.menu == Some(MenuPage::Info) {
-        let lines = info_lines(snapshot);
+        let lines = info_lines(snapshot, state.local_ip.as_deref());
         let shown = page_items(geometry, state, &lines);
         let slots = occupied_target_slots(geometry, shown.len());
         for (slot, (index, line)) in slots.iter().zip(shown.iter()) {
@@ -1536,7 +1540,7 @@ mod tests {
             packet_loss_pct: Some(4.5),
             ..Default::default()
         });
-        let lines = info_lines(&snapshot);
+        let lines = info_lines(&snapshot, Some("192.168.1.20"));
         let value = |title: &str| {
             lines
                 .iter()
@@ -1548,6 +1552,15 @@ mod tests {
         assert_eq!(value("RTT").value, "23 ms");
         assert!(!value("LOSS").ok, "4.5 % loss is a problem");
         assert_eq!(value("SERVER").value, "intercom.example:8443");
+        assert_eq!(value("IP").value, "192.168.1.20");
+        assert_eq!(
+            info_lines(&snapshot, None)
+                .iter()
+                .find(|l| l.title == "IP")
+                .unwrap()
+                .value,
+            "–"
+        );
 
         let mut state = DeckState::default();
         state.open_menu(MenuPage::Root);
@@ -1560,10 +1573,11 @@ mod tests {
         assert_eq!(keys[0].appearance.title, "INFO");
         assert_eq!(keys[5].role, Role::Info(0));
         assert_eq!(keys[5].appearance.title, "LINK");
-        // Six lines fill both target rows: LINK RTT LOSS AUDIO SERVER / VERSION.
+        // Seven lines fill both target rows: LINK RTT LOSS AUDIO IP / SERVER VERSION.
         assert_eq!(keys[7].appearance.title, "LOSS");
         assert_eq!(keys[7].appearance.background, palette::STATUS_BAD);
-        assert_eq!(keys[10].appearance.title, "VERSION");
+        assert_eq!(keys[9].appearance.title, "IP");
+        assert_eq!(keys[11].appearance.title, "VERSION");
     }
 
     #[test]

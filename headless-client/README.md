@@ -254,8 +254,9 @@ server-side mute. The conference fader still scales the whole conference.
     shows "No productions".
   - **CLEAR / locks** clears all talk locks (greyed out when there are none).
   - **INFO** (subtitle: the round trip, or the first problem) opens a
-    read-only page: link state, round trip, packet loss, audio, server host
-    and client / server version. Keys turn orange when a value is a problem.
+    read-only page: link state, round trip, packet loss, audio, the deck's
+    local IP (the address it uses to reach the server), server host and
+    client / server version. Keys turn orange when a value is a problem.
 
   Status shows **MENU / close** on the menu and **… / back** on a sub-page:
   tap it to go up one level. **NEXT** appears when a page has more entries

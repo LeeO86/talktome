@@ -662,7 +662,8 @@ Every command is answered with the matching `-result` event carrying the
       production tap closes the menu.
     - **CLEAR / locks** clears all talk locks; dimmed when none are active.
     - **INFO** opens a read-only page: link, round trip, packet loss, audio,
-      server host, client / server version. Problem values (not ready, RTT
+      local IP (the source address of the route to the server, looked up
+      when the page opens), server host, client / server version. Problem values (not ready, RTT
       ≥ 250 ms, loss ≥ 2 %, no audio) use the warning colour, and the INFO
       entry shows the first problem as its subtitle.
     The menu closes by itself after `streamdeck.volume_layer_timeout_s`.

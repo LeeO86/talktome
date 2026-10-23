@@ -498,6 +498,40 @@ fn role_label(role: Role) -> String {
     }
 }
 
+/// Local address the OS uses to reach the server: a connected UDP socket
+/// picks the route without sending anything. Falls back to the default route.
+async fn local_ip_towards(server_url: &str) -> Option<String> {
+    let server = url::Url::parse(server_url).ok().and_then(|url| {
+        Some(format!(
+            "{}:{}",
+            url.host_str()?,
+            url.port_or_known_default()?
+        ))
+    });
+    let lookup = async {
+        for target in server.into_iter().chain(["1.1.1.1:53".to_string()]) {
+            for bind in ["0.0.0.0:0", "[::]:0"] {
+                let Ok(socket) = tokio::net::UdpSocket::bind(bind).await else {
+                    continue;
+                };
+                if socket.connect(&target).await.is_err() {
+                    continue;
+                }
+                if let Ok(addr) = socket.local_addr() {
+                    if !addr.ip().is_unspecified() {
+                        return Some(addr.ip().to_string());
+                    }
+                }
+            }
+        }
+        None
+    };
+    tokio::time::timeout(Duration::from_secs(2), lookup)
+        .await
+        .ok()
+        .flatten()
+}
+
 fn menu_label(page: MenuPage) -> &'static str {
     match page {
         MenuPage::Root => "menu",
@@ -864,6 +898,9 @@ async fn run_device(
                             state.touch_layer();
                         }
                         Role::Menu(page) => {
+                            if page == MenuPage::Info {
+                                state.local_ip = local_ip_towards(&snapshot.server_url).await;
+                            }
                             state.open_menu(page);
                             relayout = true;
                         }
@@ -1490,7 +1527,15 @@ async fn render_lcd(
 
 #[cfg(test)]
 mod tests {
-    use super::kind_from_name;
+    #[tokio::test]
+    async fn local_ip_uses_the_route_to_the_server() {
+        assert_eq!(
+            local_ip_towards("https://127.0.0.1:8443").await.as_deref(),
+            Some("127.0.0.1")
+        );
+    }
+
+    use super::{kind_from_name, local_ip_towards};
 
     #[test]
     fn kind_from_name_accepts_config_models() {
