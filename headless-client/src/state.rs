@@ -526,7 +526,8 @@ pub struct DeckStatus {
     pub encoder_pages: usize,
     pub volume_layer: bool,
     pub member_layer: bool,
-    pub production_layer: bool,
+    /// Open menu page (`menu`, `productions`, `info`), if any.
+    pub menu: Option<String>,
     pub keys: Vec<DeckKeyView>,
     pub dials: Vec<DeckDialView>,
     pub error: Option<String>,

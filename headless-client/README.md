@@ -244,17 +244,24 @@ server-side mute. The conference fader still scales the whole conference.
   the left, **VOL** next to it, **NEXT** (when there are more targets than
   keys) one left of **Reply**, and **Reply** at the far right. Reply shows
   the conference (or target) being talked to, not the caller name.
-- **Tap status to change the production.** The deck switches to a blank
-  page that lists your productions on the target keys; the active one is
-  highlighted ("current"). Tap another production to switch to it: talking
-  stops, the targets of the new production load, and the choice is saved
-  as `user.production`, so it survives a restart. Tap status again (now
-  **PRODUCTION / back**) to leave without changing; the page also closes
-  after `streamdeck.volume_layer_timeout_s`. **CLEAR** on that page clears
-  all talk locks (this used to be a tap on status). **NEXT** appears when
-  there are more productions than keys. Holding status 2 s still pages
-  the keys. The list needs multiple productions enabled on the server;
-  otherwise the page shows "No productions".
+- **Tap status to open the menu.** The deck switches to a page of its own
+  with three keys:
+  - **PRODUCTION** (subtitle: the current production) opens the production
+    list. The active one is highlighted ("current"). Tap another production
+    to switch to it: talking stops, the targets of the new production load,
+    and the choice is saved as `user.production`, so it survives a restart.
+    The list needs multiple productions enabled on the server; otherwise it
+    shows "No productions".
+  - **CLEAR / locks** clears all talk locks (greyed out when there are none).
+  - **INFO** (subtitle: the round trip, or the first problem) opens a
+    read-only page: link state, round trip, packet loss, audio, server host
+    and client / server version. Keys turn orange when a value is a problem.
+
+  Status shows **MENU / close** on the menu and **… / back** on a sub-page:
+  tap it to go up one level. **NEXT** appears when a page has more entries
+  than keys (small decks). The menu closes by itself after
+  `streamdeck.volume_layer_timeout_s`. Holding status 2 s still pages the
+  keys.
 - Remaining keys are targets in the same order as the web client: **left to
   right, top to bottom**. If there are fewer targets than keys, used rows sit
   on the **lowest available rows** (empty rows above the block). Hold to talk,

@@ -589,7 +589,7 @@
           decks.length > 1 ? `Layout ${index + 1}` : 'Layout',
           `${deck.rows}×${deck.cols} keys${deck.encoders ? `, ${deck.encoders} dials` : ''}${deck.touchpoints ? `, ${deck.touchpoints} touch points` : ''}`,
         ]);
-        const pages = `keys ${deck.page + 1}/${deck.pages}${deck.encoder_pages > 1 ? ` · dials ${deck.encoder_page + 1}/${deck.encoder_pages}` : ''}${deck.member_layer ? ' · members layer' : ''}${deck.production_layer ? ' · production page' : ''}${deck.volume_layer ? ' · volume layer' : ''}`;
+        const pages = `keys ${deck.page + 1}/${deck.pages}${deck.encoder_pages > 1 ? ` · dials ${deck.encoder_page + 1}/${deck.encoder_pages}` : ''}${deck.member_layer ? ' · members layer' : ''}${deck.menu ? ` · ${deck.menu === 'menu' ? 'menu' : `${deck.menu} page`}` : ''}${deck.volume_layer ? ' · volume layer' : ''}`;
         deckRows.push([decks.length > 1 ? `Page ${index + 1}` : 'Page', pages]);
         if (deck.dials && deck.dials.some((dial) => dial.title)) {
           deckRows.push([
@@ -1071,7 +1071,7 @@
       pageBits.push(`keys ${deck.page + 1}/${deck.pages}`);
       if (deck.encoder_pages > 1) pageBits.push(`dials ${deck.encoder_page + 1}/${deck.encoder_pages}`);
       if (deck.member_layer) pageBits.push('members layer');
-      if (deck.production_layer) pageBits.push('production page');
+      if (deck.menu) pageBits.push(deck.menu === 'menu' ? 'menu' : `${deck.menu} page`);
       if (deck.volume_layer) pageBits.push('volume layer');
     }
     pageLabel.textContent = pageBits.join(' · ');

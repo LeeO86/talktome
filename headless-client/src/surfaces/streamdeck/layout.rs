@@ -112,8 +112,28 @@ pub enum Role {
     /// Index into `Snapshot::productions` on the production page.
     Production(usize),
     ClearLocks,
+    /// A menu entry that opens one of the menu's sub-pages.
+    Menu(MenuPage),
+    /// Index into `info_lines` on the info page (read-only).
+    Info(usize),
     Empty,
 }
+
+/// Pages of the menu opened from the status key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuPage {
+    /// Entries: Production, Clear locks, Info.
+    Root,
+    Productions,
+    Info,
+}
+
+/// Root menu entries, in key order.
+const MENU_ENTRIES: [Role; 3] = [
+    Role::Menu(MenuPage::Productions),
+    Role::ClearLocks,
+    Role::Menu(MenuPage::Info),
+];
 
 /// What a Stream Deck + / + XL encoder currently controls.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -154,10 +174,10 @@ pub struct DeckState {
     pub member_conference: Option<TargetKey>,
     pub member_selected: Option<i64>,
     pub member_page: usize,
-    /// Production picker opened from the status key.
-    pub production_layer: bool,
-    pub production_layer_touched: Instant,
-    pub production_page: usize,
+    /// Menu opened from the status key; `None` while the targets show.
+    pub menu: Option<MenuPage>,
+    pub menu_touched: Instant,
+    pub menu_page: usize,
     pub selected: Option<TargetKey>,
     pub blink_phase: bool,
 }
@@ -174,9 +194,9 @@ impl Default for DeckState {
             member_conference: None,
             member_selected: None,
             member_page: 0,
-            production_layer: false,
-            production_layer_touched: Instant::now(),
-            production_page: 0,
+            menu: None,
+            menu_touched: Instant::now(),
+            menu_page: 0,
             selected: None,
             blink_phase: false,
         }
@@ -216,22 +236,30 @@ impl DeckState {
         false
     }
 
-    /// Opens the production picker; the other layers close.
-    pub fn open_production_layer(&mut self) {
+    /// Opens a menu page on its first key page; the other layers close.
+    pub fn open_menu(&mut self, page: MenuPage) {
         self.close_volume_layer();
         self.close_member_layer();
-        self.production_layer = true;
-        self.production_page = 0;
-        self.production_layer_touched = Instant::now();
+        self.menu = Some(page);
+        self.menu_page = 0;
+        self.menu_touched = Instant::now();
     }
 
-    pub fn close_production_layer(&mut self) {
-        self.production_layer = false;
+    pub fn close_menu(&mut self) {
+        self.menu = None;
     }
 
-    pub fn expire_production_layer(&mut self, timeout: Duration) -> bool {
-        if self.production_layer && self.production_layer_touched.elapsed() >= timeout {
-            self.close_production_layer();
+    /// Status tap inside the menu: a sub-page goes back to the root, the root closes.
+    pub fn menu_back(&mut self) {
+        match self.menu {
+            Some(MenuPage::Root) | None => self.close_menu(),
+            Some(_) => self.open_menu(MenuPage::Root),
+        }
+    }
+
+    pub fn expire_menu(&mut self, timeout: Duration) -> bool {
+        if self.menu.is_some() && self.menu_touched.elapsed() >= timeout {
+            self.close_menu();
             return true;
         }
         false
@@ -239,8 +267,8 @@ impl DeckState {
 
     /// Key page of whatever the target keys currently show.
     pub fn key_page(&self) -> usize {
-        if self.production_layer {
-            self.production_page
+        if self.menu.is_some() {
+            self.menu_page
         } else if self.member_layer {
             self.member_page
         } else {
@@ -249,8 +277,8 @@ impl DeckState {
     }
 
     pub fn key_page_mut(&mut self) -> &mut usize {
-        if self.production_layer {
-            &mut self.production_page
+        if self.menu.is_some() {
+            &mut self.menu_page
         } else if self.member_layer {
             &mut self.member_page
         } else {
@@ -258,10 +286,10 @@ impl DeckState {
         }
     }
 
-    /// Keeps an open production or member layer from timing out.
+    /// Keeps an open menu or member layer from timing out.
     pub fn touch_layer(&mut self) {
-        if self.production_layer {
-            self.production_layer_touched = Instant::now();
+        if self.menu.is_some() {
+            self.menu_touched = Instant::now();
         } else if self.member_layer {
             self.touch_member_layer();
         }
@@ -335,8 +363,10 @@ impl DeckState {
         };
         let encoder_pages = encoder_page_count(geometry, encoder_count);
         self.encoder_page = self.encoder_page.min(encoder_pages.saturating_sub(1));
-        let production_pages = page_count(geometry, snapshot.productions.len());
-        self.production_page = self.production_page.min(production_pages.saturating_sub(1));
+        if let Some(menu) = self.menu {
+            let menu_pages = page_count(geometry, menu_item_count(snapshot, menu));
+            self.menu_page = self.menu_page.min(menu_pages.saturating_sub(1));
+        }
     }
 }
 
@@ -489,16 +519,90 @@ pub fn page_members<'a>(
         .collect()
 }
 
-/// Productions shown on the current production page.
-pub fn page_productions<'a>(
+/// Number of keys a menu page lists.
+pub fn menu_item_count(snapshot: &Snapshot, menu: MenuPage) -> usize {
+    match menu {
+        MenuPage::Root => MENU_ENTRIES.len(),
+        MenuPage::Productions => snapshot.productions.len(),
+        MenuPage::Info => info_lines(snapshot).len(),
+    }
+}
+
+/// One read-only key on the info page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InfoLine {
+    pub title: &'static str,
+    pub value: String,
+    pub ok: bool,
+}
+
+/// Info page rows, most useful first so a small deck shows them on page 1.
+pub fn info_lines(snapshot: &Snapshot) -> Vec<InfoLine> {
+    let line = |title, value: String, ok| InfoLine { title, value, ok };
+    let media = snapshot.media.as_ref();
+    let link_ok = snapshot.connection == ConnectionState::Ready && !snapshot.server_not_responding;
+    let link = if snapshot.server_not_responding {
+        "no reply".to_string()
+    } else if link_ok {
+        "ok".to_string()
+    } else {
+        snapshot.connection.label().to_string()
+    };
+    let rtt = media.and_then(|media| media.rtt_ms);
+    let loss = media.and_then(|media| media.packet_loss_pct);
+    let host = snapshot
+        .server_url
+        .split("://")
+        .last()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_string();
+    vec![
+        line("LINK", link, link_ok),
+        line(
+            "RTT",
+            rtt.map(|ms| format!("{ms} ms"))
+                .unwrap_or_else(|| "–".into()),
+            rtt.is_none_or(|ms| ms < 250),
+        ),
+        line(
+            "LOSS",
+            loss.map(|pct| format!("{pct:.1} %"))
+                .unwrap_or_else(|| "–".into()),
+            loss.is_none_or(|pct| pct < 2.0),
+        ),
+        line(
+            "AUDIO",
+            if snapshot.audio_ok { "ok" } else { "no audio" }.into(),
+            snapshot.audio_ok,
+        ),
+        line(
+            "SERVER",
+            if host.is_empty() { "–".into() } else { host },
+            true,
+        ),
+        line(
+            "VERSION",
+            format!(
+                "{} / {}",
+                crate::VERSION,
+                snapshot.server_version.as_deref().unwrap_or("–")
+            ),
+            true,
+        ),
+    ]
+}
+
+/// Items shown on the current menu page as (index, item).
+fn page_items<'a, T>(
     geometry: &Geometry,
     state: &DeckState,
-    productions: &'a [ProductionInfo],
-) -> Vec<(usize, &'a ProductionInfo)> {
+    items: &'a [T],
+) -> Vec<(usize, &'a T)> {
     let per_page = target_slots(geometry).len().max(1);
-    let pages = page_count(geometry, productions.len());
-    let page = state.production_page.min(pages.saturating_sub(1));
-    productions
+    let pages = page_count(geometry, items.len());
+    let page = state.menu_page.min(pages.saturating_sub(1));
+    items
         .iter()
         .enumerate()
         .skip(page * per_page)
@@ -506,13 +610,22 @@ pub fn page_productions<'a>(
         .collect()
 }
 
+/// Productions shown on the current production page.
+pub fn page_productions<'a>(
+    geometry: &Geometry,
+    state: &DeckState,
+    productions: &'a [ProductionInfo],
+) -> Vec<(usize, &'a ProductionInfo)> {
+    page_items(geometry, state, productions)
+}
+
 fn layer_page_counts(
     geometry: &Geometry,
     snapshot: &Snapshot,
     state: &DeckState,
 ) -> (usize, usize) {
-    if state.production_layer {
-        (page_count(geometry, snapshot.productions.len()), 1)
+    if let Some(menu) = state.menu {
+        (page_count(geometry, menu_item_count(snapshot, menu)), 1)
     } else if state.member_layer {
         let count = state
             .member_conference
@@ -586,13 +699,10 @@ fn command_roles(
         }
     };
 
-    if state.production_layer {
-        // A page of its own: status = back, clear locks, paging; nothing else.
+    if state.menu.is_some() {
+        // Menu pages are pages of their own: status = back, paging; nothing else.
         row[0] = Some(Role::Status);
-        if cols > 1 {
-            row[1] = Some(Role::ClearLocks);
-        }
-        if key_pages > 1 && cols > 2 {
+        if key_pages > 1 && cols > 1 {
             row[cols - 1] = Some(Role::NextPage);
         }
     } else if state.member_layer {
@@ -690,9 +800,14 @@ fn production_appearance(production: &ProductionInfo, snapshot: &Snapshot) -> Ap
 }
 
 fn status_appearance(snapshot: &Snapshot, state: &DeckState) -> Appearance {
-    if state.production_layer {
-        let mut appearance = Appearance::simple("PRODUCTION", palette::SELECTED);
-        appearance.subtitle = "back".into();
+    if let Some(menu) = state.menu {
+        let (title, subtitle) = match menu {
+            MenuPage::Root => ("MENU", "close"),
+            MenuPage::Productions => ("PRODUCTION", "back"),
+            MenuPage::Info => ("INFO", "back"),
+        };
+        let mut appearance = Appearance::simple(title, palette::SELECTED);
+        appearance.subtitle = subtitle.into();
         return appearance;
     }
     let mut appearance = Appearance::simple(
@@ -956,8 +1071,56 @@ fn appearance_for_role(
             }
             a
         }
+        Role::Menu(page) => menu_entry_appearance(page, snapshot),
+        Role::Info(index) => info_lines(snapshot)
+            .get(index)
+            .map(info_appearance)
+            .unwrap_or_else(Appearance::blank),
         Role::Empty => Appearance::blank(),
     }
+}
+
+fn menu_entry_appearance(page: MenuPage, snapshot: &Snapshot) -> Appearance {
+    match page {
+        MenuPage::Productions => {
+            let mut a = Appearance::simple("PRODUCTION", palette::IDLE);
+            a.subtitle = snapshot
+                .production_name()
+                .unwrap_or_else(|| "choose".into());
+            a
+        }
+        MenuPage::Info => {
+            let lines = info_lines(snapshot);
+            let mut a = Appearance::simple("INFO", palette::IDLE);
+            // The first problem, else the round trip, else just "ok".
+            a.subtitle = match lines.iter().find(|line| !line.ok) {
+                Some(line) => format!("{} {}", line.title.to_lowercase(), line.value),
+                None => lines
+                    .iter()
+                    .find(|line| line.title == "RTT" && line.value != "–")
+                    .map(|line| line.value.clone())
+                    .unwrap_or_else(|| "ok".into()),
+            };
+            if lines.iter().any(|line| !line.ok) {
+                a.background = palette::STATUS_BAD;
+            }
+            a
+        }
+        MenuPage::Root => Appearance::blank(),
+    }
+}
+
+fn info_appearance(line: &InfoLine) -> Appearance {
+    let mut a = Appearance::simple(
+        line.title,
+        if line.ok {
+            palette::STATUS_OK
+        } else {
+            palette::STATUS_BAD
+        },
+    );
+    a.subtitle = line.value.clone();
+    a
 }
 
 /// Builds the full key map for a visual deck.
@@ -984,7 +1147,27 @@ pub fn layout(
         slot.role = role;
         slot.appearance = appearance_for_role(role, snapshot, state, key_pages, encoder_pages);
     }
-    if state.production_layer {
+    if state.menu == Some(MenuPage::Root) {
+        let shown = page_items(geometry, state, &MENU_ENTRIES);
+        let slots = occupied_target_slots(geometry, shown.len());
+        for (slot, (_, role)) in slots.iter().zip(shown.iter()) {
+            if let Some(key) = keys.get_mut(*slot as usize) {
+                key.role = **role;
+                key.appearance =
+                    appearance_for_role(**role, snapshot, state, key_pages, encoder_pages);
+            }
+        }
+    } else if state.menu == Some(MenuPage::Info) {
+        let lines = info_lines(snapshot);
+        let shown = page_items(geometry, state, &lines);
+        let slots = occupied_target_slots(geometry, shown.len());
+        for (slot, (index, line)) in slots.iter().zip(shown.iter()) {
+            if let Some(key) = keys.get_mut(*slot as usize) {
+                key.role = Role::Info(*index);
+                key.appearance = info_appearance(line);
+            }
+        }
+    } else if state.menu == Some(MenuPage::Productions) {
         let shown = page_productions(geometry, state, &snapshot.productions);
         let slots = occupied_target_slots(geometry, shown.len().max(1));
         if shown.is_empty() {
@@ -1068,7 +1251,7 @@ pub fn encoder_bindings<'a>(
     if geometry.encoders == 0 {
         return Vec::new();
     }
-    if state.production_layer {
+    if state.menu.is_some() {
         return vec![None; geometry.encoders as usize];
     }
     if state.member_layer {
@@ -1296,17 +1479,104 @@ mod tests {
     }
 
     #[test]
+    fn menu_root_lists_production_clear_and_info() {
+        let mut snapshot = with_productions(3);
+        snapshot.connection = ConnectionState::Ready;
+        snapshot.audio_ok = true;
+        let mut state = DeckState::default();
+        state.open_menu(MenuPage::Root);
+        let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
+        assert_eq!(keys[0].role, Role::Status);
+        assert_eq!(keys[0].appearance.title, "MENU");
+        assert_eq!(keys[0].appearance.subtitle, "close");
+        // Only status in the command row: no VOL, NEXT, MEMBERS or Reply.
+        assert!(keys[1..5].iter().all(|key| key.role == Role::Empty));
+        assert_eq!(keys[10].role, Role::Menu(MenuPage::Productions));
+        assert_eq!(keys[10].appearance.subtitle, "Prod 2");
+        assert_eq!(keys[11].role, Role::ClearLocks);
+        assert_eq!(keys[12].role, Role::Menu(MenuPage::Info));
+        assert!(!keys.iter().any(|key| matches!(key.role, Role::Target(_))));
+    }
+
+    #[test]
+    fn menu_status_goes_back_one_level_then_closes() {
+        let mut state = DeckState::default();
+        state.open_menu(MenuPage::Root);
+        state.open_menu(MenuPage::Info);
+        state.menu_back();
+        assert_eq!(state.menu, Some(MenuPage::Root));
+        state.menu_back();
+        assert_eq!(state.menu, None);
+    }
+
+    #[test]
+    fn menu_fits_the_smallest_decks() {
+        let snapshot = with_productions(2);
+        let mut state = DeckState::default();
+        state.open_menu(MenuPage::Root);
+        for name in ["mini", "neo", "plus"] {
+            let keys = layout(&geometry(name), &snapshot, &state, &options());
+            let entries = keys
+                .iter()
+                .filter(|key| matches!(key.role, Role::Menu(_) | Role::ClearLocks))
+                .count();
+            assert_eq!(entries, 3, "{name}");
+            assert!(!keys.iter().any(|key| key.role == Role::NextPage), "{name}");
+        }
+    }
+
+    #[test]
+    fn info_page_shows_link_and_network_health() {
+        let mut snapshot = snapshot(2);
+        snapshot.connection = ConnectionState::Ready;
+        snapshot.audio_ok = true;
+        snapshot.server_url = "https://intercom.example:8443/".into();
+        snapshot.media = Some(crate::state::MediaInfo {
+            rtt_ms: Some(23),
+            packet_loss_pct: Some(4.5),
+            ..Default::default()
+        });
+        let lines = info_lines(&snapshot);
+        let value = |title: &str| {
+            lines
+                .iter()
+                .find(|line| line.title == title)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(value("LINK").value, "ok");
+        assert_eq!(value("RTT").value, "23 ms");
+        assert!(!value("LOSS").ok, "4.5 % loss is a problem");
+        assert_eq!(value("SERVER").value, "intercom.example:8443");
+
+        let mut state = DeckState::default();
+        state.open_menu(MenuPage::Root);
+        let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
+        assert_eq!(keys[12].appearance.subtitle, "loss 4.5 %");
+        assert_eq!(keys[12].appearance.background, palette::STATUS_BAD);
+
+        state.open_menu(MenuPage::Info);
+        let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
+        assert_eq!(keys[0].appearance.title, "INFO");
+        assert_eq!(keys[5].role, Role::Info(0));
+        assert_eq!(keys[5].appearance.title, "LINK");
+        // Six lines fill both target rows: LINK RTT LOSS AUDIO SERVER / VERSION.
+        assert_eq!(keys[7].appearance.title, "LOSS");
+        assert_eq!(keys[7].appearance.background, palette::STATUS_BAD);
+        assert_eq!(keys[10].appearance.title, "VERSION");
+    }
+
+    #[test]
     fn production_page_replaces_the_whole_deck() {
         let snapshot = with_productions(3);
         let mut state = DeckState::default();
-        state.open_production_layer();
+        state.open_menu(MenuPage::Productions);
         let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
         assert_eq!(keys[0].role, Role::Status);
         assert_eq!(keys[0].appearance.title, "PRODUCTION");
         assert_eq!(keys[0].appearance.subtitle, "back");
-        assert_eq!(keys[1].role, Role::ClearLocks);
-        // No VOL, NEXT, MEMBERS, Reply or targets on this page.
-        assert!(keys[2..5].iter().all(|key| key.role == Role::Empty));
+        // No CLEAR, VOL, NEXT, MEMBERS, Reply or targets on this page.
+        assert!(keys[1..5].iter().all(|key| key.role == Role::Empty));
         assert!(!keys
             .iter()
             .any(|key| matches!(key.role, Role::Target(_) | Role::Reply)));
@@ -1327,7 +1597,7 @@ mod tests {
             volume_layer: true,
             ..Default::default()
         };
-        state.open_production_layer();
+        state.open_menu(MenuPage::Productions);
         assert!(!state.volume_layer && !state.member_layer);
         let keys = layout(&geometry, &snapshot, &state, &options());
         // Neo: 4 production keys per page, NEXT at the far right of the command row.
@@ -1345,7 +1615,7 @@ mod tests {
     fn production_page_without_productions_says_so() {
         let snapshot = snapshot(4);
         let mut state = DeckState::default();
-        state.open_production_layer();
+        state.open_menu(MenuPage::Productions);
         let keys = layout(&geometry("mk2"), &snapshot, &state, &options());
         assert_eq!(keys[10].appearance.title, "No productions");
         assert_eq!(keys[10].role, Role::Empty);

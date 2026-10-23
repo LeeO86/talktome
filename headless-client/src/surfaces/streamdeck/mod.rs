@@ -27,9 +27,9 @@ use crate::state::{
 };
 use crate::talk::TargetKey;
 use layout::{
-    conference_members, encoder_bindings, encoder_page_count, page_count, palette,
+    conference_members, encoder_bindings, encoder_page_count, menu_item_count, page_count, palette,
     volume_toggle_defers_to_release, Appearance, DeckState, EncoderBinding, Geometry, KeySpec,
-    LayoutOptions, Role,
+    LayoutOptions, MenuPage, Role,
 };
 use render::{Renderer, StripSegment};
 use tokio::sync::mpsc;
@@ -492,13 +492,23 @@ fn role_label(role: Role) -> String {
         Role::MuteSelected => "mute-selected".into(),
         Role::Production(index) => format!("production:{index}"),
         Role::ClearLocks => "clear-locks".into(),
+        Role::Menu(page) => format!("menu:{}", menu_label(page)),
+        Role::Info(index) => format!("info:{index}"),
         Role::Empty => "empty".into(),
     }
 }
 
+fn menu_label(page: MenuPage) -> &'static str {
+    match page {
+        MenuPage::Root => "menu",
+        MenuPage::Productions => "productions",
+        MenuPage::Info => "info",
+    }
+}
+
 fn key_item_count(snapshot: &Snapshot, state: &DeckState) -> usize {
-    if state.production_layer {
-        snapshot.productions.len()
+    if let Some(menu) = state.menu {
+        menu_item_count(snapshot, menu)
     } else if state.member_layer {
         state
             .member_conference
@@ -663,7 +673,7 @@ async fn run_device(
                 state.blink_phase = !state.blink_phase;
                 if state.expire_volume_layer(volume_timeout)
                     || state.expire_member_layer(volume_timeout)
-                    || state.expire_production_layer(volume_timeout)
+                    || state.expire_menu(volume_timeout)
                 {
                     relayout = true;
                 }
@@ -846,13 +856,18 @@ async fn run_device(
                                     state.page = 0;
                                 }
                             }
-                            state.close_production_layer();
+                            state.close_menu();
                             relayout = true;
                         }
                         Role::ClearLocks => {
                             let _ = bus.commands.send(Command::ClearLocks).await;
                             state.touch_layer();
                         }
+                        Role::Menu(page) => {
+                            state.open_menu(page);
+                            relayout = true;
+                        }
+                        Role::Info(_) => state.touch_layer(),
                         Role::Empty => {}
                     }
                 }
@@ -868,10 +883,10 @@ async fn run_device(
                                     page_count(&geometry, key_item_count(&snapshot, &state));
                                 cycle_page(state.key_page_mut(), pages, true);
                                 state.touch_layer();
-                            } else if state.production_layer {
-                                state.close_production_layer();
+                            } else if state.menu.is_some() {
+                                state.menu_back();
                             } else {
-                                state.open_production_layer();
+                                state.open_menu(MenuPage::Root);
                             }
                             relayout = true;
                         }
@@ -1369,7 +1384,7 @@ fn publish_deck_view(
         encoder_pages: encoder_page_count(geometry, key_item_count(snapshot, state)),
         volume_layer: state.volume_layer,
         member_layer: state.member_layer,
-        production_layer: state.production_layer,
+        menu: state.menu.map(|page| menu_label(page).to_string()),
         keys: keys
             .iter()
             .enumerate()

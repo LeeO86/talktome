@@ -540,8 +540,8 @@ one of `user:<id>`, `conference:<id>`, `feed:<id>` (feeds are listen-only,
   `talk.lock_multiple` is false (mirrors `lockMultipleTargets`), locking a
   new target clears the previous lock. Any press-and-hold while locks are
   active adds to the target list; release restores the locked set. A
-  dedicated "clear locks" action exists for GPIO and the **CLEAR** key on
-  the deck's production page.
+  dedicated "clear locks" action exists for GPIO and the **CLEAR** key in
+  the deck's status menu.
 - **Reply** → talks to `incoming-talk-state.state.replyTarget` (falls back
   to the most recent `addressedNow` entry) unless `talk.main_target` pins
   Reply / Main to a user or conference (`user:4`, `conference:1`; env
@@ -644,22 +644,30 @@ Every command is answered with the matching `-result` event carrying the
     **Reply** at the far right. Reply shows the conference being talked to
     (same as the web client), not the caller. The status subtitle is the
     production **name** (resolved from `user.production` or the server's
-    active production, never the raw id). Tap status: production page (see
-    below). Hold status 2 s: next key page.
-  - **Production page** (tap status): the deck switches to a page of its
-    own. The command row holds only status (**PRODUCTION** / back),
-    **CLEAR** (clear all talk locks) and **NEXT** when the productions do
-    not fit on one page; every other key is blank. The target keys list the
-    user's productions (`GET /productions`, same as Settings) in server
-    order, left to right on the lowest rows; the active one is highlighted
-    and labelled "current". Tap a production to switch: talk stops, the
-    client sends `set-active-production`, reloads its targets and saves the
-    choice as `user.production` in the configuration file (kept across
-    restarts; offline the choice is saved and used on the next
-    registration). Tapping the current production or status closes the
-    page. It closes by itself after `streamdeck.volume_layer_timeout_s`.
+    active production, never the raw id). Tap status: menu (see below).
+    Hold status 2 s: next key page.
+  - **Menu** (tap status): the deck switches to a page of its own. The
+    command row holds only status and **NEXT** when a page does not fit;
+    every other key is blank. Status reads **MENU / close** on the root and
+    **PRODUCTION / back** or **INFO / back** on a sub-page; a tap goes up one
+    level. The root lists three entries on the target keys (lowest rows,
+    left to right), so it fits every visual deck down to the Mini:
+    - **PRODUCTION** (subtitle: active production) opens the production
+      page. It lists the user's productions (`GET /productions`, same as
+      Settings) in server order; the active one is highlighted and labelled
+      "current". Tap a production to switch: talk stops, the client sends
+      `set-active-production`, reloads its targets and saves the choice as
+      `user.production` in the configuration file (kept across restarts;
+      offline the choice is saved and used on the next registration). Any
+      production tap closes the menu.
+    - **CLEAR / locks** clears all talk locks; dimmed when none are active.
+    - **INFO** opens a read-only page: link, round trip, packet loss, audio,
+      server host, client / server version. Problem values (not ready, RTT
+      ≥ 250 ms, loss ≥ 2 %, no audio) use the warning colour, and the INFO
+      entry shows the first problem as its subtitle.
+    The menu closes by itself after `streamdeck.volume_layer_timeout_s`.
     Dials do nothing while it is open. Without productions (server
-    multi-production off) the page shows "No productions".
+    multi-production off) the production page shows "No productions".
   - Remaining keys: targets in **left-to-right, top-to-bottom** order like
     the web client. If there are fewer targets than keys, whole rows sit on
     the lowest available rows (empty rows stay above the block). Feeds show
