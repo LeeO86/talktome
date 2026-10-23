@@ -80,9 +80,8 @@ export function TargetRow({
         ? 'Offline'
         : feedStopped
           ? 'Stopped'
-          : receiving
-            ? 'Streaming'
-            : 'Feed'
+          : // TalkToMe 1.5.17: the green border already says it is streaming.
+            'Feed'
       : target.type === 'conference'
         ? listenOnly
           ? 'Listen only'
