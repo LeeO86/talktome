@@ -24,6 +24,7 @@ import {
   targetAvatarBackground,
 } from './icons';
 import { colors } from './theme';
+import { targetActivity } from './targetActivity';
 import { VolumeOverlay } from './VolumeOverlay';
 import { VolumeRing } from './VolumeRing';
 
@@ -64,13 +65,14 @@ export function TargetRow({
   const showTalkIcon = target.canTalk && target.type !== 'feed';
   const userOnline =
     target.type !== 'user' || peers.some((peer) => peer.kind === 'user' && peer.userId === target.id);
-  const dimmed = target.type === 'feed' ? !feedOnline : target.type === 'user' && !userOnline;
+  const { offline: dimmed, receiving } = targetActivity({
+    type: target.type, incoming, feedOnline, feedStopped, userOnline,
+  });
   const listenOnly = target.type === 'conference' && !target.canTalk;
   const [volumeOpen, setVolumeOpen] = useState(false);
   const tight = compact || (height != null && height < 64);
 
-  const speaking = incoming;
-  const streaming = target.type === 'feed' && feedOnline && !feedStopped;
+  const speaking = receiving;
 
   const meta =
     target.type === 'feed'
@@ -78,7 +80,7 @@ export function TargetRow({
         ? 'Offline'
         : feedStopped
           ? 'Stopped'
-          : streaming
+          : receiving
             ? 'Streaming'
             : 'Feed'
       : target.type === 'conference'
@@ -162,7 +164,22 @@ export function TargetRow({
   const edgeIconColor = talking ? colors.talking : dimmed ? 'rgba(255,255,255,0.28)' : colors.text;
   const talkSlotStyle = [styles.talkControl, edgeTalkAffordance && styles.edgeTalk];
 
-  const talkControl = showTalkIcon ? (
+  const talkControl = target.type === 'feed' ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={feedStopped ? 'Start receiving feed' : 'Stop receiving feed'}
+      accessibilityState={{ disabled: !feedOnline, selected: feedStopped }}
+      disabled={!feedOnline}
+      onPress={() => session.toggleFeedReception(target)}
+      style={[...talkSlotStyle, styles.feedButton, dimmed && styles.controlOffline]}
+    >
+      {feedStopped ? (
+        <PlayIcon color={feedOnline ? 'rgba(248,113,113,0.95)' : WEB_AVATAR.offlineGlyph} />
+      ) : (
+        <StopIcon color={colors.text} />
+      )}
+    </Pressable>
+  ) : showTalkIcon ? (
     wrapTalk(
       <WalkieTalkieIcon color={edgeIconColor} size={tight ? 18 : 22} />,
       [...talkSlotStyle, talking && styles.talkZoneActive],
@@ -177,7 +194,7 @@ export function TargetRow({
     leftHanded && styles.rowLeft,
     tight && styles.rowCompact,
     talking && styles.rowTalking,
-    (speaking || streaming) && !talking && styles.rowSpeaking,
+    speaking && !talking && styles.rowSpeaking,
     dimmed && styles.rowOffline,
     height != null ? { height, minHeight: height, flex: 1, paddingVertical: tight ? 4 : 8 } : null,
   ];
@@ -193,18 +210,6 @@ export function TargetRow({
           volumeReadout && styles.meterClusterReadout,
         ]}
       >
-        {target.type === 'feed' && feedOnline ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={feedStopped ? 'Start feed' : 'Stop feed'}
-            onPress={() => session.toggleFeedReception(target)}
-            style={styles.feedButton}
-          >
-            {feedStopped ? <PlayIcon color={colors.text} /> : <StopIcon color={colors.text} />}
-          </Pressable>
-        ) : volumeReadout ? null : (
-          <View style={styles.feedSlot} />
-        )}
         <VolumeRing
           level={preference.volume}
           muted={preference.muted}
@@ -246,10 +251,10 @@ const styles = StyleSheet.create({
     minHeight: 72,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 6,
+    backgroundColor: '#1f2937',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: 'transparent',
     overflow: 'hidden',
   },
   rowLeft: {
@@ -260,14 +265,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   rowTalking: {
-    backgroundColor: 'rgba(122,71,199,0.20)',
-    borderColor: 'rgba(158,112,230,0.55)',
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    borderColor: 'rgba(139,92,246,0.8)',
   },
   rowSpeaking: {
-    borderColor: 'rgba(117,242,184,0.32)',
+    backgroundColor: 'rgba(34,197,94,0.12)',
+    borderColor: 'rgba(34,197,94,0.8)',
   },
   rowOffline: {
-    opacity: 0.72,
+    opacity: 0.6,
+    borderColor: 'rgba(148,163,184,0.25)',
+    backgroundColor: 'rgba(15,23,42,0.35)',
   },
   avatar: {
     width: 36,
@@ -333,17 +341,12 @@ const styles = StyleSheet.create({
   meterClusterReadout: {
     gap: 4,
   },
-  feedSlot: {
-    width: 40,
-    height: 40,
-  },
   feedButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    minWidth: 40,
+    minHeight: 40,
+  },
+  controlOffline: {
+    opacity: 0.55,
   },
   talkControl: {
     width: 36,

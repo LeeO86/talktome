@@ -1,5 +1,6 @@
 import { Alert, Pressable, Text, View } from 'react-native';
 
+import { describePttDevicesSummary } from '../ble/bindings';
 import { productionChoices, visibleProductionName } from '../protocol';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { session, useSessionStore } from '../session/store';
@@ -15,14 +16,20 @@ import {
   useSettingsTheme,
 } from './settingsChrome';
 
-/** Root page of the session sheet; Settings and Profiles are pushed from here. */
+/** Root menu of the session sheet; each settings category opens directly. */
 export function SessionPage({
   onClose,
-  onOpenSettings,
+  onOpenLayout,
+  onOpenAudio,
+  onOpenAccessories,
+  onOpenDebug,
   onOpenProfiles,
 }: {
   onClose: () => void;
-  onOpenSettings: () => void;
+  onOpenLayout: () => void;
+  onOpenAudio: () => void;
+  onOpenAccessories: () => void;
+  onOpenDebug: () => void;
   onOpenProfiles: () => void;
 }) {
   const store = useSessionStore();
@@ -86,7 +93,17 @@ export function SessionPage({
       ) : null}
 
       <SettingsSection>
-        <SettingsNavRow label="Settings" onPress={onOpenSettings} />
+        <SettingsNavRow label="Layout" onPress={onOpenLayout} />
+        <SettingsNavRow label="Audio" onPress={onOpenAudio} />
+        <SettingsNavRow
+          label="Accessories"
+          value={describePttDevicesSummary(store.bleBindings, store.bleDevices)}
+          onPress={onOpenAccessories}
+        />
+        <SettingsNavRow label="Debug" onPress={onOpenDebug} />
+      </SettingsSection>
+
+      <SettingsSection>
         <SettingsNavRow label="Profiles" onPress={onOpenProfiles} />
         <Pressable accessibilityRole="button" onPress={disconnect} style={[styles.row, styles.actionTop]}>
           <Text style={styles.destructiveLabel}>Disconnect</Text>

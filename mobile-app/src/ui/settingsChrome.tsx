@@ -377,15 +377,6 @@ function makeSettingsStyles(palette: SettingsPalette) {
       fontSize: 12,
       paddingBottom: 8,
     },
-    signOut: {
-      paddingHorizontal: 16,
-      paddingVertical: 14,
-    },
-    signOutText: {
-      color: palette.danger,
-      fontSize: 16,
-      fontWeight: '600',
-    },
     pairingHero: {
       alignItems: 'center',
       paddingHorizontal: 24,
