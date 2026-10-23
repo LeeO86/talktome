@@ -64,6 +64,9 @@ const adminNavLinks = [...document.querySelectorAll('[data-admin-nav]')];
 const configTabs = [...document.querySelectorAll('[data-config-tab]')];
 let activeConfigCategory = 'network';
 const statusUsersBody = document.getElementById('status-users-body');
+const statusUserControls = document.getElementById('status-users-controls');
+const statusUserFilterToggle = document.getElementById('status-user-filter-toggle');
+const statusUserFilterPanel = document.getElementById('status-user-filter-panel');
 const statusFeedsBody = document.getElementById('status-feeds-body');
 const statusBridgesBody = document.getElementById('status-bridges-body');
 const statusCompanionsBody = document.getElementById('status-companions-body');
@@ -389,6 +392,8 @@ let statusClockTimer = null;
 let statusFallbackTimer = null;
 let statusHealthTimer = null;
 let latestAdminStatus = null;
+const statusUserFilters = { productionId: '' };
+let statusUserProductionOptionsKey = '';
 let serverReachable = null;
 let activeAdminView = null;
 let productionSummaries = [];
@@ -1545,12 +1550,54 @@ function sortStatusRows(rows, body, fallback) {
   });
 }
 
+function filterStatusUsers(users, { productionId = '' } = {}) {
+  return users.filter((user) => (
+    !productionId || (user.productionIds || []).some((id) => String(id) === String(productionId))
+  ));
+}
+
+function setStatusUserFilterOpen(open, { restoreFocus = false } = {}) {
+  if (!statusUserFilterPanel || !statusUserFilterToggle) return;
+  statusUserFilterPanel.hidden = !open;
+  statusUserFilterToggle.setAttribute('aria-expanded', String(open));
+  if (open) statusUserFilterPanel.querySelector('[aria-checked="true"]')?.focus();
+  else if (restoreFocus) statusUserFilterToggle.focus();
+}
+
+function syncStatusUserFilters(payload) {
+  const enabled = payload.multipleProductionsEnabled === true;
+  const productions = enabled && Array.isArray(payload.productions) ? payload.productions : [];
+  const selected = productions.find((production) => String(production.id) === statusUserFilters.productionId);
+  if (!selected) statusUserFilters.productionId = '';
+  const optionsKey = JSON.stringify([productions, statusUserFilters.productionId]);
+  if (statusUserFilterPanel && optionsKey !== statusUserProductionOptionsKey) {
+    statusUserFilterPanel.innerHTML = [{ id: '', name: 'All productions' }, ...productions].map((production) => {
+      const checked = String(production.id) === statusUserFilters.productionId;
+      return `<button type="button" role="menuitemradio" aria-checked="${checked}" tabindex="${checked ? 0 : -1}"
+        data-status-production-id="${escapeHtml(production.id)}" title="${escapeHtml(production.name)}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+        <span>${escapeHtml(production.name)}</span></button>`;
+    }).join('');
+    statusUserProductionOptionsKey = optionsKey;
+  }
+  if (statusUserFilterToggle) {
+    statusUserFilterToggle.hidden = !enabled;
+    statusUserFilterToggle.dataset.active = String(Boolean(selected));
+    const label = selected ? `Filter users by production: ${selected.name}` : 'Filter users by production';
+    statusUserFilterToggle.setAttribute('aria-label', label);
+    statusUserFilterToggle.title = label;
+  }
+  if (!enabled) setStatusUserFilterOpen(false);
+}
+
 function renderAdminStatus(payload = {}) {
   const canRestartServer = Boolean(adminState.isSuperAdmin && payload.restartSupported);
   const showProductionColumn = payload.multipleProductionsEnabled === true;
   containerRestartPanel?.classList.toggle('is-hidden', !canRestartServer);
   latestAdminStatus = payload;
-  const users = Array.isArray(payload.users) ? [...payload.users] : [];
+  syncStatusUserFilters(payload);
+  const allStatusUsers = Array.isArray(payload.users) ? payload.users : [];
+  const users = filterStatusUsers(allStatusUsers, statusUserFilters);
   const feeds = Array.isArray(payload.feeds) ? [...payload.feeds] : [];
   const bridges = Array.isArray(payload.bridges) ? [...payload.bridges] : [];
   const companions = Array.isArray(payload.companions) ? [...payload.companions] : [];
@@ -1564,7 +1611,7 @@ function renderAdminStatus(payload = {}) {
   sortStatusRows(feeds, statusFeedsBody, sortByOnlineAndName);
   sortStatusRows(bridges, statusBridgesBody, sortByOnlineAndName);
   sortStatusRows(companions, statusCompanionsBody, sortByOnlineAndName);
-  syncStopTransmissionButtons(users);
+  syncStopTransmissionButtons(allStatusUsers);
 
   setStatusText('status-summary-users', `${summary.usersOnline || 0} / ${summary.usersTotal || 0}`);
   setStatusText('status-summary-bridges', `${summary.bridgesOnline || 0} / ${summary.bridgesTotal || 0}`);
@@ -1572,6 +1619,7 @@ function renderAdminStatus(payload = {}) {
   setStatusText('status-summary-feeds', String(summary.feedsOnline || 0));
   setStatusText('status-summary-guests', String(summary.guestsOnline || 0));
   setStatusText('status-summary-uptime', formatStatusUptime(payload.serverStartedAt));
+  const userFilterActive = Boolean(statusUserFilters.productionId);
   setStatusText('status-users-count', `${summary.usersOnline || 0} online of ${summary.usersTotal || 0}`);
   setStatusText('status-feeds-count', `${summary.feedsOnline || 0} online of ${summary.feedsTotal || 0}`);
   setStatusText('status-bridges-count', `${summary.bridgesOnline || 0} online of ${summary.bridgesTotal || 0}`);
@@ -1616,7 +1664,7 @@ function renderAdminStatus(payload = {}) {
             </tr>
           `;
         }).join('')
-      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No users configured.</td></tr>`;
+      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">${userFilterActive ? 'No users match your filters.' : 'No users configured.'}</td></tr>`;
   }
 
   if (statusFeedsBody) {
@@ -1944,6 +1992,42 @@ function clearEntitySearch(input) {
   input.value = '';
   input.dispatchEvent(new Event('input'));
 }
+
+statusUserFilterToggle?.addEventListener('click', () => {
+  setStatusUserFilterOpen(statusUserFilterPanel?.hidden === true);
+});
+statusUserFilterPanel?.addEventListener('click', (event) => {
+  const option = event.target.closest('[data-status-production-id]');
+  if (!option || !statusUserFilterPanel.contains(option)) return;
+  statusUserFilters.productionId = option.dataset.statusProductionId;
+  if (latestAdminStatus) renderAdminStatus(latestAdminStatus);
+  setStatusUserFilterOpen(false, { restoreFocus: true });
+});
+statusUserControls?.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && statusUserFilterPanel?.hidden === false) {
+    event.preventDefault();
+    setStatusUserFilterOpen(false, { restoreFocus: true });
+    return;
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  const wasClosed = statusUserFilterPanel?.hidden !== false;
+  if (wasClosed && event.target !== statusUserFilterToggle) return;
+  event.preventDefault();
+  setStatusUserFilterOpen(true);
+  const options = [...statusUserFilterPanel.querySelectorAll('[role="menuitemradio"]')];
+  const current = options.indexOf(event.target);
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+    : wasClosed ? event.key === 'ArrowUp' ? options.length - 1 : 0
+      : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+  options.forEach((option, optionIndex) => { option.tabIndex = optionIndex === index ? 0 : -1; });
+  options[index]?.focus();
+});
+statusUserControls?.addEventListener('focusout', (event) => {
+  if (event.relatedTarget && !statusUserControls.contains(event.relatedTarget)) setStatusUserFilterOpen(false);
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!statusUserControls?.contains(event.target)) setStatusUserFilterOpen(false);
+});
 
 for (const kind of ['users', 'conferences', 'feeds']) {
   const config = getEntityMasterDetailConfig(kind);
@@ -4909,6 +4993,7 @@ multipleProductionsInput?.addEventListener('change', async () => {
         currentBridgeRegistry
       ),
       renderConferenceList(currentAdminCatalog.conferences, currentAdminCatalog.users),
+      loadAdminStatus({ silent: true }),
     ]);
     showMessage(`Multiple Productions ${enabled ? 'enabled' : 'disabled'}.`, 'success', 'matrix');
   } catch (error) {

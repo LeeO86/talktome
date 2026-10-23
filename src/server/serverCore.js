@@ -178,6 +178,7 @@ const {
   getAllFeeds,
   getFeedById,
   getAllProductions,
+  getAllProductionMemberships,
   getProductionById,
   getPrimaryProduction,
   getProductionsForUser,
@@ -3891,6 +3892,14 @@ function buildAdminStatusSnapshot() {
   const productionsById = multipleProductionsEnabled
     ? new Map(getAllProductions().map((production) => [String(production.id), production]))
     : new Map();
+  const productionIdsByUser = new Map();
+  if (multipleProductionsEnabled) {
+    for (const membership of getAllProductionMemberships()) {
+      const userId = String(membership.user_id);
+      if (!productionIdsByUser.has(userId)) productionIdsByUser.set(userId, []);
+      productionIdsByUser.get(userId).push(Number(membership.production_id));
+    }
+  }
   const usersById = new Map(allUsers.map((user) => [String(user.id), user]));
   const conferencesById = new Map(allConferences.map((conference) => [String(conference.id), conference]));
   const users = allUsers
@@ -3922,6 +3931,7 @@ function buildAdminStatusSnapshot() {
         talkLocked: online && activeTargets.length > 0
           && Boolean(companionUserState.get(String(user.id))?.talkLocked),
         talkTargets,
+        productionIds: productionIdsByUser.get(String(user.id)) || [],
         activeProduction: activeProduction
           ? { id: Number(activeProduction.id), name: activeProduction.name }
           : null,
@@ -4028,6 +4038,7 @@ function buildAdminStatusSnapshot() {
     runningInContainer: isRunningInContainer(),
     restartSupported: isServerRestartSupported(),
     multipleProductionsEnabled,
+    productions: [...productionsById.values()].map(({ id, name }) => ({ id: Number(id), name })),
     users,
     feeds,
     bridges,
@@ -6364,6 +6375,8 @@ function notifyAvailableProductionsChanged(userId = null) {
       productions: getEnabledProductionsForUser(profileUserId).map(({ id, name }) => ({ id, name })),
     });
   }
+  // Admin status also needs new mode, production names and offline memberships.
+  scheduleAdminStatusBroadcast("productions-updated");
 }
 
 

@@ -498,6 +498,10 @@ function materializePrimaryProductionFromGlobal() {
   return productionId;
 }
 
+function getAllProductionMemberships() {
+  return db.prepare('SELECT production_id, user_id FROM production_users').all();
+}
+
 function getProductionsForUser(userId) {
   return db.prepare(`
     SELECT p.id, p.name, pu.is_admin AS isAdmin
@@ -2412,6 +2416,7 @@ module.exports = {
   getAllFeeds,
   getFeedById,
   getAllProductions,
+  getAllProductionMemberships,
   getProductionById,
   getPrimaryProduction,
   getProductionsForUser,
