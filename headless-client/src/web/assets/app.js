@@ -90,6 +90,12 @@
     return wrap;
   }
 
+  // Short state for a line that could not be requested; the card message and
+  // the cell tooltip carry the full text.
+  function gpioErrorLabel(error) {
+    return /already used/.test(error) ? 'in use' : 'error';
+  }
+
   function gpioLedClass(output) {
     if (output.error) return 'led-amber';
     if (output.active === null) return 'led-unknown';
@@ -524,7 +530,7 @@
         el('tr', {}, [
           el('td', { text: output.name }),
           el('td', {}, code(`${output.line}${output.active_low ? ' (active low)' : ''}`)),
-          el('td', {}, [el('span', { class: `led ${ledClass}` }), ' ', output.error ? `error: ${output.error}` : output.active === null ? 'not driven' : output.active ? 'active' : 'inactive']),
+          el('td', output.error ? { title: output.error } : {}, [el('span', { class: `led ${ledClass}` }), ' ', output.error ? gpioErrorLabel(output.error) : output.active === null ? 'not driven' : output.active ? 'active' : 'inactive']),
         ])
       );
     }
@@ -539,8 +545,8 @@
           el('td', {}, code(input.line)),
           el('td', { text: input.action.replace('_', ' ') }),
           el('td', { text: input.target || '–' }),
-          el('td', {}, input.error
-            ? [el('span', { class: 'led led-amber' }), ' ', `error: ${input.error}`]
+          el('td', input.error ? { title: input.error } : {}, input.error
+            ? [el('span', { class: 'led led-amber' }), ' ', gpioErrorLabel(input.error)]
             : [el('span', { class: `led ${input.pressed ? 'led-on' : ''}` }), ' ', input.pressed ? 'pressed' : 'released']),
           el('td', { text: input.events }),
         ])
@@ -1462,12 +1468,21 @@
     return value != null && typeof value === 'object' && !Array.isArray(value);
   }
 
-  function mergeFileOverRunning(running, file) {
+  // Same rule as config::merge_file_over_running: these maps come from the
+  // file as a whole, so a cleared GPIO output does not reappear from the
+  // running configuration before the restart.
+  const FILE_OWNED_MAPS = { gpio: ['outputs'], streamdeck: ['layout'] };
+
+  function mergeFileOverRunning(running, file, section = null) {
     if (file == null) return running;
     if (!isPlainObject(running) || !isPlainObject(file)) return file;
+    const owned = (section && FILE_OWNED_MAPS[section]) || [];
     const out = { ...running };
     for (const [key, value] of Object.entries(file)) {
-      out[key] = isPlainObject(value) && isPlainObject(out[key]) ? mergeFileOverRunning(out[key], value) : value;
+      out[key] = !owned.includes(key) && isPlainObject(value) && isPlainObject(out[key]) ? mergeFileOverRunning(out[key], value, section || key) : value;
+    }
+    for (const key of owned) {
+      if (!(key in file)) out[key] = {};
     }
     return out;
   }
@@ -1745,7 +1760,7 @@
       const current = outputs[name] || {};
       editor.append(
         el('div', { class: 'list-row', dataset: { output: name } }, [
-          el('label', { class: 'field' }, [el('span', { text: `${OUTPUT_LABELS[name] || name} line` }), el('input', { type: 'text', placeholder: 'GPIO17', dataset: { field: 'line' }, value: current.line || '' })]),
+          el('label', { class: 'field' }, [el('span', { text: `${OUTPUT_LABELS[name] || name} line` }), el('input', { type: 'text', placeholder: 'unassigned', title: 'Line name such as GPIO17; leave empty to leave this output unassigned', dataset: { field: 'line' }, value: current.line || '' })]),
           el('label', { class: 'field-check' }, [el('input', { type: 'checkbox', dataset: { field: 'active_low' }, ...(current.active_low ? { checked: '' } : {}) }), el('span', { text: 'active low' })]),
         ])
       );
@@ -1776,7 +1791,7 @@
     const target = el('select', { dataset: { field: 'target' } });
     fillTargetSelect(target, output.target || '');
     row.append(
-      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'GPIO18', dataset: { field: 'line' }, value: output.line || '' })]),
+      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'e.g. GPIO18', dataset: { field: 'line' }, value: output.line || '' })]),
       el('label', { class: 'field' }, [el('span', { text: 'Target' }), target]),
       el('label', { class: 'field' }, [el('span', { text: 'When' }), when]),
       el('label', { class: 'field-check' }, [el('input', { type: 'checkbox', dataset: { field: 'active_low' }, ...(output.active_low ? { checked: '' } : {}) }), el('span', { text: 'active low' })]),
@@ -1803,7 +1818,7 @@
     const target = el('select', { dataset: { field: 'target' } });
     fillTargetSelect(target, input.target || '');
     row.append(
-      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'GPIO22', dataset: { field: 'line' }, value: input.line || '' })]),
+      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'e.g. GPIO22', dataset: { field: 'line' }, value: input.line || '' })]),
       el('label', { class: 'field' }, [el('span', { text: 'Action' }), action]),
       el('label', { class: 'field' }, [el('span', { text: 'Target' }), target]),
       el('label', { class: 'field' }, [el('span', { text: 'Debounce (ms)' }), el('input', { type: 'number', min: 0, dataset: { field: 'debounce_ms' }, value: input.debounce_ms != null ? input.debounce_ms : 20 })]),

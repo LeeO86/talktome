@@ -531,7 +531,7 @@ async fn run_real(
                 let error = format!("{error:#}");
                 tracing::warn!(event = "gpio-line-unavailable", name, line = %output.line, error = %error);
                 record_output(status, name, None, Some(error.clone()));
-                problems.push(format!("output {name}: {error}"));
+                problems.push(format!("{name} output: {error}"));
             }
         }
     }
@@ -548,7 +548,7 @@ async fn run_real(
                 if let Some(view) = status.inputs.get_mut(index) {
                     view.error = Some(error.clone());
                 }
-                problems.push(format!("input {}: {error}", input.line));
+                problems.push(format!("{} input: {error}", action_name(input.action)));
                 continue;
             }
         };
@@ -588,7 +588,7 @@ async fn run_real(
         });
     }
     drop(event_tx);
-    status.error = (!problems.is_empty()).then(|| problems.join("; "));
+    status.error = (!problems.is_empty()).then(|| problems.join("\n"));
 
     let mut snapshots = bus.snapshots.clone();
     let mut debouncer = Debouncer::new(

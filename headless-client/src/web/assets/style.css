@@ -416,6 +416,25 @@ body[data-view='remote'] #flash {
   letter-spacing: 0.04em;
 }
 
+.table-scroll {
+  overflow-x: auto;
+  margin: 0 -0.25rem;
+}
+
+.table-scroll .table td {
+  white-space: nowrap;
+}
+
+#gpio-error {
+  white-space: pre-line;
+}
+
+/* The GPIO card sits in a third of the page; keep its tables compact. */
+.card-gpio .table th,
+.card-gpio .table td {
+  padding: 0.4rem 0.35rem;
+}
+
 .table td.empty {
   color: var(--muted);
   font-style: italic;

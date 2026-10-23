@@ -897,26 +897,42 @@ pub fn render_document(path: &Path, doc: &Value) -> Result<String> {
     }
 }
 
-/// Overlay a configuration **file** on the running (fully defaulted) document.
-/// File values win; keys only present in `running` remain, so the result is
-/// suitable for a settings form after a save that has not been restarted yet.
+/// Maps of user entries (keyed by output name or deck key). When the file
+/// has the section, its map is the whole truth: an entry removed in the file
+/// must not come back from the running process, which still has it until the
+/// next restart.
+const FILE_OWNED_MAPS: &[(&str, &str)] = &[("gpio", "outputs"), ("streamdeck", "layout")];
+
+/// Editor view: the saved file over the running configuration, so saved but
+/// not yet applied values show, and sections missing from the file show the
+/// running values.
 pub fn merge_file_over_running(running: &Value, file: &Value) -> Value {
-    match (running, file) {
-        (Value::Object(running_map), Value::Object(file_map)) => {
-            let mut out = running_map.clone();
-            for (key, file_val) in file_map {
-                let merged = match running_map.get(key) {
-                    Some(running_val) if running_val.is_object() && file_val.is_object() => {
-                        merge_file_over_running(running_val, file_val)
-                    }
-                    _ => file_val.clone(),
-                };
-                out.insert(key.clone(), merged);
+    merge_over(running, file, None)
+}
+
+fn merge_over(running: &Value, file: &Value, section: Option<&str>) -> Value {
+    let (Value::Object(running_map), Value::Object(file_map)) = (running, file) else {
+        return file.clone();
+    };
+    let mut out = running_map.clone();
+    for (key, file_val) in file_map {
+        let owned = section.is_some_and(|s| FILE_OWNED_MAPS.contains(&(s, key.as_str())));
+        let merged = match running_map.get(key) {
+            Some(running_val) if !owned && running_val.is_object() && file_val.is_object() => {
+                merge_over(running_val, file_val, section.or(Some(key.as_str())))
             }
-            Value::Object(out)
-        }
-        (_, file) => file.clone(),
+            _ => file_val.clone(),
+        };
+        out.insert(key.clone(), merged);
     }
+    if let Some(section) = section {
+        for (owner, key) in FILE_OWNED_MAPS {
+            if *owner == section && !file_map.contains_key(*key) {
+                out.insert((*key).to_string(), Value::Object(Default::default()));
+            }
+        }
+    }
+    Value::Object(out)
 }
 
 /// Whether the on-disk document, once parsed into a full `Config`, differs
@@ -1554,6 +1570,35 @@ mod tests {
         assert_eq!(editor["user"]["name"], "Studio");
         assert_eq!(editor["audio"]["profile"], "standard");
         assert_eq!(editor["audio"]["input_device"], "tone");
+    }
+
+    #[test]
+    fn merge_file_over_running_does_not_revive_removed_gpio_outputs() {
+        let running = serde_json::json!({
+            "gpio": {
+                "enabled": true,
+                "outputs": { "tally": { "line": "GPIO17" }, "talking": { "line": "GPIO27" } }
+            },
+            "streamdeck": { "layout": { "0": "user:4" }, "brightness": 60 }
+        });
+        // Saved with tally cleared; not restarted yet.
+        let file = serde_json::json!({
+            "gpio": { "enabled": true, "outputs": { "talking": { "line": "GPIO27" } } },
+            "streamdeck": { "brightness": 40 }
+        });
+        let editor = merge_file_over_running(&running, &file);
+        assert!(editor["gpio"]["outputs"].get("tally").is_none());
+        assert_eq!(editor["gpio"]["outputs"]["talking"]["line"], "GPIO27");
+        // A map missing from a saved section means "none", not "running".
+        assert_eq!(editor["streamdeck"]["layout"], serde_json::json!({}));
+        assert_eq!(editor["streamdeck"]["brightness"], 40);
+        // All outputs cleared: the TOML writer may drop the empty table.
+        let cleared = serde_json::json!({ "gpio": { "enabled": true } });
+        let editor = merge_file_over_running(&running, &cleared);
+        assert_eq!(editor["gpio"]["outputs"], serde_json::json!({}));
+        // A section the file does not have still shows the running values.
+        let editor = merge_file_over_running(&running, &serde_json::json!({}));
+        assert_eq!(editor["gpio"]["outputs"]["tally"]["line"], "GPIO17");
     }
 
     #[test]
