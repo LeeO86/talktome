@@ -25,12 +25,10 @@ enum TalkToMeSessionShutdown {
     reloadWidgetsAndClearNowPlaying()
   }
 
-  /// `willTerminate` path, while the process is still running. Order matters:
-  /// the PTT leave goes out first so its XPC is in flight while we wait on
-  /// ActivityKit, and JS gets its disconnect event before the wait as well.
+  /// `willTerminate` path, while the process is still running. JS gets its
+  /// disconnect event before the wait on ActivityKit.
   static func runForImminentTermination(beforeWait: () -> Void = {}) {
     TalkToMePresenceStore.writeDisconnected()
-    postWillTerminate()
     beforeWait()
     endLeftoverLiveActivities(wait: true)
     reloadWidgetsAndClearNowPlaying()
@@ -46,16 +44,6 @@ enum TalkToMeSessionShutdown {
       }
     }
     #endif
-  }
-
-  static func postWillTerminate() {
-    CFNotificationCenterPostNotification(
-      CFNotificationCenterGetDarwinNotifyCenter(),
-      CFNotificationName(TalkToMePresenceStore.sessionWillTerminateNotification),
-      nil,
-      nil,
-      true
-    )
   }
 
   private static func reloadWidgetsAndClearNowPlaying() {

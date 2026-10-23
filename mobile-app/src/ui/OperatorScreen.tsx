@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, Platform, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import { iosPttEnabled } from '../audio/policy';
 import {
   cameraTallyColor,
   cameraTallyLabel,
@@ -9,7 +8,6 @@ import {
   talkTargetIdentity,
   type TalkTarget,
 } from '../protocol';
-import { operatorPttNotice, shouldShowPttJoinBanner } from '../ptt/policy';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
 import { session, useSessionStore } from '../session/store';
@@ -102,14 +100,6 @@ export function OperatorScreen() {
 
   const productionLabel = visibleProductionName(store.productionName);
   const connection = connectionHealthFromSession(store);
-  const pttNotice = operatorPttNotice({
-    platform: Platform.OS,
-    pttEnabled: iosPttEnabled(),
-    bootstrapEnabled: store.pttBootstrapEnabled,
-    joined: store.pttJoined,
-    verified: store.pttVerified,
-    diagnostic: store.pttDiagnostic,
-  });
   const mediaNotice =
     connection.kind === 'warning' || connection.kind === 'failed' ? connection.label : store.audioNotice;
   const tallyColor = cameraTallyColor(store.cameraTally);
@@ -257,28 +247,8 @@ export function OperatorScreen() {
       )}
 
       {mediaNotice ? <Text style={styles.warn}>{mediaNotice}</Text> : null}
-      {pttNotice ? <Text style={styles.warn}>{pttNotice}</Text> : null}
       {store.overBudget ? (
         <Text style={styles.warn}>Too many incoming streams — some feeds paused.</Text>
-      ) : null}
-      {shouldShowPttJoinBanner({
-        platform: Platform.OS,
-        pttEnabled: iosPttEnabled(),
-        bootstrapEnabled: store.pttBootstrapEnabled,
-        joined: store.pttJoined,
-      }) ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Join PushToTalk channel"
-          accessibilityHint="Joins Apple's Push to Talk channel when this server has a push key. In-app talk does not need it."
-          onPress={() => void session.joinSystemPttChannel()}
-          style={styles.pttBanner}
-        >
-          <Text style={styles.pttBannerTitle}>Optional: system Push to Talk</Text>
-          <Text style={styles.pttBannerHint}>
-            Only if this server has an Apple push key. Not required to talk, or for the lock screen card.
-          </Text>
-        </Pressable>
       ) : null}
       {store.error ? <Text style={styles.error}>{store.error}</Text> : null}
 
@@ -443,25 +413,6 @@ const styles = StyleSheet.create({
   error: {
     color: colors.danger,
     marginBottom: 8,
-  },
-  pttBanner: {
-    backgroundColor: 'rgba(61,214,245,0.16)',
-    borderColor: 'rgba(61,214,245,0.42)',
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 10,
-  },
-  pttBannerTitle: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  pttBannerHint: {
-    color: colors.muted,
-    fontSize: 13,
-    marginTop: 2,
   },
   body: {
     flex: 1,

@@ -45,8 +45,6 @@ import {
   type OperatorAudioSettings,
 } from './operatorAudio';
 import type { ServerClientDefaults } from '../protocol/clientDefaults';
-import { pttNativeAvailable } from '../ptt/native';
-import { SystemPttJoinGate } from '../ptt/joinGate';
 import {
   loadProfileBundle,
   passwordForProfile,
@@ -107,8 +105,6 @@ export class SessionController {
   lockedTargets: TalkTarget[] = [];
   overrideFrom: TalkTarget[] | null = null;
   liveProducers = new Map<string, ActiveProducer>();
-  pttChannelUUID: string | null = null;
-  readonly pttJoin = new SystemPttJoinGate();
   fgsSync: Promise<void> = Promise.resolve();
 
   // Server-configured client defaults (1.4.4+) and per-key explicit choices.
@@ -193,10 +189,8 @@ export class SessionController {
       mainButtonTargets: bundle.mainButtonTargets ?? {},
       bigMainButton: bundle.bigMainButton === true,
       audioSessionAvailable: audioSessionAvailable(),
-      pttAvailable: pttNativeAvailable(),
       capabilityReason: this.background.capabilityReason({
         audioSessionAvailable: audioSessionAvailable(),
-        pttAvailable: pttNativeAvailable(),
       }),
       audioPreferences,
       conferenceListen,
@@ -673,8 +667,6 @@ export class SessionController {
     this.overrideFrom = null;
     this.liveProducers = new Map();
     this.background.resetBleAccessorySession();
-    this.pttJoin.settle();
-    await this.background.leaveSystemPtt();
     await this.background.teardownAudioSession();
     await stopForegroundService();
   }
@@ -724,7 +716,6 @@ export class SessionController {
       bondedSerialDevices: next.bondedSerialDevices,
       fgsAvailable: next.fgsAvailable,
       audioSessionAvailable: next.audioSessionAvailable,
-      pttAvailable: next.pttAvailable,
       status: input.status ?? 'idle',
       statusMessage: input.statusMessage,
     });
@@ -759,10 +750,6 @@ export class SessionController {
       allowInsecureLocalTLS: state.allowInsecureLocalTLS,
       productionId: state.operatorReady ? state.productionId : (existing?.productionId ?? state.productionId),
       productionName: state.operatorReady ? state.productionName : (existing?.productionName ?? state.productionName),
-      pttChannelUUID: guest ? undefined : (this.pttChannelUUID ?? existing?.pttChannelUUID),
-      pttChannelName: guest
-        ? undefined
-        : (state.pttChannelName.trim() || existing?.pttChannelName),
       guest,
       loginToken: guest ? undefined : this.pendingLoginToken || undefined,
     };
@@ -1311,10 +1298,6 @@ export class SessionController {
     this.talk.handleTalkUrl(url);
   }
 
-  async leaveSystemPtt(): Promise<void> {
-    await this.background.leaveSystemPtt();
-  }
-
   setConferenceMemberListening(conferenceId: number | string, userId: number, listening: boolean): void {
     this.talk.setConferenceMemberListening(conferenceId, userId, listening);
   }
@@ -1355,10 +1338,6 @@ export class SessionController {
   }
 
   // Background façade.
-  async joinSystemPttChannel(): Promise<void> {
-    await this.background.joinSystemPttChannel();
-  }
-
   bluetoothButtonCandidates(): TalkTarget[] {
     return this.background.bluetoothButtonCandidates();
   }

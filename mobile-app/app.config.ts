@@ -1,12 +1,5 @@
 import type { ExpoConfig } from 'expo/config';
 
-const enableIosPtt = process.env.EXPO_PUBLIC_ENABLE_IOS_PTT === '1';
-// Store / TestFlight builds must set EXPO_PUBLIC_APNS_ENVIRONMENT=production.
-// Development is only for a dev-signed client. app.config writes the key first so
-// the PTT plugin cannot leave a store build on the development APNs environment.
-const apnsEnvironment =
-  process.env.EXPO_PUBLIC_APNS_ENVIRONMENT === 'production' ? 'production' : 'development';
-
 const config: ExpoConfig = {
   name: 'TalkToMe',
   slug: 'talktome-mobile',
@@ -23,12 +16,6 @@ const config: ExpoConfig = {
     appleTeamId: '4876GGFAH9',
     entitlements: {
       'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
-      ...(enableIosPtt
-        ? {
-            'com.apple.developer.push-to-talk': true,
-            'aps-environment': apnsEnvironment,
-          }
-        : {}),
     },
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
@@ -43,9 +30,7 @@ const config: ExpoConfig = {
       },
       NSSupportsLiveActivities: true,
       NSSupportsLiveActivitiesFrequentUpdates: true,
-      UIBackgroundModes: enableIosPtt
-        ? ['audio', 'bluetooth-central', 'push-to-talk']
-        : ['audio', 'bluetooth-central'],
+      UIBackgroundModes: ['audio', 'bluetooth-central'],
       UISupportedInterfaceOrientations: [
         'UIInterfaceOrientationPortrait',
         'UIInterfaceOrientationLandscapeLeft',
@@ -110,7 +95,6 @@ const config: ExpoConfig = {
       },
     ],
     './plugins/withTalkToMeBle',
-    './plugins/withTalkToMePtt',
     './plugins/withTalkToMeOrientation',
     './plugins/withTalkToMePresence',
     './plugins/withTalkToMeXcodeWarnings',
@@ -127,7 +111,6 @@ const config: ExpoConfig = {
     './plugins/withTalkToMeAndroidIcons',
   ],
   extra: {
-    enableIosPtt,
     eas: {
       projectId: 'ae071885-3a15-4e42-950f-101152ef28be',
     },

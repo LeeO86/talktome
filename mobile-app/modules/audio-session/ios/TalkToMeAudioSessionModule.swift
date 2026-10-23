@@ -54,11 +54,6 @@ public final class TalkToMeAudioSessionModule: Module {
       return true
     }
 
-    AsyncFunction("prepareForSystemManagedIntercom") {
-      try self.controller.prepareForSystemManagedIntercom()
-      return true
-    }
-
     AsyncFunction("deactivate") {
       self.controller.deactivate()
       return true

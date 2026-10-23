@@ -93,12 +93,6 @@ export type SessionUiState = {
   audioSessionAvailable: boolean;
   audioSessionActive: boolean;
   audioKeepalive: boolean;
-  pttAvailable: boolean;
-  pttBootstrapEnabled: boolean;
-  pttJoined: boolean;
-  pttVerified: boolean;
-  pttChannelName: string;
-  pttDiagnostic: string;
   bleKind: BleConnectionKind;
   bleName: string;
   bleMessage: string;
@@ -120,7 +114,7 @@ export type SessionUiState = {
 };
 
 export const FOREGROUND_REASON =
-  'In-app talk. Backgrounding keeps the session while the process is alive. Lock-screen wake for a new caller needs system Push to Talk and a server Apple push key.';
+  'In-app talk. Backgrounding keeps the session while the process is alive. The app does not wake for a new caller.';
 export const HOLD_HINT = 'Hold to talk. Slide to lock.';
 
 export const initialState: SessionUiState = {
@@ -192,12 +186,6 @@ export const initialState: SessionUiState = {
   audioSessionAvailable: false,
   audioSessionActive: false,
   audioKeepalive: false,
-  pttAvailable: false,
-  pttBootstrapEnabled: false,
-  pttJoined: false,
-  pttVerified: false,
-  pttChannelName: '',
-  pttDiagnostic: '',
   bleKind: 'idle',
   bleName: '',
   bleMessage: '',
@@ -266,14 +254,6 @@ export function bleFieldsFromSelection(
     bleTargetId: String(selection.id),
     bleTargetLabel: selection.label,
   };
-}
-
-export function latestIncomingName(incoming: IncomingTalkState): string | null {
-  const latest = incoming.addressedNow
-    .slice()
-    .sort((left, right) => (right.at ?? 0) - (left.at ?? 0))[0];
-  const name = latest?.fromName?.trim();
-  return name ? name : null;
 }
 
 export { looksLikeTlsFailure } from '../servers/tlsFailure';

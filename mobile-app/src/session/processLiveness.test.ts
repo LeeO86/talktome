@@ -90,13 +90,11 @@ describe('iOS lock screen Live Activity', () => {
     expect(liveActivityController).toContain('await previous.value');
   });
 
-  it('posts the PTT leave and the JS disconnect before waiting on ActivityKit', () => {
+  it('posts the JS disconnect before waiting on ActivityKit', () => {
     const terminate = sessionShutdown.slice(sessionShutdown.indexOf('static func runForImminentTermination'));
-    const postAt = terminate.indexOf('postWillTerminate()');
     const jsAt = terminate.indexOf('beforeWait()');
     const waitAt = terminate.indexOf('endLeftoverLiveActivities(wait: true)');
-    expect(postAt).toBeGreaterThan(0);
-    expect(jsAt).toBeGreaterThan(postAt);
+    expect(jsAt).toBeGreaterThan(0);
     expect(waitAt).toBeGreaterThan(jsAt);
     expect(presenceModule).toContain('runForImminentTermination(beforeWait:');
   });

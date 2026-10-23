@@ -6,23 +6,12 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal",
-      "env": {
-        "EXPO_PUBLIC_ENABLE_IOS_PTT": "1"
-      }
+      "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal",
-      "env": {
-        "EXPO_PUBLIC_ENABLE_IOS_PTT": "1"
-      }
+      "distribution": "internal"
     },
-    "production": {
-      "env": {
-        "EXPO_PUBLIC_ENABLE_IOS_PTT": "1",
-        "EXPO_PUBLIC_APNS_ENVIRONMENT": "production"
-      }
-    }
+    "production": {}
   },
   "submit": {
     "production": {
