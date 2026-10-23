@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { normalize: normalizeUserAudioSettings } = require('../../public/userAudioSettings');
 const bridgeAudioLevels = require('../../public/bridgeAudioLevels');
+const { loginNameKey, assertUniqueLoginNames } = require('./loginNames');
 
 const BRIDGE_ENDPOINT_TEXT_LIMIT = 200;
 const BRIDGE_TRIGGER_DEFAULT_THRESHOLD_DB = -45;
@@ -1138,6 +1139,9 @@ function importDatabaseSnapshot(snapshot) {
     throw new Error('Snapshot is missing required collections');
   }
 
+  // Validate before deleting any data, including names shared by users and feeds.
+  assertUniqueLoginNames([...users, ...feeds]);
+
   const restore = db.transaction(() => {
     db.prepare('DELETE FROM browser_sessions').run();
     db.prepare('DELETE FROM user_bridge_endpoints').run();
@@ -1505,18 +1509,56 @@ function importDatabaseSnapshot(snapshot) {
   restore();
 }
 
-function createUser(name, password) {
+// Users and feeds share /login. Compare only names here; fetch password hashes
+// by ID after resolving exactly one identity, never by whichever row comes first.
+function matchingLoginNames(name) {
+  const key = loginNameKey(name);
+  if (!key) return [];
+  return db.prepare(`
+    SELECT id, name, 'user' AS kind FROM users
+    UNION ALL
+    SELECT id, name, 'feed' AS kind FROM feeds
+  `).all().filter((row) => loginNameKey(row.name) === key);
+}
+
+function loginNameConflict(kind) {
+  return Object.assign(new Error(kind === 'user' ? 'Username already exists' : 'Feed name already exists'), {
+    code: 'SQLITE_CONSTRAINT_UNIQUE',
+  });
+}
+
+function assertLoginNameAvailable(name, kind, ownId = null) {
+  if (!loginNameKey(name)) throw new Error('Login name must be a non-empty string');
+  if (matchingLoginNames(name).some((row) => row.kind !== kind || row.id !== Number(ownId))) {
+    throw loginNameConflict(kind);
+  }
+}
+
+function createLoginIdentity(kind, name, password) {
+  const table = kind === 'user' ? 'users' : 'feeds';
+  const hash = bcrypt.hashSync(password, 10);
   try {
-    const hash = bcrypt.hashSync(password, 10);
-    const stmt = db.prepare('INSERT INTO users (name, password) VALUES (?, ?)');
-    const result = stmt.run(name, hash);
-    return result.lastInsertRowid;
+    return db.transaction(() => {
+      assertLoginNameAvailable(name, kind);
+      return db.prepare(`INSERT INTO ${table} (name, password) VALUES (?, ?)`).run(name, hash).lastInsertRowid;
+    }).immediate();
   } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      throw new Error('Username already exists');
-    }
+    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') throw loginNameConflict(kind);
     throw err;
   }
+}
+
+function renameLoginIdentity(kind, id, name) {
+  const table = kind === 'user' ? 'users' : 'feeds';
+  return db.transaction(() => {
+    if (!db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(id)) return false;
+    assertLoginNameAvailable(name, kind, id);
+    return db.prepare(`UPDATE ${table} SET name = ? WHERE id = ?`).run(name, id).changes > 0;
+  }).immediate();
+}
+
+function createUser(name, password) {
+  return createLoginIdentity('user', name, password);
 }
 
 function getGuestProfileUser() {
@@ -1530,34 +1572,36 @@ function getGuestProfileUser() {
 }
 
 function getOrCreateGuestProfile() {
-  const existing = getGuestProfileUser();
-  if (existing) return existing;
+  return db.transaction(() => {
+    const existing = getGuestProfileUser();
+    if (existing) return existing;
 
-  const baseNames = ['Guest', 'Guest Profile'];
-  let selectedName = null;
-  for (const baseName of baseNames) {
-    const exists = db.prepare('SELECT id FROM users WHERE name = ?').get(baseName);
-    if (!exists) {
-      selectedName = baseName;
-      break;
+    const baseNames = ['Guest', 'Guest Profile'];
+    let selectedName = null;
+    for (const baseName of baseNames) {
+      const exists = matchingLoginNames(baseName).length > 0;
+      if (!exists) {
+        selectedName = baseName;
+        break;
+      }
     }
-  }
-  if (!selectedName) {
-    let index = 2;
-    while (!selectedName) {
-      const candidate = `Guest Profile ${index}`;
-      const exists = db.prepare('SELECT id FROM users WHERE name = ?').get(candidate);
-      if (!exists) selectedName = candidate;
-      index += 1;
+    if (!selectedName) {
+      let index = 2;
+      while (!selectedName) {
+        const candidate = `Guest Profile ${index}`;
+        const exists = matchingLoginNames(candidate).length > 0;
+        if (!exists) selectedName = candidate;
+        index += 1;
+      }
     }
-  }
 
-  const hash = bcrypt.hashSync(crypto.randomUUID(), 10);
-  const result = db.prepare(`
-    INSERT INTO users (name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile)
-    VALUES (?, ?, 0, 0, 0, 1)
-  `).run(selectedName, hash);
-  return getUserById(result.lastInsertRowid);
+    const hash = bcrypt.hashSync(crypto.randomUUID(), 10);
+    const result = db.prepare(`
+      INSERT INTO users (name, password, is_admin, is_superadmin, admin_must_change, is_guest_profile)
+      VALUES (?, ?, 0, 0, 0, 1)
+    `).run(selectedName, hash);
+    return getUserById(result.lastInsertRowid);
+  }).immediate();
 }
 
 function createConference(name) {
@@ -1573,16 +1617,7 @@ function createConference(name) {
 }
 
 function createFeed(name, password) {
-  try {
-    const hash = bcrypt.hashSync(password, 10);
-    const stmt = db.prepare('INSERT INTO feeds (name, password) VALUES (?, ?)');
-    return stmt.run(name, hash).lastInsertRowid;
-  } catch (err) {
-    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      throw new Error('Feed name already exists');
-    }
-    throw err;
-  }
+  return createLoginIdentity('feed', name, password);
 }
 
 function addUserToConference(userId, conferenceId) {
@@ -1608,27 +1643,29 @@ function getUsersForConference(conferenceId) {
   return stmt.all(conferenceId);
 }
 
+function loginIdentityByName(kind, name, passwordLogin = false) {
+  const matches = matchingLoginNames(name).filter((row) => passwordLogin || row.kind === kind);
+  // Legacy databases may contain case-only duplicates. Reject ambiguous names
+  // even for an exact spelling; an admin can resolve them by renaming by ID.
+  if (matches.length !== 1 || matches[0].kind !== kind) return null;
+  const table = kind === 'user' ? 'users' : 'feeds';
+  return db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(matches[0].id);
+}
+
 function getUserByName(name) {
-  const stmt = db.prepare('SELECT * FROM users WHERE name = ?');
-  return stmt.get(name);
+  return loginIdentityByName('user', name);
 }
 
 function verifyUser(name, plainPassword) {
-  const user = getUserByName(name);
-  if (!user) return null;
-  const isValid = bcrypt.compareSync(plainPassword, user.password);
-  return isValid ? user : null;
-}
-
-function getFeedByName(name) {
-  return db.prepare('SELECT * FROM feeds WHERE name = ?').get(name);
+  const user = loginIdentityByName('user', name, true);
+  if (!user || typeof plainPassword !== 'string') return null;
+  return bcrypt.compareSync(plainPassword, user.password) ? user : null;
 }
 
 function verifyFeed(name, plainPassword) {
-  const feed = getFeedByName(name);
-  if (!feed) return null;
-  const isValid = bcrypt.compareSync(plainPassword, feed.password);
-  if (!isValid) return null;
+  const feed = loginIdentityByName('feed', name, true);
+  if (!feed || typeof plainPassword !== 'string') return null;
+  if (!bcrypt.compareSync(plainPassword, feed.password)) return null;
   return { id: feed.id, name: feed.name };
 }
 
@@ -1655,9 +1692,7 @@ function removeUserFromConference(userId, conferenceId) {
 }
 
 function updateUserName(id, name) {
-  const stmt = db.prepare('UPDATE users SET name = ? WHERE id = ?');
-  const result = stmt.run(name, id);
-  return result.changes > 0;
+  return renameLoginIdentity('user', id, name);
 }
 
 function updateConferenceName(id, name) {
@@ -1879,9 +1914,7 @@ function updateFeedBridgeEndpoint(feedId, config = {}) {
 }
 
 function updateFeedName(id, name) {
-  const stmt = db.prepare('UPDATE feeds SET name = ? WHERE id = ?');
-  const result = stmt.run(name, id);
-  return result.changes > 0;
+  return renameLoginIdentity('feed', id, name);
 }
 
 function updateFeedPassword(id, password) {
@@ -2206,23 +2239,26 @@ function getApplePttRegistrationsForUsers(userIds, channelUUID = null) {
 }
 
 function ensureDefaultAdmin() {
-  const existingAdmin = db.prepare('SELECT id FROM users WHERE is_admin = 1 LIMIT 1').get();
-  if (existingAdmin) return existingAdmin.id;
+  return db.transaction(() => {
+    const existingAdmin = db.prepare('SELECT id FROM users WHERE is_admin = 1 LIMIT 1').get();
+    if (existingAdmin) return existingAdmin.id;
 
-  const existingUser = db.prepare('SELECT id FROM users WHERE name = ?').get('admin');
-  if (existingUser) {
-    db.prepare('UPDATE users SET is_admin = 1, is_superadmin = 1, admin_must_change = 1 WHERE id = ?')
-      .run(existingUser.id);
-    return existingUser.id;
-  }
+    const existingUser = getUserByName('admin');
+    if (existingUser) {
+      db.prepare('UPDATE users SET is_admin = 1, is_superadmin = 1, admin_must_change = 1 WHERE id = ?')
+        .run(existingUser.id);
+      return existingUser.id;
+    }
 
-  const hash = bcrypt.hashSync('talktom3', 10);
-  const stmt = db.prepare(`
-    INSERT INTO users (name, password, is_admin, is_superadmin, admin_must_change)
-    VALUES (?, ?, 1, 1, 1)
-  `);
-  const result = stmt.run('admin', hash);
-  return result.lastInsertRowid;
+    assertLoginNameAvailable('admin', 'user');
+    const hash = bcrypt.hashSync('talktom3', 10);
+    const stmt = db.prepare(`
+      INSERT INTO users (name, password, is_admin, is_superadmin, admin_must_change)
+      VALUES (?, ?, 1, 1, 1)
+    `);
+    const result = stmt.run('admin', hash);
+    return result.lastInsertRowid;
+  }).immediate();
 }
 
 function normalizeUserTargetAudioStates(states = []) {

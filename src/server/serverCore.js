@@ -3094,8 +3094,8 @@ app.post("/login/sso", (req, res) => {
     return res.sendStatus(204);
   }
 
-  // Identity matching is deliberately exact. There is no implicit account
-  // creation and privileged/Guest profiles cannot be entered through SSO.
+  // Resolve a unique username without regard to casing. There is no implicit
+  // account creation and privileged/Guest profiles cannot be entered through SSO.
   const user = getUserByName(resolved.identity);
   if (!user || user.is_guest_profile || user.is_superadmin) {
     clearBrowserSession(req, res);
@@ -4980,7 +4980,7 @@ app.post("/users", requireAdmin, (req, res) => {
     scheduleAdminStatusBroadcast("user-created");
     res.json({ id });
   } catch (err) {
-    if (err.message.includes("UNIQUE")) {
+    if (err.code === "SQLITE_CONSTRAINT_UNIQUE" || err.message.includes("UNIQUE")) {
       res.status(409).json({ error: "Username already exists" });
     } else {
       res.status(500).json({ error: "Internal server error" });
@@ -6070,7 +6070,7 @@ app.put("/users/:id", requireAdmin, (req, res) => {
     scheduleAdminStatusBroadcast("user-renamed");
     res.sendStatus(204);
   } catch (err) {
-    if (err.message.includes("UNIQUE")) {
+    if (err.code === "SQLITE_CONSTRAINT_UNIQUE" || err.message.includes("UNIQUE")) {
       res.status(409).json({ error: "Username already exists" });
     } else {
       res.status(500).json({ error: "Internal server error" });
@@ -6196,7 +6196,7 @@ app.put('/feeds/:id', requireAdmin, (req, res) => {
     listeners.forEach(({ user_id }) => notifyTargetChange(user_id));
     res.sendStatus(204);
   } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || err.message.includes('UNIQUE')) {
       res.status(409).json({ error: 'Feed name already exists' });
     } else {
       console.error('Error renaming feed:', err);
