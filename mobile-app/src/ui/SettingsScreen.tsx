@@ -16,7 +16,6 @@ import { audioSessionStatusLabel, iosPttEnabled } from '../audio/policy';
 import { describeAudioRouteKind } from '../audio/routes';
 import { pttStatusLabel, shouldShowPttJoinBanner } from '../ptt/policy';
 import { loadTalkLinkToken } from '../talk/talkLink';
-import { describePttDevicesSummary } from '../ble/bindings';
 import { fgsStatusLabel } from '../background/fgs';
 import { FEED_DIM_DB_OPTIONS, dimDbFromSliderPosition, sliderPositionFromDimDb } from '../session/operatorAudio';
 import { mainButtonCandidates, mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
@@ -44,7 +43,6 @@ import { VolumeSlider } from './VolumeSlider';
 
 type SettingsPage =
   | { kind: 'session' }
-  | { kind: 'settings' }
   | { kind: 'profiles' }
   | { kind: 'layout' }
   | { kind: 'main-button' }
@@ -64,7 +62,7 @@ function pageKey(page: SettingsPage): string {
 }
 
 /**
- * The session sheet: Session is the root and Settings / Profiles are pushed from it. App.tsx
+ * The session sheet: Session is the root and settings categories / Profiles are pushed from it. App.tsx
  * presents it as a native sheet; the pages inside are a nested native stack, so slides and the
  * swipe back are iOS's own. Swiping back from Session closes the sheet. Mounted only while open,
  * so every opening starts on Session.
@@ -113,7 +111,6 @@ export function SessionSheet({ onClose }: { onClose: () => void }) {
   const pageActions = {
     showPttList: back,
     onClose,
-    onOpenSettings: () => push({ kind: 'settings' }),
     onOpenProfiles: () => push({ kind: 'profiles' }),
     onOpenLayout: () => push({ kind: 'layout' }),
     onOpenMainButton: () => push({ kind: 'main-button' }),
@@ -219,7 +216,6 @@ function SettingsSheet({
   onClose,
   scrollEnabled,
   onDimSliding,
-  onOpenSettings,
   onOpenProfiles,
   onOpenLayout,
   onOpenMainButton,
@@ -237,7 +233,6 @@ function SettingsSheet({
   onClose: () => void;
   scrollEnabled: boolean;
   onDimSliding: (active: boolean) => void;
-  onOpenSettings: () => void;
   onOpenProfiles: () => void;
   onOpenLayout: () => void;
   onOpenMainButton: () => void;
@@ -264,35 +259,16 @@ function SettingsSheet({
 
       <ScrollView scrollEnabled={scrollEnabled} style={styles.scroll} contentContainerStyle={styles.body}>
         {page.kind === 'session' ? (
-          <SessionPage onClose={onClose} onOpenSettings={onOpenSettings} onOpenProfiles={onOpenProfiles} />
+          <SessionPage
+            onClose={onClose}
+            onOpenLayout={onOpenLayout}
+            onOpenAudio={onOpenAudio}
+            onOpenAccessories={onOpenAccessories}
+            onOpenDebug={onOpenDebug}
+            onOpenProfiles={onOpenProfiles}
+          />
         ) : null}
         {page.kind === 'profiles' ? <ProfilesPage onClose={onClose} /> : null}
-
-        {page.kind === 'settings' ? (
-          <>
-            <SettingsSection>
-              <SettingsNavRow label="Layout" onPress={onOpenLayout} />
-              <SettingsNavRow label="Audio" onPress={onOpenAudio} />
-              <SettingsNavRow
-                label="Accessories"
-                value={describePttDevicesSummary(store.bleBindings, store.bleDevices)}
-                onPress={onOpenAccessories}
-              />
-              <SettingsNavRow label="Debug" onPress={onOpenDebug} />
-            </SettingsSection>
-            <SettingsSection>
-              <Pressable
-                style={styles.signOut}
-                onPress={() => {
-                  onClose();
-                  void session.leaveToProfiles();
-                }}
-              >
-                <Text style={styles.signOutText}>Sign Out</Text>
-              </Pressable>
-            </SettingsSection>
-          </>
-        ) : null}
 
         {page.kind === 'layout' ? (
           <LayoutSettingsPage onOpenMainButton={onOpenMainButton} onOpenArrange={onOpenArrange} />
@@ -324,26 +300,24 @@ function headerForPage(page: SettingsPage, deviceName?: string): { title: string
   switch (page.kind) {
     case 'session':
       return { title: 'Session', backLabel: 'Session' };
-    case 'settings':
-      return { title: 'Settings', backLabel: 'Session' };
     case 'profiles':
       return { title: 'Profiles', backLabel: 'Session' };
     case 'layout':
-      return { title: 'Layout', backLabel: 'Settings' };
+      return { title: 'Layout', backLabel: 'Session' };
     case 'main-button':
       return { title: 'Main button target', backLabel: 'Layout' };
     case 'arrange':
       return { title: 'Arrange targets', backLabel: 'Layout' };
     case 'audio':
-      return { title: 'Audio', backLabel: 'Settings' };
+      return { title: 'Audio', backLabel: 'Session' };
     case 'ptt':
-      return { title: 'Accessories', backLabel: 'Settings' };
+      return { title: 'Accessories', backLabel: 'Session' };
     case 'ptt-add':
       return { title: 'Add a device', backLabel: 'Accessories' };
     case 'ptt-device':
       return { title: deviceName || 'Accessory', backLabel: 'Accessories' };
     case 'debug':
-      return { title: 'Debug', backLabel: 'Settings' };
+      return { title: 'Debug', backLabel: 'Session' };
   }
 }
 

@@ -214,7 +214,7 @@ export function OperatorScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Session, ${connection.label}`}
-            accessibilityHint="Server, settings, disconnect, and profiles"
+            accessibilityHint="Server, layout, audio, accessories, debug, profiles, and disconnect"
             onPress={openSessionSheet}
             style={styles.identity}
           >
