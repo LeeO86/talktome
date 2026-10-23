@@ -288,12 +288,14 @@ impl DeckState {
         }
     }
 
-    /// Keeps an open menu or member layer from timing out.
+    /// Keeps an open menu, member or volume layer from timing out.
     pub fn touch_layer(&mut self) {
         if self.menu.is_some() {
             self.menu_touched = Instant::now();
         } else if self.member_layer {
             self.touch_member_layer();
+        } else if self.volume_layer {
+            self.touch_volume_layer();
         }
     }
 
@@ -684,6 +686,15 @@ fn command_roles(
                 if row[index].is_none() {
                     row[index] = role;
                 }
+            }
+        }
+        // The controls cover the NEXT slot of the idle row on 4-5 column
+        // decks. Reply gives way where there is one; on 4 columns MUTE does
+        // (holding a target or member still mutes it).
+        if key_pages > 1 && !row.contains(&Some(Role::NextPage)) {
+            let slot = if cols > 4 { cols - 1 } else { 1 };
+            if slot < cols {
+                row[slot] = Some(Role::NextPage);
             }
         }
     };
@@ -1723,6 +1734,41 @@ mod tests {
         assert_eq!(keys[10].role, Role::Target(TargetKey::User(10)));
         assert_eq!(keys[11].role, Role::Target(TargetKey::Feed(11)));
         assert_eq!(keys[12].role, Role::Empty);
+    }
+
+    #[test]
+    fn volume_layer_can_page_through_targets() {
+        let state = DeckState {
+            volume_layer: true,
+            selected: Some(TargetKey::User(0)),
+            ..DeckState::default()
+        };
+        // MK.2: 12 targets on 10 keys. NEXT takes Reply's place; + stays.
+        let keys = roles("mk2", 12, &state);
+        assert_eq!(keys[3], Role::VolumeUp);
+        assert_eq!(keys[4], Role::NextPage);
+        // Neo: 6 targets on 4 keys. NEXT takes MUTE's place; - and + stay.
+        let keys = roles("neo", 6, &state);
+        assert_eq!(keys[0], Role::VolumeToggle);
+        assert_eq!(keys[1], Role::NextPage);
+        assert_eq!(keys[2], Role::VolumeDown);
+        assert_eq!(keys[3], Role::VolumeUp);
+        // XL already has room next to the controls.
+        let keys = roles("xl", 40, &state);
+        assert_eq!(
+            keys.iter().filter(|role| **role == Role::NextPage).count(),
+            1
+        );
+        assert!(keys.contains(&Role::MuteSelected) && keys.contains(&Role::Reply));
+    }
+
+    #[test]
+    fn member_layer_can_page_through_members() {
+        let snapshot = conference_snapshot(6);
+        let state = member_state(Some(0));
+        let keys = layout(&geometry("neo"), &snapshot, &state, &options());
+        assert_eq!(keys[0].role, Role::MembersToggle);
+        assert_eq!(keys[1].role, Role::NextPage);
     }
 
     #[test]

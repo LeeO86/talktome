@@ -270,8 +270,10 @@ server-side mute. The conference fader still scales the whole conference.
 - `VOL` opens the volume layer: mute / − / + occupy the command row (on a
   Neo the whole top row becomes VOL, MUTE, −, +) and **targets do not
   move**. Tap a target to select it. Steps use `streamdeck.volume_step_db`
-  (default 3 dB). The layer closes after
-  `streamdeck.volume_layer_timeout_s`.
+  (default 3 dB). With more targets than keys, **NEXT** pages them: it
+  takes Reply's key on an MK.2 and MUTE's key on a Neo / Stream Deck +
+  (hold a target to mute it there). The layer closes after
+  `streamdeck.volume_layer_timeout_s`; paging keeps it open.
 - Conference **member mix** uses the same overlay pattern. **MEMBERS** is
   added on decks that still have a free command-row cell (MK.2, Original,
   XL, Plus XL). Neo / Mini / Plus open the layer with a **long-press on

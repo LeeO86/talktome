@@ -681,7 +681,11 @@ Every command is answered with the matching `-result` event carrying the
     short (Neo: VOL, MUTE, −, +). Target keys never move. Tap a target to
     select it; `streamdeck.volume_step_db` (default 3 dB; legacy
     `volume_step` 0–1 values become 3 dB); hold a target 600 ms toggles
-    mute. The layer times out after `streamdeck.volume_layer_timeout_s` (8 s).
+    mute. With more targets than keys the layer keeps a **NEXT** key: where
+    the controls cover the idle NEXT cell, Reply gives way (MK.2, Original),
+    or MUTE on 4-column decks (Neo, Plus); the member layer does the same.
+    The layer times out after `streamdeck.volume_layer_timeout_s` (8 s);
+    paging restarts the timer.
   - **Conference members**: a shared **member layer** lists the people in a
     conference on the target keys (name, hear/mute, per-member volume). It is
     exclusive with the volume layer and uses the same timeout. Tap a member

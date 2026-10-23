@@ -662,7 +662,8 @@ mod tests {
         };
         let keys = layout(&neo, &snapshot, &volume, &options);
         assert_eq!(keys[0].role, Role::VolumeToggle);
-        assert_eq!(keys[1].role, Role::MuteSelected);
+        // More targets than keys: NEXT replaces MUTE (hold a target to mute).
+        assert_eq!(keys[1].role, Role::NextPage);
         assert_eq!(keys[2].role, Role::VolumeDown);
         assert_eq!(keys[3].role, Role::VolumeUp);
         assert_eq!(keys[4].role, Role::Target(TargetKey::User(0)));
