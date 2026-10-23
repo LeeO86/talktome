@@ -244,9 +244,9 @@ server-side mute. The conference fader still scales the whole conference.
   the left, **VOL** next to it, **NEXT** (when there are more targets than
   keys) one left of **Reply**, and **Reply** at the far right. Reply shows
   the conference (or target) being talked to, not the caller name.
-- **Tap status to open the menu.** The deck switches to a page of its own
-  with three keys. **PRODUCTION** and **INFO** carry a › in the corner:
-  they open another screen.
+- **Tap status to open the menu.** The deck switches to a page of its own:
+  **CLEAR / locks** sits next to status in the top row, and **PRODUCTION**
+  and **INFO** (same colour as the MENU key) open another screen.
   - **PRODUCTION** lists your productions. The active one is highlighted
     ("current"). Tap another production to switch to it: talking stops,
     the targets of the new production load, and the choice is saved as

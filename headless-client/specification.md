@@ -650,11 +650,11 @@ Every command is answered with the matching `-result` event carrying the
     command row holds only status and **NEXT** when a page does not fit;
     every other key is blank. Status reads **MENU / close** on the root and
     **PRODUCTION / back** or **INFO / back** on a sub-page; a tap goes up one
-    level. The root lists three entries on the target keys (lowest rows,
-    left to right), so it fits every visual deck down to the Mini:
-    **PRODUCTION** and **INFO** show only their title and a › chevron in
-    the bottom-right corner (they open another screen); they carry no
-    status text.
+    level. The root lists two entries on the target keys (lowest rows,
+    left to right), so it fits every visual deck down to the Mini.
+    On the root, **CLEAR / locks** sits next to status in the command row;
+    **PRODUCTION** and **INFO** use the status key's menu colour and show
+    only their title (they open another screen).
     - **PRODUCTION** opens the production page. It lists the user's
       productions (`GET /users/:id/productions`, refreshed after
       `available-productions-updated`) in server order; the active one is

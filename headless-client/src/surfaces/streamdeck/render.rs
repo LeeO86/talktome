@@ -162,25 +162,6 @@ impl Renderer {
             }
             Badge::OnAir => fill_rect(image, x, y, size, size, palette::WHITE),
             Badge::Incoming => fill_rect(image, x, y, size, size, palette::WHITE),
-            Badge::Submenu => {
-                // A "›" drawn in the bottom-right corner, two strokes meeting at the tip.
-                let (_, h) = image.dimensions();
-                let half = (w as f32 * 0.09).max(4.0) as u32;
-                let stroke = (w as f32 * 0.035).max(2.0) as u32;
-                let x0 = w - margin - half - stroke;
-                let y0 = h - margin - 2 * half - stroke;
-                for t in 0..=half {
-                    fill_rect(image, x0 + t, y0 + t, stroke, stroke, palette::IDLE_TEXT);
-                    fill_rect(
-                        image,
-                        x0 + t,
-                        y0 + 2 * half - t,
-                        stroke,
-                        stroke,
-                        palette::IDLE_TEXT,
-                    );
-                }
-            }
         }
     }
 

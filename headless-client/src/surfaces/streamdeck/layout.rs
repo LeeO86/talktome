@@ -60,8 +60,6 @@ pub enum Badge {
     Muted,
     OnAir,
     Incoming,
-    /// Chevron in the bottom-right corner: the key opens another screen.
-    Submenu,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,16 +122,15 @@ pub enum Role {
 /// Pages of the menu opened from the status key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuPage {
-    /// Entries: Production, Clear locks, Info.
+    /// Entries: Production, Info; CLEAR sits next to status.
     Root,
     Productions,
     Info,
 }
 
 /// Root menu entries, in key order.
-const MENU_ENTRIES: [Role; 3] = [
+const MENU_ENTRIES: [Role; 2] = [
     Role::Menu(MenuPage::Productions),
-    Role::ClearLocks,
     Role::Menu(MenuPage::Info),
 ];
 
@@ -692,8 +689,12 @@ fn command_roles(
     };
 
     if state.menu.is_some() {
-        // Menu pages are pages of their own: status = back, paging; nothing else.
+        // Menu pages are pages of their own: status = back, CLEAR next to it
+        // on the root, paging; nothing else.
         row[0] = Some(Role::Status);
+        if state.menu == Some(MenuPage::Root) && cols > 2 {
+            row[1] = Some(Role::ClearLocks);
+        }
         if key_pages > 1 && cols > 1 {
             row[cols - 1] = Some(Role::NextPage);
         }
@@ -1078,9 +1079,8 @@ fn menu_entry_appearance(page: MenuPage) -> Appearance {
         MenuPage::Info => "INFO",
         MenuPage::Root => "MENU",
     };
-    let mut a = Appearance::simple(title, palette::IDLE);
-    a.badge = Some(Badge::Submenu);
-    a
+    // Same look as the MENU / back key: these keys move between menu screens.
+    Appearance::simple(title, palette::SELECTED)
 }
 
 fn info_appearance(line: &InfoLine) -> Appearance {
@@ -1462,21 +1462,17 @@ mod tests {
         assert_eq!(keys[0].role, Role::Status);
         assert_eq!(keys[0].appearance.title, "MENU");
         assert_eq!(keys[0].appearance.subtitle, "close");
-        // Only status in the command row: no VOL, NEXT, MEMBERS or Reply.
-        assert!(keys[1..5].iter().all(|key| key.role == Role::Empty));
+        // CLEAR next to status; no VOL, NEXT, MEMBERS or Reply.
+        assert_eq!(keys[1].role, Role::ClearLocks);
+        assert!(keys[2..5].iter().all(|key| key.role == Role::Empty));
         assert_eq!(keys[10].role, Role::Menu(MenuPage::Productions));
-        // Sub-menus carry no status text, only the "opens a screen" chevron.
-        assert_eq!(keys[10].appearance.subtitle, "");
-        assert_eq!(keys[10].appearance.badge, Some(Badge::Submenu));
-        assert_eq!(keys[12].appearance.subtitle, "");
-        assert_eq!(keys[12].appearance.badge, Some(Badge::Submenu));
-        assert_ne!(
-            keys[11].appearance.badge,
-            Some(Badge::Submenu),
-            "CLEAR is an action"
-        );
-        assert_eq!(keys[11].role, Role::ClearLocks);
-        assert_eq!(keys[12].role, Role::Menu(MenuPage::Info));
+        assert_eq!(keys[11].role, Role::Menu(MenuPage::Info));
+        // Sub-menu keys look like MENU / close: same colour, title only.
+        for key in &keys[10..12] {
+            assert_eq!(key.appearance.background, keys[0].appearance.background);
+            assert_eq!(key.appearance.subtitle, "");
+            assert_eq!(key.appearance.badge, None);
+        }
         assert!(!keys.iter().any(|key| matches!(key.role, Role::Target(_))));
     }
 
