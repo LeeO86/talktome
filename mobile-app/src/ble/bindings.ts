@@ -440,6 +440,30 @@ export function describePttDevicesSummary(
   return `${connected} of ${bindings.length} connected`;
 }
 
+/** Operator-screen warning for saved accessories that are not connected; null when all are. */
+export function missingAccessoryNotice(
+  bindings: readonly BleDeviceBinding[],
+  devices: readonly BleDeviceState[],
+  bluetoothKind?: BleConnectionKind,
+): string | null {
+  const missing = bindings.filter((binding) => !isBindingConnected(binding, devices));
+  if (missing.length === 0) {
+    return null;
+  }
+  const subject =
+    missing.length === 1
+      ? `${missing[0]?.name || 'PTT accessory'} not connected`
+      : `${missing.length} accessories not connected`;
+  if (bluetoothKind === 'unavailable' && missing.some((binding) => binding.kind === 'ble')) {
+    return `Bluetooth unavailable · ${subject}`;
+  }
+  const reconnecting = missing.some((binding) => {
+    const kind = devices.find((device) => device.id === binding.id)?.kind;
+    return kind === 'connecting' || kind === 'scanning';
+  });
+  return reconnecting ? `${subject} · Reconnecting…` : subject;
+}
+
 export function describeBleDeviceStatus(
   device: BleDeviceState | undefined,
   binding?: BleDeviceBinding,
