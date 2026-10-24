@@ -20,7 +20,9 @@ export class TalkToMeHttp {
 
     const response = await fetchImpl(joinUrl(this.options.baseUrl, path), {
       ...init,
-      credentials: init.credentials ?? 'include',
+      // iOS appends supplied Cookie headers to native cookies when credentials
+      // are included. Use our explicit jar alone once it contains a cookie.
+      credentials: init.credentials ?? (headers.has('Cookie') ? 'omit' : 'include'),
       headers,
     });
 

@@ -23,7 +23,7 @@
   <key>WKApplication</key>
   <true/>
   <key>WKCompanionAppBundleIdentifier</key>
-  <string>io.github.leeo86.talktome-mobile</string>
+  <string>$(INFOPLIST_KEY_WKCompanionAppBundleIdentifier)</string>
   <key>WKRunsIndependentlyOfCompanionApp</key>
   <false/>
   <key>WKSupportsLiveActivityLaunchAttributeTypes</key>

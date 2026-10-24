@@ -1,5 +1,8 @@
 import type { ExpoConfig } from 'expo/config';
 
+const { resolveIosSigning } = require('./scripts/ios-signing');
+const iosSigning = resolveIosSigning(__dirname);
+
 const config: ExpoConfig = {
   name: 'TalkToMe',
   slug: 'talktome-mobile',
@@ -11,11 +14,11 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     icon: './assets/icon.png',
-    bundleIdentifier: 'io.github.leeo86.talktome-mobile',
+    bundleIdentifier: iosSigning.bundleIdentifier,
     buildNumber: '27',
-    appleTeamId: '4876GGFAH9',
+    appleTeamId: iosSigning.appleTeamId,
     entitlements: {
-      'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
+      'com.apple.security.application-groups': [iosSigning.appGroup],
     },
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
@@ -98,6 +101,9 @@ const config: ExpoConfig = {
     './plugins/withTalkToMeOrientation',
     './plugins/withTalkToMePresence',
     './plugins/withTalkToMeXcodeWarnings',
+    ...(iosSigning.local || process.env.TALKTOME_IOS_SCENES === '1'
+      ? ['./plugins/withTalkToMeScenes']
+      : []),
     [
       'expo-splash-screen',
       {

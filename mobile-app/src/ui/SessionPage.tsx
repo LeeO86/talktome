@@ -106,7 +106,7 @@ export function SessionPage({
       <SettingsSection>
         <SettingsNavRow label="Profiles" onPress={onOpenProfiles} />
         <Pressable accessibilityRole="button" onPress={disconnect} style={[styles.row, styles.actionTop]}>
-          <Text style={styles.destructiveLabel}>Disconnect</Text>
+          <Text style={[styles.navLabel, styles.destructiveLabel]}>Disconnect</Text>
         </Pressable>
       </SettingsSection>
     </>

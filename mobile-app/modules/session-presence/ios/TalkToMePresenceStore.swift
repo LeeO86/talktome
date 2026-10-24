@@ -10,7 +10,8 @@ struct TalkToMePresenceState: Codable, Hashable {
 }
 
 enum TalkToMePresenceStore {
-  static let suiteName = "group.io.github.leeo86.talktome-mobile"
+  static let suiteName = Bundle.main.object(forInfoDictionaryKey: "TalkToMeAppGroup") as? String
+    ?? "group.io.github.leeo86.talktome-mobile"
   static let snapshotKey = "talktome.presence.snapshot"
   /// Builds 15/16 held a process-lifetime file lock here so the widget could probe
   /// liveness. iOS kills an app that holds a lock on a shared-container file when it

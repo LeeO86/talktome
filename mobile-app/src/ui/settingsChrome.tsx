@@ -289,7 +289,6 @@ function makeSettingsStyles(palette: SettingsPalette) {
       backgroundColor: palette.card,
       borderRadius: 12,
       overflow: 'hidden',
-      paddingBottom: 8,
     },
     sectionTitle: {
       color: palette.muted,
@@ -304,6 +303,7 @@ function makeSettingsStyles(palette: SettingsPalette) {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
+      minHeight: 48,
       paddingHorizontal: 16,
       paddingVertical: 12,
     },
@@ -339,6 +339,7 @@ function makeSettingsStyles(palette: SettingsPalette) {
     chevron: {
       color: palette.chevron,
       fontSize: 22,
+      lineHeight: 22,
       fontWeight: '500',
       marginLeft: 6,
       marginTop: -1,

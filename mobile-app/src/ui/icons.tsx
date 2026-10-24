@@ -171,10 +171,29 @@ export function ListenOnlyIcon({ color = colors.muted, size = 14 }: IconProps) {
 }
 
 export function ReplyArrowIcon({ color = colors.text, size = 18 }: IconProps) {
+  const stroke = Math.max(1.5, size * 0.1);
+  const headSize = size * 0.42;
   return (
     <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View style={[styles.replyStem, { backgroundColor: color }]} />
-      <View style={[styles.replyHead, { borderRightColor: color }]} />
+      <View
+        style={[
+          styles.replyStem,
+          { backgroundColor: color, left: size * 0.1, width: size * 0.8, height: stroke },
+        ]}
+      />
+      <View
+        style={[
+          styles.replyHead,
+          {
+            left: size * 0.18,
+            width: headSize,
+            height: headSize,
+            borderLeftWidth: stroke,
+            borderBottomWidth: stroke,
+            borderColor: color,
+          },
+        ]}
+      />
     </View>
   );
 }
@@ -312,9 +331,8 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   replyStem: {
-    width: 12,
-    height: 2,
-    marginLeft: 4,
+    position: 'absolute',
+    borderRadius: 1,
   },
   lockShackle: {
     position: 'absolute',
@@ -331,14 +349,7 @@ const styles = StyleSheet.create({
   },
   replyHead: {
     position: 'absolute',
-    left: 0,
-    width: 0,
-    height: 0,
-    borderTopWidth: 5,
-    borderBottomWidth: 5,
-    borderRightWidth: 7,
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
+    transform: [{ rotate: '45deg' }],
   },
   trashHandle: {
     position: 'absolute',
