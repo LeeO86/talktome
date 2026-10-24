@@ -30,7 +30,7 @@ import {
   rememberTlsPin,
   storedPinForHost,
 } from '../servers/tlsTrust';
-import { isRegisterConflict, isRegisterOk, SignalingClient } from '../signaling/client';
+import { isRegisterConflict, isRegisterOk, SignalingClient, SignalingConnectCancelledError } from '../signaling/client';
 import { stopForegroundService } from '../background/foregroundService';
 import { startBleNative } from '../ble/native';
 import { loadBlePreferences } from '../ble/preferences';
@@ -261,7 +261,7 @@ export class SessionController {
     useSessionStore.setState({ statusMessage: 'Signing in…' });
     const identity = await this.requireApi().login(input.username, input.password);
     await this.attachSessionCookie(input.serverAddress);
-    await this.finishIdentity(identity, input.force === true);
+    if (!(await this.finishIdentity(identity, input.force === true))) return;
     await this.persistCurrentProfile(input.password);
   }
 
@@ -279,7 +279,7 @@ export class SessionController {
     const identity = await this.requireApi().loginToken(input.token);
     useSessionStore.setState({ username: identity.name });
     await this.attachSessionCookie(input.serverAddress);
-    await this.finishIdentity(identity, input.force === true);
+    if (!(await this.finishIdentity(identity, input.force === true))) return;
     await this.persistCurrentProfile(input.token);
   }
 
@@ -289,7 +289,7 @@ export class SessionController {
     await this.probeAndHealth();
     useSessionStore.setState({ statusMessage: 'Signing in as guest…' });
     const identity = await this.requireApi().loginGuest(input.displayName);
-    await this.finishIdentity(identity, input.force === true);
+    if (!(await this.finishIdentity(identity, input.force === true))) return;
     await this.persistCurrentProfile();
   }
 
@@ -832,6 +832,7 @@ export class SessionController {
         });
       },
       onStateChange: (state) => {
+        if (this.signaling !== signaling) return;
         if (state.status === 'connected') {
           useSessionStore.setState({
             signalingStatus: 'connected',
@@ -861,6 +862,7 @@ export class SessionController {
         }
       },
       onReconnect: () => {
+        if (this.signaling !== signaling) return;
         void this.handleReconnect();
       },
       onUserList: (peers) => {
@@ -1133,14 +1135,22 @@ export class SessionController {
     }
   }
 
-  private async finishIdentity(identity: OperatorIdentity, force: boolean): Promise<void> {
+  private async finishIdentity(identity: OperatorIdentity, force: boolean): Promise<boolean> {
     const parsed = parseServerAddress(useSessionStore.getState().serverAddress);
     this.signaling?.disconnect();
-    this.signaling = new SignalingClient(parsed.baseUrl, () => this.cookies, Platform.OS);
-    this.bindSignaling(this.signaling);
+    const signaling = new SignalingClient(parsed.baseUrl, () => this.cookies, Platform.OS);
+    this.signaling = signaling;
+    this.bindSignaling(signaling);
 
     useSessionStore.setState({ statusMessage: 'Connecting signaling…' });
-    await this.signaling.connect();
+    try {
+      await signaling.connect();
+    } catch (error) {
+      // Replacing or ending a pending login is silent and must not persist it.
+      if (error instanceof SignalingConnectCancelledError) return false;
+      throw error;
+    }
+    if (this.signaling !== signaling) return false;
     let productions = Array.isArray(identity.productions) ? identity.productions : [];
     const rememberedProductionId = useSessionStore.getState().productionId;
     const rememberedProductionName = useSessionStore.getState().productionName;
@@ -1148,10 +1158,11 @@ export class SessionController {
       productions.length === 0 || productions.some((item) => item.id === rememberedProductionId)
         ? rememberedProductionId
         : null;
-    const register = await this.signaling.register(identity, force, registerProductionId);
+    const register = await signaling.register(identity, force, registerProductionId);
+    if (this.signaling !== signaling) return false;
 
     if (isRegisterConflict(register)) {
-      this.signaling.disconnect();
+      signaling.disconnect();
       this.signaling = null;
       useSessionStore.setState({
         status: 'idle',
@@ -1170,8 +1181,9 @@ export class SessionController {
 
     const panelSettings = parsePanelSettings(register.panelSettings);
     if (panelSettings && Array.isArray(register.productions)) productions = parseProductions(register.productions);
-    this.lastSocketId = this.signaling.socketId;
+    this.lastSocketId = signaling.socketId;
     await this.refreshServerClientDefaults();
+    if (this.signaling !== signaling) return false;
     useSessionStore.setState({
       identity,
       productions,
@@ -1190,29 +1202,30 @@ export class SessionController {
       if (panelSettings?.storage[`activeProduction:${identity.id}`] && !serverSelectedProduction) {
         await this.mediaCoordinator.enterOperator(null);
         this.announceConnectionRecovery();
-        return;
+        return true;
       }
       const remembered = serverSelectedProduction ?? productions.find((item) => item.id === rememberedProductionId);
       if (remembered) {
         await this.mediaCoordinator.enterOperator(remembered);
         this.announceConnectionRecovery();
-        return;
+        return true;
       }
       if (rememberedProductionId == null && rememberedProductionName?.trim().toLowerCase() === 'default') {
         await this.mediaCoordinator.enterOperator(null);
         this.announceConnectionRecovery();
-        return;
+        return true;
       }
       useSessionStore.setState({
         status: 'choose-production',
         statusMessage: 'Choose a production',
       });
       this.announceConnectionRecovery();
-      return;
+      return true;
     }
 
     await this.mediaCoordinator.enterOperator(null);
     this.announceConnectionRecovery();
+    return true;
   }
 
   requireApi(): ApiClient {
