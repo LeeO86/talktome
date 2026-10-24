@@ -26,6 +26,7 @@ export const WEB_AVATAR = {
 const WALKIE_TALKIE = require('../../assets/icons/walkie-talkies-white.png') as ImageSourcePropType;
 const SPEAKER_ON = require('../../assets/icons/speaker-white.png') as ImageSourcePropType;
 const SPEAKER_MUTED = require('../../assets/icons/speaker-muted.png') as ImageSourcePropType;
+const REPLY = require('../../assets/icons/reply.png') as ImageSourcePropType;
 
 export function targetAvatarBackground(
   type: 'user' | 'guest' | 'conference' | 'feed',
@@ -171,31 +172,7 @@ export function ListenOnlyIcon({ color = colors.muted, size = 14 }: IconProps) {
 }
 
 export function ReplyArrowIcon({ color = colors.text, size = 18 }: IconProps) {
-  const stroke = Math.max(1.5, size * 0.1);
-  const headSize = size * 0.42;
-  return (
-    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
-      <View
-        style={[
-          styles.replyStem,
-          { backgroundColor: color, left: size * 0.1, width: size * 0.8, height: stroke },
-        ]}
-      />
-      <View
-        style={[
-          styles.replyHead,
-          {
-            left: size * 0.18,
-            width: headSize,
-            height: headSize,
-            borderLeftWidth: stroke,
-            borderBottomWidth: stroke,
-            borderColor: color,
-          },
-        ]}
-      />
-    </View>
-  );
+  return <AssetIcon source={REPLY} color={color} size={size} />;
 }
 
 export function WalkieTalkieIcon({ color = colors.text, size = 22 }: IconProps) {
@@ -330,10 +307,6 @@ const styles = StyleSheet.create({
     height: 5,
     marginTop: 1,
   },
-  replyStem: {
-    position: 'absolute',
-    borderRadius: 1,
-  },
   lockShackle: {
     position: 'absolute',
     top: 0,
@@ -346,10 +319,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     borderRadius: 2,
-  },
-  replyHead: {
-    position: 'absolute',
-    transform: [{ rotate: '45deg' }],
   },
   trashHandle: {
     position: 'absolute',

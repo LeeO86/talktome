@@ -127,17 +127,30 @@ export function OperatorScreen() {
   const tallyColor = cameraTallyColor(store.cameraTally);
   const tallyLabel = cameraTallyLabel(store.cameraTally);
   const mainLocked = Boolean(mainKey && store.lockedTargetKeys.includes(mainKey));
+  const layerLabel = compact
+    ? `${(safeLayerIndex % layers) + 1}/${layers}`
+    : `Layer ${(safeLayerIndex % layers) + 1}/${layers}`;
 
   const layerButton =
     layers > 1 ? (
       <Pressable
         accessibilityRole="button"
+        accessibilityLabel={layerLabel}
         onPress={() => setLayerIndex((current) => (current + 1) % layers)}
         style={[styles.layer, compact && styles.layerCompact]}
       >
-        <Text style={styles.layerText}>
-          {compact ? `${(safeLayerIndex % layers) + 1}/${layers}` : `Layer ${(safeLayerIndex % layers) + 1}/${layers}`}
+        {/* Reserve the widest page label, including the jump from 9 to 10. */}
+        <Text
+          accessible={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+          style={[styles.layerText, styles.layerSizer]}
+        >
+          {compact ? `${layers}/${layers}` : `Layer ${layers}/${layers}`}
         </Text>
+        <View pointerEvents="none" style={styles.layerLabel}>
+          <Text style={styles.layerText}>{layerLabel}</Text>
+        </View>
       </Pressable>
     ) : null;
 
@@ -456,6 +469,15 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: '600',
     fontSize: 13,
+    fontVariant: ['tabular-nums'],
+  },
+  layerSizer: {
+    opacity: 0,
+  },
+  layerLabel: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   warn: {
     color: colors.danger,
