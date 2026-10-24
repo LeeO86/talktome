@@ -19,7 +19,6 @@ const {
 } = require("./automaticConfigBackup");
 const { normalizeRegisteredClientType, describeStatusClient, statusRemoteAddress } = require("./statusClient");
 const { resetPeerMediaTransportStatus, updatePeerMediaTransportStatus, describePeerMediaStatus } = require("./mediaStatus");
-const { ApplePttPushService } = require("./applePttPushService");
 const { buildGuestLoginUrl, buildLoginUrl, buildMediaNetworkQrTargets, normalizeConnectUrl, selectAdminQrUrl } = require("./qrConnectUrl");
 const { buildWebRtcListenInfos, resolveClientIceConfig } = require("./webrtcConfig");
 const { normalizeWebAccess, resolveWebAccess, createWebServer, requestConnectOrigin } = require("./webAccess");
@@ -225,10 +224,6 @@ const {
   getProductionFeedIdsForUser,
   getUsersForFeed,
   updateFeedBridgeEndpoint,
-  getOrCreateApplePttChannelForUser,
-  registerApplePttPushToken,
-  unregisterApplePttPushToken,
-  getApplePttRegistrationsForUsers,
   setUserAdminRole,
   updateUserBridgeEndpoint,
   exportDatabaseSnapshot,
@@ -370,7 +365,10 @@ function loadRuntimeConfig() {
   if (!fs.existsSync(configPath)) return null;
 
   try {
-    return JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    // Retire legacy Apple PTT settings from future saves and configuration backups.
+    delete config.applePtt;
+    return config;
   } catch (error) {
     console.warn(`[CONFIG] Failed to read ${configPath}: ${error.message}`);
     return null;
@@ -580,11 +578,6 @@ function resolveGuestLoginSettings(config, { createProfile = false, persist = fa
 
   return resolved;
 }
-
-const applePttPushService = new ApplePttPushService({
-  loadConfig: loadRuntimeConfig,
-  logger: console,
-});
 
 function normalizeMdnsSetting(value) {
   if (value === undefined || value === null) {
@@ -1816,59 +1809,6 @@ function getPeerActiveTalkInfo(peer) {
     targets,
     at: latestAt || Date.now(),
   };
-}
-
-function resolveAddressedUserIdsForTarget(target, speakerUserId) {
-  if (!target) {
-    return [];
-  }
-
-  if (target.type === "user") {
-    const targetUserId = resolveUserIdFromTargetIdentity(target.id);
-    if (!Number.isFinite(targetUserId) || Number(targetUserId) === Number(speakerUserId)) {
-      return [];
-    }
-    return [Number(targetUserId)];
-  }
-
-  if (target.type === "conference") {
-    const conferenceId = Number(target.id);
-    if (!Number.isFinite(conferenceId)) {
-      return [];
-    }
-
-    if (areMultipleProductionsEnabled()) {
-      const activeMembers = new Set();
-      for (const peer of peers.values()) {
-        if (!isPeerMemberOfConference(peer, conferenceId)) continue;
-        const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
-        const numericUserId = Number(userId);
-        if (Number.isFinite(numericUserId) && numericUserId !== Number(speakerUserId)) {
-          activeMembers.add(numericUserId);
-        }
-      }
-      return Array.from(activeMembers);
-    }
-
-    const primaryProductionId = getPrimaryProduction()?.id ?? null;
-    return Array.from(new Set(
-      (primaryProductionId === null ? [] : getProductionUsersForConference(conferenceId, primaryProductionId))
-        .map((member) => Number(member?.id))
-        .filter((userId) => Number.isFinite(userId) && Number(userId) !== Number(speakerUserId))
-    ));
-  }
-
-  return [];
-}
-
-function resolveAddressedUserIdsForTargets(targets, speakerUserId) {
-  const recipientUserIds = new Set();
-  for (const target of normalizeRuntimeTalkTargets(targets)) {
-    for (const userId of resolveAddressedUserIdsForTarget(target, speakerUserId)) {
-      recipientUserIds.add(Number(userId));
-    }
-  }
-  return Array.from(recipientUserIds);
 }
 
 function getRecipientKeyForPeer(peer) {
@@ -4067,13 +4007,9 @@ async function forceStopUserTransmission(userId) {
 
   const { socketId, peer } = found;
   const talkProducers = getPeerTalkProducers(peer, { includePaused: true });
-  const appleRecipientUserIds = [...new Set(talkProducers.flatMap((producer) => (
-    Array.isArray(producer?.__applePttRecipientUserIds) ? producer.__applePttRecipientUserIds : []
-  )))];
   const result = await stopPeerTransmission(peer, talkProducers);
 
   for (const producer of talkProducers) {
-    producer.__applePttRecipientUserIds = [];
     if (String(producer?.appData?.type || "").trim().toLowerCase() === "talk") {
       syncProducerRecipients({ producer, speakerSocketId: socketId });
     }
@@ -4090,12 +4026,6 @@ async function forceStopUserTransmission(userId) {
 
   syncPeerCompanionState(peer, { reason: "admin-stop-transmission" });
   broadcastRuntimeUserStates("admin-stop-transmission");
-  void sendApplePttServiceUpdate({
-    recipientUserIds: appleRecipientUserIds,
-    reason: "admin-stop-transmission",
-  }).catch((error) => {
-    console.warn("[APPLE-PTT] Failed to send forced-stop update:", error?.message || error);
-  });
 
   return result;
 }
@@ -7527,59 +7457,6 @@ function getUserList() {
   }));
 }
 
-function resolveApplePttRecipientUserIds({ type, targetId, targets = null, speakerSocketId }) {
-  const recipientUserIds = new Set();
-  const speakerPeer = peers.get(speakerSocketId);
-  const speakerUserId = speakerPeer?.userId != null ? Number(speakerPeer.userId) : null;
-
-  if (type === "talk") {
-    const resolvedTargets = Array.isArray(targets)
-      ? normalizeRuntimeTalkTargets(targets)
-      : getPeerActiveTalkTargets(speakerPeer);
-    for (const userId of resolveAddressedUserIdsForTargets(resolvedTargets, speakerUserId)) {
-      recipientUserIds.add(Number(userId));
-    }
-  } else if (type === "user") {
-    const targetUserId = resolveUserIdFromTargetIdentity(targetId);
-    if (Number.isFinite(targetUserId)) {
-      recipientUserIds.add(Number(targetUserId));
-    }
-  } else if (type === "conference") {
-    for (const userId of resolveAddressedUserIdsForTarget(
-      { type: "conference", id: targetId },
-      speakerUserId
-    )) {
-      recipientUserIds.add(Number(userId));
-    }
-  } else if (type === "feed") {
-    if (areMultipleProductionsEnabled()) {
-      for (const peer of peers.values()) {
-        if (!isOperatorPeer(peer)) continue;
-        if (!getEffectiveFeedIdsForPeer(peer).some((id) => String(id) === String(targetId))) continue;
-        const userId = peer.kind === "guest" ? peer.guestProfileUserId : peer.userId;
-        if (Number.isFinite(Number(userId))) recipientUserIds.add(Number(userId));
-      }
-    } else {
-      const listeners = getUsersForFeed(targetId) || [];
-      for (const listener of listeners) {
-        recipientUserIds.add(Number(listener.user_id));
-      }
-    }
-  }
-
-  if (speakerUserId != null) {
-    recipientUserIds.delete(speakerUserId);
-  }
-
-  return Array.from(recipientUserIds);
-}
-
-function resolveApplePttSpeakerName(socketId) {
-  const peer = peers.get(socketId);
-  const trimmed = typeof peer?.name === "string" ? peer.name.trim() : "";
-  return trimmed || "Talktome";
-}
-
 function resolveProducerRecipientDeliveriesForTargets({ targets, speakerSocketId }) {
   const deliveries = [];
   const seenRecipients = new Set();
@@ -7783,42 +7660,6 @@ function announceProducerToRecipients({
     speakerSocketId,
     forceAnnounce,
   }).map((delivery) => delivery.recipientSocketId);
-}
-
-async function sendApplePttSpeakerStarted({ type, targetId, targets = null, speakerSocketId, reason }) {
-  if (!applePttPushService.isConfigured()) {
-    return [];
-  }
-
-  const recipientUserIds = resolveApplePttRecipientUserIds({ type, targetId, targets, speakerSocketId });
-  if (recipientUserIds.length === 0) {
-    return recipientUserIds;
-  }
-
-  const registrations = getApplePttRegistrationsForUsers(recipientUserIds);
-  await applePttPushService.sendActiveRemoteParticipant({
-    registrations,
-    participantName: resolveApplePttSpeakerName(speakerSocketId),
-    reason,
-  });
-
-  return recipientUserIds;
-}
-
-async function sendApplePttServiceUpdate({ recipientUserIds, reason }) {
-  if (!applePttPushService.isConfigured()) {
-    return;
-  }
-
-  if (!Array.isArray(recipientUserIds) || recipientUserIds.length === 0) {
-    return;
-  }
-
-  const registrations = getApplePttRegistrationsForUsers(recipientUserIds);
-  await applePttPushService.sendServiceUpdate({
-    registrations,
-    reason,
-  });
 }
 
 function emitUserListToOperators() {
@@ -8154,58 +7995,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("request-apple-ptt-bootstrap", (callback = () => {}) => {
-    const peer = peers.get(socket.id);
-    if (!peer || peer.kind !== "user" || peer.userId == null) {
-      return callback({ ok: false, error: "Peer not registered" });
-    }
-
-    const runtimeConfig = loadRuntimeConfig() || {};
-    if (runtimeConfig.applePtt?.enabled !== true) {
-      return callback({ ok: true, enabled: false });
-    }
-
-    const channel = getOrCreateApplePttChannelForUser(peer.userId, "Talktome");
-    callback({
-      ok: true,
-      enabled: true,
-      channelUUID: channel.channel_uuid,
-      channelName: channel.channel_name,
-    });
-  });
-
-  socket.on("register-apple-ptt-push-token", ({ channelUUID, pushToken } = {}, callback = () => {}) => {
-    const peer = peers.get(socket.id);
-    if (!peer || peer.kind !== "user" || peer.userId == null) {
-      return callback({ ok: false, error: "Peer not registered" });
-    }
-
-    if (typeof channelUUID !== "string" || !channelUUID.trim()) {
-      return callback({ ok: false, error: "Missing channelUUID" });
-    }
-
-    if (typeof pushToken !== "string" || !/^[0-9a-f]+$/i.test(pushToken)) {
-      return callback({ ok: false, error: "Invalid pushToken" });
-    }
-
-    registerApplePttPushToken(peer.userId, channelUUID.trim(), pushToken.toLowerCase());
-    callback({ ok: true });
-  });
-
-  socket.on("unregister-apple-ptt-push-token", ({ channelUUID } = {}, callback = () => {}) => {
-    const peer = peers.get(socket.id);
-    if (!peer || peer.kind !== "user" || peer.userId == null) {
-      return callback({ ok: false, error: "Peer not registered" });
-    }
-
-    if (typeof channelUUID !== "string" || !channelUUID.trim()) {
-      return callback({ ok: false, error: "Missing channelUUID" });
-    }
-
-    unregisterApplePttPushToken(peer.userId, channelUUID.trim());
-    callback({ ok: true });
-  });
-
   socket.on('panel-client-state', (payload = {}) => {
     remotePanels.report(peers.get(socket.id), payload);
   });
@@ -8293,7 +8082,7 @@ io.on("connection", (socket) => {
     broadcastRuntimeUserStates("ptt-state");
   });
 
-  socket.on("talk-targets-updated", async (payload = {}) => {
+  socket.on("talk-targets-updated", (payload = {}) => {
     const peer = peers.get(socket.id);
     if (!isOperatorPeer(peer)) {
       return;
@@ -8330,25 +8119,6 @@ io.on("connection", (socket) => {
       talkProducers.forEach((producer) => {
         syncProducerRecipients({ producer, speakerSocketId: socket.id });
       });
-    }
-
-    const activeTalkProducers = getPeerActiveTalkProducers(peer)
-      .filter((producer) => String(producer?.appData?.type || "").trim().toLowerCase() === "talk");
-
-    if (isPersistentUserPeer(peer) && activeTalkProducers.length > 0 && normalizedTargets.length > 0) {
-      try {
-        const recipientUserIds = await sendApplePttSpeakerStarted({
-          type: "talk",
-          targets: normalizedTargets,
-          speakerSocketId: socket.id,
-          reason: "talk-targets-updated",
-        });
-        activeTalkProducers.forEach((producer) => {
-          producer.__applePttRecipientUserIds = recipientUserIds;
-        });
-      } catch (error) {
-        console.warn("[PTT] Failed to update Apple PTT recipients for talk-targets-updated:", error?.message || error);
-      }
     }
 
     syncPeerCompanionState(peer, { reason: "talk-targets-updated" });
@@ -9070,18 +8840,10 @@ io.on("connection", (socket) => {
             + `recipients=${initialRecipientSocketIds.length}`
           );
 
-          const applePttRecipientUserIds = await sendApplePttSpeakerStarted({
-            type,
-            targetId,
-            targets: type === "talk" ? getPeerActiveTalkTargets(peer) : null,
-            speakerSocketId: socket.id,
-            reason: "producer-started",
-          });
           //----------------------------------------------------------------
           // 4️⃣  Cleanup listener
           //----------------------------------------------------------------
           producer.appData = appData;  // store once
-          producer.__applePttRecipientUserIds = applePttRecipientUserIds;
           producer.observer.on("pause", () => {
             syncPeerCompanionState(peer, { reason: "produce-paused" });
             broadcastRuntimeUserStates("produce-paused");
@@ -9100,17 +8862,6 @@ io.on("connection", (socket) => {
               `[ROUTE] Re-announced resumed producer ${producer.id} for ${type} ${targetId ?? ""} `
               + `recipients=${resumedRecipientSocketIds.length}`
             );
-            void sendApplePttSpeakerStarted({
-              type,
-              targetId,
-              targets: type === "talk" ? getPeerActiveTalkTargets(peer) : null,
-              speakerSocketId: socket.id,
-              reason: "producer-resumed",
-            }).then((recipientUserIds) => {
-              producer.__applePttRecipientUserIds = recipientUserIds;
-            }).catch((error) => {
-              console.warn("[PRODUCE] Failed to send Apple PTT resume update:", error?.message || error);
-            });
           });
 
           producer.on("close", () => {

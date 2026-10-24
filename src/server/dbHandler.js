@@ -1095,16 +1095,6 @@ function exportDatabaseSnapshot() {
       FROM feed_bridge_endpoints
       ORDER BY feed_id
     `).all(),
-    applePttChannels: db.prepare(`
-      SELECT user_id, channel_uuid, channel_name, updated_at
-      FROM apple_ptt_channels
-      ORDER BY user_id
-    `).all(),
-    applePttRegistrations: db.prepare(`
-      SELECT user_id, channel_uuid, push_token, created_at, updated_at
-      FROM apple_ptt_registrations
-      ORDER BY user_id, channel_uuid, push_token
-    `).all(),
   };
 }
 
@@ -1124,8 +1114,6 @@ function importDatabaseSnapshot(snapshot) {
   const userTargetAudioState = Array.isArray(snapshot.userTargetAudioState) ? snapshot.userTargetAudioState : [];
   const userBridgeEndpoints = Array.isArray(snapshot.userBridgeEndpoints) ? snapshot.userBridgeEndpoints : [];
   const feedBridgeEndpoints = Array.isArray(snapshot.feedBridgeEndpoints) ? snapshot.feedBridgeEndpoints : [];
-  const applePttChannels = Array.isArray(snapshot.applePttChannels) ? snapshot.applePttChannels : [];
-  const applePttRegistrations = Array.isArray(snapshot.applePttRegistrations) ? snapshot.applePttRegistrations : [];
   const productions = Array.isArray(snapshot.productions) ? snapshot.productions : [];
   const productionUsers = Array.isArray(snapshot.productionUsers) ? snapshot.productionUsers : [];
   const hasProductionScopeCollections = Array.isArray(snapshot.productionConferences)
@@ -1158,8 +1146,6 @@ function importDatabaseSnapshot(snapshot) {
     db.prepare('DELETE FROM production_users').run();
     db.prepare('DELETE FROM productions').run();
     db.prepare('DELETE FROM user_target_order').run();
-    db.prepare('DELETE FROM apple_ptt_registrations').run();
-    db.prepare('DELETE FROM apple_ptt_channels').run();
     db.prepare('DELETE FROM user_user_targets').run();
     db.prepare('DELETE FROM user_conf_targets').run();
     db.prepare('DELETE FROM user_feed_targets').run();
@@ -1243,14 +1229,6 @@ function importDatabaseSnapshot(snapshot) {
         updated_at
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const insertApplePttChannel = db.prepare(`
-      INSERT INTO apple_ptt_channels (user_id, channel_uuid, channel_name, updated_at)
-      VALUES (?, ?, ?, ?)
-    `);
-    const insertApplePttRegistration = db.prepare(`
-      INSERT INTO apple_ptt_registrations (user_id, channel_uuid, push_token, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
     `);
     const insertProduction = db.prepare(`
       INSERT INTO productions (id, name, is_primary, created_at, updated_at)
@@ -1346,25 +1324,6 @@ function importDatabaseSnapshot(snapshot) {
         Number(row.target_id),
         row.muted ? 1 : 0,
         Number(row.volume),
-        String(row.updated_at)
-      );
-    });
-
-    applePttChannels.forEach((row) => {
-      insertApplePttChannel.run(
-        Number(row.user_id),
-        String(row.channel_uuid),
-        String(row.channel_name),
-        String(row.updated_at)
-      );
-    });
-
-    applePttRegistrations.forEach((row) => {
-      insertApplePttRegistration.run(
-        Number(row.user_id),
-        String(row.channel_uuid),
-        String(row.push_token),
-        String(row.created_at),
         String(row.updated_at)
       );
     });
@@ -2167,81 +2126,6 @@ function getUsersForFeed(feedId) {
   return db.prepare('SELECT user_id FROM user_feed_targets WHERE feed_id = ?').all(feedId);
 }
 
-function getOrCreateApplePttChannelForUser(userId, channelName = 'Talktome') {
-  const existing = db.prepare(`
-    SELECT user_id, channel_uuid, channel_name
-    FROM apple_ptt_channels
-    WHERE user_id = ?
-  `).get(userId);
-
-  const normalizedName = String(channelName || 'Talktome').trim() || 'Talktome';
-  const now = new Date().toISOString();
-
-  if (existing) {
-    if (existing.channel_name !== normalizedName) {
-      db.prepare(`
-        UPDATE apple_ptt_channels
-        SET channel_name = ?, updated_at = ?
-        WHERE user_id = ?
-      `).run(normalizedName, now, userId);
-      existing.channel_name = normalizedName;
-    }
-    return existing;
-  }
-
-  const channelUUID = crypto.randomUUID();
-  db.prepare(`
-    INSERT INTO apple_ptt_channels (user_id, channel_uuid, channel_name, updated_at)
-    VALUES (?, ?, ?, ?)
-  `).run(userId, channelUUID, normalizedName, now);
-
-  return {
-    user_id: userId,
-    channel_uuid: channelUUID,
-    channel_name: normalizedName,
-  };
-}
-
-function registerApplePttPushToken(userId, channelUUID, pushToken) {
-  const now = new Date().toISOString();
-  db.prepare(`
-    INSERT INTO apple_ptt_registrations (user_id, channel_uuid, push_token, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(push_token) DO UPDATE SET
-      user_id = excluded.user_id,
-      channel_uuid = excluded.channel_uuid,
-      updated_at = excluded.updated_at
-  `).run(userId, channelUUID, pushToken, now, now);
-}
-
-function unregisterApplePttPushToken(userId, channelUUID) {
-  db.prepare(`
-    DELETE FROM apple_ptt_registrations
-    WHERE user_id = ? AND channel_uuid = ?
-  `).run(userId, channelUUID);
-}
-
-function getApplePttRegistrationsForUsers(userIds, channelUUID = null) {
-  if (!Array.isArray(userIds) || userIds.length === 0) {
-    return [];
-  }
-
-  const placeholders = userIds.map(() => '?').join(', ');
-  const params = [...userIds];
-  let sql = `
-    SELECT user_id, channel_uuid, push_token
-    FROM apple_ptt_registrations
-    WHERE user_id IN (${placeholders})
-  `;
-
-  if (channelUUID) {
-    sql += ' AND channel_uuid = ?';
-    params.push(channelUUID);
-  }
-
-  return db.prepare(sql).all(...params);
-}
-
 function ensureDefaultAdmin() {
   return db.transaction(() => {
     const existingAdmin = db.prepare('SELECT id FROM users WHERE is_admin = 1 LIMIT 1').get();
@@ -2487,10 +2371,6 @@ module.exports = {
   getFeedIdsForUser,
   getProductionFeedIdsForUser,
   getUsersForFeed,
-  getOrCreateApplePttChannelForUser,
-  registerApplePttPushToken,
-  unregisterApplePttPushToken,
-  getApplePttRegistrationsForUsers,
   ensureDefaultAdmin,
   exportDatabaseSnapshot,
   importDatabaseSnapshot

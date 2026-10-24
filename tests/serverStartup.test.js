@@ -45,6 +45,7 @@ test('server starts without Git from another working directory and serves its bu
   fs.writeFileSync(path.join(appDir, 'config.json'), config);
   fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
     ...JSON.parse(config), defaultClientSettings: { allowTargetRearrange: false },
+    applePtt: { enabled: true, privateKey: 'retired-apple-key' },
   }));
   const env = {
     ...process.env, TALKTOME_DATA_DIR: dataDir, TALKTOME_NO_WIZARD: '1',
@@ -90,4 +91,31 @@ test('server starts without Git from another working directory and serves its bu
   assert.equal(await model.text(), fs.readFileSync(path.join(projectRoot, 'public/remotePanelState.js'), 'utf8'));
   assert.equal(fs.existsSync(path.join(dataDir, 'app.db')), true);
   execFileSync(process.execPath, [path.join(appDir, 'scripts/container-healthcheck.js')], { cwd: directory, env });
+
+  await t.test('legacy Apple PTT settings are excluded from exports and discarded when restoring backups', async () => {
+    const login = await fetch(`${origin}/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'admin', password: 'talktom3' }),
+    });
+    assert.equal(login.status, 200);
+    const headers = { Cookie: login.headers.get('set-cookie').split(';')[0] };
+    const exported = await fetch(`${origin}/admin/config/export`, { headers });
+    assert.equal(exported.status, 200);
+    const bundle = await exported.json();
+    assert.equal('applePtt' in bundle.serverConfig, false);
+    assert.equal(bundle.serverConfig.defaultClientSettings.allowTargetRearrange, false);
+
+    bundle.serverConfig.applePtt = { enabled: true, privateKey: 'imported-retired-key' };
+    const imported = await fetch(`${origin}/admin/config/import`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(bundle),
+    });
+    assert.equal(imported.status, 200);
+    assert.equal((await imported.json()).ok, true);
+    const saved = JSON.parse(fs.readFileSync(env.TALKTOME_CONFIG_PATH, 'utf8'));
+    assert.equal('applePtt' in saved, false);
+    assert.equal(saved.defaultClientSettings.allowTargetRearrange, false);
+  });
 });
