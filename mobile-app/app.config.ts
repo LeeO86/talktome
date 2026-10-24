@@ -1,6 +1,8 @@
 import type { ExpoConfig } from 'expo/config';
 
-const enableIosPtt = process.env.EXPO_PUBLIC_ENABLE_IOS_PTT === '1';
+const { resolveIosSigning } = require('./scripts/ios-signing');
+const iosSigning = resolveIosSigning(__dirname);
+const enableIosPtt = !iosSigning.local && process.env.EXPO_PUBLIC_ENABLE_IOS_PTT === '1';
 // Store / TestFlight builds must set EXPO_PUBLIC_APNS_ENVIRONMENT=production.
 // Development is only for a dev-signed client. app.config writes the key first so
 // the PTT plugin cannot leave a store build on the development APNs environment.
@@ -18,11 +20,11 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     icon: './assets/icon.png',
-    bundleIdentifier: 'io.github.leeo86.talktome-mobile',
+    bundleIdentifier: iosSigning.bundleIdentifier,
     buildNumber: '27',
-    appleTeamId: '4876GGFAH9',
+    appleTeamId: iosSigning.appleTeamId,
     entitlements: {
-      'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
+      'com.apple.security.application-groups': [iosSigning.appGroup],
       ...(enableIosPtt
         ? {
             'com.apple.developer.push-to-talk': true,
@@ -114,6 +116,9 @@ const config: ExpoConfig = {
     './plugins/withTalkToMeOrientation',
     './plugins/withTalkToMePresence',
     './plugins/withTalkToMeXcodeWarnings',
+    ...(iosSigning.local || process.env.TALKTOME_IOS_SCENES === '1'
+      ? ['./plugins/withTalkToMeScenes']
+      : []),
     [
       'expo-splash-screen',
       {

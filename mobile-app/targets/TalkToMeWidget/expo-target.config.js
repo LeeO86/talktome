@@ -1,5 +1,5 @@
 /** @type {import('@bacons/apple-targets/app.plugin').Config} */
-module.exports = {
+module.exports = (config) => ({
   type: 'widget',
   name: 'TalkToMeWidget',
   displayName: 'TalkToMe',
@@ -7,6 +7,6 @@ module.exports = {
   deploymentTarget: '17.0',
   frameworks: ['SwiftUI', 'WidgetKit', 'ActivityKit', 'AppIntents'],
   entitlements: {
-    'com.apple.security.application-groups': ['group.io.github.leeo86.talktome-mobile'],
+    'com.apple.security.application-groups': [`group.${config.ios.bundleIdentifier}`],
   },
-};
+});

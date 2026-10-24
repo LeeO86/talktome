@@ -177,6 +177,52 @@ describe('ApiClient', () => {
     await expect(client.fetchTargets(7, 2)).resolves.toEqual([]);
   });
 
+  it('saves target order without duplicating the native iOS session cookie', async () => {
+    const sessionCookie = 'talktome_session=order-session';
+    let nativeCookie = '';
+    const items = [
+      { targetType: 'conference', targetId: 2 },
+      { targetType: 'user', targetId: 11 },
+    ];
+    const { client } = clientWith(
+      mockFetch((url, init) => {
+        if (url.endsWith('/login')) {
+          nativeCookie = sessionCookie;
+          return jsonResponse(
+            200,
+            { id: 7, name: 'alice', kind: 'user', productions: [] },
+            { 'set-cookie': `${sessionCookie}; Path=/; HttpOnly; Secure` },
+          );
+        }
+        expect(url).toBe('https://intercom.local/api/v1/client/targets/order');
+        expect(init?.method).toBe('PUT');
+        expect(JSON.parse(String(init?.body))).toEqual({ productionId: 3, items });
+        // RCTNetworking loads native cookies, then uses NSMutableURLRequest.addValue
+        // for supplied headers. Cookie values are joined with a comma, not replaced.
+        const cookie = [
+          init?.credentials === 'omit' ? '' : nativeCookie,
+          new Headers(init?.headers).get('Cookie'),
+        ].filter(Boolean).join(',');
+        return cookie === sessionCookie
+          ? jsonResponse(200, { ok: true })
+          : jsonResponse(401, { error: 'User login required' });
+      }),
+    );
+
+    await client.login('alice', 'secret');
+    await expect(client.saveTargetOrder(3, items)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    [401, 'User login required', 'The server did not recognize your login. Disconnect and sign in again.'],
+    [403, 'User cannot arrange targets', 'This account cannot arrange targets.'],
+    [403, 'User is not a member of this production', 'This account is not assigned to the selected production.'],
+    [403, 'Forbidden', 'The server did not allow changing the target order.'],
+  ])('explains a target order rejection (%s, %s)', async (status, error, message) => {
+    const { client } = clientWith(mockFetch(() => jsonResponse(status, { error })));
+    await expect(client.saveTargetOrder(3, [])).rejects.toMatchObject({ message, statusCode: status });
+  });
+
   it('hides a raw server failure from the operator', async () => {
     const { client } = clientWith(
       mockFetch(async () =>

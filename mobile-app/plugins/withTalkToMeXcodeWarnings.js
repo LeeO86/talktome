@@ -1,8 +1,34 @@
-const { withXcodeProject } = require('expo/config-plugins');
+const { withPodfile, withXcodeProject } = require('expo/config-plugins');
 
 const STRIP_PHASE = '[Expo Dev Launcher] Strip Local Network Keys for Release';
+const POD_DEPLOYMENT_MARKER = '# talktome-pod-deployment-target';
+
+function alignPodDeploymentTargets(contents) {
+  if (contents.includes(POD_DEPLOYMENT_MARKER)) return contents;
+  const hook = 'post_install do |installer|';
+  if (!contents.includes(hook)) {
+    throw new Error('Podfile is missing post_install; update withTalkToMeXcodeWarnings.js');
+  }
+  return contents.replace(hook, `${hook}
+    ${POD_DEPLOYMENT_MARKER}
+    # Resource bundles can retain older podspec minimums rejected by newer Xcode SDKs.
+    minimum_ios = Gem::Version.new(podfile_properties['ios.deploymentTarget'] || '16.4')
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |build_config|
+        current = build_config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        if current && Gem::Version.new(current) < minimum_ios
+          build_config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = minimum_ios.to_s
+        end
+      end
+    end
+`);
+}
 
 function withTalkToMeXcodeWarnings(config) {
+  config = withPodfile(config, (mod) => {
+    mod.modResults.contents = alignPodDeploymentTargets(mod.modResults.contents);
+    return mod;
+  });
   return withXcodeProject(config, (mod) => {
     const project = mod.modResults;
     markStripPhaseAlwaysOutOfDate(project);
@@ -84,3 +110,4 @@ function isCxxStdlibFlag(flag) {
 }
 
 module.exports = withTalkToMeXcodeWarnings;
+module.exports.alignPodDeploymentTargets = alignPodDeploymentTargets;

@@ -1,12 +1,12 @@
 const { withEntitlementsPlist, withInfoPlist, withXcodeProject } = require('expo/config-plugins');
 
-const APP_GROUP = 'group.io.github.leeo86.talktome-mobile';
 const LIVE_ACTIVITY_ATTRIBUTES = 'TalkToMePresenceAttributes';
 
 function withTalkToMePresence(config) {
+  const appGroup = `group.${config.ios.bundleIdentifier}`;
   config = withEntitlementsPlist(config, (mod) => {
     const groups = new Set(mod.modResults['com.apple.security.application-groups'] ?? []);
-    groups.add(APP_GROUP);
+    groups.add(appGroup);
     mod.modResults['com.apple.security.application-groups'] = [...groups];
     return mod;
   });
@@ -14,21 +14,25 @@ function withTalkToMePresence(config) {
   config = withInfoPlist(config, (mod) => {
     mod.modResults.NSSupportsLiveActivities = true;
     mod.modResults.NSSupportsLiveActivitiesFrequentUpdates = true;
+    mod.modResults.TalkToMeAppGroup = appGroup;
     return mod;
   });
 
-  return withWatchLiveActivityLaunch(config);
+  return withWatchLiveActivityLaunch(config, appGroup);
 }
 
-function withWatchLiveActivityLaunch(config) {
+function withWatchLiveActivityLaunch(config, appGroup) {
   return withXcodeProject(config, (mod) => {
     const configs = mod.modResults.pbxXCBuildConfigurationSection();
     for (const entry of Object.values(configs)) {
       const settings = entry?.buildSettings;
-      if (!settings || !isWatchAppBuildSettings(settings)) {
+      if (!settings) {
         continue;
       }
-      settings.INFOPLIST_KEY_WKSupportsLiveActivityLaunchAttributeTypes = LIVE_ACTIVITY_ATTRIBUTES;
+      settings.TALKTOME_APP_GROUP = appGroup;
+      if (isWatchAppBuildSettings(settings)) {
+        settings.INFOPLIST_KEY_WKSupportsLiveActivityLaunchAttributeTypes = LIVE_ACTIVITY_ATTRIBUTES;
+      }
     }
     return mod;
   });

@@ -148,33 +148,48 @@ export function OperatorScreen() {
         !mainTarget && styles.replyDisabled,
       ]}
     >
-      {mainLocked ? (
-        <LockIcon color={colors.text} size={store.bigMainButton ? 28 : 22} />
-      ) : mainButton.mode === 'target' ? (
-        <WalkieTalkieIcon
-          color={mainTarget ? colors.text : 'rgba(255,255,255,0.38)'}
-          size={store.bigMainButton ? 32 : 22}
-        />
-      ) : (
-        <ReplyArrowIcon
-          color={mainTarget ? colors.text : 'rgba(255,255,255,0.38)'}
-          size={store.bigMainButton ? 28 : 22}
-        />
-      )}
-      <Text
-        numberOfLines={2}
+      <View
         style={[
-          styles.replyText,
-          replyBeside && styles.replyTextLandscape,
-          store.bigMainButton && styles.replyTextBig,
-          !mainTarget && styles.replyMuted,
+          styles.replyContent,
+          (store.bigMainButton || replyBeside) && styles.replyContentStacked,
         ]}
       >
-        {mainButton.label}
-      </Text>
-      {mainTarget && !compact ? (
-        <Text style={styles.replyHint}>{slideToLockHint(store.leftHanded)}</Text>
-      ) : null}
+        <View
+          style={[
+            styles.replyTitle,
+            store.bigMainButton && styles.replyTitleBig,
+            replyBeside && styles.replyTitleLandscape,
+          ]}
+        >
+          {mainLocked ? (
+            <LockIcon color={colors.text} size={store.bigMainButton ? 28 : 22} />
+          ) : mainButton.mode === 'target' ? (
+            <WalkieTalkieIcon
+              color={mainTarget ? colors.text : 'rgba(255,255,255,0.38)'}
+              size={store.bigMainButton ? 32 : 22}
+            />
+          ) : (
+            <ReplyArrowIcon
+              color={mainTarget ? colors.text : 'rgba(255,255,255,0.38)'}
+              size={store.bigMainButton ? 28 : 22}
+            />
+          )}
+          <Text
+            numberOfLines={2}
+            style={[
+              styles.replyText,
+              replyBeside && styles.replyTextLandscape,
+              store.bigMainButton && styles.replyTextBig,
+              !mainTarget && styles.replyMuted,
+            ]}
+          >
+            {mainButton.label}
+          </Text>
+        </View>
+        {mainTarget && !compact ? (
+          <Text style={styles.replyHint}>{slideToLockHint(store.leftHanded)}</Text>
+        ) : null}
+      </View>
     </HoldToTalk>
   );
 
@@ -535,10 +550,36 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.05)',
     borderColor: 'rgba(255,255,255,0.10)',
   },
+  replyContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+    minWidth: 0,
+    gap: 10,
+  },
+  replyContentStacked: {
+    flexDirection: 'column',
+    width: '100%',
+    gap: 6,
+  },
+  replyTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+    minWidth: 0,
+    gap: 10,
+  },
+  replyTitleBig: {
+    gap: 14,
+  },
+  replyTitleLandscape: {
+    flexDirection: 'column',
+  },
   replyText: {
     color: colors.text,
     fontSize: 20,
     fontWeight: '700',
+    flexShrink: 1,
   },
   replyTextLandscape: {
     fontSize: 14,
@@ -546,6 +587,7 @@ const styles = StyleSheet.create({
   },
   replyTextBig: {
     fontSize: 26,
+    textAlign: 'center',
   },
   replyMuted: {
     color: 'rgba(255,255,255,0.5)',
@@ -553,5 +595,6 @@ const styles = StyleSheet.create({
   replyHint: {
     color: colors.muted,
     fontSize: 11,
+    textAlign: 'center',
   },
 });

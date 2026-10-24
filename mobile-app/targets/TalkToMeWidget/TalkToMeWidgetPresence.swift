@@ -13,7 +13,8 @@ import WidgetKit
 /// the app clears it on `willTerminate` (still running) or on its next launch
 /// (swipe-killed while suspended).
 enum TalkToMeWidgetPresence {
-  static let suiteName = "group.io.github.leeo86.talktome-mobile"
+  static let suiteName = Bundle.main.object(forInfoDictionaryKey: "TalkToMeAppGroup") as? String
+    ?? "group.io.github.leeo86.talktome-mobile"
   static let snapshotKey = "talktome.presence.snapshot"
 
   static func disconnectedHomeEntry(date: Date = Date()) -> TalkToMeHomeEntry {

@@ -182,8 +182,20 @@ export class ApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ productionId, items }),
     });
-    if (response.status === 401 || response.status === 403) {
-      throw new ApiClientError('This account cannot arrange targets.', response.status);
+    if (response.status === 401) {
+      throw new ApiClientError(
+        'The server did not recognize your login. Disconnect and sign in again.',
+        401,
+      );
+    }
+    if (response.status === 403) {
+      const payload = await readJson<{ error?: unknown }>(response);
+      const message = payload?.error === 'User cannot arrange targets'
+        ? 'This account cannot arrange targets.'
+        : payload?.error === 'User is not a member of this production'
+          ? 'This account is not assigned to the selected production.'
+          : 'The server did not allow changing the target order.';
+      throw new ApiClientError(message, 403);
     }
     if (!response.ok) {
       throw await this.serverError(response);
