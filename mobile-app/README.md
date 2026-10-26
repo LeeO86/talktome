@@ -153,8 +153,8 @@ white glyph on black. Web-client icon assets are checked against `../public/`.
 
 The app's filtered Git history retains its original authors. To preserve
 per-commit attribution upstream, merge the PR with a merge commit rather than
-squashing it. See `AUTHORS`, `NOTICE` and `LICENSE` for contributor and source
-attribution. Research, prototype archives and standalone development-environment
+squashing it. The app uses the repository's [Apache-2.0 license](../LICENSE).
+See `AUTHORS` and `NOTICE` for contributor and source attribution. Research, prototype archives and standalone development-environment
 scripts are not part of this folder.
 
 Physical-device testing is still required for background audio, hardware PTT,

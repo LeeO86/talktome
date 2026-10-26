@@ -7,12 +7,17 @@ node_modules/
 .expo/
 dist/
 web-build/
+*.apk
+*.aab
+*.ipa
 expo-env.d.ts
 
 # Native
 .kotlin/
 *.orig.*
 *.jks
+*.keystore
+credentials.json
 *.p8
 *.p12
 *.key
