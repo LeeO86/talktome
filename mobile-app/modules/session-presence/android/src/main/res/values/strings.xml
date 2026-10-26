@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="talktome_session_widget_description">Shows who is talking, with Reply lock and Disconnect while you are connected.</string>
+</resources>

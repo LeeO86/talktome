@@ -1,0 +1,22 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.certtrust'
+version = '0.1.0'
+
+android {
+  namespace 'expo.modules.certtrust'
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+dependencies {
+  // TalkToMeTrust hooks RN fetch via OkHttpClientProvider. expo-modules-core
+  // depends on react-android as implementation, so it is not on this module's
+  // compile classpath unless we declare it.
+  compileOnly 'com.facebook.react:react-android'
+}

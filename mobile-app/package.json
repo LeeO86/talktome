@@ -1,0 +1,51 @@
+{
+  "name": "talktome-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "ios:local:prepare": "node scripts/ios-local-prepare.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@bacons/apple-targets": "^5.0.0",
+    "@config-plugins/react-native-webrtc": "15.0.2",
+    "@preeternal/react-native-cookie-manager": "^6.4.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~56.0.19",
+    "expo-camera": "~56.0.8",
+    "expo-dev-client": "~56.0.24",
+    "expo-keep-awake": "~56.0.3",
+    "expo-secure-store": "~56.0.4",
+    "expo-splash-screen": "~56.0.14",
+    "expo-status-bar": "~56.0.4",
+    "mediasoup-client": "3.22.0",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-screens": "~4.26.0",
+    "react-native-webrtc": "124.0.8",
+    "socket.io-client": "^4.8.1",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@types/react": "~19.2.2",
+    "babel-preset-expo": "~56.0.19",
+    "typescript": "~5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
+  }
+}
