@@ -44,3 +44,6 @@ yarn-error.*
 **/android/build/
 **/android/.cxx/
 **/.gradle/
+
+# Personal signing overrides
+ios.local.json

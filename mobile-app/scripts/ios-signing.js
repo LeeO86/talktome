@@ -6,9 +6,9 @@ function resolveIosSigning(projectRoot, env = process.env) {
   if (env.TALKTOME_IOS_LOCAL !== '1') {
     return {
       local: false,
-      bundleIdentifier: 'io.github.leeo86.talktome-mobile',
-      appleTeamId: '4876GGFAH9',
-      appGroup: 'group.io.github.leeo86.talktome-mobile',
+      bundleIdentifier: env.TALKTOME_IOS_BUNDLE_IDENTIFIER || 'com.example.talktome',
+      appleTeamId: env.TALKTOME_APPLE_TEAM_ID || undefined,
+      appGroup: `group.${env.TALKTOME_IOS_BUNDLE_IDENTIFIER || 'com.example.talktome'}`,
     };
   }
 
@@ -22,7 +22,7 @@ function resolveIosSigning(projectRoot, env = process.env) {
     !local ||
     typeof local.bundleIdentifier !== 'string' ||
     !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(local.bundleIdentifier) ||
-    local.bundleIdentifier === 'io.github.leeo86.talktome-mobile' ||
+    local.bundleIdentifier === (env.TALKTOME_IOS_BUNDLE_IDENTIFIER || 'com.example.talktome') ||
     typeof local.appleTeamId !== 'string' ||
     !/^[A-Z0-9]{10}$/.test(local.appleTeamId)
   ) {

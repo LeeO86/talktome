@@ -19,9 +19,21 @@ describe('local iOS signing', () => {
     writeLocal({ bundleIdentifier: 'com.example.private', appleTeamId: 'ABCDEFGHIJ' });
     expect(resolveIosSigning(root, {})).toEqual({
       local: false,
-      bundleIdentifier: 'io.github.leeo86.talktome-mobile',
-      appleTeamId: '4876GGFAH9',
-      appGroup: 'group.io.github.leeo86.talktome-mobile',
+      bundleIdentifier: 'com.example.talktome',
+      appleTeamId: undefined,
+      appGroup: 'group.com.example.talktome',
+    });
+  });
+
+  it('uses the publisher identity and derives the matching widget app group', () => {
+    expect(resolveIosSigning(root, {
+      TALKTOME_IOS_BUNDLE_IDENTIFIER: 'org.publisher.intercom',
+      TALKTOME_APPLE_TEAM_ID: 'ABCDEFGHIJ',
+    })).toEqual({
+      local: false,
+      bundleIdentifier: 'org.publisher.intercom',
+      appleTeamId: 'ABCDEFGHIJ',
+      appGroup: 'group.org.publisher.intercom',
     });
   });
 
@@ -44,7 +56,7 @@ describe('local iOS signing', () => {
   });
 
   it.each([
-    { bundleIdentifier: 'io.github.leeo86.talktome-mobile', appleTeamId: 'ABCDEFGHIJ' },
+    { bundleIdentifier: 'com.example.talktome', appleTeamId: 'ABCDEFGHIJ' },
     { bundleIdentifier: 'not a bundle id', appleTeamId: 'ABCDEFGHIJ' },
     { bundleIdentifier: 'com.example.private', appleTeamId: '' },
   ])('rejects an incomplete or non-personal local signing config: %j', config => {

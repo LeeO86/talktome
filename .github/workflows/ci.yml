@@ -150,3 +150,27 @@ jobs:
 
       - name: Test Rust
         run: cargo test --locked --manifest-path server-app/src-tauri/Cargo.toml --lib
+
+  mobile-app:
+    name: Mobile app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile-app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile-app/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Test
+        run: npm test
+      - name: Check TypeScript
+        run: npm run typecheck
+      - name: Resolve Expo configuration
+        run: npx expo config --type public --json > /dev/null

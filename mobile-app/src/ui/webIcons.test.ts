@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const iconsRoot = resolve(__dirname, '../../assets/icons');
-const referenceImages = resolve(__dirname, '../../../../reference/talktome/public/images');
+const referenceImages = resolve(__dirname, '../../../public/images');
 
 const WEB_UI_ICONS = {
   'walkie-talkies-white.png':

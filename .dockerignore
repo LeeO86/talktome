@@ -24,3 +24,6 @@ build
 worker
 *.test.js
 tests/
+
+# Mobile builds have their own Expo/EAS context.
+mobile-app/

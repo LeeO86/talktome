@@ -11,13 +11,13 @@
     "preview": {
       "distribution": "internal"
     },
-    "production": {}
+    "production": {
+      "environment": "production"
+    }
   },
   "submit": {
     "production": {
-      "ios": {
-        "ascAppId": "6804514280"
-      }
+      "ios": {}
     }
   }
 }

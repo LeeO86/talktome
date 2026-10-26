@@ -6,7 +6,7 @@ const iosSigning = resolveIosSigning(__dirname);
 const config: ExpoConfig = {
   name: 'TalkToMe',
   slug: 'talktome-mobile',
-  version: '1.0.0',
+  version: process.env.TALKTOME_MOBILE_VERSION || '1.0.0',
   orientation: 'default',
   icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
@@ -15,7 +15,7 @@ const config: ExpoConfig = {
     supportsTablet: true,
     icon: './assets/icon.png',
     bundleIdentifier: iosSigning.bundleIdentifier,
-    buildNumber: '28',
+    buildNumber: process.env.TALKTOME_MOBILE_BUILD_NUMBER || '28',
     appleTeamId: iosSigning.appleTeamId,
     entitlements: {
       'com.apple.security.application-groups': [iosSigning.appGroup],
@@ -49,8 +49,8 @@ const config: ExpoConfig = {
   },
   android: {
     // Android Java packages cannot contain a hyphen.
-    package: 'io.github.leeo86.talktomemobile',
-    versionCode: 28,
+    package: process.env.TALKTOME_ANDROID_PACKAGE || 'com.example.talktome',
+    versionCode: Number(process.env.TALKTOME_MOBILE_BUILD_NUMBER || 28),
     adaptiveIcon: {
       backgroundColor: '#000000',
       foregroundImage: './assets/android-icon-foreground.png',
@@ -116,10 +116,11 @@ const config: ExpoConfig = {
     './plugins/withTalkToMeSplash',
     './plugins/withTalkToMeAndroidIcons',
   ],
+  ...(process.env.TALKTOME_EXPO_OWNER ? { owner: process.env.TALKTOME_EXPO_OWNER } : {}),
   extra: {
-    eas: {
-      projectId: 'ae071885-3a15-4e42-950f-101152ef28be',
-    },
+    ...(process.env.TALKTOME_EAS_PROJECT_ID
+      ? { eas: { projectId: process.env.TALKTOME_EAS_PROJECT_ID } }
+      : {}),
   },
 };
 

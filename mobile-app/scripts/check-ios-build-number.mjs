@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const mobileRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ASC_APP_ID = process.env.APP_STORE_CONNECT_APP_ID || '6804514280';
-const BUNDLE_ID = 'io.github.leeo86.talktome-mobile';
+const ASC_APP_ID = process.env.APP_STORE_CONNECT_APP_ID;
+let BUNDLE_ID;
 
 function parseExpoConfig() {
   const output = execFileSync('npx', ['expo', 'config', '--json', '--type', 'public'], {
@@ -108,6 +108,7 @@ async function listAppStoreBuilds(version) {
   if (!token) {
     return { available: false, builds: [] };
   }
+  if (!ASC_APP_ID) throw new Error('APP_STORE_CONNECT_APP_ID is required with Apple API credentials');
   const url = new URL('https://api.appstoreconnect.apple.com/v1/builds');
   url.searchParams.set('filter[app]', ASC_APP_ID);
   url.searchParams.set('include', 'preReleaseVersion');
@@ -149,6 +150,8 @@ function easVersion(row) {
 }
 
 const config = parseExpoConfig();
+BUNDLE_ID = config.ios?.bundleIdentifier;
+if (!BUNDLE_ID) throw new Error('Missing iOS bundle identifier');
 const version = String(config.version ?? '');
 const localBuild = parseBuildNumber(config.ios?.buildNumber);
 if (!version || localBuild == null) {

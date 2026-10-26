@@ -1,0 +1,145 @@
+name: Mobile Android Builds
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Version to build and upload to a draft; empty uses Git version'
+        required: false
+        type: string
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - '.github/workflows/mobile-android-release.yml'
+      - 'mobile-app/**'
+      - 'scripts/resolve-build-version.js'
+      - 'scripts/upload-release-asset.sh'
+
+concurrency:
+  group: mobile-android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_PACKAGE: ${{ vars.TALKTOME_ANDROID_PACKAGE }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Resolve build version
+        id: version
+        env:
+          TALKTOME_BUILD_VERSION: ${{ inputs.release_version || '' }}
+        run: node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"
+      - name: Set mobile version
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: |
+          echo "TALKTOME_MOBILE_VERSION=${APP_VERSION%%[-+]*}" >> "$GITHUB_ENV"
+          echo "TALKTOME_MOBILE_BUILD_NUMBER=$((28 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "TALKTOME_ANDROID_PACKAGE=${ANDROID_PACKAGE:-com.example.talktome}" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile-app/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # ubuntu-latest already ships ANDROID_SDK_ROOT. setup-android@v3 then tries
+      # to install the obsolete `tools` package, which Google removed from the
+      # repository ("Failed to find package 'tools'").
+      - name: Use runner Android SDK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK" ]; then
+            echo "Android SDK not found at $SDK"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('mobile-app/package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+      - name: Install JS deps
+        working-directory: mobile-app
+        run: npm ci
+      - name: Prebuild Android
+        working-directory: mobile-app
+        run: npx expo prebuild --platform android --non-interactive
+      - name: Use debug signing for CI APK
+        working-directory: mobile-app
+        run: node scripts/ensure-android-ci-signing.mjs
+      - name: Assemble release APK
+        working-directory: mobile-app/android
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx3g
+        run: |
+          set -euo pipefail
+          attempt=1
+          until ./gradlew :app:assembleRelease --no-daemon; do
+            if [ "$attempt" -ge 3 ]; then
+              exit 1
+            fi
+            echo "assembleRelease failed (attempt ${attempt}/3); retrying after Maven backoff"
+            attempt=$((attempt + 1))
+            sleep $((20 * (attempt - 1)))
+          done
+      - name: Stage APK
+        id: apk
+        working-directory: mobile-app
+        run: |
+          set -euo pipefail
+          SRC="android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$SRC" ]; then
+            echo "Expected $SRC"
+            find android/app/build/outputs -type f -name '*.apk' || true
+            exit 1
+          fi
+          LABEL="$(npx expo config --json --type public | node -e '
+            let s = "";
+            process.stdin.on("data", (d) => { s += d; });
+            process.stdin.on("end", () => {
+              const c = JSON.parse(s.slice(s.indexOf("{")));
+              const build = c.android?.versionCode ?? c.ios?.buildNumber ?? 1;
+              process.stdout.write(`${c.version}-${build}`);
+            });
+          ')"
+          mkdir -p dist
+          NAME="TalkToMe-${LABEL}-android.apk"
+          cp "$SRC" "dist/${NAME}"
+          echo "path=${GITHUB_WORKSPACE}/mobile-app/dist/${NAME}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "Staged ${NAME}"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: TalkToMe-android
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_version != '')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.version }}
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          bash scripts/upload-release-asset.sh "$RELEASE_TAG" "$APK" "$RELEASE_TAG - macOS + Windows"
