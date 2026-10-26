@@ -68,7 +68,7 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.app_version }}
         run: |
           echo "TALKTOME_MOBILE_VERSION=${APP_VERSION%%[-+]*}" >> "$GITHUB_ENV"
-          echo "TALKTOME_MOBILE_BUILD_NUMBER=$((28 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "TALKTOME_MOBILE_BUILD_NUMBER=$((29 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
       - name: Require Expo credentials
         run: |
           test -n "$EXPO_TOKEN" || { echo 'Set repository secret EXPO_TOKEN'; exit 1; }

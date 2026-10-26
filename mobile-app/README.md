@@ -90,7 +90,8 @@ an active build when a newer workflow run arrives.
 All mobile workflows derive the marketing version from the repository's Git
 version
 (the numeric `x.y.z` portion) and set the mobile build number to
-`28 + GITHUB_RUN_NUMBER`. Reruns keep the same number; the iOS pre-check rejects
+`29 + GITHUB_RUN_NUMBER` (the first run is build 30). Local iOS and Android
+builds default to 30. Reruns keep the same number; the iOS pre-check rejects
 numbers already used or active in EAS, and also checks App Store Connect when
 API credentials are configured. Start a new workflow run rather than resubmitting
 a successful build. If moving to an existing app with a higher build counter,
