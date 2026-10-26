@@ -75,7 +75,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Prepare publisher identity and cloud build metadata
-        run: node scripts/prepare-eas-release.cjs
+        run: node scripts/prepare-eas-release.cjs ios
       - name: Pre-check iOS build number
         run: node scripts/check-ios-build-number.mjs
       - name: Build and optionally submit to TestFlight

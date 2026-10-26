@@ -22,8 +22,8 @@ const publisher = {
   TALKTOME_MOBILE_VERSION: '1.5.20',
   TALKTOME_MOBILE_BUILD_NUMBER: '50',
 };
-function prepare(env: Record<string, string>) {
-  prepareEasRelease(root, env);
+function prepare(env: Record<string, string>, platform = 'ios') {
+  prepareEasRelease(root, env, platform);
 }
 
 describe('EAS release handoff', () => {
@@ -42,4 +42,24 @@ describe('EAS release handoff', () => {
   it('refuses the development identity for a release', () => {
     expect(() => prepare({ ...publisher, TALKTOME_IOS_BUNDLE_IDENTIFIER: 'com.example.talktome' })).toThrow();
   });
+
+  it('prepares Android without requiring an Apple account or copying its identity', () => {
+    const android = {
+      TALKTOME_EXPO_OWNER: publisher.TALKTOME_EXPO_OWNER,
+      TALKTOME_EAS_PROJECT_ID: publisher.TALKTOME_EAS_PROJECT_ID,
+      TALKTOME_MOBILE_VERSION: publisher.TALKTOME_MOBILE_VERSION,
+      TALKTOME_MOBILE_BUILD_NUMBER: publisher.TALKTOME_MOBILE_BUILD_NUMBER,
+      TALKTOME_ANDROID_PACKAGE: 'org.publisher.intercom',
+    };
+    prepare(android, 'android');
+    const config = JSON.parse(readFileSync(join(root, 'eas.json'), 'utf8'));
+    expect(config.build.production.env).toEqual(android);
+    expect(config.build.production.env.TALKTOME_APPLE_TEAM_ID).toBeUndefined();
+  });
+
+  it.each(['com.example.talktome', 'org.publisher.intercom.sideload', 'org.publisher.bad-name'])(
+    'rejects a development, sideload or invalid Play package: %s', identifier => {
+      expect(() => prepare({ ...publisher, TALKTOME_ANDROID_PACKAGE: identifier }, 'android')).toThrow();
+    },
+  );
 });

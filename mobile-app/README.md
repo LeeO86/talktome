@@ -63,26 +63,39 @@ configuration checks alongside the existing server and desktop checks.
 tag/manual-version builds also upload the APK to the shared GitHub release
 draft. This APK uses debug signing for sideload testing. It is not a Play Store
 upload artifact. Set repository variable `TALKTOME_ANDROID_PACKAGE` to the
-publisher's final package name before distributing it; the development fallback
-is `com.example.talktome`.
+publisher's final Play package name before distributing it. The APK appends
+`.sideload` to that base (development fallback: `com.example.talktome.sideload`)
+so it can coexist with the differently signed Play app. Profiles are separate;
+the two installations do not update each other.
 
 **Mobile iOS EAS Release** starts when a GitHub release is published. It checks
 out that release's tag, builds in EAS Cloud and submits to App Store Connect /
 TestFlight. Manual dispatch accepts an existing tag in `release_version`; leave
 `submit` unchecked for a build without submission. App Store public release
 still requires the publisher's review/release process in App Store Connect.
-Each run starts a cloud build and consumes the publisher's EAS build quota.
-The workflow serializes iOS builds and never cancels an active cloud build.
 
-Both workflows derive the marketing version from the repository's Git version
+**Mobile Google Play EAS Release** runs on the same published-release event,
+with a separate manual build/submit option. It builds a production Android App
+Bundle (`.aab`) in EAS and uploads to an **internal-track draft** in Play Console.
+The publisher completes store setup and promotes the draft there. Enable it
+with repository variable `MOBILE_PLAY_RELEASE_ENABLED=true` after provisioning
+Android credentials and assigning a Google service account key in EAS.
+
+Each EAS workflow run starts a cloud build and consumes the publisher's EAS
+build quota. Each store workflow serializes its own builds and does not cancel
+an active build when a newer workflow run arrives.
+
+All mobile workflows derive the marketing version from the repository's Git
+version
 (the numeric `x.y.z` portion) and set the mobile build number to
 `28 + GITHUB_RUN_NUMBER`. Reruns keep the same number; the iOS pre-check rejects
 numbers already used or active in EAS, and also checks App Store Connect when
 API credentials are configured. Start a new workflow run rather than resubmitting
 a successful build. If moving to an existing app with a higher build counter,
-adjust the offset in the release workflows first.
+adjust the offset in the release workflows first. The APK and Play counters are
+independent because they use different package identifiers.
 
-## Publisher setup for EAS and Apple
+## Publisher setup for EAS and the stores
 
 Create/link the publisher's Expo project and register the main iOS bundle ID,
 `.widget` and `.watchkitapp` extensions and the `group.<bundle ID>` App Group
@@ -100,19 +113,28 @@ Configure these **GitHub repository variables**:
 | `TALKTOME_IOS_BUNDLE_IDENTIFIER` | Registered main iOS bundle identifier |
 | `TALKTOME_APPLE_TEAM_ID` | Publisher's ten-character Apple team ID |
 | `APP_STORE_CONNECT_APP_ID` | Numeric App Store Connect app ID |
-| `MOBILE_IOS_RELEASE_ENABLED` | `true` once setup is complete |
+| `MOBILE_IOS_RELEASE_ENABLED` | `true` once Apple setup is complete |
+| `TALKTOME_ANDROID_PACKAGE` | Final Google Play package name (without `.sideload`) |
+| `MOBILE_PLAY_RELEASE_ENABLED` | `true` once Play setup is complete |
 
 Configure **GitHub repository secret** `EXPO_TOKEN` for that Expo account.
-Signing and submission credentials are managed by EAS. Optionally configure
+Signing and submission credentials are managed by EAS. For Google Play,
+create the app in the publisher's Play Console, configure Play App Signing and
+an Android upload keystore through `npx eas-cli credentials --platform android`.
+Create a Google Cloud service account, enable the Android Publisher API, grant
+the service account the required app/release permissions in Play Console and
+assign its JSON key to the app in EAS Credentials. The key is not a GitHub
+repository variable and is never committed. See
+[Expo's Google Play submission setup](https://docs.expo.dev/submit/android/). Optionally configure
 `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_KEY_ID`, and
 `APP_STORE_CONNECT_PRIVATE_KEY` as repository secrets for the build-number
 pre-check against Apple; without them it checks EAS history only.
 
 `scripts/prepare-eas-release.cjs` validates the required publisher settings and
-writes the public identity/version into the production profile in `eas.json`
+writes the platform-specific public identity/version into the production profile in `eas.json`
 for that run. This ensures EAS workers use the same settings as GitHub even
 though runner environment variables are not automatically forwarded to cloud
-builds. The App Store Connect app ID is also written into the submission
+builds. For iOS, the App Store Connect app ID is also written into the submission
 profile. No signing key is written to the repository or the uploaded source.
 The committed config has no contributor-specific Expo, Apple-team or Store ID;
 local development defaults to `com.example.talktome` without a signing team.
