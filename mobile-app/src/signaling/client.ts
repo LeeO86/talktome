@@ -57,6 +57,13 @@ const ACK_TIMEOUT_MS = 8000;
 /** TalkToMe 1.5.0+ `set-active-production`. Short so unknown servers fail fast. */
 export const SET_ACTIVE_PRODUCTION_ACK_MS = 2500;
 
+export class SignalingConnectCancelledError extends Error {
+  constructor() {
+    super('The Socket.IO connection attempt was cancelled.');
+    this.name = 'SignalingConnectCancelledError';
+  }
+}
+
 export function cookieExtraHeaders(cookies: CookieMap): Record<string, string> {
   const cookie = cookieHeader(cookies);
   return cookie ? { Cookie: cookie } : {};
@@ -106,6 +113,7 @@ export class SignalingClient {
   private socket: Socket | null = null;
   private hasEverConnected = false;
   private awaitingInitialConnect = false;
+  private cancelConnect: (() => void) | null = null;
   handlers: SignalingHandlers = {};
 
   constructor(
@@ -144,14 +152,14 @@ export class SignalingClient {
     this.bindPersistentHandlers(socket);
 
     return new Promise((resolve, reject) => {
+      let settled = false;
       const timeout = setTimeout(() => {
-        cleanup();
-        this.awaitingInitialConnect = false;
-        this.handlers.onStateChange?.({ status: 'failed', message: 'timeout' });
-        reject(new Error('The Socket.IO connection timed out.'));
+        fail('timeout', new Error('The Socket.IO connection timed out.'));
       }, 10_000);
 
       const onConnect = () => {
+        if (settled || this.socket !== socket) return;
+        settled = true;
         cleanup();
         this.awaitingInitialConnect = false;
         this.hasEverConnected = true;
@@ -160,18 +168,35 @@ export class SignalingClient {
       };
 
       const onError = (error: Error) => {
+        fail(error.message, new Error(`Socket.IO connection failed: ${error.message}`));
+      };
+
+      const fail = (message: string, error: Error) => {
+        if (settled || this.socket !== socket) return;
+        settled = true;
         cleanup();
         this.awaitingInitialConnect = false;
-        this.handlers.onStateChange?.({ status: 'failed', message: error.message });
-        reject(new Error(`Socket.IO connection failed: ${error.message}`));
+        // A rejected initial attempt must not keep reconnecting in the background.
+        this.closeSocket();
+        this.handlers.onStateChange?.({ status: 'failed', message });
+        reject(error);
+      };
+
+      const cancel = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new SignalingConnectCancelledError());
       };
 
       const cleanup = () => {
         clearTimeout(timeout);
         socket.off('connect', onConnect);
         socket.off('connect_error', onError);
+        if (this.cancelConnect === cancel) this.cancelConnect = null;
       };
 
+      this.cancelConnect = cancel;
       socket.on('connect', onConnect);
       socket.on('connect_error', onError);
       socket.connect();
@@ -179,13 +204,18 @@ export class SignalingClient {
   }
 
   disconnect(): void {
-    if (this.socket) {
-      this.socket.removeAllListeners();
-      this.socket.disconnect();
-      this.socket = null;
-    }
+    this.cancelConnect?.();
+    this.closeSocket();
     this.awaitingInitialConnect = false;
+    this.hasEverConnected = false;
     this.handlers.onStateChange?.({ status: 'disconnected' });
+  }
+
+  private closeSocket(): void {
+    const socket = this.socket;
+    this.socket = null;
+    socket?.removeAllListeners();
+    socket?.disconnect();
   }
 
   async register(
@@ -349,14 +379,15 @@ export class SignalingClient {
 
   private bindPersistentHandlers(socket: Socket): void {
     socket.on('connect', () => {
-      const shouldReconnect = this.hasEverConnected && !this.awaitingInitialConnect;
+      if (this.socket !== socket || this.awaitingInitialConnect) return;
       this.handlers.onStateChange?.({ status: 'connected', socketId: socket.id });
-      if (shouldReconnect) {
+      if (this.hasEverConnected) {
         this.handlers.onReconnect?.(socket.id);
       }
     });
 
     socket.on('disconnect', (reason) => {
+      if (this.socket !== socket) return;
       this.handlers.onStateChange?.({ status: 'disconnected' });
       if (reason && reason !== 'io client disconnect') {
         this.handlers.onStateChange?.({ status: 'failed', message: String(reason) });

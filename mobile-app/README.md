@@ -8,6 +8,8 @@ The app includes:
 - Server/account profiles, guest login, production selection and QR login links.
 - WebRTC talk/listen, per-target volume and mute, Reply and locked talk buttons.
 - Server remote-panel control and synchronized operator preferences.
+- Live speaker names on conference cards, including listen-only conferences.
+- Automatic reconnect with cancellation of superseded connection attempts.
 - Background audio, native route selection and Android foreground service.
 - BLE push-to-talk accessories, including PTT-Z01 and Herda HB980-Plus profiles.
 - iOS Live Activities, widgets and shortcuts; Android session widget.

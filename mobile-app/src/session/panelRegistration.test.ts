@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MediaEngine } from '../media/engine';
 import type { OperatorIdentity, Production } from '../protocol';
 import { PANEL_AUDIO_DEFAULTS } from '../protocol/remotePanel';
+import { SignalingConnectCancelledError } from '../signaling/client';
 import { SessionController } from './sessionController';
 import { initialState, useSessionStore } from './state';
 
-const mocks = vi.hoisted(() => ({ registration: {} as Record<string, unknown>, entered: vi.fn(), order: [] as string[] }));
+const mocks = vi.hoisted(() => ({ registration: {} as Record<string, unknown>, entered: vi.fn(), connect: vi.fn<() => Promise<string>>(), order: [] as string[] }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active' }, Platform: { OS: 'android' } }));
 vi.mock('expo-modules-core', () => ({ requireNativeModule: () => { throw new Error('No device'); } }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: vi.fn(async () => null), setItemAsync: vi.fn(async () => {}), deleteItemAsync: vi.fn(async () => {}) }));
@@ -28,7 +29,7 @@ vi.mock('./mediaCoordinator', () => ({ MediaCoordinator: class {
 vi.mock('../signaling/client', async importOriginal => ({ ...await importOriginal<object>(), SignalingClient: class {
   handlers = {}; socketId = 'new-socket'; connected = true;
   disconnect() {}
-  async connect() { return this.socketId; }
+  async connect() { return mocks.connect(); }
   async register() { return mocks.registration; }
   async setActiveProduction(id: number | null) { mocks.order.push(`announce:${id}`); return id ?? 1; }
   emitPanelReport() {}
@@ -39,6 +40,7 @@ vi.mock('../signaling/client', async importOriginal => ({ ...await importOrigina
 const controllers: SessionController[] = [];
 beforeEach(() => {
   mocks.entered.mockClear(); mocks.order = [];
+  mocks.connect.mockReset().mockResolvedValue('new-socket');
   useSessionStore.setState({ ...initialState, serverAddress: 'https://example.test', activeProfileId: 'profile', productionId: 7, productionName: 'Studio', productions: [{ id: 7, name: 'Studio' }, { id: 8, name: 'Field' }] });
   mocks.registration = { ok: true, productionId: 8, productions: [{ id: 7, name: 'Studio' }, { id: 8, name: 'Field' }], panelSettings: { revision: 2, storage: { 'activeProduction:1': '8' } }, userAudioSettings: PANEL_AUDIO_DEFAULTS };
 });
@@ -47,7 +49,7 @@ const identity: OperatorIdentity = { kind: 'user', id: 1, name: 'Me', production
 function fixture() {
   const c = new SessionController(); controllers.push(c);
   vi.spyOn(c, 'persistCurrentProfile').mockResolvedValue();
-  const internal = c as unknown as { finishIdentity(identity: OperatorIdentity, force: boolean): Promise<void>; refreshServerClientDefaults(): Promise<void>; handleReconnect(): Promise<void> };
+  const internal = c as unknown as { finishIdentity(identity: OperatorIdentity, force: boolean): Promise<boolean>; refreshServerClientDefaults(): Promise<void>; handleReconnect(): Promise<void> };
   vi.spyOn(internal, 'refreshServerClientDefaults').mockResolvedValue();
   return { c, internal };
 }
@@ -77,5 +79,35 @@ describe('panel registration in the native session', () => {
     mocks.order = []; await internal.handleReconnect();
     expect(mocks.order).toEqual(['stop-old-media', 'restore-audio', 'announce:8', 'rebuild']);
     expect(useSessionStore.getState().productionId).toBe(8); expect(c.media).toBeNull();
+  });
+
+  it('ignores stale connection and reconnect reports from a replaced signaling client', async () => {
+    const { c, internal } = fixture();
+    await internal.finishIdentity(identity, false);
+    const previous = c.signaling!;
+    await internal.finishIdentity(identity, false);
+    const reconnect = vi.spyOn(internal, 'handleReconnect').mockResolvedValue();
+    const healthy = useSessionStore.getState();
+
+    previous.handlers.onStateChange?.({ status: 'failed', message: 'timeout' });
+    previous.handlers.onReconnect?.('old-socket');
+
+    expect(useSessionStore.getState()).toBe(healthy);
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it('silently ends a cancelled login without changing its successful replacement', async () => {
+    const { internal } = fixture();
+    let cancel!: (error: Error) => void;
+    mocks.connect.mockImplementationOnce(() => new Promise<string>((_resolve, reject) => { cancel = reject; }));
+    const oldAttempt = internal.finishIdentity(identity, false);
+    expect(await internal.finishIdentity(identity, false)).toBe(true);
+    const healthy = useSessionStore.getState();
+
+    cancel(new SignalingConnectCancelledError());
+
+    expect(await oldAttempt).toBe(false);
+    expect(useSessionStore.getState()).toBe(healthy);
+    expect(mocks.entered).toHaveBeenCalledOnce();
   });
 });

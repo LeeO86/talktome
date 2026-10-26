@@ -24,7 +24,7 @@ import {
   targetAvatarBackground,
 } from './icons';
 import { colors } from './theme';
-import { targetActivity } from './targetActivity';
+import { conferenceSpeakingLabel, targetActivity } from './targetActivity';
 import { VolumeOverlay } from './VolumeOverlay';
 import { VolumeRing } from './VolumeRing';
 
@@ -48,9 +48,8 @@ export function TargetRow({
   const key = talkTargetIdentity(target);
   const talking = useSessionStore((state) => state.talkingTargetKeys.includes(key));
   const locked = useSessionStore((state) => state.lockedTargetKeys.includes(key));
-  const incoming = useSessionStore((state) =>
-    state.incoming.addressedNow.some((entry) => incomingHighlightsTarget(entry, target)),
-  );
+  const incomingEntries = useSessionStore((state) => state.incoming.addressedNow);
+  const incoming = incomingEntries.some((entry) => incomingHighlightsTarget(entry, target));
   const peers = useSessionStore((state) => state.peers);
   const preference = useSessionStore(
     (state) => state.audioPreferences[key] ?? DEFAULT_AUDIO_PREFERENCE,
@@ -83,10 +82,10 @@ export function TargetRow({
           : // TalkToMe 1.5.17: the green border already says it is streaming.
             'Feed'
       : target.type === 'conference'
-        ? listenOnly
-          ? 'Listen only'
-          : speaking
-            ? 'Speaking'
+        ? speaking
+          ? conferenceSpeakingLabel(target, incomingEntries, peers)
+          : listenOnly
+            ? 'Listen only'
             : 'Conference'
         : userOnline
           ? speaking

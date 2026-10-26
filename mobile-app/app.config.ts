@@ -15,7 +15,7 @@ const config: ExpoConfig = {
     supportsTablet: true,
     icon: './assets/icon.png',
     bundleIdentifier: iosSigning.bundleIdentifier,
-    buildNumber: process.env.TALKTOME_MOBILE_BUILD_NUMBER || '28',
+    buildNumber: process.env.TALKTOME_MOBILE_BUILD_NUMBER || '29',
     appleTeamId: iosSigning.appleTeamId,
     entitlements: {
       'com.apple.security.application-groups': [iosSigning.appGroup],
