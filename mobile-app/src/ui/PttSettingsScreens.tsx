@@ -245,6 +245,19 @@ export function PttDeviceDetailPage({
             full="Radio mode uses the channel knob to select the only PTT 1 target you hear. On Android, the volume keys adjust it on the talk screen. SOS always replies."
             compact="Hear only PTT 1. On Android, +/− adjust its volume."
           />
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>Announce selected target</Text>
+            <Switch
+              accessibilityLabel="Announce selected target"
+              value={binding.announceSelectedTarget === true}
+              onValueChange={(value) => session.setAnnounceSelectedTarget(deviceId, value)}
+              trackColor={{ true: '#3DD6F5' }}
+            />
+          </View>
+          <SettingsHint
+            full="Read out the target after the knob stops moving. Speaking takes priority. Uses the phone’s text-to-speech voice."
+            compact={Platform.OS === 'android' ? 'Uses an installed offline voice. PTT interrupts the announcement.' : 'Uses the system voice. PTT interrupts the announcement.'}
+          />
         </SettingsSection>
       ) : null}
 

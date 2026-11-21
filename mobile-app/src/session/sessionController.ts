@@ -1491,6 +1491,10 @@ export class SessionController {
     this.background.setRotaryRetargetsPtt1(deviceId, enabled);
   }
 
+  setAnnounceSelectedTarget(deviceId: string, enabled: boolean): void {
+    this.background.setAnnounceSelectedTarget(deviceId, enabled);
+  }
+
   setRadioMode(deviceId: string, enabled: boolean): void {
     this.background.setRadioMode(deviceId, enabled);
   }

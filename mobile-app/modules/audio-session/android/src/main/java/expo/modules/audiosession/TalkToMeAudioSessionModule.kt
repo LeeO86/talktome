@@ -8,6 +8,8 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Build
+import expo.modules.kotlin.Promise
+import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -18,6 +20,7 @@ class TalkToMeAudioSessionModule : Module() {
   private var preferredRouteId = "speaker"
   private var deviceCallback: AudioDeviceCallback? = null
   private var cuePlayer: MediaPlayer? = null
+  private val targetSpeech = TargetSpeech()
 
   override fun definition() = ModuleDefinition {
     Name("TalkToMeAudioSession")
@@ -29,6 +32,7 @@ class TalkToMeAudioSessionModule : Module() {
     }
 
     OnDestroy {
+      targetSpeech.shutdown()
       unregisterDeviceCallback()
     }
 
@@ -78,6 +82,19 @@ class TalkToMeAudioSessionModule : Module() {
     AsyncFunction("playConnectionCue") { name: String ->
       playConnectionCue(name)
     }
+
+    AsyncFunction("announceTarget") { label: String, result: Promise ->
+      val context = appContext.reactContext
+      if (profile == "idle" || context == null || label.isBlank()) {
+        result.resolve(false)
+      } else {
+        targetSpeech.speak(context, label, result)
+      }
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("stopTargetAnnouncement") {
+      targetSpeech.stop()
+    }.runOnQueue(Queues.MAIN)
 
     Function("audioRoutes") {
       routeSnapshot()["routes"]

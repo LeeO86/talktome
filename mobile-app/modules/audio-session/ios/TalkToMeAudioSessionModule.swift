@@ -77,6 +77,14 @@ public final class TalkToMeAudioSessionModule: Module {
       self.controller.playWatchReadyCue()
     }
 
+    AsyncFunction("announceTarget") { (label: String) in
+      self.controller.announceTarget(label)
+    }.runOnQueue(.main)
+
+    AsyncFunction("stopTargetAnnouncement") {
+      self.controller.stopTargetAnnouncement()
+    }.runOnQueue(.main)
+
     Function("audioRoutes") {
       self.controller.routeSnapshot()["routes"]
     }

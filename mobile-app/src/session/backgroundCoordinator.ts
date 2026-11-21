@@ -2,6 +2,7 @@ import { AppState, Platform, type AppStateStatus } from 'react-native';
 
 import {
   activateForIntercom,
+  announceTarget,
   playWatchReadyCue,
   audioSessionAvailable,
   deactivateAudioSession,
@@ -9,7 +10,9 @@ import {
   setWebRTCAudioEnabled,
   startBackgroundKeepalive,
   stopBackgroundKeepalive,
+  stopTargetAnnouncement,
 } from '../audio/session';
+import { createTargetAnnouncements } from '../audio/targetAnnouncements';
 import {
   shouldOwnAudioSession,
   shouldReactivateCaptureForTalk,
@@ -64,6 +67,7 @@ import { saveBlePreferences } from '../ble/preferences';
 import { BleReleaseWatchdog } from '../ble/watchdog';
 import {
   bleTalkCandidates,
+  bleTargetSelectionKey,
   describeBleTarget,
   resolveBleTalkTarget,
   type BleTargetSelection,
@@ -116,6 +120,11 @@ export class BackgroundCoordinator {
   private readonly notifySessions = new Map<string, AccessoryNotifySession>();
   private readonly sppParsers = new Map<string, SppTokenParser>();
   private readonly eventDeduper = new PttEventDeduper();
+  private readonly targetAnnouncements = createTargetAnnouncements(
+    announceTarget,
+    stopTargetAnnouncement,
+    () => this.noteHardwareLog('Target announcement unavailable. Check the phone’s text-to-speech voice.'),
+  );
   private hardwareLiveDevices: BleDeviceState[] = [];
   private unsubscribeHardware: (() => void) | null = null;
   private pairingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -177,6 +186,16 @@ export class BackgroundCoordinator {
       statusMessage: enabled
         ? 'Channel knob / up-down can change the PTT 1 target.'
         : 'Channel knob / up-down leave the PTT 1 target unchanged.',
+    });
+    this.persistBlePreferences();
+  }
+
+  setAnnounceSelectedTarget(deviceId: string, enabled: boolean): void {
+    const { bleBindings } = useSessionStore.getState();
+    if (!enabled) void this.targetAnnouncements.cancel();
+    useSessionStore.setState({
+      bleBindings: bleBindings.map(binding =>
+        binding.id === deviceId ? { ...binding, announceSelectedTarget: enabled } : binding),
     });
     this.persistBlePreferences();
   }
@@ -376,6 +395,7 @@ export class BackgroundCoordinator {
   }
 
   resetBleAccessorySession(): void {
+    void this.targetAnnouncements.cancel();
     for (const watchdog of this.bleWatchdogs.values()) {
       watchdog.clear();
     }
@@ -808,10 +828,27 @@ export class BackgroundCoordinator {
   }
 
   private applyRotarySelection(selection: BleTargetSelection, deviceId: string): void {
+    const previous = useSessionStore.getState();
+    const binding = previous.bleBindings.find(item => item.id === deviceId);
+    const selectionKey = bleTargetSelectionKey(selection);
+    const changed = selectionKey !== bleTargetSelectionKey(bindingControlTarget(binding));
+
     this.setBluetoothButtonTarget(selection, deviceId, 'ptt');
-    const { replyTarget, targets } = useSessionStore.getState();
-    const target = resolveBleTalkTarget({ selection, replyTarget, targets });
-    if (target) useSessionStore.setState({ hardwarePttPageRequest: { targetKey: talkTargetIdentity(target) } });
+    const state = useSessionStore.getState();
+    const target = resolveBleTalkTarget({ ...state, selection });
+    if (!target) return;
+    useSessionStore.setState({ hardwarePttPageRequest: { targetKey: talkTargetIdentity(target) } });
+    if (!changed || !binding?.announceSelectedTarget || state.talking || state.talkLocked) return;
+
+    this.targetAnnouncements.schedule(target.label, () => {
+      const current = useSessionStore.getState();
+      const device = current.bleBindings.find(item => item.id === deviceId);
+      return current.operatorReady && current.status === 'ready' &&
+        current.productionId === state.productionId && current.activeProfileId === state.activeProfileId &&
+        !current.talking && !current.talkLocked && !this.c.talk.hasMomentaryHold() &&
+        device?.announceSelectedTarget === true &&
+        bleTargetSelectionKey(bindingControlTarget(device)) === selectionKey;
+    });
   }
 
   private forceBleRelease(deviceId?: string): void {
@@ -1216,6 +1253,8 @@ export class BackgroundCoordinator {
   }
 
   async prepareAudioForTalk(): Promise<void> {
+    const announcement = this.targetAnnouncements.cancel();
+    if (announcement) await announcement;
     const state = useSessionStore.getState();
     const ownsSession = shouldOwnAudioSession({
       platform: Platform.OS,
@@ -1241,6 +1280,8 @@ export class BackgroundCoordinator {
   }
 
   async teardownAudioSession(): Promise<void> {
+    const announcement = this.targetAnnouncements.cancel();
+    if (announcement) await announcement;
     try {
       await stopBackgroundKeepalive();
     } catch {

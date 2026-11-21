@@ -52,13 +52,16 @@ describe('BLE device bindings', () => {
     expect(removeBleDeviceBinding(next, 'aa')).toEqual([]);
   });
 
-  it('keeps the saved radio mode when the knob retargets PTT 1', () => {
-    const saved = parseBleDeviceBindings([{ id: 'onboard', radioMode: true }, { id: 'old' }]);
+  it('keeps the knob settings when the knob retargets PTT 1', () => {
+    const saved = parseBleDeviceBindings([{ id: 'onboard', radioMode: true, announceSelectedTarget: true }, { id: 'old' }]);
     const updated = upsertBleDeviceBinding(saved, {
       id: 'onboard', target: { kind: 'target', type: 'conference', id: 4, label: 'All' },
     });
-    expect(updated[0]).toMatchObject({ radioMode: true, target: { kind: 'target', id: 4 } });
+    expect(updated[0]).toMatchObject({
+      radioMode: true, announceSelectedTarget: true, target: { kind: 'target', id: 4 },
+    });
     expect(updated[1]?.radioMode).toBeUndefined();
+    expect(updated[1]?.announceSelectedTarget).toBeUndefined();
   });
 
   it('stores independent targets per PTT button and locks SOS to Reply', () => {

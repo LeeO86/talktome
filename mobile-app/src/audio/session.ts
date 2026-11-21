@@ -15,6 +15,8 @@ type NativeAudioSession = {
   updateNowPlaying?: (title: string, detail: string, active: boolean) => Promise<boolean>;
   playWatchReadyCue?: () => Promise<boolean>;
   playConnectionCue?: (name: string) => Promise<boolean>;
+  announceTarget?: (label: string) => Promise<boolean>;
+  stopTargetAnnouncement?: () => Promise<void>;
 };
 
 let cached: NativeAudioSession | null | undefined;
@@ -67,6 +69,16 @@ export async function playConnectionCue(name: 'disconnected' | 'reconnected'): P
   } catch {
     return false;
   }
+}
+
+export async function announceTarget(label: string): Promise<boolean> {
+  try { return (await loadNative()?.announceTarget?.(label)) === true; }
+  catch { return false; }
+}
+
+export async function stopTargetAnnouncement(): Promise<void> {
+  try { await loadNative()?.stopTargetAnnouncement?.(); }
+  catch { /* Speech is optional. */ }
 }
 
 /** Clears leftover iOS Now Playing. TalkToMe does not register as a media player. */

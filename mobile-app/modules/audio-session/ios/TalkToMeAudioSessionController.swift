@@ -21,6 +21,7 @@ final class TalkToMeAudioSessionController {
   }
   private var routeSelectionDeadline: TimeInterval = 0
   private var cuePlayer: AVAudioPlayer?
+  private var targetSpeech: AVSpeechSynthesizer?
   var onRouteChange: (() -> Void)?
 
   init(notificationCenter: NotificationCenter = .default) {
@@ -75,6 +76,20 @@ final class TalkToMeAudioSessionController {
       player.play()
     }
     return true
+  }
+
+  func announceTarget(_ label: String) -> Bool {
+    guard activeProfile != "idle", !label.isEmpty else { return false }
+    let speech = targetSpeech ?? AVSpeechSynthesizer()
+    targetSpeech = speech
+    speech.stopSpeaking(at: .immediate)
+    speech.usesApplicationAudioSession = true
+    speech.speak(AVSpeechUtterance(string: label))
+    return true
+  }
+
+  func stopTargetAnnouncement() {
+    targetSpeech?.stopSpeaking(at: .immediate)
   }
 
   private func cueURL(_ name: String, fileExtension: String = "mp3") -> URL? {

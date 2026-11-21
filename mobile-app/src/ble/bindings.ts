@@ -22,6 +22,7 @@ export type BleDeviceBinding = {
   seenButtons: PttButton[];
   rotaryRetargetsPtt1: boolean;
   radioMode?: boolean;
+  announceSelectedTarget?: boolean;
 };
 
 export const BLE_MAX_ACCESSORIES = 8;
@@ -184,6 +185,7 @@ export function parseBleDeviceBinding(value: unknown): BleDeviceBinding | null {
     seenButtons: parseSeenButtons(record.seenButtons, controls),
     rotaryRetargetsPtt1: record.rotaryRetargetsPtt1 === true,
     ...(record.radioMode === true ? { radioMode: true } : {}),
+    ...(record.announceSelectedTarget === true ? { announceSelectedTarget: true } : {}),
   };
 }
 
@@ -259,6 +261,7 @@ export function upsertBleDeviceBinding(
     seenButtons,
     rotaryRetargetsPtt1: input.rotaryRetargetsPtt1 ?? existing?.rotaryRetargetsPtt1 ?? false,
     ...(existing?.radioMode ? { radioMode: true } : {}),
+    ...(existing?.announceSelectedTarget ? { announceSelectedTarget: true } : {}),
   };
   if (!existing) {
     return [...bindings, next];
