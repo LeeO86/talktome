@@ -35,6 +35,7 @@ import {
 } from './operatorAudio';
 import { HOLD_HINT, useSessionStore } from './state';
 import { IDLE_MEDIA_CONNECTION } from './connectionHealth';
+import { radioReceiveKey } from './radioMode';
 import type { SessionController } from './sessionController';
 
 /** Operator media lifecycle: MediaEngine, consumers, audio prep, devices, and preferences. */
@@ -45,6 +46,16 @@ export class MediaCoordinator {
   setVisibleFeedVideos(keys: string[]): void {
     this.visibleVideoKeys = keys;
     this.c.media?.setFeedVideoTargets(keys);
+  }
+
+  syncRadioReceive(key: string | null | undefined): void {
+    const media = this.c.media;
+    if (!media) return;
+    void media.setReceiveTarget(key, this.consumerContext()).then(() => {
+      if (this.c.media === media) this.publishMediaSnapshot();
+    }).catch(() => {
+      // The next producer event or resync will retry the consumer budget.
+    });
   }
 
   private bindVideoReceiver(): void {
@@ -81,6 +92,7 @@ export class MediaCoordinator {
       this.c.media = new MediaEngine(signaling);
       this.c.media.onConnectionChange = () => this.publishMediaSnapshot();
       this.bindVideoReceiver();
+      this.syncRadioReceive(radioReceiveKey(useSessionStore.getState()));
       this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.remotePanel.audioProfile ?? this.c.serverClientDefaults.audioProfile));
       this.c.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
       this.c.media.setConferenceListen(useSessionStore.getState().conferenceListen);
@@ -142,6 +154,7 @@ export class MediaCoordinator {
     this.c.media = new MediaEngine(signaling);
     this.c.media.onConnectionChange = () => this.publishMediaSnapshot();
     this.bindVideoReceiver();
+    this.syncRadioReceive(radioReceiveKey(useSessionStore.getState()));
     this.c.media.setTalkOpusProfile(talkOpusProfile(this.c.remotePanel.audioProfile ?? this.c.serverClientDefaults.audioProfile));
     this.c.media.setAudioPreferences(useSessionStore.getState().audioPreferences);
     this.c.media.setConferenceListen(useSessionStore.getState().conferenceListen);

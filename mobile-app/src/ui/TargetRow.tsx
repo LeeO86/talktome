@@ -39,6 +39,7 @@ type Props = {
   hardwarePtt?: boolean;
   compactLabel?: boolean;
   volumeReadout?: boolean;
+  radioSuppressed?: boolean;
   height?: number;
   edgeTalkAffordance?: boolean;
   videoAvailable?: boolean;
@@ -57,6 +58,7 @@ export function TargetRow({
   hardwarePtt = false,
   compactLabel = false,
   volumeReadout = false,
+  radioSuppressed = false,
   height,
   edgeTalkAffordance = false,
   onOpenConferenceMembers,
@@ -96,6 +98,7 @@ export function TargetRow({
   const tight = compact || (height != null && height < 64);
 
   const speaking = receiving;
+  const muted = preference.muted || radioSuppressed;
 
   const meta =
     target.type === 'feed'
@@ -263,13 +266,14 @@ export function TargetRow({
       >
         <VolumeRing
           level={preference.volume}
-          muted={preference.muted}
+          muted={muted}
           dimmed={dimmed}
           compact={tight}
           dense={dense}
           variant={volumeReadout ? 'readout' : 'ring'}
           accessibilityLabel={
-            preference.muted ? `Volume muted, ${target.label}` : `Volume ${formatLinearLevelDb(preference.volume)}`
+            radioSuppressed ? `Muted by Radio mode, ${target.label}`
+              : muted ? `Volume muted, ${target.label}` : `Volume ${formatLinearLevelDb(preference.volume)}`
           }
           onPress={() => setVolumeOpen(true)}
           onDoublePress={() => session.toggleTargetMuted(target)}

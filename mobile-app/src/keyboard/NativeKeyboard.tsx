@@ -5,6 +5,7 @@ export type KeyboardEvent = { code: string; pressed: boolean; keypad?: boolean; 
 type Props = {
   listening: boolean;
   capture?: boolean;
+  captureVolumeKeys?: boolean;
   focusRequest?: number;
   codes?: string[];
   onKeyboardEvent: (event: { nativeEvent: KeyboardEvent }) => void;

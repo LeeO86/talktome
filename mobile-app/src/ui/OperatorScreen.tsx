@@ -4,6 +4,7 @@ import { AppState, BackHandler, Platform, Pressable, StyleSheet, Text, useWindow
 import {
   cameraTallyColor,
   cameraTallyLabel,
+  nudgeVolume,
   visibleProductionName,
   talkTargetIdentity,
   type TalkTarget,
@@ -15,6 +16,8 @@ import type { KeyboardEvent } from '../keyboard/NativeKeyboard';
 import { loadOperatorPreferences, useOperatorPreferences } from './operatorPreferences';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
+import { radioReceiveTarget } from '../session/radioMode';
+import { ONBOARD_DEVICE_ID } from '../hardware/events';
 import { session, useSessionStore } from '../session/store';
 import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
@@ -146,6 +149,8 @@ export function OperatorScreen() {
     const target = resolveBleTalkTarget({ selection: bindingControlTarget(binding, 'ptt'), replyTarget: reply, targets: store.targets });
     return target ? [talkTargetIdentity(target)] : [];
   }));
+  const radioTarget = radioReceiveTarget(store);
+  const radioTargetKey = radioTarget ? talkTargetIdentity(radioTarget) : radioTarget;
   const hardwarePage = store.hardwarePttPageRequest;
   const lastHardwarePage = useRef(hardwarePage);
   useEffect(() => {
@@ -154,8 +159,14 @@ export function OperatorScreen() {
     if (!hardwarePage || session.hasMomentaryTalk()) return;
     const index = pages.findIndex(page => page.some(row =>
       row.targets.some(target => talkTargetIdentity(target) === hardwarePage.targetKey)));
-    if (index >= 0) setLayerIndex(index);
-  }, [hardwarePage, pages]);
+    if (index < 0) return;
+    setLayerIndex(index);
+    if (isKeypadOnlyDevice() && !sheetOpen) {
+      const target = store.targets.find(item => talkTargetIdentity(item) === hardwarePage.targetKey);
+      const prefix = target && session.canTalkTo(target) ? 'operator-talk' : 'operator-card';
+      setPageFocus(`${prefix}:${hardwarePage.targetKey}`);
+    }
+  }, [hardwarePage, pages, sheetOpen, store.targets]);
 
   useEffect(() => {
     if (!pageFocus) return;
@@ -193,11 +204,6 @@ export function OperatorScreen() {
       return;
     }
     if (sheetOpen || conferenceTarget || audioMenuOpen) return;
-    if (event.code === 'Stop') {
-      releaseKeypadTalk();
-      void session.stopTalk();
-      return;
-    }
     if (event.code === 'PageLeft' || event.code === 'PageRight') {
       if (layers <= 1 || keypadHeld.current || session.hasMomentaryTalk()) return;
       const current = grid.flatMap(row => row.targets);
@@ -216,12 +222,28 @@ export function OperatorScreen() {
     }
     const target = event.targetKey === 'main' ? mainButton.target :
       store.targets.find(item => talkTargetIdentity(item) === event.targetKey);
-    if (!target || !session.canTalkTo(target)) return;
-    if (event.code === 'TalkDown' && !keypadHeld.current) {
-      keypadHeld.current = true;
-      void session.pressKeypadTalk(target, 'keypad:ok');
-    } else if (event.code === 'Lock' && !store.lockedTargetKeys.includes(talkTargetIdentity(target))) {
-      void session.lockTalk(target);
+    if (event.code === 'TalkDown') {
+      if (target && session.canTalkTo(target) && !keypadHeld.current) {
+        keypadHeld.current = true;
+        void session.pressKeypadTalk(target, 'keypad:ok');
+      }
+      return;
+    }
+    if (event.code === 'VolumeUp' || event.code === 'VolumeDown') {
+      if (radioTarget) {
+        const { volume } = session.audioPreference(radioTarget);
+        session.setTargetVolume(radioTarget, nudgeVolume(volume, event.code === 'VolumeUp' ? 1 : -1));
+      }
+      return;
+    }
+    const phone = store.bleBindings.find(binding => binding.id === ONBOARD_DEVICE_ID);
+    const selected = radioTarget !== undefined ? radioTarget : target ?? (phone
+      ? resolveBleTalkTarget({ selection: bindingControlTarget(phone), replyTarget: reply, targets: store.targets })
+      : null);
+    if (event.code === 'ToggleTalk') {
+      void session.toggleKeypadTalk(selected);
+    } else if (event.code === 'ToggleMute' && selected) {
+      session.toggleTargetMuted(selected);
     }
   }
 
@@ -380,7 +402,12 @@ export function OperatorScreen() {
         headerCollapsed && styles.screenPeek,
       ]}
     >
-      <KeyboardShortcuts onKeypad={handleKeypad} onKeypadReset={releaseKeypadTalk} />
+      <KeyboardShortcuts
+        onKeypad={handleKeypad}
+        onKeypadReset={releaseKeypadTalk}
+        captureVolumeKeys={Platform.OS === 'android'
+          ? Boolean(radioTarget && !sheetOpen && !audioMenuOpen && !conferenceTarget) : undefined}
+      />
       <View style={{ flex: 1 }} accessibilityElementsHidden={audioMenuOpen} importantForAccessibility={audioMenuOpen ? 'no-hide-descendants' : 'auto'}>
         {headerCollapsed ? (
           <View style={styles.collapsedActions}>
@@ -501,6 +528,7 @@ export function OperatorScreen() {
                       hardwarePtt={hardwareTargetKeys.has(talkTargetIdentity(target))}
                       compactLabel={layout.columns > 1 && width / layout.columns < 400}
                       volumeReadout={compact}
+                      radioSuppressed={radioTargetKey !== undefined && radioTargetKey !== talkTargetIdentity(target)}
                       height={layout.cardHeight}
                       videoAvailable={store.videoFeedKeys.includes(talkTargetIdentity(target))}
                       videoExpanded={expandedVideos.has(talkTargetIdentity(target))}

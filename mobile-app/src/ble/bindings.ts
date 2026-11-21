@@ -21,6 +21,7 @@ export type BleDeviceBinding = {
   controls: Partial<Record<PttButton, PttControlBinding>>;
   seenButtons: PttButton[];
   rotaryRetargetsPtt1: boolean;
+  radioMode?: boolean;
 };
 
 export const BLE_MAX_ACCESSORIES = 8;
@@ -182,6 +183,7 @@ export function parseBleDeviceBinding(value: unknown): BleDeviceBinding | null {
     controls,
     seenButtons: parseSeenButtons(record.seenButtons, controls),
     rotaryRetargetsPtt1: record.rotaryRetargetsPtt1 === true,
+    ...(record.radioMode === true ? { radioMode: true } : {}),
   };
 }
 
@@ -256,6 +258,7 @@ export function upsertBleDeviceBinding(
     controls,
     seenButtons,
     rotaryRetargetsPtt1: input.rotaryRetargetsPtt1 ?? existing?.rotaryRetargetsPtt1 ?? false,
+    ...(existing?.radioMode ? { radioMode: true } : {}),
   };
   if (!existing) {
     return [...bindings, next];

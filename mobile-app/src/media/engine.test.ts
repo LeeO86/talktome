@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Transport } from 'mediasoup-client/types';
 import type { SignalingClient } from '../signaling/client';
+import type { ActiveProducer } from '../protocol/types';
 import { MediaEngine } from './engine';
 import { OPUS_PROFILES } from './opus';
 import { DEFAULT_OPERATOR_AUDIO } from '../session/operatorAudio';
@@ -98,6 +99,45 @@ describe('native panel media lifecycle', () => {
 
 
 describe('video and intercom isolation', () => {
+  it('switches radio channels, preserves target gains, and restores the normal audio mix', async () => {
+    const { engine, signaling } = fixture();
+    function remote(id: number) {
+      const producer: ActiveProducer = {
+        peerId: `peer-${id}`, producerId: `p${id}`, kind: 'audio',
+        route: { kind: 'conference', id }, appData: {},
+      };
+      const track = { _setVolume: vi.fn() };
+      return {
+        producer, consumer: { id: `c${id}`, resume: vi.fn(), pause: vi.fn() },
+        stream: { getAudioTracks: () => [track] }, resumed: true, track,
+      };
+    }
+    const first = remote(1);
+    const second = remote(2);
+    Object.assign(engine, { remotes: new Map([['p1', first], ['p2', second]]) });
+    Object.assign(signaling, { resumeConsumer: vi.fn().mockResolvedValue(undefined) });
+    engine.setAudioPreferences({
+      'conference-1': { volume: 0.4, muted: false },
+      'conference-2': { volume: 0.7, muted: false },
+    });
+
+    await engine.setReceiveTarget('conference-1', {});
+    expect(first.track._setVolume).toHaveBeenLastCalledWith(0.4);
+    expect(second.track._setVolume).toHaveBeenLastCalledWith(0);
+    expect(second.consumer.pause).toHaveBeenCalledOnce();
+
+    await engine.setReceiveTarget('conference-2', {});
+    expect(first.track._setVolume).toHaveBeenLastCalledWith(0);
+    expect(second.track._setVolume).toHaveBeenLastCalledWith(0.7);
+    expect(second.consumer.resume).toHaveBeenCalledOnce();
+
+    await engine.setReceiveTarget(null, {});
+    expect(second.track._setVolume).toHaveBeenLastCalledWith(0);
+    await engine.setReceiveTarget(undefined, {});
+    expect(first.track._setVolume).toHaveBeenLastCalledWith(0.4);
+    expect(second.track._setVolume).toHaveBeenLastCalledWith(0.7);
+  });
+
   it('keeps playing audio when video is opened, hidden, or stopped', async () => {
     const f = fixture();
     const audio = { peerId: 'feed', producerId: 'audio', kind: 'audio' as const,

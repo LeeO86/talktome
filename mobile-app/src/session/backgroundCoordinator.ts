@@ -181,6 +181,20 @@ export class BackgroundCoordinator {
     this.persistBlePreferences();
   }
 
+  setRadioMode(deviceId: string, enabled: boolean): void {
+    const { bleBindings } = useSessionStore.getState();
+    if (!bleBindings.some(binding => binding.id === deviceId)) return;
+    useSessionStore.setState({
+      bleBindings: bleBindings.map(binding => {
+        if (binding.id === deviceId) {
+          return { ...binding, radioMode: enabled };
+        }
+        return enabled && binding.radioMode ? { ...binding, radioMode: false } : binding;
+      }),
+    });
+    this.persistBlePreferences();
+  }
+
   setBluetoothButtonShortPressLocks(enabled: boolean): void {
     useSessionStore.setState({
       bleShortPressLocks: enabled,
@@ -755,7 +769,7 @@ export class BackgroundCoordinator {
     if (this.c.talk.hasMomentaryHold()) return;
     const state = useSessionStore.getState();
     const binding = state.bleBindings.find((item) => item.id === deviceId);
-    if (!binding?.rotaryRetargetsPtt1) {
+    if (!binding || (!binding.rotaryRetargetsPtt1 && !binding.radioMode)) {
       this.noteHardwareLog('Channel step ignored (enable “Change PTT 1 target”).');
       return;
     }
@@ -786,7 +800,7 @@ export class BackgroundCoordinator {
       return;
     }
     const binding = state.bleBindings.find((item) => item.id === deviceId);
-    if (!binding?.rotaryRetargetsPtt1) {
+    if (!binding || (!binding.rotaryRetargetsPtt1 && !binding.radioMode)) {
       this.noteHardwareLog('Channel knob ignored (enable “Change PTT 1 target”).');
       return;
     }

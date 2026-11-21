@@ -1369,6 +1369,10 @@ export class SessionController {
     return this.talk.unlockTalk();
   }
 
+  toggleKeypadTalk(target: TalkTarget | null): Promise<void> {
+    return this.talk.toggleKeypadTalk(target);
+  }
+
   async lockTalk(target: TalkTarget): Promise<void> {
     await this.talk.lockTalk(target);
   }
@@ -1485,6 +1489,10 @@ export class SessionController {
 
   setRotaryRetargetsPtt1(deviceId: string, enabled: boolean): void {
     this.background.setRotaryRetargetsPtt1(deviceId, enabled);
+  }
+
+  setRadioMode(deviceId: string, enabled: boolean): void {
+    this.background.setRadioMode(deviceId, enabled);
   }
 
   setBluetoothButtonShortPressLocks(enabled: boolean): void {

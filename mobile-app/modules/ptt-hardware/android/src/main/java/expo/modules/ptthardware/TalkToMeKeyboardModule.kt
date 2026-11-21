@@ -19,6 +19,7 @@ class TalkToMeKeyboardModule : Module() {
       Events("onKeyboardEvent", "onReset")
       Prop("listening") { view: TalkToMeKeyboardView, value: Boolean -> view.listen(value) }
       Prop("capture") { view: TalkToMeKeyboardView, value: Boolean -> view.capture = value }
+      Prop("captureVolumeKeys") { view: TalkToMeKeyboardView, value: Boolean -> view.captureVolumeKeys = value }
       Prop("codes") { view: TalkToMeKeyboardView, value: List<String> -> view.codes = value.toSet() }
       Prop("focusRequest") { view: TalkToMeKeyboardView, _: Int -> view.refocus() }
     }
@@ -29,6 +30,7 @@ class TalkToMeKeyboardView(context: Context, appContext: AppContext) : ExpoView(
   private val onKeyboardEvent by EventDispatcher<Map<String, Any>>()
   private val onReset by EventDispatcher<Map<String, Any>>()
   var capture = false
+  var captureVolumeKeys = false
   var codes = emptySet<String>()
   private var listening = false
   private val held = mutableSetOf<String>()
@@ -93,6 +95,7 @@ class TalkToMeKeyboardView(context: Context, appContext: AppContext) : ExpoView(
     fun dispatchKeypad(code: String, target: String? = null): Boolean {
       val view = active.get() ?: return false
       if (!view.listening || view.capture || !view.isAttachedToWindow || !view.hasWindowFocus()) return false
+      if ((code == "VolumeUp" || code == "VolumeDown") && !view.captureVolumeKeys) return false
       val payload = mutableMapOf<String, Any>("code" to code, "pressed" to (code != "TalkUp"), "keypad" to true)
       if (target != null) payload["targetKey"] = target
       view.onKeyboardEvent(payload)

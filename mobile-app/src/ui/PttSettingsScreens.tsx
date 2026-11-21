@@ -220,6 +220,34 @@ export function PttDeviceDetailPage({
         )}
       </SettingsSection>
 
+      {hasChannel ? (
+        <SettingsSection title="Channel knob / up-down">
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>Change PTT 1 target</Text>
+            <Switch
+              accessibilityLabel="Change PTT 1 target"
+              value={binding.rotaryRetargetsPtt1 || binding.radioMode === true}
+              disabled={binding.radioMode === true}
+              onValueChange={(value) => session.setRotaryRetargetsPtt1(deviceId, value)}
+              trackColor={{ true: '#3DD6F5' }}
+            />
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>Radio mode</Text>
+            <Switch
+              accessibilityLabel="Radio mode"
+              value={binding.radioMode === true}
+              onValueChange={(value) => session.setRadioMode(deviceId, value)}
+              trackColor={{ true: '#3DD6F5' }}
+            />
+          </View>
+          <SettingsHint
+            full="Radio mode uses the channel knob to select the only PTT 1 target you hear. On Android, the volume keys adjust it on the talk screen. SOS always replies."
+            compact="Hear only PTT 1. On Android, +/− adjust its volume."
+          />
+        </SettingsSection>
+      ) : null}
+
       {talkButtons.map((button) => (
         <TalkTargetSection
           key={`${deviceId}-${button}`}
@@ -228,23 +256,6 @@ export function PttDeviceDetailPage({
           candidates={candidates}
         />
       ))}
-
-      {hasChannel ? (
-        <SettingsSection title="Channel knob / up-down">
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>Change PTT 1 target</Text>
-            <Switch
-              value={binding.rotaryRetargetsPtt1}
-              onValueChange={(value) => session.setRotaryRetargetsPtt1(deviceId, value)}
-              trackColor={{ true: '#3DD6F5' }}
-            />
-          </View>
-          <SettingsHint
-            full="When this is on, the channel knob and up/down retarget PTT 1. Otherwise they do nothing. SOS always replies."
-            compact="Knob and up/down retarget PTT 1 when this is on. SOS always replies."
-          />
-        </SettingsSection>
-      ) : null}
 
       <SettingsSection>
         <SettingsActionRow

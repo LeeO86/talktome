@@ -100,6 +100,7 @@ private class WindowKeys(private val root: View) {
   private class Press(val target: View, val downTime: Long, val x: Float, val y: Float)
   private var press: Press? = null
   private var heldTalk: String? = null
+  private val capturedOperatorKeys = mutableSetOf<Int>()
 
   private fun View.nativeId(): String? = getTag(R.id.view_tag_native_id) as? String
 
@@ -122,6 +123,7 @@ private class WindowKeys(private val root: View) {
         return true
       }
     }
+    if (event.action == KeyEvent.ACTION_UP && capturedOperatorKeys.remove(event.keyCode)) return true
     val scope = focusScope()
     val id = focused?.nativeId()
     val target = id?.takeIf { it.startsWith("operator-talk:") }?.removePrefix("operator-talk:")
@@ -142,12 +144,20 @@ private class WindowKeys(private val root: View) {
             return true
           }
         }
-        KeyEvent.KEYCODE_CALL -> {
-          val lockTarget = target ?: card
-          if (lockTarget != null && event.repeatCount == 0 && TalkToMeKeyboardView.dispatchKeypad("Lock", lockTarget)) return true
+        KeyEvent.KEYCODE_CALL, KeyEvent.KEYCODE_ENDCALL -> {
+          if (event.repeatCount > 0) return event.keyCode in capturedOperatorKeys
+          val action = if (event.keyCode == KeyEvent.KEYCODE_CALL) "ToggleTalk" else "ToggleMute"
+          if (TalkToMeKeyboardView.dispatchKeypad(action, target ?: card)) {
+            capturedOperatorKeys.add(event.keyCode)
+            return true
+          }
         }
-        KeyEvent.KEYCODE_ENDCALL -> {
-          if (event.repeatCount == 0 && TalkToMeKeyboardView.dispatchKeypad("Stop")) return true
+        KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
+          val action = if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) "VolumeUp" else "VolumeDown"
+          if (TalkToMeKeyboardView.dispatchKeypad(action)) {
+            capturedOperatorKeys.add(event.keyCode)
+            return true
+          }
         }
       }
     }
@@ -234,6 +244,7 @@ private class WindowKeys(private val root: View) {
 
   /** A key-up can get lost with the window (dialog, app switch); never leave a finger down. */
   fun cancel() {
+    capturedOperatorKeys.clear()
     release(MotionEvent.ACTION_CANCEL)
     heldTalk?.let { TalkToMeKeyboardView.dispatchKeypad("TalkUp", it) }
     heldTalk = null

@@ -56,6 +56,7 @@ export class MediaEngine {
   private remotes = new Map<string, RemoteConsumer>();
   private iceOverride: IceServer[] = [];
   private audioPreferences: Record<string, TargetAudioPreference> = {};
+  private receiveTargetKey: string | null | undefined;
   private stoppedFeedKeys = new Set<string>();
   private conferenceListen: ConferenceListenState = EMPTY_CONFERENCE_LISTEN;
   private operatorAudio: OperatorAudioSettings = DEFAULT_OPERATOR_AUDIO;
@@ -346,6 +347,13 @@ export class MediaEngine {
     this.applyAllTrackGain();
   }
 
+  async setReceiveTarget(key: string | null | undefined, ctx: ConsumerPriorityContext): Promise<void> {
+    if (key === this.receiveTargetKey) return;
+    this.receiveTargetKey = key;
+    this.applyAllTrackGain();
+    await this.serialize(() => this.applyBudget(ctx));
+  }
+
   setConferenceListen(state: ConferenceListenState): void {
     this.conferenceListen = state;
     this.applyAllTrackGain();
@@ -505,7 +513,12 @@ export class MediaEngine {
   private applyTrackGain(producer: ActiveProducer): void {
     const remote = this.remotes.get(producer.producerId);
     const track = remote?.stream.getAudioTracks()[0] as { _setVolume?: (volume: number) => void } | undefined;
-    const preference = normalizeAudioPreference(this.audioPreferences[producerTargetKey(producer)]);
+    const key = producerTargetKey(producer);
+    if (this.receiveTargetKey !== undefined && this.receiveTargetKey !== key) {
+      track?._setVolume?.(0);
+      return;
+    }
+    const preference = normalizeAudioPreference(this.audioPreferences[key]);
     const memberGain =
       producer.route.kind === 'conference'
         ? conferenceMemberGain(this.conferenceListen, producer.route.id, producer.speakerUserId)
@@ -624,7 +637,8 @@ export class MediaEngine {
 
   private async applyBudget(ctx: ConsumerPriorityContext): Promise<void> {
     const decision = applyConsumerBudget(
-      [...this.remotes.values()].map((item) => item.producer),
+      [...this.remotes.values()].map(item => item.producer).filter(producer =>
+        this.receiveTargetKey === undefined || this.receiveTargetKey === producerTargetKey(producer)),
       ctx,
       MAX_RESUMED_CONSUMERS,
     );
