@@ -118,22 +118,26 @@ export function TargetRow({
           : 'Offline';
 
   const avatarColor = dimmed ? WEB_AVATAR.offlineGlyph : WEB_AVATAR.glyph;
-  const avatar = dense ? null :
-    target.type === 'conference' ? (
+  const avatar = target.type === 'conference' ? (
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Choose who you hear in ${target.label}`}
         onPress={() => onOpenConferenceMembers?.(target)}
-        style={[styles.avatar, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}
+        style={dense ? styles.conferenceCompactHit :
+          [styles.avatar, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}
       >
-        <ConferenceIcon />
-        {listenOnly ? (
+        {dense ? (
+          <View pointerEvents="none" style={[styles.conferenceCompactIcon, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}>
+            <ConferenceIcon size={13} />
+          </View>
+        ) : <ConferenceIcon />}
+        {listenOnly && !dense ? (
           <View style={styles.listenBadge}>
             <ListenOnlyIcon color={colors.muted} size={10} />
           </View>
         ) : null}
       </Pressable>
-    ) : canToggleVideo ? (
+    ) : dense ? null : canToggleVideo ? (
       <View pointerEvents="none" style={[styles.avatar, { backgroundColor: targetAvatarBackground('feed', dimmed) }]}>
         <Text style={{ fontSize: 22 }}>📺</Text>
       </View>
@@ -147,9 +151,10 @@ export function TargetRow({
       </View>
     );
 
+  const showCompactStatus = receiving || dimmed || listenOnly || (target.type === 'feed' && feedStopped);
   const identity = (
     <View style={styles.identity} pointerEvents="none">
-      <View style={styles.nameRow}>
+      <View style={[styles.nameRow, dense && styles.nameRowDense]}>
         {hardwarePtt ? <PttButtonIcon size={dense ? 12 : 14} /> : null}
         {locked ? <LockIcon color={colors.text} size={dense ? 12 : 14} /> : null}
         <Text
@@ -160,10 +165,9 @@ export function TargetRow({
         >
           {target.label}
         </Text>
+        {dense && showCompactStatus ? <Text style={styles.metaDense} numberOfLines={1}>{meta}</Text> : null}
       </View>
-      <Text style={[styles.meta, dense && styles.metaDense]} numberOfLines={1}>
-        {meta}
-      </Text>
+      {!dense ? <Text style={styles.meta} numberOfLines={1}>{meta}</Text> : null}
     </View>
   );
 
@@ -249,16 +253,6 @@ export function TargetRow({
     <View pointerEvents={canToggleVideo ? "box-none" : "auto"} style={[rowStyle, videoExpanded && { flex: 0, borderWidth: 0, borderRadius: 0, backgroundColor: 'transparent', opacity: 1 }]}>
       {avatar}
       {talkZone}
-      {dense && target.type === 'conference' && onOpenConferenceMembers ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Choose who you hear in ${target.label}`}
-          onPress={() => onOpenConferenceMembers(target)}
-          style={styles.membersCompact}
-        >
-          <Text style={styles.membersLabel} numberOfLines={1}>Members</Text>
-        </Pressable>
-      ) : null}
       <View
         pointerEvents={canToggleVideo ? "box-none" : "auto"}
         style={[
@@ -339,10 +333,11 @@ const styles = StyleSheet.create({
   },
   rowDense: { gap: 4, paddingHorizontal: 7 },
   labelDense: { fontSize: 12 },
-  metaDense: { fontSize: 10, marginTop: 0 },
+  nameRowDense: { gap: 4 },
+  metaDense: { color: colors.muted, fontSize: 10, flexShrink: 1, maxWidth: '48%' },
   talkZoneDense: { minHeight: 0 },
-  membersCompact: { alignSelf: 'stretch', justifyContent: 'center', paddingHorizontal: 4 },
-  membersLabel: { color: colors.muted, fontSize: 10, fontWeight: '600' },
+  conferenceCompactHit: { width: 24, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
+  conferenceCompactIcon: { width: 16, height: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   feedButtonDense: { minHeight: 0, minWidth: 32, width: 32 },
   rowTalking: {
     backgroundColor: 'rgba(139,92,246,0.12)',

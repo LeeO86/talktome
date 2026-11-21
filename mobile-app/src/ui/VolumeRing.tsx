@@ -191,8 +191,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  readoutHitDense: { minHeight: 28 },
-  readoutDense: { minHeight: 23, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 7 },
+  readoutHitDense: { minHeight: 20 },
+  readoutDense: { minHeight: 18, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 },
   readoutValueDense: { fontSize: 10 },
   readoutUnitDense: { fontSize: 9 },
   readoutMuted: {

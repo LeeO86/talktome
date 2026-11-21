@@ -9,6 +9,7 @@ export const CARD_PREFERRED_HEIGHT = 72;
 export const CARD_MAX_HEIGHT = 88;
 export const PORTRAIT_MAX_ROWS = 8;
 export const LANDSCAPE_MAX_ROWS = 4;
+const COMPACT_HANDSET_LANDSCAPE_MAX_ROWS = 5;
 export const LANDSCAPE_COLUMNS = 2;
 export const HEADER_COLLAPSE_ROW_THRESHOLD = 4;
 /** Target-card minimum. The collapsed header is half of this height. */
@@ -124,18 +125,20 @@ export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const tablet = isTabletOperatorScreen(input.width, input.height);
   const compact = input.compact === true;
   const replyBeside = replyBesideTargets(input.width, input.height);
+  const small = compact && isCompactOperatorScreen(input.width, input.height);
   const columns = compact && !tablet ? 1 : targetGridColumns(input.width, input.height);
-  const maxRows = targetGridMaxRows(input.width, input.height);
+  const maxRows = small && replyBeside ? COMPACT_HANDSET_LANDSCAPE_MAX_ROWS
+    : targetGridMaxRows(input.width, input.height);
   const available =
     input.availableHeight ?? estimateTargetListHeight(input.width, input.height, input.headerCollapsed);
-  const small = compact && isCompactOperatorScreen(input.width, input.height);
-  const gap = small ? 3 : compact ? 4 : CARD_GAP;
-  const minHeight = Math.max(small ? 36 : 44, Math.ceil(27 * (input.fontScale ?? 1) + 6));
+  const gap = small ? 2 : compact ? 4 : CARD_GAP;
+  // Compact handset cards have one line of text and an 18 dp volume readout.
+  const minHeight = Math.max(small ? 24 : 44, Math.ceil(18 * (input.fontScale ?? 1) + 6));
   const rows = compact
     ? Math.max(1, Math.min(maxRows, Math.floor((available + gap) / (minHeight + gap))))
     : rowsThatFit(available, maxRows);
   const cardHeight = compact
-    ? Math.max(0, Math.min(Math.max(minHeight, small ? 48 : 56), (available - (rows - 1) * gap) / rows))
+    ? Math.max(0, Math.min(Math.max(minHeight, small ? 40 : 56), (available - (rows - 1) * gap) / rows))
     : cardHeightForRows(available, rows);
   return {
     landscape,
