@@ -383,7 +383,7 @@ export function OperatorScreen() {
               accessibilityLabel="Show top bar"
               accessibilityHint="Reveals name, connection, audio route, and layers"
               onPress={expandHeader}
-              style={styles.headerPeekCard}
+              style={[styles.headerPeekCard, compact && styles.headerPeekCompact]}
             >
               <ChevronIcon color={colors.text} direction="down" size={14} />
               <Text style={styles.headerPeekLabel}>Show top bar</Text>
@@ -576,6 +576,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerPeekCompact: { marginBottom: 4 },
   identity: {
     flexGrow: 1,
     flexShrink: 1,
