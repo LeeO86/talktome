@@ -118,15 +118,15 @@ export function TargetRow({
           : 'Offline';
 
   const avatarColor = dimmed ? WEB_AVATAR.offlineGlyph : WEB_AVATAR.glyph;
-  const avatar =
+  const avatar = dense ? null :
     target.type === 'conference' ? (
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Choose who you hear in ${target.label}`}
         onPress={() => onOpenConferenceMembers?.(target)}
-        style={[styles.avatar, dense && styles.avatarDense, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}
+        style={[styles.avatar, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}
       >
-        <ConferenceIcon size={dense ? 16 : 22} />
+        <ConferenceIcon />
         {listenOnly ? (
           <View style={styles.listenBadge}>
             <ListenOnlyIcon color={colors.muted} size={10} />
@@ -150,10 +150,10 @@ export function TargetRow({
   const identity = (
     <View style={styles.identity} pointerEvents="none">
       <View style={styles.nameRow}>
-        {hardwarePtt ? <PttButtonIcon /> : null}
-        {locked ? <LockIcon color={colors.text} size={14} /> : null}
+        {hardwarePtt ? <PttButtonIcon size={dense ? 12 : 14} /> : null}
+        {locked ? <LockIcon color={colors.text} size={dense ? 12 : 14} /> : null}
         <Text
-          style={[styles.label, (compactLabel || dense) && styles.labelCompact, dimmed && styles.dimText]}
+          style={[styles.label, compactLabel && styles.labelCompact, dense && styles.labelDense, dimmed && styles.dimText]}
           numberOfLines={1}
           adjustsFontSizeToFit
           minimumFontScale={0.85}
@@ -191,7 +191,7 @@ export function TargetRow({
 
   const talkZone = wrapTalk(
     identity,
-    [styles.talkZone, talking ? styles.talkZoneActive : null],
+    [styles.talkZone, dense && styles.talkZoneDense, talking && styles.talkZoneActive],
     `Talk to ${target.label}`,
     true,
   );
@@ -206,15 +206,15 @@ export function TargetRow({
       accessibilityState={{ disabled: !feedOnline, selected: feedStopped }}
       disabled={!feedOnline}
       onPress={() => session.toggleFeedReception(target)}
-      style={[...talkSlotStyle, styles.feedButton, dimmed && styles.controlOffline]}
+      style={[...talkSlotStyle, styles.feedButton, dense && styles.feedButtonDense, dimmed && styles.controlOffline]}
     >
       {feedStopped ? (
-        <PlayIcon color={feedOnline ? colors.text : WEB_AVATAR.offlineGlyph} size={18} />
+        <PlayIcon color={feedOnline ? colors.text : WEB_AVATAR.offlineGlyph} size={dense ? 14 : 18} />
       ) : (
-        <StopIcon color={colors.text} />
+        <StopIcon color={colors.text} size={dense ? 12 : 14} />
       )}
     </Pressable>
-  ) : showTalkIcon ? (
+  ) : dense ? null : showTalkIcon ? (
     wrapTalk(
       <WalkieTalkieIcon color={edgeIconColor} size={tight ? 18 : 22} />,
       [...talkSlotStyle, talking && styles.talkZoneActive],
@@ -233,7 +233,7 @@ export function TargetRow({
     (talking || keyboardHeld) && styles.rowTalking,
     speaking && !talking && !keyboardHeld && styles.rowSpeaking,
     adjustingVolume && styles.rowAdjusting,
-    height != null ? { height, minHeight: height, flex: 1, paddingVertical: dense ? 2 : tight ? 4 : 8 } : null,
+    height != null ? { height, minHeight: height, flex: 1, paddingVertical: dense ? 1 : tight ? 4 : 8 } : null,
   ];
 
   return (
@@ -249,6 +249,16 @@ export function TargetRow({
     <View pointerEvents={canToggleVideo ? "box-none" : "auto"} style={[rowStyle, videoExpanded && { flex: 0, borderWidth: 0, borderRadius: 0, backgroundColor: 'transparent', opacity: 1 }]}>
       {avatar}
       {talkZone}
+      {dense && target.type === 'conference' && onOpenConferenceMembers ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Choose who you hear in ${target.label}`}
+          onPress={() => onOpenConferenceMembers(target)}
+          style={styles.membersCompact}
+        >
+          <Text style={styles.membersLabel} numberOfLines={1}>Members</Text>
+        </Pressable>
+      ) : null}
       <View
         pointerEvents={canToggleVideo ? "box-none" : "auto"}
         style={[
@@ -262,6 +272,7 @@ export function TargetRow({
           muted={preference.muted}
           dimmed={dimmed}
           compact={tight}
+          dense={dense}
           variant={volumeReadout ? 'readout' : 'ring'}
           accessibilityLabel={
             preference.muted ? `Volume muted, ${target.label}` : `Volume ${formatLinearLevelDb(preference.volume)}`
@@ -326,9 +337,13 @@ const styles = StyleSheet.create({
     minHeight: 62,
     paddingHorizontal: 8,
   },
-  rowDense: { gap: 4, paddingHorizontal: 5 },
-  avatarDense: { width: 26, height: 26 },
-  metaDense: { fontSize: 10 },
+  rowDense: { gap: 4, paddingHorizontal: 7 },
+  labelDense: { fontSize: 12 },
+  metaDense: { fontSize: 10, marginTop: 0 },
+  talkZoneDense: { minHeight: 0 },
+  membersCompact: { alignSelf: 'stretch', justifyContent: 'center', paddingHorizontal: 4 },
+  membersLabel: { color: colors.muted, fontSize: 10, fontWeight: '600' },
+  feedButtonDense: { minHeight: 0, minWidth: 32, width: 32 },
   rowTalking: {
     backgroundColor: 'rgba(139,92,246,0.12)',
     borderColor: 'rgba(139,92,246,0.8)',

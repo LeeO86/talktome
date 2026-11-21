@@ -14,6 +14,7 @@ type Props = {
   muted?: boolean;
   dimmed?: boolean;
   compact?: boolean;
+  dense?: boolean;
   variant?: 'ring' | 'readout';
   accessibilityLabel: string;
   onPress?: () => void;
@@ -28,6 +29,7 @@ export function VolumeRing({
   muted = false,
   dimmed = false,
   compact = false,
+  dense = false,
   variant = 'ring',
   accessibilityLabel,
   onPress,
@@ -52,14 +54,14 @@ export function VolumeRing({
   const face = readout ? (
     <View
       pointerEvents="none"
-      style={[styles.readout, muted && styles.readoutMuted, dimmed && styles.readoutDimmed]}
+      style={[styles.readout, dense && styles.readoutDense, muted && styles.readoutMuted, dimmed && styles.readoutDimmed]}
     >
       {muted ? (
-        <SpeakerIcon muted color={colors.danger} size={14} />
+        <SpeakerIcon muted color={colors.danger} size={dense ? 11 : 14} />
       ) : (
-        <Text style={[styles.readoutValue, dimmed && styles.dimText]}>
+        <Text style={[styles.readoutValue, dense && styles.readoutValueDense, dimmed && styles.dimText]}>
           {label}
-          <Text style={[styles.readoutUnit, dimmed && styles.dimText]}> dB</Text>
+          <Text style={[styles.readoutUnit, dense && styles.readoutUnitDense, dimmed && styles.dimText]}> dB</Text>
         </Text>
       )}
     </View>
@@ -102,7 +104,7 @@ export function VolumeRing({
     </>
   );
 
-  const box = readout ? styles.readoutHit : [styles.hit, { width: size, height: size }];
+  const box = readout ? [styles.readoutHit, dense && styles.readoutHitDense] : [styles.hit, { width: size, height: size }];
 
   if (!onPress && !onDoublePress) {
     return <View style={box}>{face}</View>;
@@ -189,6 +191,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  readoutHitDense: { minHeight: 28 },
+  readoutDense: { minHeight: 23, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 7 },
+  readoutValueDense: { fontSize: 10 },
+  readoutUnitDense: { fontSize: 9 },
   readoutMuted: {
     backgroundColor: 'rgba(255,90,90,0.16)',
   },

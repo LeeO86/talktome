@@ -319,8 +319,8 @@ export function OperatorScreen() {
           ]}
         >
           {mainLocked ? (
-            <LockIcon color={colors.text} size={store.bigMainButton ? 28 : 22} />
-          ) : mainButton.mode === 'target' ? (
+            <LockIcon color={colors.text} size={compact ? 13 : store.bigMainButton ? 28 : 22} />
+          ) : mainButton.mode === 'target' ? !compact && (
             <WalkieTalkieIcon
               color={mainTarget ? colors.text : 'rgba(255,255,255,0.38)'}
               size={store.bigMainButton ? 32 : 22}
@@ -328,7 +328,7 @@ export function OperatorScreen() {
           ) : (
             <ReplyArrowIcon
               color={mainTarget ? colors.text : 'rgba(255,255,255,0.38)'}
-              size={store.bigMainButton ? 28 : 22}
+              size={compact ? 14 : store.bigMainButton ? 28 : 22}
             />
           )}
           <Text
@@ -340,6 +340,8 @@ export function OperatorScreen() {
               store.bigMainButton && styles.replyTextBig,
               replyBeside && styles.replyTextLandscape,
               replyBeside && store.bigMainButton && styles.replyTextBigLandscape,
+              compact && styles.replyTextCompact,
+              compact && replyBeside && styles.replyTextCompactLandscape,
               !mainTarget && styles.replyMuted,
             ]}
           >
@@ -468,10 +470,11 @@ export function OperatorScreen() {
             styles.body,
             replyBeside && styles.bodyLandscape,
             replyBeside && store.leftHanded && styles.bodyLandscapeLeft,
+            compact && styles.bodyCompact,
           ]}
         >
           <View
-            style={[styles.list, { gap: layout.gap }]}
+            style={[styles.list, compact && styles.listCompact, { gap: layout.gap }]}
             onLayout={(event) => { setListHeight(event.nativeEvent.layout.height); setListWidth(event.nativeEvent.layout.width); }}
           >
             {grid.map((row, rowIndex) => (
@@ -527,9 +530,10 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   screenCompact: {
-    paddingHorizontal: 10,
-    paddingTop: 4,
-    paddingBottom: 8,
+    backgroundColor: '#111827',
+    paddingHorizontal: 6,
+    paddingTop: 3,
+    paddingBottom: 4,
   },
   screenTablet: {
     paddingHorizontal: 20,
@@ -559,8 +563,8 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 4,
   },
-  noticeCompact: { height: 16, marginBottom: 2 },
-  replyCompactLandscape: { width: 62, minWidth: 62, paddingHorizontal: 4 },
+  noticeCompact: { height: 14, marginBottom: 2 },
+  replyCompactLandscape: { width: 52, minWidth: 52, paddingHorizontal: 3, borderRadius: 10 },
   headerPeekCard: {
     flex: 1,
     flexDirection: 'row',
@@ -576,7 +580,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerPeekCompact: { marginBottom: 4 },
+  headerPeekCompact: { marginBottom: 2 },
   identity: {
     flexGrow: 1,
     flexShrink: 1,
@@ -701,6 +705,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
+  bodyCompact: { gap: 4 },
   bodyLandscapeLeft: {
     flexDirection: 'row-reverse',
   },
@@ -712,6 +717,7 @@ const styles = StyleSheet.create({
     gap: 8,
     overflow: 'hidden',
   },
+  listCompact: { justifyContent: 'flex-start' },
   gridRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -744,9 +750,10 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   replyCompact: {
-    minHeight: 52,
-    paddingHorizontal: 12,
-    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 8,
+    gap: 4,
+    borderRadius: 10,
   },
   replyBig: {
     minHeight: 112,
@@ -802,6 +809,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     width: '100%',
   },
+  replyTextCompact: { fontSize: 15 },
+  replyTextCompactLandscape: { fontSize: 12 },
   replyTextBigLandscape: {
     fontSize: 18,
   },

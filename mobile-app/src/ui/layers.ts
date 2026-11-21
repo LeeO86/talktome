@@ -128,13 +128,14 @@ export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const maxRows = targetGridMaxRows(input.width, input.height);
   const available =
     input.availableHeight ?? estimateTargetListHeight(input.width, input.height, input.headerCollapsed);
-  const gap = compact ? 4 : CARD_GAP;
-  const minHeight = Math.max(44, Math.ceil(30 * (input.fontScale ?? 1) + 8));
+  const small = compact && isCompactOperatorScreen(input.width, input.height);
+  const gap = small ? 3 : compact ? 4 : CARD_GAP;
+  const minHeight = Math.max(small ? 36 : 44, Math.ceil(27 * (input.fontScale ?? 1) + 6));
   const rows = compact
     ? Math.max(1, Math.min(maxRows, Math.floor((available + gap) / (minHeight + gap))))
     : rowsThatFit(available, maxRows);
   const cardHeight = compact
-    ? Math.max(0, Math.min(Math.max(minHeight, 56), (available - (rows - 1) * gap) / rows))
+    ? Math.max(0, Math.min(Math.max(minHeight, small ? 48 : 56), (available - (rows - 1) * gap) / rows))
     : cardHeightForRows(available, rows);
   return {
     landscape,
