@@ -253,6 +253,10 @@ export function OperatorScreen() {
     missingAccessoryNotice(store.bleBindings, store.bleDevices, store.bleKind),
     ACCESSORY_NOTICE_DELAY_MS,
   );
+  const warning =
+    store.error || mediaNotice || (store.overBudget ? 'Too many incoming streams — some feeds paused.' : null);
+  const noticeInTopBar = compact && headerCollapsed;
+  const topBarNotice = noticeInTopBar ? warning || accessoryNotice : null;
   const tallyColor = cameraTallyColor(store.cameraTally);
   const tallyLabel = cameraTallyLabel(store.cameraTally);
   const mainLocked = Boolean(mainKey && store.lockedTargetKeys.includes(mainKey));
@@ -382,13 +386,22 @@ export function OperatorScreen() {
           <View style={styles.collapsedActions}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Show top bar"
+              accessibilityLabel={topBarNotice ? `Show top bar. ${topBarNotice}` : 'Show top bar'}
               accessibilityHint="Reveals name, connection, audio route, and layers"
               onPress={expandHeader}
               style={[styles.headerPeekCard, compact && styles.headerPeekCompact]}
             >
               <ChevronIcon color={colors.text} direction="down" size={14} />
-              <Text style={styles.headerPeekLabel}>Show top bar</Text>
+              <Text
+                style={[
+                  styles.headerPeekLabel,
+                  topBarNotice && (store.error ? styles.headerPeekError : styles.headerPeekWarning),
+                ]}
+                numberOfLines={1}
+                accessibilityLiveRegion="polite"
+              >
+                {topBarNotice || 'Show top bar'}
+              </Text>
             </Pressable>
             {layerButton}
           </View>
@@ -443,27 +456,27 @@ export function OperatorScreen() {
           </View>
         )}
 
-        {/* Reserve one line even when healthy: transient warnings must never
-            change the target grid's measured height or move a held button. */}
-        <View style={[styles.noticeSlot, compact && styles.noticeCompact]}>
-          {store.error || mediaNotice || store.overBudget ? (
-            <Text style={store.error ? styles.error : styles.warn} numberOfLines={1}
-              accessibilityLiveRegion="polite">
-              {store.error || mediaNotice || 'Too many incoming streams — some feeds paused.'}
-            </Text>
-          ) : accessoryNotice ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={accessoryNotice}
-              accessibilityHint="Opens Accessories"
-              onPress={() => openSessionSheet('accessories')}
-              style={styles.accessoryNotice}
-            >
-              <Text style={styles.accessoryNoticeText} numberOfLines={1}>{accessoryNotice}</Text>
-              <Text style={styles.accessoryNoticeChevron}>›</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        {/* Keep the target positions fixed when a notice appears. */}
+        {!noticeInTopBar ? (
+          <View style={[styles.noticeSlot, compact && styles.noticeCompact]}>
+            {warning ? (
+              <Text style={styles.error} numberOfLines={1} accessibilityLiveRegion="polite">
+                {warning}
+              </Text>
+            ) : accessoryNotice ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={accessoryNotice}
+                accessibilityHint="Opens Accessories"
+                onPress={() => openSessionSheet('accessories')}
+                style={styles.accessoryNotice}
+              >
+                <Text style={styles.accessoryNoticeText} numberOfLines={1}>{accessoryNotice}</Text>
+                <Text style={styles.accessoryNoticeChevron}>›</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
 
         <View
           style={[
@@ -554,10 +567,13 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   headerPeekLabel: {
+    flexShrink: 1,
     color: colors.muted,
     fontSize: 11,
     fontWeight: '600',
   },
+  headerPeekError: { color: colors.danger },
+  headerPeekWarning: { color: colors.warning },
   collapsedActions: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -580,7 +596,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerPeekCompact: { marginBottom: 2 },
+  headerPeekCompact: {
+    marginBottom: 2,
+    paddingHorizontal: 8,
+    justifyContent: 'flex-start',
+  },
   identity: {
     flexGrow: 1,
     flexShrink: 1,
@@ -663,10 +683,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     justifyContent: 'center',
     marginBottom: 4,
-  },
-  warn: {
-    color: colors.danger,
-    fontSize: 13,
   },
   accessoryNotice: {
     flexDirection: 'row',
