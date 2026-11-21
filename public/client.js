@@ -1,4 +1,20 @@
-const socket = io({
+const audioMeter = window.TalktomeAudioMeter;
+const remotePanel = window.TalktomeRemotePanel?.create() || null;
+let clientPanelRevision = 0;
+let applyingClientPanelSettings = false;
+let reportClientPanelState = () => {};
+let clientPanelDevices = [];
+let clientPanelReportTimer = null;
+const clientLocalStorage = window.TalktomeRemotePanelState.createStorage(remotePanel ? null : window.localStorage, (key, value) => {
+  if (applyingClientPanelSettings) return;
+  if (remotePanel) remotePanel.preferenceChanged(key, value);
+  else {
+    clearTimeout(clientPanelReportTimer);
+    clientPanelReportTimer = setTimeout(() => reportClientPanelState(), 120);
+  }
+});
+const clientSessionStorage = remotePanel ? window.TalktomeRemotePanelState.createStorage() : window.sessionStorage;
+const socket = remotePanel?.socket || io({
   reconnection: true,
   reconnectionAttempts: Infinity,
   reconnectionDelay: 500,
@@ -7,7 +23,7 @@ const socket = io({
   timeout: 10000,
 });
 
-const connectionSounds = createConnectionSounds(() => ensureAudioContext());
+const connectionSounds = createConnectionSounds(() => ensureAudioContext(), remotePanel ? async () => ({ ok: false }) : undefined);
 connectionSounds.setBackground(document.visibilityState === 'hidden');
 document.addEventListener('visibilitychange', () => {
   connectionSounds.setBackground(document.visibilityState === 'hidden');
@@ -15,7 +31,7 @@ document.addEventListener('visibilitychange', () => {
 for (const event of ['pointerdown', 'touchend', 'click', 'keydown']) {
   // Retry on later gestures too: mobile Safari may interrupt an unlocked context.
   document.addEventListener(event, () => {
-    if (playConnectionSoundsEnabled) void connectionSounds.prepare();
+    if (!remotePanel && playConnectionSoundsEnabled) void connectionSounds.prepare();
   }, { passive: true });
 }
 
@@ -93,6 +109,7 @@ socket.on("cut-camera", (value) => {
 });
 
 const BASE_REPLY_LABEL = "REPLY";
+// Configure DTX through opusDtx only; the obsolete RTP dtx boolean breaks Safari.
 const QUALITY_PROFILES = {
   "ultra-low": {
     label: "Ultra low (5 ms frame)",
@@ -104,7 +121,7 @@ const QUALITY_PROFILES = {
       opusMaxAverageBitrate: 48000,
       opusPtime: 5,
     },
-    encodings: [{ dtx: false, maxBitrate: 48000, priority: 'high' }],
+    encodings: [{ maxBitrate: 48000, priority: 'high' }],
     constraints: { channelCount: 1, sampleRate: 48000 },
     note: "minimal latency, best on stable networks",
   },
@@ -118,7 +135,7 @@ const QUALITY_PROFILES = {
       opusMaxAverageBitrate: 64000,
       opusPtime: 10,
     },
-    encodings: [{ dtx: false, maxBitrate: 64000, priority: 'high' }],
+    encodings: [{ maxBitrate: 64000, priority: 'high' }],
     constraints: { channelCount: 1, sampleRate: 48000 },
     note: "balanced latency vs. robustness",
   },
@@ -132,7 +149,7 @@ const QUALITY_PROFILES = {
       opusMaxAverageBitrate: 64000,
       opusPtime: 20,
     },
-    encodings: [{ dtx: false, maxBitrate: 64000, priority: 'high' }],
+    encodings: [{ maxBitrate: 64000, priority: 'high' }],
     constraints: { channelCount: 1, sampleRate: 48000 },
     note: "highest resilience, highest latency",
   },
@@ -160,18 +177,20 @@ const FEED_DIM_INCOMING_STORAGE_KEY = 'feedDimIncoming';
 const AUDIO_PROCESSING_STORAGE_KEY = 'audioProcessingEnabled';
 const AUDIO_PROCESSING_EXPLICIT_STORAGE_KEY = 'audioProcessingEnabledExplicit';
 const CONNECTION_SOUNDS_STORAGE_KEY = 'playConnectionSounds';
+const INCOMING_LEVELS_STORAGE_KEY = 'showIncomingLevels';
 const LEFT_HAND_MODE_STORAGE_KEY = 'leftHandModeEnabled';
+const BIG_MAIN_BUTTON_STORAGE_KEY = 'bigMainButtonEnabled';
 const LOCK_MULTIPLE_TARGETS_STORAGE_KEY = 'lockMultipleTargetsEnabled';
 const FEED_INPUT_GAIN_DB_STORAGE_KEY = 'feedInputGainDb';
 const MIC_DEVICE_STORAGE_KEY = 'preferredAudioInputDeviceId';
 const OUTPUT_DEVICE_STORAGE_KEY = 'preferredAudioOutputDeviceId';
 const MIC_DEVICE_EXPLICIT_STORAGE_KEY = 'preferredAudioInputDeviceExplicit';
-const FEED_INPUT_GAIN_DB_MIN = -30;
+const FEED_INPUT_GAIN_DB_MIN = -40;
 const FEED_INPUT_GAIN_DB_MAX = 40;
 const FEED_METER_MIN_DB = -60;
 const FEED_CLIP_THRESHOLD_DB = -0.5;
 const USER_INPUT_GAIN_DB_STORAGE_KEY = 'userInputGainDb';
-const USER_INPUT_GAIN_DB_MIN = -30;
+const USER_INPUT_GAIN_DB_MIN = -40;
 const USER_INPUT_GAIN_DB_MAX = 40;
 const USER_METER_MIN_DB = -60;
 const USER_CLIP_THRESHOLD_DB = -0.5;
@@ -288,6 +307,10 @@ const pendingOfflineUserTimers = new Map();
 let recoverExistingIncomingPlayback = () => {};
 let attemptPlayAudio = () => Promise.resolve();
 let persistUserAudioSettingsHandler = () => {};
+let syncIncomingLevelMeters = () => {};
+let showIncomingLevelsEnabled = hasServerDefaultClientSetting('showIncomingLevels')
+  ? serverDefaultClientSettings.showIncomingLevels === true
+  : false;
 let loadedTargetHotkeyStorageKey = null;
 
 let feedDuckingDb = hasServerDefaultClientSetting('dimAmountDb')
@@ -313,6 +336,21 @@ let leftHandModeEnabled = hasServerDefaultClientSetting('leftHandMode')
 let lockMultipleTargetsEnabled = hasServerDefaultClientSetting('lockMultipleTargets')
   ? serverDefaultClientSettings.lockMultipleTargets === true
   : false;
+let tapToLockEnabled = serverDefaultClientSettings.tapToLock !== false;
+let allowTargetRearrange = false;
+let allowTargetAddRemove = false;
+function canEditTargets() { return canArrangeTargets() || (session.kind === 'user' && allowTargetAddRemove); }
+
+function canArrangeTargets() {
+  return session.kind === 'user' && remotePanel?.state?.capabilities?.rearrangeTargets !== false && (Boolean(remotePanel) || allowTargetRearrange);
+}
+
+function applyTargetRearrangePermission(allowed, addRemove = false) {
+  allowTargetRearrange = allowed === true;
+  allowTargetAddRemove = addRemove === true;
+  if (arrangeTargetsOpenButton) arrangeTargetsOpenButton.hidden = !canEditTargets();
+  if (!canEditTargets() && activeSettingsView === 'arrange') setActiveSettingsView('main');
+}
 let feedInputProcessingEnabled = false;
 let feedPtimeMs = DEFAULT_FEED_PTIME_MS;
 const audioProcessingOptions = {
@@ -422,7 +460,7 @@ function ensureCustomTargetHotkeysLoaded() {
   if (!storageKey || typeof window === 'undefined') return;
 
   try {
-    const rawValue = window.localStorage?.getItem(storageKey);
+    const rawValue = clientLocalStorage?.getItem(storageKey);
     if (!rawValue) return;
     const parsed = JSON.parse(rawValue);
     if (!parsed || typeof parsed !== 'object') return;
@@ -453,10 +491,10 @@ function persistCustomTargetHotkeys() {
 
   try {
     if (Object.keys(serialized).length === 0) {
-      window.localStorage?.removeItem(storageKey);
+      clientLocalStorage?.removeItem(storageKey);
       return;
     }
-    window.localStorage?.setItem(storageKey, JSON.stringify(serialized));
+    clientLocalStorage?.setItem(storageKey, JSON.stringify(serialized));
   } catch (error) {
     console.warn('Unable to persist custom target hotkeys:', error);
   }
@@ -563,12 +601,13 @@ function appendPlaybackAudioElement(audioEl) {
 }
 
 function supportsFeedDimming() {
+  if (remotePanel) return true;
   return shouldUseFeedPlaybackBus();
 }
 
 if (typeof window !== 'undefined') {
   try {
-    const storedDb = window.localStorage?.getItem(FEED_DUCKING_DB_STORAGE_KEY);
+    const storedDb = clientLocalStorage?.getItem(FEED_DUCKING_DB_STORAGE_KEY);
     if (storedDb !== null) {
       const parsed = parseFloat(storedDb);
       if (!Number.isNaN(parsed)) {
@@ -576,11 +615,11 @@ if (typeof window !== 'undefined') {
         feedDuckingFactor = dbToLinear(feedDuckingDb);
       }
     }
-    const storedSelfDim = window.localStorage?.getItem(FEED_DIM_SELF_STORAGE_KEY);
+    const storedSelfDim = clientLocalStorage?.getItem(FEED_DIM_SELF_STORAGE_KEY);
     if (storedSelfDim !== null) {
       feedDimSelf = storedSelfDim === 'true';
     }
-    const storedIncomingDim = window.localStorage?.getItem(FEED_DIM_INCOMING_STORAGE_KEY);
+    const storedIncomingDim = clientLocalStorage?.getItem(FEED_DIM_INCOMING_STORAGE_KEY);
     if (storedIncomingDim !== null) {
       feedDimIncoming = storedIncomingDim === 'true';
     }
@@ -588,31 +627,31 @@ if (typeof window !== 'undefined') {
       feedDimSelf = false;
       feedDimIncoming = false;
     }
-    const storedFeedInputProcessing = window.localStorage?.getItem(FEED_INPUT_PROCESSING_STORAGE_KEY);
+    const storedFeedInputProcessing = clientLocalStorage?.getItem(FEED_INPUT_PROCESSING_STORAGE_KEY);
     if (storedFeedInputProcessing !== null) {
       feedInputProcessingEnabled = storedFeedInputProcessing === 'true';
     }
-    const storedInputDeviceId = window.localStorage?.getItem(MIC_DEVICE_STORAGE_KEY);
+    const storedInputDeviceId = clientLocalStorage?.getItem(MIC_DEVICE_STORAGE_KEY);
     if (storedInputDeviceId !== null) {
       preferredInputDeviceId = storedInputDeviceId;
     }
-    const storedInputDeviceExplicit = window.localStorage?.getItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY);
+    const storedInputDeviceExplicit = clientLocalStorage?.getItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY);
     if (storedInputDeviceExplicit !== null) {
       preferredInputDeviceExplicit = storedInputDeviceExplicit === 'true';
     }
-    const storedOutputDeviceId = window.localStorage?.getItem(OUTPUT_DEVICE_STORAGE_KEY);
+    const storedOutputDeviceId = clientLocalStorage?.getItem(OUTPUT_DEVICE_STORAGE_KEY);
     if (storedOutputDeviceId !== null) {
       preferredOutputDeviceId = storedOutputDeviceId;
     }
-    const storedFeedPtime = window.localStorage?.getItem(FEED_PTIME_STORAGE_KEY);
+    const storedFeedPtime = clientLocalStorage?.getItem(FEED_PTIME_STORAGE_KEY);
     if (storedFeedPtime !== null) {
       const parsedFeedPtime = parseInt(storedFeedPtime, 10);
       if (!Number.isNaN(parsedFeedPtime)) {
         feedPtimeMs = clampFeedPtimeMs(parsedFeedPtime);
       }
     }
-    const storedProcessingExplicit = window.localStorage?.getItem(AUDIO_PROCESSING_EXPLICIT_STORAGE_KEY);
-    const storedProcessing = window.localStorage?.getItem(AUDIO_PROCESSING_STORAGE_KEY);
+    const storedProcessingExplicit = clientLocalStorage?.getItem(AUDIO_PROCESSING_EXPLICIT_STORAGE_KEY);
+    const storedProcessing = clientLocalStorage?.getItem(AUDIO_PROCESSING_STORAGE_KEY);
     if (storedProcessingExplicit !== null && storedProcessing !== null) {
       audioProcessingEnabled = storedProcessing === 'true';
     } else if (hasServerDefaultClientSetting('audioAutoProcessing')) {
@@ -627,19 +666,21 @@ if (typeof window !== 'undefined') {
         audioProcessingEnabled = false;
       }
     }
-    const storedConnectionSounds = window.localStorage?.getItem(CONNECTION_SOUNDS_STORAGE_KEY);
+    const storedConnectionSounds = clientLocalStorage?.getItem(CONNECTION_SOUNDS_STORAGE_KEY);
     if (storedConnectionSounds !== null) {
       playConnectionSoundsEnabled = storedConnectionSounds === 'true';
     }
-    const storedLeftHandMode = window.localStorage?.getItem(LEFT_HAND_MODE_STORAGE_KEY);
+    const storedIncomingLevels = clientLocalStorage?.getItem(INCOMING_LEVELS_STORAGE_KEY);
+    if (storedIncomingLevels !== null) showIncomingLevelsEnabled = storedIncomingLevels === 'true';
+    const storedLeftHandMode = clientLocalStorage?.getItem(LEFT_HAND_MODE_STORAGE_KEY);
     if (storedLeftHandMode !== null) {
       leftHandModeEnabled = storedLeftHandMode === 'true';
     }
-    const storedLockMultipleTargets = window.localStorage?.getItem(LOCK_MULTIPLE_TARGETS_STORAGE_KEY);
+    const storedLockMultipleTargets = clientLocalStorage?.getItem(LOCK_MULTIPLE_TARGETS_STORAGE_KEY);
     if (storedLockMultipleTargets !== null) {
       lockMultipleTargetsEnabled = storedLockMultipleTargets === 'true';
     }
-    const storedInputGainDb = window.localStorage?.getItem(FEED_INPUT_GAIN_DB_STORAGE_KEY);
+    const storedInputGainDb = clientLocalStorage?.getItem(FEED_INPUT_GAIN_DB_STORAGE_KEY);
     if (storedInputGainDb !== null) {
       const parsedGainDb = parseFloat(storedInputGainDb);
       if (!Number.isNaN(parsedGainDb)) {
@@ -647,7 +688,7 @@ if (typeof window !== 'undefined') {
         feedInputGainLinear = dbToLinear(feedInputGainDb);
       }
     }
-    const storedUserGainDb = window.localStorage?.getItem(USER_INPUT_GAIN_DB_STORAGE_KEY);
+    const storedUserGainDb = clientLocalStorage?.getItem(USER_INPUT_GAIN_DB_STORAGE_KEY);
     if (storedUserGainDb !== null) {
       const parsedUserGainDb = parseFloat(storedUserGainDb);
       if (!Number.isNaN(parsedUserGainDb)) {
@@ -655,15 +696,15 @@ if (typeof window !== 'undefined') {
         userInputGainLinear = dbToLinear(userInputGainDb);
       }
     }
-    const storedVoiceTriggerEnabled = window.localStorage?.getItem(VOICE_TRIGGER_ENABLED_STORAGE_KEY);
+    const storedVoiceTriggerEnabled = clientLocalStorage?.getItem(VOICE_TRIGGER_ENABLED_STORAGE_KEY);
     if (storedVoiceTriggerEnabled !== null) {
       voiceTriggerEnabled = storedVoiceTriggerEnabled === 'true';
     }
-    const storedVoiceTriggerTarget = window.localStorage?.getItem(VOICE_TRIGGER_TARGET_STORAGE_KEY);
+    const storedVoiceTriggerTarget = clientLocalStorage?.getItem(VOICE_TRIGGER_TARGET_STORAGE_KEY);
     if (storedVoiceTriggerTarget !== null) {
       voiceTriggerTargetIdentity = String(storedVoiceTriggerTarget || '').trim();
     }
-    const storedVoiceTriggerThreshold = window.localStorage?.getItem(VOICE_TRIGGER_THRESHOLD_DB_STORAGE_KEY);
+    const storedVoiceTriggerThreshold = clientLocalStorage?.getItem(VOICE_TRIGGER_THRESHOLD_DB_STORAGE_KEY);
     if (storedVoiceTriggerThreshold !== null) {
       const parsedVoiceTriggerThreshold = parseFloat(storedVoiceTriggerThreshold);
       if (!Number.isNaN(parsedVoiceTriggerThreshold)) {
@@ -687,7 +728,7 @@ const FEED_PROFILE = {
     opusMaxAverageBitrate: 128000,
     opusPtime: 20,
   },
-  encodings: [{ dtx: false, maxBitrate: 128000, priority: 'high' }],
+  encodings: [{ maxBitrate: 128000, priority: 'high' }],
   constraints: {
     channelCount: { ideal: 2 },
     sampleRate: { ideal: 48000 },
@@ -714,6 +755,8 @@ let sendTransport = null;
 let recvTransport = null;
 let producer = null;
 let mediaNetworkStatsTimer = null;
+let deviceStatusReporter = null;
+let readActiveAudioOutput = async () => null;
 let mediaNetworkStatsReportInFlight = false;
 let collectMediaConsumerNetworkStats = async () => [];
 
@@ -855,11 +898,21 @@ async function reportMediaNetworkStats() {
 
 function startMediaNetworkStatsReporting() {
   if (mediaNetworkStatsTimer) return;
+  if (!remotePanel) {
+    deviceStatusReporter?.stop();
+    deviceStatusReporter = window.TalktomeClientDeviceStatus.createReporter({
+      socket,
+      isActive: () => isOperatorSession() || session.kind === 'feed',
+      readOutput: () => readActiveAudioOutput(),
+    });
+  }
   reportMediaNetworkStats();
   mediaNetworkStatsTimer = window.setInterval(reportMediaNetworkStats, MEDIA_NETWORK_STATS_INTERVAL_MS);
 }
 
 function stopMediaNetworkStatsReporting() {
+  deviceStatusReporter?.stop();
+  deviceStatusReporter = null;
   if (!mediaNetworkStatsTimer) return;
   window.clearInterval(mediaNetworkStatsTimer);
   mediaNetworkStatsTimer = null;
@@ -963,6 +1016,7 @@ let dimWhileSpeakingToggle;
 let dimWhenAddressedToggle;
 let audioProcessingToggle;
 let connectionSoundsToggle;
+let incomingLevelsToggle;
 let leftHandModeToggle;
 let lockMultipleTargetsToggle;
 let userLevelControls;
@@ -1197,6 +1251,7 @@ async function resumeAudioContextIfNeeded(ctx, { label = 'AudioContext', onRunni
 }
 
 function ensureAudioContext() {
+  if (remotePanel) return null;
   if (sharedAudioContext && sharedAudioContext.state !== 'closed') {
     return sharedAudioContext;
   }
@@ -1513,8 +1568,8 @@ function setAudioProcessingEnabled(enabled, { persist = true, updateUI = true, r
 
   if (persist && typeof window !== 'undefined') {
     try {
-      window.localStorage?.setItem(AUDIO_PROCESSING_STORAGE_KEY, String(applied));
-      window.localStorage?.setItem(AUDIO_PROCESSING_EXPLICIT_STORAGE_KEY, 'true');
+      clientLocalStorage?.setItem(AUDIO_PROCESSING_STORAGE_KEY, String(applied));
+      clientLocalStorage?.setItem(AUDIO_PROCESSING_EXPLICIT_STORAGE_KEY, 'true');
     } catch (err) {
       console.warn('Unable to persist audio processing preference:', err);
     }
@@ -1544,7 +1599,7 @@ function setPlayConnectionSounds(enabled, { persist = true } = {}) {
   if (connectionSoundsToggle) connectionSoundsToggle.checked = playConnectionSoundsEnabled;
   if (persist && typeof window !== 'undefined') {
     try {
-      window.localStorage?.setItem(CONNECTION_SOUNDS_STORAGE_KEY, String(playConnectionSoundsEnabled));
+      clientLocalStorage?.setItem(CONNECTION_SOUNDS_STORAGE_KEY, String(playConnectionSoundsEnabled));
     } catch (err) {
       console.warn('Unable to persist connection sounds preference:', err);
     }
@@ -1575,8 +1630,8 @@ function updateFeedProcessingUI() {
     feedInputGainSlider.disabled = !feedInputProcessingEnabled;
   }
   if (!feedInputProcessingEnabled) {
-    setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-    setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+    setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, { forceText: true });
+    setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, { forceText: true });
   } else if (feedProcessingChain) {
     scheduleFeedMeterUpdate();
   }
@@ -1588,7 +1643,7 @@ function setFeedInputProcessingEnabled(enabled, { persist = true } = {}) {
 
   if (persist && typeof window !== 'undefined') {
     try {
-      window.localStorage?.setItem(FEED_INPUT_PROCESSING_STORAGE_KEY, String(feedInputProcessingEnabled));
+      clientLocalStorage?.setItem(FEED_INPUT_PROCESSING_STORAGE_KEY, String(feedInputProcessingEnabled));
     } catch (err) {
       console.warn('Unable to persist feed input processing preference:', err);
     }
@@ -1616,7 +1671,7 @@ function setFeedPtimeMs(value, { persist = true } = {}) {
 
   if (persist && typeof window !== 'undefined') {
     try {
-      window.localStorage?.setItem(FEED_PTIME_STORAGE_KEY, String(feedPtimeMs));
+      clientLocalStorage?.setItem(FEED_PTIME_STORAGE_KEY, String(feedPtimeMs));
     } catch (err) {
       console.warn('Unable to persist feed ptime preference:', err);
     }
@@ -1632,7 +1687,7 @@ function setFeedInputGainDb(dbValue, { persist = true, apply = true } = {}) {
 
   if (persist && typeof window !== 'undefined') {
     try {
-      window.localStorage?.setItem(FEED_INPUT_GAIN_DB_STORAGE_KEY, String(clamped));
+      clientLocalStorage?.setItem(FEED_INPUT_GAIN_DB_STORAGE_KEY, String(clamped));
     } catch (err) {
       console.warn('Unable to persist feed input gain:', err);
     }
@@ -1665,10 +1720,10 @@ function hasSignificantDbChange(lastDb, nextDb) {
   return Math.abs(nextDb - lastDb) >= METER_TEXT_DB_THRESHOLD;
 }
 
-function setFeedMeterDisplayFor(barEl, valueEl, clipEl, state, fraction, text, showClip, clipFraction = null, { forceText = false } = {}) {
+function setFeedMeterDisplayFor(barEl, valueEl, clipEl, state, fraction, text, showClip, { forceText = false } = {}) {
   const clampedFraction = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0));
   if (barEl) {
-    barEl.style.width = `${(clampedFraction * 100).toFixed(1)}%`;
+    audioMeter.renderLevel(barEl, clampedFraction * 100, FEED_METER_MIN_DB);
   }
   if (valueEl && state) {
     const now = nowMs();
@@ -1687,14 +1742,7 @@ function setFeedMeterDisplayFor(barEl, valueEl, clipEl, state, fraction, text, s
     valueEl.classList.toggle('is-clipping', !!showClip);
   }
   if (clipEl) {
-    if (showClip) {
-      const raw = clipFraction == null ? 1 : Number(clipFraction);
-      const clampedClip = Math.max(0, Math.min(1, Number.isFinite(raw) ? raw : 1));
-      clipEl.style.left = `${(clampedClip * 100).toFixed(1)}%`;
-      clipEl.style.opacity = '1';
-    } else {
-      clipEl.style.opacity = '0';
-    }
+    clipEl.style.opacity = showClip ? '1' : '0';
   }
 }
 
@@ -1730,8 +1778,8 @@ function destroyFeedProcessing({ resetUI = true } = {}) {
   feedProcessingChain = null;
 
   if (resetUI) {
-    setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-    setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+    setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, { forceText: true });
+    setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, { forceText: true });
   }
 }
 
@@ -1796,8 +1844,7 @@ function updateFeedMeterFromAnalyser() {
     feedMeterStateL,
     left.fraction,
     textL,
-    showClipL,
-    left.fraction
+    showClipL
   );
   setFeedMeterDisplayFor(
     feedMeterBarREl,
@@ -1806,8 +1853,7 @@ function updateFeedMeterFromAnalyser() {
     feedMeterStateR,
     right.fraction,
     textR,
-    showClipR,
-    right.fraction
+    showClipR
   );
 }
 
@@ -1923,8 +1969,8 @@ function ensureFeedProcessingChain(track) {
     clipHoldFramesR: 0,
   };
 
-  setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-  setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, { forceText: true });
+  setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, { forceText: true });
   scheduleFeedMeterUpdate();
 
   if (typeof outputTrack.addEventListener === 'function') {
@@ -2003,11 +2049,11 @@ function setPreferredInputDeviceId(deviceId, { persist = true, explicit = prefer
   preferredInputDeviceExplicit = Boolean(normalized && explicit);
   if (persist) {
     if (preferredInputDeviceExplicit) {
-      localStorage.setItem(MIC_DEVICE_STORAGE_KEY, normalized);
-      localStorage.setItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY, 'true');
+      clientLocalStorage.setItem(MIC_DEVICE_STORAGE_KEY, normalized);
+      clientLocalStorage.setItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY, 'true');
     } else {
-      localStorage.removeItem(MIC_DEVICE_STORAGE_KEY);
-      localStorage.removeItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY);
+      clientLocalStorage.removeItem(MIC_DEVICE_STORAGE_KEY);
+      clientLocalStorage.removeItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY);
     }
   }
   syncManagedInputSelects(normalized);
@@ -2017,9 +2063,9 @@ function persistPreferredOutputDeviceId(deviceId) {
   const normalized = deviceId || '';
   preferredOutputDeviceId = normalized;
   if (normalized) {
-    localStorage.setItem(OUTPUT_DEVICE_STORAGE_KEY, normalized);
+    clientLocalStorage.setItem(OUTPUT_DEVICE_STORAGE_KEY, normalized);
   } else {
-    localStorage.removeItem(OUTPUT_DEVICE_STORAGE_KEY);
+    clientLocalStorage.removeItem(OUTPUT_DEVICE_STORAGE_KEY);
   }
 }
 
@@ -2066,6 +2112,7 @@ function getCurrentAudioConstraints() {
 }
 
 async function requestInitialMicrophoneAccess({ reason = 'startup' } = {}) {
+  if (remotePanel) return null;
   if (initialMicAccessRequested) return null;
   if (session.kind === 'guest' && !isGuestSessionActive()) return null;
   if (!navigator.mediaDevices?.getUserMedia) return null;
@@ -2100,6 +2147,7 @@ async function requestInitialMicrophoneAccess({ reason = 'startup' } = {}) {
 }
 
 async function startInputMonitor() {
+  if (remotePanel) return null;
   if (!settingsMenuOpen) return null;
   if (settingsMonitorPromise) {
     return settingsMonitorPromise;
@@ -2208,7 +2256,7 @@ function handleSettingsMenuClosed() {
 }
 
 function setActiveSettingsView(nextView = 'main') {
-  const resolvedView = nextView === 'shortcuts' || nextView === 'arrange' ? nextView : 'main';
+  const resolvedView = nextView === 'shortcuts' || (nextView === 'arrange' && canEditTargets()) ? nextView : 'main';
   if (resolvedView === activeSettingsView && settingsMainView && settingsShortcutsView && settingsArrangeView) {
     return;
   }
@@ -2293,7 +2341,7 @@ function setUserInputGainDb(dbValue, { persist = true, apply = true } = {}) {
 
   if (persist && typeof window !== 'undefined') {
     try {
-      window.localStorage?.setItem(USER_INPUT_GAIN_DB_STORAGE_KEY, String(clamped));
+      clientLocalStorage?.setItem(USER_INPUT_GAIN_DB_STORAGE_KEY, String(clamped));
     } catch (err) {
       console.warn('Unable to persist user input gain:', err);
     }
@@ -2308,10 +2356,10 @@ function setUserInputGainDb(dbValue, { persist = true, apply = true } = {}) {
   }
 }
 
-function setUserMeterDisplay(fraction, text, showClip, clipFraction = null, { forceText = false } = {}) {
+function setUserMeterDisplay(fraction, text, showClip, { forceText = false } = {}) {
   const clampedFraction = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0));
   if (userMeterBarEl) {
-    userMeterBarEl.style.width = `${(clampedFraction * 100).toFixed(1)}%`;
+    audioMeter.renderLevel(userMeterBarEl, clampedFraction * 100, USER_METER_MIN_DB);
   }
   if (userMeterValueEl) {
     const now = nowMs();
@@ -2330,14 +2378,7 @@ function setUserMeterDisplay(fraction, text, showClip, clipFraction = null, { fo
     userMeterValueEl.classList.toggle('is-clipping', !!showClip);
   }
   if (userMeterClipEl) {
-    if (showClip) {
-      const raw = clipFraction == null ? 1 : Number(clipFraction);
-      const clampedClip = Math.max(0, Math.min(1, Number.isFinite(raw) ? raw : 1));
-      userMeterClipEl.style.left = `${(clampedClip * 100).toFixed(1)}%`;
-      userMeterClipEl.style.opacity = '1';
-    } else {
-      userMeterClipEl.style.opacity = '0';
-    }
+    userMeterClipEl.style.opacity = showClip ? '1' : '0';
   }
 }
 
@@ -2355,7 +2396,7 @@ function destroyUserMeterMonitorChain({ resetUI = true } = {}) {
   userMeterMonitorChain = null;
 
   if (resetUI) {
-    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, { forceText: true });
   }
 }
 
@@ -2424,7 +2465,7 @@ function ensureUserMeterMonitorChain(track) {
     rafId: null,
     clipHoldFrames: 0,
   };
-  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, { forceText: true });
   return userMeterMonitorChain;
 }
 
@@ -2454,7 +2495,7 @@ function destroyUserProcessing({ resetUI = true } = {}) {
   userProcessingChain = null;
 
   if (resetUI && !userMeterMonitorChain) {
-    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+    setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, { forceText: true });
   }
 }
 
@@ -2510,7 +2551,7 @@ function updateUserMeterFromAnalyser() {
     ? formatDbDisplay(peakDb)
     : '-inf dB';
 
-  setUserMeterDisplay(fraction, displayText, showClip, fraction);
+  setUserMeterDisplay(fraction, displayText, showClip);
 }
 
 function ensureUserProcessingChain(track) {
@@ -2780,7 +2821,7 @@ function getStoredVolume(key, defaultValue = defaultVolume) {
   };
 
   try {
-    const v = sessionStorage.getItem(key);
+    const v = clientSessionStorage.getItem(key);
     if (v !== null) {
       const normalized = normalizeVolume(v, defaultValue);
       volumeMemoryStore.set(key, normalized);
@@ -2808,7 +2849,7 @@ function storeVolume(key, value) {
   );
   volumeMemoryStore.set(key, normalized);
   try {
-    sessionStorage.setItem(key, String(normalized));
+    clientSessionStorage.setItem(key, String(normalized));
   } catch (error) {
     if (!warnedVolumeStorageWrite) {
       warnedVolumeStorageWrite = true;
@@ -2818,7 +2859,10 @@ function storeVolume(key, value) {
 }
 
 async function updateDeviceList() {
+  if (remotePanel) return;
   const devices = await navigator.mediaDevices.enumerateDevices();
+  clientPanelDevices = devices.map(({ kind, deviceId, label }) => ({ kind, deviceId, label }));
+  setTimeout(() => reportClientPanelState(), 0);
   const inputs  = devices.filter(d => d.kind === "audioinput");
   const outputs = devices.filter(d => d.kind === "audiooutput");
 
@@ -2851,8 +2895,8 @@ async function updateDeviceList() {
       } else {
         preferredInputDeviceExplicit = false;
         try {
-          localStorage.removeItem(MIC_DEVICE_STORAGE_KEY);
-          localStorage.removeItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY);
+          clientLocalStorage.removeItem(MIC_DEVICE_STORAGE_KEY);
+          clientLocalStorage.removeItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY);
         } catch {}
         preferredInputDeviceId = desiredDeviceId;
         syncManagedInputSelects(desiredDeviceId);
@@ -2982,6 +3026,7 @@ function buildRelaxedAudioConstraints(audioConstraints, { dropDeviceId = false }
 }
 
 async function ensureMicTrack(audioConstraints, selectedDeviceId) {
+  if (remotePanel) throw new Error('Remote control has no local audio');
   if (micTrack && micTrack.readyState === 'live') {
     if (!selectedDeviceId || selectedDeviceId === micDeviceId) {
       if (micCleanupTimer) {
@@ -3094,6 +3139,7 @@ async function warmReceiveAudioSession(reason = 'receive-audio-session') {
 }
 
 async function primeVoiceProcessingMode() {
+  if (remotePanel) return;
   if (!isiOS) return;
   if (micPrimed) return;
   if (micPrimingPromise) return micPrimingPromise;
@@ -3161,7 +3207,7 @@ function currentQualityKey() {
   const fromSelect = qualitySelect?.value;
   if (fromSelect && QUALITY_PROFILES[fromSelect]) return fromSelect;
 
-  const stored = localStorage.getItem('audioQualityProfile');
+  const stored = clientLocalStorage.getItem('audioQualityProfile');
   if (stored && QUALITY_PROFILES[stored]) return stored;
 
   const serverDefault = serverDefaultClientSettings.audioProfile;
@@ -3171,6 +3217,30 @@ function currentQualityKey() {
 document.addEventListener("DOMContentLoaded", () => {
   console.log("DOM loaded, initializing...");
   document.body?.classList.toggle('feed-dim-unsupported', !supportsFeedDimming());
+
+  let viewportLayoutFrame = null;
+  const syncVisibleViewport = () => {
+    if (viewportLayoutFrame !== null) return;
+    viewportLayoutFrame = window.requestAnimationFrame(() => {
+      viewportLayoutFrame = null;
+      const viewport = window.visualViewport;
+      if (!viewport || viewport.scale === 1) {
+        const height = viewport?.height ?? window.innerHeight;
+        document.documentElement.style.setProperty('--app-viewport-height', `${height}px`);
+        schedulePttButtonSizing();
+        updateTargetLayerControls();
+      }
+    });
+  };
+  syncVisibleViewport();
+  window.addEventListener('resize', syncVisibleViewport, { passive: true });
+  window.visualViewport?.addEventListener('resize', syncVisibleViewport, { passive: true });
+  if (typeof ResizeObserver === 'function') {
+    const layoutObserver = new ResizeObserver(syncVisibleViewport);
+    for (const element of [document.getElementById('targets-list'), document.querySelector('.session-bar')]) {
+      if (element) layoutObserver.observe(element);
+    }
+  }
 
   inputSelect  = document.getElementById("input-select");
   feedInputSelect = document.getElementById("feed-input-select");
@@ -3194,6 +3264,7 @@ document.addEventListener("DOMContentLoaded", () => {
   dimWhenAddressedToggle = document.getElementById('toggle-incoming-dim');
   audioProcessingToggle = document.getElementById('toggle-processing');
   connectionSoundsToggle = document.getElementById('toggle-connection-sounds');
+  incomingLevelsToggle = document.getElementById('toggle-incoming-levels');
   leftHandModeToggle = document.getElementById('toggle-left-hand-mode');
   lockMultipleTargetsToggle = document.getElementById('toggle-lock-multiple-targets');
   userLevelControls = document.getElementById('user-level-controls');
@@ -3223,12 +3294,12 @@ document.addEventListener("DOMContentLoaded", () => {
   syncManagedOutputSelects(preferredOutputDeviceId);
 
   updateUserGainUI();
-  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  setUserMeterDisplay(0, formatDbDisplay(-Infinity), false, { forceText: true });
   updateFeedGainUI();
   updateFeedProcessingUI();
   updateFeedPtimeUI();
-  setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
-  setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, null, { forceText: true });
+  setFeedMeterDisplayFor(feedMeterBarLEl, feedMeterValueLEl, feedMeterClipLEl, feedMeterStateL, 0, formatDbDisplay(-Infinity), false, { forceText: true });
+  setFeedMeterDisplayFor(feedMeterBarREl, feedMeterValueREl, feedMeterClipREl, feedMeterStateR, 0, formatDbDisplay(-Infinity), false, { forceText: true });
   applyUserGainControlState();
   ensureCustomTargetHotkeysLoaded();
 
@@ -3338,6 +3409,26 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function setShowIncomingLevels(value, { persist = true } = {}) {
+    showIncomingLevelsEnabled = Boolean(value);
+    document.body.classList.toggle('show-incoming-levels', showIncomingLevelsEnabled && !remotePanel);
+    if (incomingLevelsToggle) incomingLevelsToggle.checked = showIncomingLevelsEnabled;
+    syncIncomingLevelMeters();
+    if (persist) {
+      try {
+        clientLocalStorage?.setItem(INCOMING_LEVELS_STORAGE_KEY, String(showIncomingLevelsEnabled));
+      } catch (error) {
+        console.warn('Unable to persist incoming level meters:', error);
+      }
+      persistUserAudioSettingsHandler();
+    }
+  }
+
+  setShowIncomingLevels(showIncomingLevelsEnabled, { persist: false });
+  incomingLevelsToggle?.addEventListener('change', () => {
+    setShowIncomingLevels(incomingLevelsToggle.checked);
+  });
+
   function setLeftHandMode(value, { persist = true } = {}) {
     leftHandModeEnabled = Boolean(value);
     document.body?.classList.toggle('left-hand-mode', leftHandModeEnabled);
@@ -3351,7 +3442,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     if (persist && typeof window !== 'undefined') {
       try {
-        window.localStorage?.setItem(LEFT_HAND_MODE_STORAGE_KEY, String(leftHandModeEnabled));
+        clientLocalStorage?.setItem(LEFT_HAND_MODE_STORAGE_KEY, String(leftHandModeEnabled));
       } catch (error) {
         console.warn('Unable to persist left-hand mode:', error);
       }
@@ -3364,6 +3455,32 @@ document.addEventListener("DOMContentLoaded", () => {
     setLeftHandMode(leftHandModeToggle.checked);
   });
 
+  const bigMainButtonToggle = document.getElementById('toggle-big-main-button');
+  function setBigMainButton(enabled, { persist = true } = {}) {
+    document.body.classList.toggle('big-main-button', enabled);
+    if (bigMainButtonToggle) bigMainButtonToggle.checked = enabled;
+    if (persist) {
+      try {
+        clientLocalStorage.setItem(BIG_MAIN_BUTTON_STORAGE_KEY, String(enabled));
+      } catch (error) {
+        console.warn('Unable to persist main button size:', error);
+      }
+    }
+    window.requestAnimationFrame(() => {
+      schedulePttButtonSizing();
+      updateTargetLayerControls();
+    });
+  }
+  let bigMainButtonEnabled = serverDefaultClientSettings.bigMainButton === true;
+  try {
+    const storedBigMainButton = clientLocalStorage.getItem(BIG_MAIN_BUTTON_STORAGE_KEY);
+    if (storedBigMainButton !== null) bigMainButtonEnabled = storedBigMainButton === 'true';
+  } catch {}
+  setBigMainButton(bigMainButtonEnabled, { persist: false });
+  bigMainButtonToggle?.addEventListener('change', () => {
+    setBigMainButton(bigMainButtonToggle.checked);
+  });
+
   function setLockMultipleTargets(value, { persist = true } = {}) {
     const wasEnabled = lockMultipleTargetsEnabled;
     lockMultipleTargetsEnabled = Boolean(value);
@@ -3372,7 +3489,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (persist && typeof window !== 'undefined') {
       try {
-        window.localStorage?.setItem(LOCK_MULTIPLE_TARGETS_STORAGE_KEY, String(lockMultipleTargetsEnabled));
+        clientLocalStorage?.setItem(LOCK_MULTIPLE_TARGETS_STORAGE_KEY, String(lockMultipleTargetsEnabled));
       } catch (error) {
         console.warn('Unable to persist multiple-target lock mode:', error);
       }
@@ -3400,7 +3517,20 @@ document.addEventListener("DOMContentLoaded", () => {
     setLockMultipleTargets(lockMultipleTargetsToggle.checked);
   });
 
-  const storedQuality = localStorage.getItem('audioQualityProfile');
+  const tapToLockToggle = document.getElementById('toggle-tap-to-lock');
+  let pendingTapToLock;
+  function setTapToLock(value) {
+    tapToLockEnabled = value;
+    if (tapToLockToggle) tapToLockToggle.checked = value;
+  }
+  setTapToLock(tapToLockEnabled);
+  tapToLockToggle?.addEventListener('change', () => {
+    setTapToLock(tapToLockToggle.checked);
+    pendingTapToLock = tapToLockEnabled;
+    persistUserAudioSettingsHandler();
+  });
+
+  const storedQuality = clientLocalStorage.getItem('audioQualityProfile');
   const defaultQuality = QUALITY_PROFILES[serverDefaultClientSettings.audioProfile]
     ? serverDefaultClientSettings.audioProfile
     : 'ultra-low';
@@ -3416,7 +3546,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!QUALITY_PROFILES[selected]) {
         qualitySelect.value = 'ultra-low';
       }
-      localStorage.setItem('audioQualityProfile', qualitySelect.value);
+      clientLocalStorage.setItem('audioQualityProfile', qualitySelect.value);
       persistUserAudioSettingsHandler();
       cleanupMicTrack();
       if (voiceTriggerEnabled) {
@@ -3435,7 +3565,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (persist && typeof window !== 'undefined') {
       try {
-        window.localStorage?.setItem(FEED_DUCKING_DB_STORAGE_KEY, String(clamped));
+        clientLocalStorage?.setItem(FEED_DUCKING_DB_STORAGE_KEY, String(clamped));
       } catch (err) {
         console.warn('Unable to persist feed dim level:', err);
       }
@@ -3464,7 +3594,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (persist && typeof window !== 'undefined') {
       try {
-        window.localStorage?.setItem(FEED_DIM_SELF_STORAGE_KEY, String(enabled));
+        clientLocalStorage?.setItem(FEED_DIM_SELF_STORAGE_KEY, String(enabled));
       } catch (err) {
         console.warn('Unable to persist self dim preference:', err);
       }
@@ -3490,7 +3620,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (persist && typeof window !== 'undefined') {
       try {
-        window.localStorage?.setItem(FEED_DIM_INCOMING_STORAGE_KEY, String(enabled));
+        clientLocalStorage?.setItem(FEED_DIM_INCOMING_STORAGE_KEY, String(enabled));
       } catch (err) {
         console.warn('Unable to persist incoming dim preference:', err);
       }
@@ -3509,12 +3639,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   updateDeviceList().catch(err => console.error("updateDeviceList failed:", err));
-  navigator.mediaDevices.addEventListener("devicechange", () =>
+  if (!remotePanel) navigator.mediaDevices?.addEventListener("devicechange", () =>
       updateDeviceList().catch(err => console.error(err))
   );
 
   const handleInputDeviceSelectionChange = (selected) => {
     setPreferredInputDeviceId(selected, { persist: true, explicit: Boolean(selected) });
+    if (remotePanel) return;
     if (session.kind === 'feed') {
       const wasStreaming = feedStreaming;
       if (feedStreaming) {
@@ -3604,21 +3735,26 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderMediaConnectionStatus() {
     if (!mediaConnectionStatusEl || !mediaConnectionStatusLabelEl) return;
 
-    const states = [mediaConnectionState.send, mediaConnectionState.receive];
-    const iceStates = [mediaConnectionState.sendIce, mediaConnectionState.receiveIce];
-    let label = 'Media idle';
+    const connection = remotePanel
+      ? remotePanel.state?.online
+        ? remotePanel.state.runtime?.mediaConnection || { signaling: 'connected', send: 'idle', receive: 'idle' }
+        : { signaling: 'failed', send: 'idle', receive: 'idle' }
+      : mediaConnectionState;
+    const states = [connection.send, connection.receive];
+    const iceStates = [connection.sendIce, connection.receiveIce];
+    let label = remotePanel && !remotePanel.state?.runtime?.mediaConnection ? 'Media status unavailable' : 'Media idle';
     let className = '';
 
-    if (mediaConnectionState.signaling === 'failed') {
+    if (connection.signaling === 'failed') {
       label = 'Server unavailable';
       className = 'is-failed';
-    } else if (mediaConnectionState.signaling !== 'connected') {
+    } else if (connection.signaling !== 'connected') {
       label = 'Server connecting';
       className = 'is-connecting';
     } else if (states.includes('failed')) {
       label = 'Media failed';
       className = 'is-failed';
-    } else if (mediaConnectionState.heartbeatInterrupted) {
+    } else if (connection.heartbeatInterrupted) {
       label = 'Server not responding';
       className = 'is-warning';
     } else if (states.includes('disconnected')) {
@@ -3633,10 +3769,10 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (states.includes('connected')) {
       label = 'Media connected';
       className = 'is-connected';
-    } else if (mediaConnectionState.iceError) {
+    } else if (connection.iceError) {
       label = 'ICE warning';
       className = 'is-warning';
-    } else if (mediaInitialized) {
+    } else if (remotePanel ? connection.initialized : mediaInitialized) {
       label = 'Media ready';
       className = 'is-connected';
     }
@@ -3644,13 +3780,13 @@ document.addEventListener("DOMContentLoaded", () => {
     mediaConnectionStatusEl.className = `media-connection-status${className ? ` ${className}` : ''}`;
     mediaConnectionStatusLabelEl.textContent = label;
     mediaConnectionStatusEl.title = [
-      `Signaling: ${mediaConnectionState.signaling}`,
-      `Server heartbeat: ${mediaConnectionState.heartbeatInterrupted ? 'missing' : 'no interruption detected'}`,
-      `Send media: ${mediaConnectionState.send}`,
-      `Receive media: ${mediaConnectionState.receive}`,
-      `Send ICE: ${mediaConnectionState.sendIce}`,
-      `Receive ICE: ${mediaConnectionState.receiveIce}`,
-      mediaConnectionState.iceError ? `Last ICE error: ${mediaConnectionState.iceError}` : null,
+      `Signaling: ${connection.signaling}`,
+      `Server heartbeat: ${connection.heartbeatInterrupted ? 'missing' : 'no interruption detected'}`,
+      `Send media: ${remotePanel && !remotePanel.state?.runtime?.mediaConnection ? 'not reported' : connection.send}`,
+      `Receive media: ${remotePanel && !remotePanel.state?.runtime?.mediaConnection ? 'not reported' : connection.receive}`,
+      `Send ICE: ${connection.sendIce || 'not reported'}`,
+      `Receive ICE: ${connection.receiveIce || 'not reported'}`,
+      connection.iceError ? `Last ICE error: ${connection.iceError}` : null,
     ].filter(Boolean).join('\n');
   }
 
@@ -3661,9 +3797,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function reportMediaTransportEvent(direction, event, state, detail = null) {
-    if (!socket.connected) return;
+    if (remotePanel || !socket.connected) return;
     socket.emit('media-transport-event', {
       direction,
+      transportId: (direction === 'send' ? sendTransport : recvTransport)?.id || null,
       event,
       state: state || 'unknown',
       detail: detail ? String(detail).slice(0, 500) : null,
@@ -3687,6 +3824,7 @@ document.addEventListener("DOMContentLoaded", () => {
     mediaConnectionState[direction] = transport.connectionState || 'new';
     mediaConnectionState[`${direction}Ice`] = transport.iceGatheringState || 'new';
     renderMediaConnectionStatus();
+    reportMediaTransportEvent(direction, 'connection-state', mediaConnectionState[direction]);
 
     transport.on('connectionstatechange', (state) => {
       if (direction === 'send' && transport !== sendTransport) return;
@@ -3728,6 +3866,8 @@ document.addEventListener("DOMContentLoaded", () => {
     mediaConnectionState.receiveIce = 'idle';
     mediaConnectionState.iceError = null;
     renderMediaConnectionStatus();
+    reportMediaTransportEvent('send', 'connection-state', 'idle');
+    reportMediaTransportEvent('receive', 'connection-state', 'idle');
   }
 
   renderMediaConnectionStatus();
@@ -3752,6 +3892,21 @@ document.addEventListener("DOMContentLoaded", () => {
   const conferenceLabels = new Map();
 
   const audioElements = new Map();
+  readActiveAudioOutput = async () => {
+    // Read the sinks actually used by Web Audio/media, not the saved preference.
+    const sinks = new Set();
+    if (sharedAudioContext?.state !== 'closed' && typeof sharedAudioContext?.sinkId === 'string') sinks.add(sharedAudioContext.sinkId);
+    for (const audio of [remotePlaybackBus?.audio, ...Array.from(audioElements.values(), entry => entry.audio)]) {
+      if (audio && typeof audio.sinkId === 'string') sinks.add(audio.sinkId);
+    }
+    if (!sinks.size) return null;
+    if (sinks.size > 1) return { kind: 'other', label: 'Multiple outputs' };
+    const sinkId = [...sinks][0];
+    const devices = await navigator.mediaDevices?.enumerateDevices?.() || [];
+    const output = devices.find(device => device.kind === 'audiooutput' && device.deviceId === (sinkId || 'default'));
+    if (output?.label) return { kind: 'other', label: output.label };
+    return sinkId === '' ? { kind: 'other', label: 'System default' } : null;
+  };
   const audioEntryMap = new WeakMap();
   const confAudioElements = new Map();
   const feedAudioElements = new Map();
@@ -3759,6 +3914,92 @@ document.addEventListener("DOMContentLoaded", () => {
   const stoppedFeedKeys = new Set();
   const listenOnlyConferenceKeys = new Set();
   const activeFeedKeys = new Set();
+  const feedVideo = window.TalktomeFeedVideo.createController({
+    socket, getSession: () => session, getDevice: () => device,
+    getSendTransport: () => sendTransport, getRecvTransport: () => recvTransport,
+    isStreaming: () => feedStreaming, isStopped: key => stoppedFeedKeys.has(key),
+    enabled: !remotePanel,
+    onLayoutChange: (anchorKey) => {
+      const list = document.getElementById('targets-list');
+      if (!list) return;
+      list.classList.toggle('has-expanded-video', feedVideo.hasExpanded());
+      updateTargetLayerControls();
+      // Keep the feed just opened on screen even if packing moved it to a new layer.
+      const anchor = anchorKey && document.getElementById(anchorKey);
+      if (anchor) {
+        currentTargetLayerIndex = Number(anchor.dataset.layer || 0);
+        updateTargetLayerControls();
+      }
+      schedulePttButtonSizing();
+    },
+  });
+
+  socket.on('feed-video-permission-updated', ({ allowed } = {}) => {
+    if (session?.kind === 'feed') feedVideo.setAllowed(allowed === true);
+  });
+
+  const incomingLevelMonitor = window.TalktomeIncomingAudioLevels.createMonitor({
+    getTransport: () => recvTransport,
+    getAudioContext: () => {
+      const context = ensureAudioContext();
+      if (context?.state === 'suspended') context.resume().catch(() => {});
+      return context;
+    },
+    getBindings: () => {
+      const bindings = [];
+      for (const [streamKey, consumers] of peerConsumers) {
+        const entry = audioElements.get(streamKey);
+        if (!entry) continue;
+        for (const consumer of consumers) {
+          if (consumer.closed) continue;
+          bindings.push({
+            id: consumer.id,
+            targetKey: entry.key,
+            track: consumer.track,
+            paused: consumer.paused,
+          });
+        }
+      }
+      return bindings;
+    },
+    onLevels: (levels) => {
+      document.querySelectorAll('#targets-list .target-level-meter').forEach((meter) => {
+        const level = levels.get(meter.parentElement.id) ?? 0;
+        const unavailable = levels.has(meter.parentElement.id) && levels.get(meter.parentElement.id) === null;
+        const percent = window.TalktomeIncomingAudioLevels.levelToPercent(level);
+        audioMeter.renderLevel(meter.firstElementChild, percent, window.TalktomeIncomingAudioLevels.MIN_DB, true);
+        meter.classList.toggle('is-unavailable', unavailable);
+        meter.setAttribute('aria-valuenow', String(Math.round(percent)));
+        const description = unavailable ? 'Incoming level unavailable in this browser'
+          : percent > 0 ? `Incoming audio: ${Math.round(20 * Math.log10(level))} dBFS`
+          : 'No incoming audio';
+        meter.setAttribute('aria-valuetext', description);
+        meter.title = `${description}. Measured before playback volume and dimming.`;
+      });
+    },
+  });
+  syncIncomingLevelMeters = () => {
+    incomingLevelMonitor.setEnabled(showIncomingLevelsEnabled && !remotePanel
+      && isOperatorSession() && document.visibilityState !== 'hidden');
+  };
+  document.addEventListener('visibilitychange', syncIncomingLevelMeters);
+
+  function createTargetLevelMeter() {
+    const meter = document.createElement('span');
+    meter.className = 'target-level-meter';
+    meter.setAttribute('role', 'meter');
+    meter.setAttribute('aria-label', 'Incoming audio level');
+    meter.setAttribute('aria-valuemin', '0');
+    meter.setAttribute('aria-valuemax', '100');
+    meter.setAttribute('aria-valuenow', '0');
+    meter.setAttribute('aria-valuetext', 'No incoming audio');
+    meter.title = 'Incoming audio before playback volume and dimming';
+    const fill = document.createElement('span');
+    fill.className = 'target-level-meter__fill';
+    meter.append(fill);
+    return meter;
+  }
+
   collectMediaConsumerNetworkStats = async () => {
     const consumerEntries = [];
     for (const [streamKey, consumers] of peerConsumers.entries()) {
@@ -3825,15 +4066,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function clearStoredPersistentIdentity() {
-    localStorage.removeItem("userId");
-    localStorage.removeItem(FEED_ID_STORAGE_KEY);
-    localStorage.removeItem("userName");
-    localStorage.removeItem(IDENTITY_KIND_KEY);
+    clientLocalStorage.removeItem("userId");
+    clientLocalStorage.removeItem(FEED_ID_STORAGE_KEY);
+    clientLocalStorage.removeItem("userName");
+    clientLocalStorage.removeItem(IDENTITY_KIND_KEY);
   }
 
   function loadStoredGuestSession() {
     try {
-      const raw = sessionStorage.getItem(GUEST_SESSION_STORAGE_KEY);
+      const raw = clientSessionStorage.getItem(GUEST_SESSION_STORAGE_KEY);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       const guestId = String(parsed?.guestId || '').trim();
@@ -3860,7 +4101,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function persistGuestSession(nextSession) {
     if (!nextSession || nextSession.kind !== 'guest') return;
     try {
-      sessionStorage.setItem(GUEST_SESSION_STORAGE_KEY, JSON.stringify({
+      clientSessionStorage.setItem(GUEST_SESSION_STORAGE_KEY, JSON.stringify({
         guestId: nextSession.guestId,
         guestProfileUserId: nextSession.guestProfileUserId,
         productionId: nextSession.productionId,
@@ -3875,7 +4116,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function clearStoredGuestSession() {
     try {
-      sessionStorage.removeItem(GUEST_SESSION_STORAGE_KEY);
+      clientSessionStorage.removeItem(GUEST_SESSION_STORAGE_KEY);
     } catch {}
   }
 
@@ -4035,6 +4276,8 @@ let cachedUsers = [];
 let latestServerUsers = [];
 let cachedOperatorTargets = null;
   const arrangeTargetsList = document.getElementById('arrange-targets-list');
+  const addTargetsButton = document.getElementById('edit-targets-add');
+  const addTargetsList = document.getElementById('edit-targets-available');
   const arrangeTargetsEmpty = document.getElementById('arrange-targets-empty');
   const arrangeTargetsMessage = document.getElementById('arrange-targets-message');
   let arrangeTargetsDraft = [];
@@ -4055,6 +4298,7 @@ let cachedOperatorTargets = null;
   function renderArrangeTargets() {
     if (!arrangeTargetsList || !arrangeTargetsEmpty) return;
     arrangeTargetsList.replaceChildren();
+    if (addTargetsButton) { addTargetsButton.hidden = !allowTargetAddRemove || Boolean(remotePanel); addTargetsButton.disabled = arrangeTargetsSaving; }
     arrangeTargetsEmpty.hidden = arrangeTargetsDraft.length > 0;
 
     arrangeTargetsDraft.forEach((target, index) => {
@@ -4068,6 +4312,7 @@ let cachedOperatorTargets = null;
       handle.type = 'button';
       handle.className = 'arrange-targets__handle';
       handle.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>';
+      handle.hidden = !canArrangeTargets();
       handle.setAttribute('aria-label', `Reorder ${name}. Drag or use the up and down arrow keys.`);
       handle.addEventListener('keydown', (event) => {
         if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
@@ -4087,9 +4332,64 @@ let cachedOperatorTargets = null;
       type.textContent = kind;
       identity.append(label, type);
       row.append(handle, identity);
+      if (allowTargetAddRemove && !remotePanel) {
+        const remove = document.createElement('button');
+        remove.type = 'button'; remove.className = 'edit-targets__remove';
+        remove.setAttribute('aria-label', `Remove ${name}`); remove.title = `Remove ${name}`;
+        remove.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>';
+        remove.disabled = arrangeTargetsSaving;
+        remove.addEventListener('click', () => changeSelectedTarget('remove', target));
+        row.append(remove);
+      }
       arrangeTargetsList.appendChild(row);
     });
+    updateArrangeTargetsBusy();
   }
+
+  function updateArrangeTargetsBusy() {
+    // Keep the existing nodes (and menu height) while a request is pending.
+    // In particular, do not remove a touch target before Safari finishes it.
+    if (addTargetsButton) addTargetsButton.disabled = arrangeTargetsSaving;
+    arrangeTargetsList?.querySelectorAll('button').forEach(button => { button.disabled = arrangeTargetsSaving; });
+    addTargetsList?.querySelectorAll('button').forEach(button => { button.disabled = arrangeTargetsSaving; });
+  }
+
+  async function changeSelectedTarget(action, target) {
+    if (!allowTargetAddRemove || remotePanel || arrangeTargetsSaving) return;
+    const productionId = session.productionId, userId = session.userId;
+    arrangeTargetsSaving = true;
+    clearArrangeTargetsDrag(); updateArrangeTargetsBusy(); setArrangeTargetsMessage('Saving…');
+    try {
+      const response = await fetch('/api/v1/client/targets/selection', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productionId, action, targetType: target.targetType, targetId: Number(target.targetId) }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Could not edit targets');
+      if (session.userId === userId && session.productionId === productionId) await loadArrangeTargets();
+    } catch (error) { setArrangeTargetsMessage(error.message, true); }
+    finally { arrangeTargetsSaving = false; renderArrangeTargets(); }
+  }
+
+  addTargetsButton?.addEventListener('click', async () => {
+    if (!allowTargetAddRemove || arrangeTargetsSaving || remotePanel) return;
+    if (!addTargetsList.hidden) { addTargetsList.hidden = true; return; }
+    const userId = session.userId, productionId = session.productionId;
+    setArrangeTargetsMessage('Loading…');
+    try {
+      const available = await fetchJSON(`/api/v1/client/targets/available?productionId=${encodeURIComponent(productionId ?? '')}`);
+      if (!allowTargetAddRemove || session.userId !== userId || session.productionId !== productionId || activeSettingsView !== 'arrange') return;
+      addTargetsList.replaceChildren();
+      const selected = new Set(arrangeTargetsDraft.map(t => `${t.targetType}:${t.targetId}`));
+      for (const target of available.filter(t => !selected.has(`${t.targetType}:${t.targetId}`))) {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'settings-nav-button';
+        button.textContent = `＋ ${target.name} · ${target.targetType === 'conference' ? 'Conference' : target.targetType === 'feed' ? 'Feed' : 'User'}`;
+        button.addEventListener('click', () => changeSelectedTarget('add', target)); addTargetsList.append(button);
+      }
+      addTargetsList.hidden = false;
+      setArrangeTargetsMessage(addTargetsList.children.length ? '' : 'All available targets are already added.');
+    } catch (error) { setArrangeTargetsMessage(error.message, true); }
+  });
 
   function clearArrangeTargetsDrag() {
     if (!arrangeTargetsDrag) return;
@@ -4126,7 +4426,7 @@ let cachedOperatorTargets = null;
   }
 
   function moveArrangeTarget(sourceIndex, destinationIndex, restoreFocus = false) {
-    if (arrangeTargetsSaving || destinationIndex < 0 || destinationIndex >= arrangeTargetsDraft.length
+    if (!canArrangeTargets() || arrangeTargetsSaving || destinationIndex < 0 || destinationIndex >= arrangeTargetsDraft.length
       || sourceIndex === destinationIndex) return;
     const [target] = arrangeTargetsDraft.splice(sourceIndex, 1);
     arrangeTargetsDraft.splice(destinationIndex, 0, target);
@@ -4139,7 +4439,7 @@ let cachedOperatorTargets = null;
 
   arrangeTargetsList?.addEventListener('pointerdown', (event) => {
     const handle = event.target.closest('.arrange-targets__handle');
-    if (!handle || !event.isPrimary || event.button !== 0 || arrangeTargetsSaving || arrangeTargetsDrag) return;
+    if (!canArrangeTargets() || !handle || !event.isPrimary || event.button !== 0 || arrangeTargetsSaving || arrangeTargetsDrag) return;
     const row = handle.closest('.arrange-targets__row');
     const sourceIndex = [...arrangeTargetsList.children].indexOf(row);
     if (sourceIndex < 0 || arrangeTargetsDraft.length < 2) return;
@@ -4182,26 +4482,33 @@ let cachedOperatorTargets = null;
   });
 
   async function loadArrangeTargets() {
-    if (session.kind !== 'user' || !session.userId) return;
+    if (!canEditTargets() || !session.userId) return;
     clearArrangeTargetsDrag();
     const generation = ++arrangeTargetsLoadGeneration;
     const userId = session.userId;
     const productionId = session.productionId;
-    arrangeTargetsDraft = [];
-    arrangeTargetsSaved = [];
-    arrangeTargetsForUserId = null;
-    arrangeTargetsForProductionId = null;
-    renderArrangeTargets();
+    const sameContext = arrangeTargetsForUserId === userId && arrangeTargetsForProductionId === productionId;
+    // A refresh must not collapse the menu to its header while fetching. Only
+    // clear immediately when switching users/productions, to avoid stale scope.
+    if (!sameContext) {
+      arrangeTargetsDraft = [];
+      arrangeTargetsSaved = [];
+      arrangeTargetsForUserId = null;
+      arrangeTargetsForProductionId = null;
+      if (addTargetsList) addTargetsList.hidden = true;
+      renderArrangeTargets();
+    }
     setArrangeTargetsMessage('Loading…');
     try {
       const productionQuery = productionId ? `?productionId=${encodeURIComponent(productionId)}` : '';
-      const targets = await fetchJSON(`/users/${encodeURIComponent(userId)}/targets${productionQuery}`);
+      const targets = remotePanel ? remotePanel.state.targets : await fetchJSON(`/users/${encodeURIComponent(userId)}/targets${productionQuery}`);
       if (generation !== arrangeTargetsLoadGeneration || activeSettingsView !== 'arrange'
         || session.userId !== userId || session.productionId !== productionId) return false;
       arrangeTargetsDraft = Array.isArray(targets) ? targets.map((target) => ({ ...target })) : [];
       arrangeTargetsSaved = arrangeTargetsDraft.map((target) => ({ ...target }));
       arrangeTargetsForUserId = userId;
       arrangeTargetsForProductionId = productionId;
+      if (addTargetsList) addTargetsList.hidden = true;
       renderArrangeTargets();
       setArrangeTargetsMessage();
       return true;
@@ -4214,7 +4521,7 @@ let cachedOperatorTargets = null;
 
   loadArrangeTargetsHandler = loadArrangeTargets;
   async function persistArrangeTargets() {
-    if (arrangeTargetsSaving || session.kind !== 'user' || !session.userId) return;
+    if (arrangeTargetsSaving || !canArrangeTargets() || !session.userId) return;
     const userId = arrangeTargetsForUserId;
     const productionId = arrangeTargetsForProductionId;
     if (session.userId !== userId || session.productionId !== productionId) {
@@ -4227,6 +4534,13 @@ let cachedOperatorTargets = null;
     setArrangeTargetsMessage('Saving…');
     let refreshOnFinish = false;
     try {
+      if (remotePanel) {
+        const result = await remotePanel.command({ kind: 'order', items: submitted.map(({ targetType, targetId }) => ({ targetType, targetId })) });
+        if (!result.ok) throw new Error(result.error || 'Could not save target order');
+        arrangeTargetsSaved = submitted;
+        setArrangeTargetsMessage('Saved');
+        return;
+      }
       const response = await fetch('/api/v1/client/targets/order', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -4278,6 +4592,7 @@ let cachedOperatorTargets = null;
   let streamPruneInterval = null;
   let activeProducerSyncInterval = null;
   let activeProducersSyncInFlight = false;
+  let activeProducersSyncRequested = false;
   let pendingIncomingConsumeKeys = new Set();
   const EARLY_CLOSED_CONSUMER_TTL_MS = 10000;
   const earlyClosedConsumerIds = new Map();
@@ -4308,7 +4623,7 @@ let cachedOperatorTargets = null;
     if (!storageKey) return;
 
     try {
-      const parsed = JSON.parse(window.localStorage?.getItem(storageKey) || '{}');
+      const parsed = JSON.parse(clientLocalStorage?.getItem(storageKey) || '{}');
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
       Object.entries(parsed).forEach(([conferenceId, userIds]) => {
         const numericConferenceId = Number(conferenceId);
@@ -4339,7 +4654,7 @@ let cachedOperatorTargets = null;
     });
 
     try {
-      window.localStorage?.setItem(storageKey, JSON.stringify(serialized));
+      clientLocalStorage?.setItem(storageKey, JSON.stringify(serialized));
     } catch (error) {
       console.warn('Failed to save conference member listen preferences:', error);
     }
@@ -4354,7 +4669,7 @@ let cachedOperatorTargets = null;
     if (!storageKey) return;
 
     try {
-      const parsed = JSON.parse(window.localStorage?.getItem(storageKey) || '{}');
+      const parsed = JSON.parse(clientLocalStorage?.getItem(storageKey) || '{}');
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
       Object.entries(parsed).forEach(([conferenceId, rawLevels]) => {
         const numericConferenceId = Number(conferenceId);
@@ -4398,7 +4713,7 @@ let cachedOperatorTargets = null;
     });
 
     try {
-      window.localStorage?.setItem(storageKey, JSON.stringify(serialized));
+      clientLocalStorage?.setItem(storageKey, JSON.stringify(serialized));
     } catch (error) {
       console.warn('Failed to save conference member levels:', error);
     }
@@ -4595,10 +4910,10 @@ let cachedOperatorTargets = null;
       }
     });
     try {
-      for (let i = sessionStorage.length - 1; i >= 0; i -= 1) {
-        const key = sessionStorage.key(i);
+      for (let i = clientSessionStorage.length - 1; i >= 0; i -= 1) {
+        const key = clientSessionStorage.key(i);
         if (key && TARGET_AUDIO_VOLUME_STORAGE_PREFIXES.some(prefix => key.startsWith(prefix))) {
-          sessionStorage.removeItem(key);
+          clientSessionStorage.removeItem(key);
         }
       }
     } catch (error) {
@@ -4682,6 +4997,11 @@ let cachedOperatorTargets = null;
 
   async function applyOutputDeviceSelection(deviceId, { persist = true, sync = true, requestPermission = false } = {}) {
     const normalized = deviceId || '';
+    if (remotePanel) {
+      if (persist) persistPreferredOutputDeviceId(normalized);
+      if (sync) syncManagedOutputSelects(normalized);
+      return true;
+    }
     if (!supportsAudioOutputSelection()) {
       if (sync) syncManagedOutputSelects('');
       if (persist) persistPreferredOutputDeviceId('');
@@ -4835,6 +5155,8 @@ let cachedOperatorTargets = null;
   }
 
   function emitPttState(reason, overrides = {}) {
+    if (remotePanel) return;
+    setTimeout(() => reportClientPanelState(), 0);
     if (!isOperatorSession()) return;
     if (!socket.connected) return;
     const state = getCurrentPttState(overrides);
@@ -4845,6 +5167,7 @@ let cachedOperatorTargets = null;
   }
 
   function emitTalkTargetsUpdated(reason, targets = currentTargets) {
+    if (remotePanel) return;
     if (!isOperatorSession()) return;
     if (!socket.connected) return;
     socket.emit('talk-targets-updated', {
@@ -5115,6 +5438,7 @@ let cachedOperatorTargets = null;
   targetHasActiveStreams = hasActiveStreams;
 
   function isTargetSpeaking(targetKey) {
+    if (isFeedKey(targetKey)) return activeFeedKeys.has(targetKey) && !stoppedFeedKeys.has(targetKey);
     return speakingPeers.has(targetKey) || activeFeedKeys.has(targetKey);
   }
 
@@ -5190,6 +5514,7 @@ let cachedOperatorTargets = null;
     const stopped = stoppedFeedKeys.has(targetKey);
     const targetEl = document.getElementById(targetKey);
     targetEl?.classList.toggle('feed-stopped', stopped);
+    updateSpeakerHighlight(targetKey, isTargetSpeaking(targetKey));
 
     const button = targetEl?.querySelector('.feed-reception-btn');
     if (!button) return;
@@ -5234,6 +5559,10 @@ let cachedOperatorTargets = null;
     });
 
     updateFeedReceptionUi(targetKey);
+    if (typeof feedVideo !== 'undefined') feedVideo.syncVisibility();
+    if (!applyingClientPanelSettings && session.userId) {
+      clientLocalStorage.setItem(`stoppedFeeds:user:${session.userId}`, JSON.stringify(Object.fromEntries([...stoppedFeedKeys].map(key => [key, true]))));
+    }
     if (isOperatorSession()) {
       applyFeedDucking();
     }
@@ -5425,6 +5754,7 @@ let cachedOperatorTargets = null;
       const audioEl = stored.audio;
       disposePlaybackEntry(stored);
       audioElements.delete(streamKey);
+      syncIncomingLevelMeters();
 
       if (stored.type === 'feed') {
         const feedId = Number(targetKey.split('-')[1]);
@@ -5455,6 +5785,7 @@ let cachedOperatorTargets = null;
     targetStreamMap.clear();
     peerConsumers.clear();
     audioElements.clear();
+    syncIncomingLevelMeters();
     earlyClosedConsumerIds.clear();
     earlyClosedStreamKeys.clear();
     pendingAutoplayAudios.clear();
@@ -5625,6 +5956,9 @@ let cachedOperatorTargets = null;
     updateTargetVolumeSliderUi(targetKey, clamped);
     if (targetKey.startsWith('feed-') && isOperatorSession()) {
       applyFeedDucking();
+    }
+    if (syncServer && remotePanel && !remotePanel.applying && persistedState) {
+      remotePanel.command({ kind: 'target-audio', targetType: persistedState.targetType, targetId: persistedState.targetId, volume: clamped });
     }
     if (syncServer) emitTargetAudioStateSnapshot('target-audio-volume');
     return clamped;
@@ -5817,7 +6151,7 @@ let cachedOperatorTargets = null;
 
   function getConfiguredMainButtonIdentity() {
     const key = getMainButtonStorageKey();
-    try { return key ? localStorage.getItem(key) || '' : ''; } catch { return ''; }
+    try { return key ? clientLocalStorage.getItem(key) || '' : ''; } catch { return ''; }
   }
 
   function getMainButtonTarget() {
@@ -5851,14 +6185,15 @@ let cachedOperatorTargets = null;
     const key = getMainButtonStorageKey();
     try {
       if (key) {
-        if (event.target.value) localStorage.setItem(key, event.target.value);
-        else localStorage.removeItem(key);
+        if (event.target.value) clientLocalStorage.setItem(key, event.target.value);
+        else clientLocalStorage.removeItem(key);
       }
     } catch {}
     updateReplyButtonState();
   });
 
   function renderReplyButtonLabel() {
+    if (btnReply.dataset.locked === 'true') return;
     if (getConfiguredMainButtonIdentity()) {
       const target = getMainButtonTarget();
       btnReply.setAttribute('data-label', target?.label || 'Unavailable target');
@@ -5914,8 +6249,9 @@ let cachedOperatorTargets = null;
     refreshLastTargetLabel();
     const target = getMainButtonTarget();
     const replyUserSocketId = resolveReplyUserSocketId(target);
-    btnReply.disabled = !socket.connected || !isOperatorSession() || !target
-      || (target.type === 'user' && !replyUserSocketId);
+    const targetUnavailable = !target || (target.type === 'user' && !replyUserSocketId);
+    btnReply.disabled = !socket.connected || !isOperatorSession()
+      || (targetUnavailable && btnReply.dataset.locked !== 'true');
     renderReplyButtonLabel();
   }
 
@@ -6147,9 +6483,9 @@ let cachedOperatorTargets = null;
       shortcutSettingsOpenButton.hidden = !isOperator;
     }
     if (arrangeTargetsOpenButton) {
-      arrangeTargetsOpenButton.hidden = session.kind !== 'user';
+      arrangeTargetsOpenButton.hidden = !canEditTargets();
     }
-    if (session.kind !== 'user' && activeSettingsView === 'arrange') {
+    if (!canEditTargets() && activeSettingsView === 'arrange') {
       setActiveSettingsView('main');
     }
 
@@ -6180,7 +6516,7 @@ let cachedOperatorTargets = null;
         qualitySelect.disabled = true;
       } else {
         qualitySelect.disabled = false;
-        const storedQuality = localStorage.getItem('audioQualityProfile');
+        const storedQuality = clientLocalStorage.getItem('audioQualityProfile');
         if (storedQuality && QUALITY_PROFILES[storedQuality]) {
           qualitySelect.value = storedQuality;
         }
@@ -6317,6 +6653,7 @@ let cachedOperatorTargets = null;
         if (entry) {
           disposePlaybackEntry(entry);
           audioElements.delete(streamKey);
+          syncIncomingLevelMeters();
           const feedId = Number(session.feedId);
           feedAudioElements.get(feedId)?.delete(entry.audio);
         }
@@ -6376,6 +6713,7 @@ let cachedOperatorTargets = null;
           producer = null;
         }
         feedStreaming = false;
+        feedVideo.stopSending();
         updateFeedControls();
         if (!feedManualStop) {
           scheduleMicCleanup();
@@ -6391,6 +6729,7 @@ let cachedOperatorTargets = null;
           producer = null;
         }
         feedStreaming = false;
+        feedVideo.stopSending();
         updateFeedControls();
         if (!feedManualStop) {
           shouldStartFeedWhenReady = true;
@@ -6401,6 +6740,7 @@ let cachedOperatorTargets = null;
       });
 
       updateFeedControls();
+      await feedVideo.startSending();
     } catch (err) {
       feedStreaming = false;
       shouldStartFeedWhenReady = true;
@@ -6414,6 +6754,7 @@ let cachedOperatorTargets = null;
 
   function stopFeedStream({ manual = false } = {}) {
     if (session.kind !== 'feed') return;
+    feedVideo.stopSending();
     const feedKey = session.feedId != null ? `feed-${session.feedId}` : null;
 
     if (producer) {
@@ -6440,6 +6781,7 @@ let cachedOperatorTargets = null;
   }
 
   async function ensureMediaInitialized() {
+    if (remotePanel) return;
     if (mediaInitialized) return;
     if (initializingMediaPromise) {
       return initializingMediaPromise;
@@ -6471,6 +6813,8 @@ let cachedOperatorTargets = null;
 
   function closeMediaTransportState() {
     mediaStateGeneration += 1;
+    feedVideo.stopSending();
+    feedVideo.resetReceiving();
     stopMediaNetworkStatsReporting();
     try {
       producer?.close();
@@ -6499,6 +6843,7 @@ let cachedOperatorTargets = null;
   }
 
   function initializeMediaIfPossible() {
+    if (remotePanel) return;
     shouldInitializeAfterConnect = true;
     if (socket.connected) {
       ensureMediaInitialized().catch(err => {
@@ -6512,10 +6857,10 @@ let cachedOperatorTargets = null;
   }
 
   function clearStoredIdentity() {
-    localStorage.removeItem("userId");
-    localStorage.removeItem(FEED_ID_STORAGE_KEY);
-    localStorage.removeItem("userName");
-    localStorage.removeItem(IDENTITY_KIND_KEY);
+    clientLocalStorage.removeItem("userId");
+    clientLocalStorage.removeItem(FEED_ID_STORAGE_KEY);
+    clientLocalStorage.removeItem("userName");
+    clientLocalStorage.removeItem(IDENTITY_KIND_KEY);
     clearStoredGuestSession();
     clearStoredTargetAudioPreferences();
   }
@@ -6599,6 +6944,7 @@ let cachedOperatorTargets = null;
   }
 
   async function hardLogoutAndReload(message = null, { silent = false, notifyServer = true } = {}) {
+    if (remotePanel) { remotePanel.close(); return; }
     sessionResetInProgress = true;
     suppressLogoutBeacon = !notifyServer;
     try {
@@ -6638,11 +6984,13 @@ let cachedOperatorTargets = null;
       const finish = (result) => {
         if (done) return;
         done = true;
+        // A fresh login is acknowledged before session is replaced with the feed identity.
+        if (result?.ok && payload.kind === 'feed') feedVideo.setAllowed(result.allowFeedVideo === true);
         resolve(result || {});
       };
       const timer = setTimeout(() => finish({ error: "register-user timeout" }), timeoutMs);
       try {
-        socket.emit("register-user", payload, (resp) => {
+        socket.emit("register-user", { ...payload, feedVideo: !remotePanel }, (resp) => {
           clearTimeout(timer);
           finish(resp);
         });
@@ -6775,6 +7123,7 @@ let cachedOperatorTargets = null;
   }
 
   async function recoverConnectedSession(reason = 'socket-connect') {
+    if (remotePanel) return;
     if (reconnectRecoveryPromise) return reconnectRecoveryPromise;
 
     const generation = connectionGeneration;
@@ -6814,6 +7163,8 @@ let cachedOperatorTargets = null;
             return false;
           }
           if (session.kind === 'user') {
+            applyTargetRearrangePermission(registration.allowTargetRearrange, registration.allowTargetAddRemove);
+            await applyClientPanelSettings(registration.panelSettings);
             applyPersistedTargetAudioStates(registration.targetAudioStates || []);
             if (registration.userAudioSettings) applyUserAudioSettings(registration.userAudioSettings);
             else persistUserAudioSettingsHandler();
@@ -6870,6 +7221,7 @@ let cachedOperatorTargets = null;
   }
 
   function requestSessionRecovery(reason = 'client-lifecycle') {
+    if (remotePanel) return;
     if (sessionResetInProgress || !session?.name) return;
     if (!socket.connected) {
       socket.connect();
@@ -6933,7 +7285,7 @@ let cachedOperatorTargets = null;
 
     if (preferStored) {
       const storageKey = getActiveProductionStorageKey(identity);
-      const storedId = storageKey ? localStorage.getItem(storageKey) : null;
+      const storedId = storageKey ? clientLocalStorage.getItem(storageKey) : null;
       if (storedId === DEFAULT_PRODUCTION_STORAGE_VALUE) return Promise.resolve(productions[0]);
       const stored = productions.find((production) => String(production.id) === String(storedId));
       if (stored) return Promise.resolve(stored);
@@ -6985,8 +7337,8 @@ let cachedOperatorTargets = null;
   function persistActiveProduction(identity, production) {
     const storageKey = getActiveProductionStorageKey(identity);
     if (!storageKey) return;
-    if (production?.id) localStorage.setItem(storageKey, String(production.id));
-    else localStorage.setItem(storageKey, DEFAULT_PRODUCTION_STORAGE_VALUE);
+    if (production?.id) clientLocalStorage.setItem(storageKey, String(production.id));
+    else clientLocalStorage.setItem(storageKey, DEFAULT_PRODUCTION_STORAGE_VALUE);
   }
 
   function applyRegisteredProductionState(targetSession, registration) {
@@ -7090,23 +7442,25 @@ let cachedOperatorTargets = null;
     shouldStartFeedWhenReady = kind === 'feed';
 
     if (kind === 'user') {
+      applyTargetRearrangePermission(reg.allowTargetRearrange, reg.allowTargetAddRemove);
+      await applyClientPanelSettings(reg.panelSettings);
       applyPersistedTargetAudioStates(reg.targetAudioStates || []);
       if (reg.userAudioSettings) applyUserAudioSettings(reg.userAudioSettings);
       else persistUserAudioSettingsHandler();
     }
 
     clearStoredGuestSession();
-    localStorage.setItem("userName", user.name);
-    localStorage.setItem(IDENTITY_KIND_KEY, kind);
+    clientLocalStorage.setItem("userName", user.name);
+    clientLocalStorage.setItem(IDENTITY_KIND_KEY, kind);
     if (kind === 'user') {
-      localStorage.setItem("userId", session.userId);
+      clientLocalStorage.setItem("userId", session.userId);
       persistActiveProduction(user, (session.productions || []).find((item) => (
         String(item.id) === String(session.productionId)
       )) || null);
-      localStorage.removeItem(FEED_ID_STORAGE_KEY);
+      clientLocalStorage.removeItem(FEED_ID_STORAGE_KEY);
     } else {
-      localStorage.setItem(FEED_ID_STORAGE_KEY, session.feedId);
-      localStorage.removeItem("userId");
+      clientLocalStorage.setItem(FEED_ID_STORAGE_KEY, session.feedId);
+      clientLocalStorage.removeItem("userId");
     }
 
     loginContainer.style.display = "none";
@@ -7120,9 +7474,11 @@ let cachedOperatorTargets = null;
     return true;
   }
 
-  productionSessionSelect?.addEventListener('change', async () => {
+  async function changeActiveProduction(selectedValue) {
     if (!isOperatorSession()) return;
-    const selectedValue = productionSessionSelect.value;
+    if (remotePanel && !remotePanel.applying) {
+      return remotePanel.command({ kind: 'production', productionId: Number(selectedValue) });
+    }
     const production = (session.productions || []).find((item) => String(item.id) === String(selectedValue));
     if (!production) return;
     const nextProductionId = String(production.id);
@@ -7146,7 +7502,10 @@ let cachedOperatorTargets = null;
     if (session.kind === 'guest') persistGuestSession(session);
     applyProductionSessionUI();
     await renderTargetList(cachedUsers);
-  });
+    reportClientPanelState();
+    return result;
+  }
+  productionSessionSelect?.addEventListener('change', () => changeActiveProduction(productionSessionSelect.value));
 
   function consumeLoginTokenFromHash() {
     const hash = window.location.hash;
@@ -7168,10 +7527,10 @@ let cachedOperatorTargets = null;
   const guestLoginRequested = consumeGuestLoginIntentFromHash();
 
   function clearStoredCredentialIdentity() {
-    localStorage.removeItem("userId");
-    localStorage.removeItem(FEED_ID_STORAGE_KEY);
-    localStorage.removeItem("userName");
-    localStorage.removeItem(IDENTITY_KIND_KEY);
+    clientLocalStorage.removeItem("userId");
+    clientLocalStorage.removeItem(FEED_ID_STORAGE_KEY);
+    clientLocalStorage.removeItem("userName");
+    clientLocalStorage.removeItem(IDENTITY_KIND_KEY);
   }
 
   async function fetchLoginIdentity(url, options = {}) {
@@ -7202,6 +7561,20 @@ let cachedOperatorTargets = null;
   }
 
   async function bootstrapLogin() {
+    if (remotePanel) {
+      await loadLoginOptions();
+      document.body.classList.add('remote-panel');
+      document.getElementById('remote-panel-banner').hidden = false;
+      document.getElementById('remote-panel-status').hidden = false;
+      loginContainer.style.display = 'none';
+      intercomApp.style.display = 'flex';
+      document.getElementById('logout-btn').textContent = 'Close panel';
+      let renderQueue = Promise.resolve();
+      remotePanel.start(state => {
+        renderQueue = renderQueue.catch(console.error).then(() => applyRemotePanelState(state));
+      });
+      return;
+    }
     await loadLoginOptions();
 
     if (guestLoginRequested) {
@@ -7373,6 +7746,7 @@ let cachedOperatorTargets = null;
   });
 
   async function handleLogoutClick() {
+    if (remotePanel) { remotePanel.close(); return; }
     sessionResetInProgress = true;
     if (session.kind === 'feed') {
       stopFeedStream({ manual: true });
@@ -7396,6 +7770,214 @@ let cachedOperatorTargets = null;
     }
   });
 
+
+  function remoteTarget(target) {
+    if (target?.type === 'guest') return { targetType: 'reply' };
+    if (target?.type === 'user') {
+      const user = cachedUsers.find(user => String(user.socketId) === String(target.id) || String(user.userId) === String(target.id));
+      return { targetType: 'user', targetId: Number(user?.userId ?? target.id) };
+    }
+    return { targetType: target?.type || 'reply', targetId: target?.id ?? null };
+  }
+
+  function collectClientPanelReport() {
+    const meter = document.getElementById('user-meter-bar');
+    return {
+      revision: clientPanelRevision,
+      storage: window.TalktomeRemotePanelState.collectStorage(clientLocalStorage, session.userId),
+      runtime: {
+        mediaConnection: { ...mediaConnectionState, initialized: mediaInitialized },
+        devices: clientPanelDevices, inputDeviceId: preferredInputDeviceId,
+        outputDeviceId: preferredOutputDeviceId, outputSupported: supportsAudioOutputSelection(),
+        ...getCurrentPttState(), lockedTargets: getActiveTalkLockTargets(),
+        micLevel: document.getElementById('user-meter-value')?.textContent || '-inf dB',
+        micMeterWidth: parseFloat(meter?.style.getPropertyValue('--meter-level')) || 0,
+      },
+    };
+  }
+
+  reportClientPanelState = () => {
+    if (remotePanel || applyingClientPanelSettings || !socket.connected || session.kind !== 'user' || !session.userId) return;
+    socket.emit('panel-client-state', collectClientPanelReport());
+  };
+  socket.on('panel-state-request', reportClientPanelState);
+
+  async function applyClientPanelSettings(settings, { verifyDevices = false } = {}) {
+    if (!settings || typeof settings !== 'object') return;
+    clientPanelRevision = Number(settings.revision) || 0;
+    const storage = window.TalktomeRemotePanelState.normalizeStorage(settings.storage || {}, session.userId);
+    // The first connection imports existing device-local preferences.
+    if (!clientPanelRevision && !Object.keys(storage).length && !remotePanel) return;
+    const previousApplying = applyingClientPanelSettings;
+    applyingClientPanelSettings = true;
+    try {
+      const previousInput = getSelectedDeviceId();
+      const previousOutput = preferredOutputDeviceId;
+      for (const key of Object.keys(window.TalktomeRemotePanelState.collectStorage(clientLocalStorage, session.userId))) {
+        if (!(key in storage)) clientLocalStorage.removeItem(key);
+      }
+      for (const [key, value] of Object.entries(storage)) {
+        if (value !== null) clientLocalStorage.setItem(key, value);
+      }
+      loadedConferenceListenExclusionsKey = null;
+      loadedConferenceMemberLevelsKey = null;
+      ensureConferenceListenExclusionsLoaded();
+      ensureConferenceMemberLevelsLoaded();
+      loadedTargetHotkeyStorageKey = null;
+      ensureCustomTargetHotkeysLoaded();
+      const nextInput = clientLocalStorage.getItem(MIC_DEVICE_STORAGE_KEY) || '';
+      const nextExplicit = Boolean(nextInput && clientLocalStorage.getItem(MIC_DEVICE_EXPLICIT_STORAGE_KEY) === 'true');
+      if (nextExplicit || preferredInputDeviceExplicit) preferredInputDeviceId = nextInput;
+      preferredInputDeviceExplicit = nextExplicit;
+      preferredOutputDeviceId = clientLocalStorage.getItem(OUTPUT_DEVICE_STORAGE_KEY) || '';
+      syncManagedInputSelects(preferredInputDeviceId);
+      syncManagedOutputSelects(preferredOutputDeviceId);
+      if (!remotePanel && previousInput !== getSelectedDeviceId()) {
+        cleanupMicTrack();
+        if (voiceTriggerEnabled) startVoiceTriggerMonitoring();
+      }
+      if (!remotePanel && supportsAudioOutputSelection() && previousOutput !== preferredOutputDeviceId) {
+        const applied = await applyOutputDeviceSelection(preferredOutputDeviceId, { persist: false, requestPermission: false });
+        if (!applied && preferredOutputDeviceId && verifyDevices) throw new Error('Unable to select the output device on the client');
+      }
+      const stopped = JSON.parse(clientLocalStorage.getItem(`stoppedFeeds:user:${session.userId}`) || '{}');
+      for (const target of cachedOperatorTargets || []) {
+        if (target.targetType === 'feed') setFeedReceptionStopped(`feed-${target.targetId}`, Boolean(stopped[`feed-${target.targetId}`]));
+      }
+      audioElements.forEach(entry => {
+        if (entry.type === 'conference') applyConferenceMemberListenPreference(Number(String(entry.key).replace('conf-', '')), entry.sourceUserId);
+      });
+      refreshTargetHotkeyUi(cachedUsers);
+      updateMainButtonOptions();
+      const openConferenceId = conferenceMembersModal && !conferenceMembersModal.hidden ? conferenceMembersModal.dataset.conferenceId : null;
+      const conference = (cachedOperatorTargets || []).find(target => target.targetType === 'conference' && String(target.targetId) === String(openConferenceId));
+      if (conference) renderConferenceMembersModal(conference, cachedUsers);
+    } finally { applyingClientPanelSettings = previousApplying; }
+  }
+
+  let remoteLayoutSignature = null;
+  let remoteSettingsSignature = null;
+  let remoteDeviceSignature = null;
+  async function applyRemotePanelState(state) {
+    await remotePanel.apply(async () => {
+      session = {
+        kind: 'user', userId: String(state.userId), feedId: null, name: state.name,
+        productionId: state.productionId == null ? null : String(state.productionId),
+        productionName: state.productionName, productions: state.productions,
+      };
+      renderMediaConnectionStatus();
+      document.title = `${state.name} · Remote panel · Talktome`;
+      setSessionDisplay(state.name);
+      applyProductionSessionUI();
+      applySessionUI();
+      cachedUsers = state.users;
+      latestServerUsers = state.users;
+      const signature = JSON.stringify([state.productionId, state.targets, state.users]);
+      if (signature !== remoteLayoutSignature) {
+        remoteLayoutSignature = signature;
+        await renderTargetList(cachedUsers);
+      }
+      const settingsSignature = JSON.stringify([state.productionId, state.panelSettings, state.settings, state.targetAudioStates]);
+      if (!remotePanel.busy && (remotePanel.needsRefresh || settingsSignature !== remoteSettingsSignature)) {
+        remoteSettingsSignature = settingsSignature;
+        remotePanel.needsRefresh = false;
+        await applyClientPanelSettings(state.panelSettings);
+        applyUserAudioSettings(state.settings);
+        applyPersistedTargetAudioStates(state.targetAudioStates);
+      }
+      const runtime = state.runtime;
+      activeFeedKeys.clear();
+      for (const key of state.activeFeedKeys || []) activeFeedKeys.add(key);
+      const devices = runtime?.devices || [];
+      const selectedInput = runtime?.inputDeviceId || clientLocalStorage.getItem(MIC_DEVICE_STORAGE_KEY) || '';
+      const selectedOutput = runtime?.outputDeviceId || clientLocalStorage.getItem(OUTPUT_DEVICE_STORAGE_KEY) || '';
+      const deviceSignature = JSON.stringify([devices, selectedInput, selectedOutput, runtime?.outputSupported]);
+      if (!remotePanel.busy && deviceSignature !== remoteDeviceSignature) {
+        remoteDeviceSignature = deviceSignature;
+        for (const [select, kind, value, defaultLabel] of [[inputSelect, 'audioinput', selectedInput, 'System default'], [outputSelect, 'audiooutput', selectedOutput, 'System default']]) {
+          if (!select) continue;
+          const options = [new Option(defaultLabel, '')];
+          for (const device of devices.filter(device => device.kind === kind && device.deviceId && (kind !== 'audiooutput' || !['default', 'communications'].includes(device.deviceId)))) {
+            options.push(new Option(device.label || device.deviceId, device.deviceId));
+          }
+          if (value && !options.some(option => option.value === value)) options.push(new Option('Saved device (currently unavailable)', value));
+          select.replaceChildren(...options);
+          select.value = value;
+          select.disabled = state.connectionType === 'bridge' || (kind === 'audiooutput' && state.online && !runtime?.outputSupported);
+          select.title = state.connectionType === 'bridge' ? 'Bridge audio devices are configured in Admin Users' : '';
+        }
+      }
+      if (outputDeviceSelector) outputDeviceSelector.hidden = false;
+      incomingTalkState = normalizeIncomingTalkState(state.incomingTalkState);
+      applyIncomingTalkState();
+      syncRenderedTargetStateUi();
+      for (const entry of activeTalkLocks.values()) setTalkButtonLocked(entry.button, false);
+      activeTalkLocks.clear();
+      for (const target of runtime?.lockedTargets || []) {
+        const liveTarget = resolveLiveTalkTarget(target);
+        const button = findTalkButtonForTarget(liveTarget);
+        if (button) { activeTalkLocks.set(getTalkTargetIdentity(liveTarget), { target: liveTarget, button }); setTalkButtonLocked(button, true); }
+      }
+      isTalking = Boolean(runtime?.talking);
+      setCurrentTalkTargets((runtime?.targets || []).map(resolveLiveTalkTarget).filter(Boolean));
+      document.querySelectorAll('#targets-list .talk-btn').forEach(button => { button.disabled ||= !state.online; });
+      document.querySelectorAll('#targets-list .volume-slider, #targets-list .mute-btn').forEach(control => { control.disabled = false; });
+      updateReplyButtonState();
+      if (!state.online) btnReply.disabled = true;
+      const micLevel = document.getElementById('user-meter-value');
+      if (micLevel) micLevel.textContent = runtime?.micLevel || '-inf dB';
+      const micBar = document.getElementById('user-meter-bar');
+      if (micBar) {
+        audioMeter.renderLevel(micBar, runtime?.micMeterWidth || 0, USER_METER_MIN_DB);
+      }
+    });
+  }
+
+  socket.on('panel-command', async (command = {}, acknowledge = () => {}) => {
+    if (remotePanel || session.kind !== 'user') return acknowledge({ ok: false, error: 'User client is not ready' });
+    try {
+      if (command.kind !== 'talk') await applyClientPanelSettings(command.panelSettings, { verifyDevices: command.kind === 'preferences' });
+      if (command.kind === 'target-audio') {
+        applyPersistedTargetAudioStates([command.audio], { replace: false });
+      } else if (command.kind === 'audio-settings') {
+        applyUserAudioSettings(command.settings);
+      } else if (command.kind === 'production') {
+        const result = await changeActiveProduction(String(command.productionId));
+        if (!result?.ok) throw new Error(result?.error || 'Unable to change production');
+      } else if (command.kind === 'order') {
+        await renderTargetList(cachedUsers);
+      } else if (command.kind === 'talk') {
+        const event = { preventDefault() {}, talkInputKey: command.inputKey };
+        if (command.action === 'release') {
+          // Releasing a panel input must not release an unrelated local input.
+          if (activeTalkPointers.has(command.inputKey)) handleStopTalking(event);
+        } else if (command.action === 'stop') {
+          handleStopTalking({ preventDefault() {}, currentTarget: null });
+        } else {
+          const target = resolveApiTalkTarget(command.targetType, command.targetId);
+          if (!target) throw new Error('Talk target is not available');
+          const button = findTalkButtonForTarget(target);
+          if (command.action === 'press') {
+            if (hasActiveTalkLocks() && !lockMultipleTargetsEnabled && !isTalkTargetLocked(target)) {
+              suspendActiveLockState();
+              handleStopTalking({ preventDefault() {}, currentTarget: null, suppressLockRestore: true });
+            }
+            await handleTalk(event, target);
+            if (!isTalking && !producer) throw new Error('Unable to start the client microphone');
+          } else if (command.action === 'lock') {
+            activateTalkLock(target, button);
+            await handleTalk({ preventDefault() {} }, target);
+          } else if (command.action === 'unlock') {
+            removeTalkLock(target);
+          }
+        }
+      }
+      const report = collectClientPanelReport();
+      acknowledge({ ok: true, report });
+      reportClientPanelState();
+    } catch (error) { acknowledge({ ok: false, error: error.message, report: collectClientPanelReport() }); }
+  });
+
   // Signaling Events
   const connectionHealth = createConnectionHealth(socket, (interrupted) => {
     mediaConnectionState.heartbeatInterrupted = interrupted;
@@ -7411,7 +7993,7 @@ let cachedOperatorTargets = null;
     setSignalingConnectionState('connected');
     connectionHealth.start();
     lastConnectedSocketId = socket.id;
-    await recoverConnectedSession('socket-connect');
+    if (!remotePanel) await recoverConnectedSession('socket-connect');
   });
 
   socket.on("session-kicked", () => {
@@ -7422,6 +8004,11 @@ let cachedOperatorTargets = null;
 
   socket.on("disconnect", (reason) => {
     connectionHealth.stop();
+    if (remotePanel) {
+      remotePanel.heldInputs.clear();
+      document.querySelectorAll('.talk-btn, #reply').forEach(button => { button.disabled = true; });
+      return;
+    }
     console.log("Disconnected from server:", reason);
     if (!sessionResetInProgress && session.name && reason !== 'io client disconnect') {
       connectionSounds.disconnected();
@@ -7457,6 +8044,7 @@ let cachedOperatorTargets = null;
     }
     stopActiveProducerSync();
     activeProducersSyncInFlight = false;
+    activeProducersSyncRequested = false;
     cleanupAllIncomingStreams({ suppressUi: true });
     document.querySelectorAll('#targets-list li.target-item').forEach(li => {
       li.classList.remove('talking-to', 'speaking');
@@ -7743,31 +8331,31 @@ function getDynamicTargetLayerSize(list, targetEls) {
     return null;
   }
 
-  const hasFinePointer = typeof window.matchMedia === 'function'
-    ? window.matchMedia('(pointer: fine)').matches
-    : false;
-  if (!hasFinePointer) {
-    return null;
+  // Measure natural, non-shrinking rows, including targets on other pages.
+  // Otherwise a shorter last page can change its own page size, or Safari's
+  // smaller visible viewport can squeeze every row instead of paginating.
+  const hiddenTargets = targetEls.filter((targetEl) => targetEl.classList.contains('layer-hidden'));
+  hiddenTargets.forEach((targetEl) => targetEl.classList.remove('layer-hidden'));
+  let fullItemHeight = 0;
+  try {
+    for (const targetEl of targetEls) {
+      const rect = targetEl.getBoundingClientRect();
+      const styles = window.getComputedStyle(targetEl);
+      const marginTop = parseFloat(styles.marginTop || '0');
+      const marginBottom = parseFloat(styles.marginBottom || '0');
+      fullItemHeight = Math.max(fullItemHeight, rect.height + marginTop + marginBottom);
+    }
+  } finally {
+    hiddenTargets.forEach((targetEl) => targetEl.classList.add('layer-hidden'));
   }
-
-  const probeTarget = targetEls.find((targetEl) => targetEl.getBoundingClientRect().height > 0) || null;
-  if (!probeTarget) {
-    return null;
-  }
-
-  const rect = probeTarget.getBoundingClientRect();
-  const styles = window.getComputedStyle(probeTarget);
-  const marginTop = parseFloat(styles.marginTop || '0');
-  const marginBottom = parseFloat(styles.marginBottom || '0');
-  const fullItemHeight = rect.height + marginTop + marginBottom;
+  const gap = parseFloat(window.getComputedStyle(list).rowGap) || 0;
   const availableHeight = list.clientHeight;
 
   if (!Number.isFinite(fullItemHeight) || fullItemHeight <= 0 || !Number.isFinite(availableHeight) || availableHeight <= 0) {
     return null;
   }
 
-  const fittedCount = Math.floor(availableHeight / fullItemHeight);
-  return fittedCount > 0 ? fittedCount : null;
+  return Math.max(1, Math.floor((availableHeight + gap) / (fullItemHeight + gap)));
 }
 
 function getTargetLayerSize(list, targetEls) {
@@ -7776,7 +8364,48 @@ function getTargetLayerSize(list, targetEls) {
   if (!Number.isFinite(dynamicLayerSize)) {
     return baseLayerSize;
   }
-  return Math.max(baseLayerSize, dynamicLayerSize);
+  return isPhoneLandscapeViewport()
+    ? Math.min(baseLayerSize, dynamicLayerSize)
+    : dynamicLayerSize;
+}
+
+function getVideoTargetLayers(list, targetEls) {
+  if (!list.classList?.contains('has-expanded-video')) {
+    list.style?.removeProperty('grid-template-columns');
+    list.classList?.remove('video-grid-layout');
+    return null;
+  }
+  // Keep the viewport budget fixed while exposing hidden layers for measurement.
+  const availableHeight = list.clientHeight;
+  list.style.setProperty('--feed-list-height', `${availableHeight}px`);
+  // Resolve the media-query columns with all targets present. Then retain that
+  // count on sparse layers too: auto-fit must not widen a single video target.
+  list.style.removeProperty('grid-template-columns');
+  const hidden = targetEls.filter(el => el.classList.contains('layer-hidden'));
+  hidden.forEach(el => el.classList.remove('layer-hidden'));
+  let heights, columns = 1, gap = 0;
+  try {
+    const listStyle = window.getComputedStyle(list);
+    const isGrid = listStyle.display === 'grid';
+    list.classList.toggle('video-grid-layout', isGrid);
+    if (isGrid) {
+      columns = Math.max(1, listStyle.gridTemplateColumns.trim().split(/\s+/).filter(track => parseFloat(track) > 0).length);
+      list.style.setProperty('grid-template-columns', `repeat(${columns}, minmax(0, 1fr))`);
+    }
+    gap = parseFloat(listStyle.rowGap) || 0;
+    heights = targetEls.map(el => {
+      const style = window.getComputedStyle(el);
+      return el.getBoundingClientRect().height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+    });
+  } finally { hidden.forEach(el => el.classList.add('layer-hidden')); }
+  return window.TalktomeTargetLayers.packRows(heights, availableHeight, gap, columns);
+}
+
+function getTargetLayerAssignments(list, targetEls) {
+  const videoLayers = getVideoTargetLayers(list, targetEls);
+  if (videoLayers) return videoLayers;
+  const size = getTargetLayerSize(list, targetEls);
+  return targetEls.map((_, index) => Math.floor(index / size));
 }
 
 function updateTargetLayerControls() {
@@ -7790,10 +8419,12 @@ function updateTargetLayerControls() {
   const targetEls = Array.from(list.querySelectorAll('li.target-item'));
   const isMobileViewport = typeof window !== 'undefined'
     && (window.innerWidth <= MOBILE_TARGET_LAYER_MAX_WIDTH || isPhoneLandscapeViewport());
-  const layerSize = getTargetLayerSize(list, targetEls);
+  const assignments = getTargetLayerAssignments(list, targetEls);
+  const layerCount = Math.max(1, ...assignments.map(index => index + 1));
+  const hasVideo = list.classList?.contains('has-expanded-video');
   const shouldPaginate = isOperatorSession()
-    && isMobileViewport
-    && targetEls.length > layerSize;
+    && (isMobileViewport || hasVideo)
+    && layerCount > 1;
 
   if (!shouldPaginate) {
     currentTargetLayerIndex = 0;
@@ -7805,10 +8436,10 @@ function updateTargetLayerControls() {
     targetLayerButton.textContent = 'Layer 1/1';
     targetLayerButton.setAttribute('aria-label', 'Only one target layer');
     targetLayerSwitcher.hidden = true;
+    if (typeof feedVideo !== 'undefined') feedVideo.syncVisibility();
     return;
   }
 
-  const layerCount = Math.max(1, Math.ceil(targetEls.length / layerSize));
   if (currentTargetLayerIndex >= layerCount) {
     currentTargetLayerIndex = layerCount - 1;
   }
@@ -7817,7 +8448,7 @@ function updateTargetLayerControls() {
   }
 
   targetEls.forEach((targetEl, index) => {
-    const layerIndex = Math.floor(index / layerSize);
+    const layerIndex = assignments[index];
     targetEl.dataset.layer = String(layerIndex);
     targetEl.classList.toggle('layer-hidden', layerIndex !== currentTargetLayerIndex);
   });
@@ -7826,14 +8457,15 @@ function updateTargetLayerControls() {
   targetLayerButton.textContent = `Layer ${currentTargetLayerIndex + 1}/${layerCount}`;
   targetLayerButton.setAttribute('aria-label', `Switch target layer, current layer ${currentTargetLayerIndex + 1} of ${layerCount}`);
   targetLayerSwitcher.hidden = false;
+  if (typeof feedVideo !== 'undefined') feedVideo.syncVisibility();
 }
 
 function setTargetLayer(nextIndex) {
   const list = document.getElementById('targets-list');
   if (!list) return;
   const targetEls = Array.from(list.querySelectorAll('li.target-item'));
-  const layerSize = getTargetLayerSize(list, targetEls);
-  const layerCount = Math.max(1, Math.ceil(targetEls.length / layerSize));
+  const assignments = getTargetLayerAssignments(list, targetEls);
+  const layerCount = Math.max(1, ...assignments.map(index => index + 1));
   if (layerCount <= 1) return;
 
   const parsedIndex = Number(nextIndex);
@@ -7852,8 +8484,8 @@ function advanceTargetLayer() {
   const list = document.getElementById('targets-list');
   if (!list) return;
   const targetEls = Array.from(list.querySelectorAll('li.target-item'));
-  const layerSize = getTargetLayerSize(list, targetEls);
-  const layerCount = Math.max(1, Math.ceil(targetEls.length / layerSize));
+  const assignments = getTargetLayerAssignments(list, targetEls);
+  const layerCount = Math.max(1, ...assignments.map(index => index + 1));
   if (layerCount <= 1) return;
 
   const nextIndex = (currentTargetLayerIndex + 1) % layerCount;
@@ -7861,11 +8493,13 @@ function advanceTargetLayer() {
 }
 
 function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
+  if (remotePanel || applyingClientPanelSettings) return;
   if (session.kind !== 'user') return;
   if (!socket.connected) return;
     socket.emit('target-audio-state-snapshot', {
       reason,
       states: collectVisibleTargetAudioStates(),
+      revision: clientPanelRevision,
     });
   }
 
@@ -7904,6 +8538,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     targetType = 'conference',
     targetId = null,
     inputKey = null,
+    tapToLock = false,
   } = {}) => {
     if (session.kind !== 'user') {
       emitApiTalkCommandResult({
@@ -7981,23 +8616,22 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       }
 
       if (action === 'release') {
-        if (targetType === 'reply') {
-          btnReply.classList.remove('active');
+        const held = normalizedInputKey ? activeTalkPointers.get(normalizedInputKey)?.target : null;
+        if (held && tapToLock) {
+          const button = targetType === 'reply' ? btnReply : findTalkButtonForTarget(held);
+          if (isTalkTargetLocked(held)) removeTalkLock(held);
+          else if (button) activateTalkLock(held, button);
         }
-        handleStopTalking(
-          normalizedInputKey
-            ? { preventDefault() {}, currentTarget: null, talkInputKey: normalizedInputKey }
-            : { preventDefault() {}, currentTarget: null }
-        );
+        if (targetType === 'reply' && (!normalizedInputKey || held)) {
+          setReplyButtonActive(Boolean(held && isTalkTargetLocked(held)));
+        }
+        if (!normalizedInputKey || held) handleStopTalking(dummyEvent);
         emitApiTalkCommandResult({
           commandId,
           ok: true,
           action,
           targetType,
           targetId,
-          talking: false,
-          lockActive: false,
-          target: null,
         });
         return;
       }
@@ -8282,6 +8916,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   }
 
   async function startVoiceTriggerMonitoring() {
+    if (remotePanel) return;
     if (!voiceTriggerEnabled || !isOperatorSession() || session.kind === 'feed') {
       stopVoiceTriggerMonitoring();
       return;
@@ -8415,7 +9050,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     }
     if (persist && typeof window !== 'undefined') {
       try {
-        window.localStorage?.setItem(VOICE_TRIGGER_ENABLED_STORAGE_KEY, String(voiceTriggerEnabled));
+        clientLocalStorage?.setItem(VOICE_TRIGGER_ENABLED_STORAGE_KEY, String(voiceTriggerEnabled));
       } catch (err) {
         console.warn('Unable to persist level trigger state:', err);
       }
@@ -8437,9 +9072,9 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     if (persist && typeof window !== 'undefined') {
       try {
         if (voiceTriggerTargetIdentity) {
-          window.localStorage?.setItem(VOICE_TRIGGER_TARGET_STORAGE_KEY, voiceTriggerTargetIdentity);
+          clientLocalStorage?.setItem(VOICE_TRIGGER_TARGET_STORAGE_KEY, voiceTriggerTargetIdentity);
         } else {
-          window.localStorage?.removeItem(VOICE_TRIGGER_TARGET_STORAGE_KEY);
+          clientLocalStorage?.removeItem(VOICE_TRIGGER_TARGET_STORAGE_KEY);
         }
       } catch (err) {
         console.warn('Unable to persist level trigger target:', err);
@@ -8457,7 +9092,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     updateVoiceTriggerThresholdUI();
     if (persist && typeof window !== 'undefined') {
       try {
-        window.localStorage?.setItem(VOICE_TRIGGER_THRESHOLD_DB_STORAGE_KEY, String(voiceTriggerThresholdDb));
+        clientLocalStorage?.setItem(VOICE_TRIGGER_THRESHOLD_DB_STORAGE_KEY, String(voiceTriggerThresholdDb));
       } catch (err) {
         console.warn('Unable to persist level trigger threshold:', err);
       }
@@ -8473,8 +9108,10 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       dimWhenAddressed: feedDimIncoming,
       audioAutoProcessing: audioProcessingEnabled,
       playConnectionSounds: playConnectionSoundsEnabled,
+      showIncomingLevels: showIncomingLevelsEnabled,
       leftHandMode: leftHandModeEnabled,
       lockMultipleTargets: lockMultipleTargetsEnabled,
+      bigMainButton: document.body.classList.contains('big-main-button'),
       userInputGainDb,
       voiceTriggerEnabled,
       voiceTriggerTarget: voiceTriggerTargetIdentity,
@@ -8484,10 +9121,14 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   let userAudioSettingsSaveTimer = null;
   persistUserAudioSettingsHandler = () => {
-    if (session.kind !== 'user' || !socket.connected) return;
+    if (session.kind !== 'user' || !socket.connected || applyingClientPanelSettings || remotePanel?.applying) return;
     clearTimeout(userAudioSettingsSaveTimer);
     userAudioSettingsSaveTimer = setTimeout(() => {
-      socket.emit('user-audio-settings-update', { settings: currentUserAudioSettings() }, (result = {}) => {
+      const settings = currentUserAudioSettings();
+      if (typeof pendingTapToLock === 'boolean') settings.tapToLock = pendingTapToLock;
+      pendingTapToLock = undefined;
+      if (remotePanel) { remotePanel.command({ kind: 'audio-settings', settings }); return; }
+      socket.emit('user-audio-settings-update', { settings, revision: clientPanelRevision }, (result = {}) => {
         if (!result.ok) console.warn('Unable to save user audio settings:', result.error);
       });
     }, 120);
@@ -8507,8 +9148,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     setFeedDimIncoming(settings.dimWhenAddressed, { persist: false });
     setAudioProcessingEnabled(settings.audioAutoProcessing, { persist: false });
     setPlayConnectionSounds(settings.playConnectionSounds, { persist: false });
+    setShowIncomingLevels(settings.showIncomingLevels, { persist: false });
     setLeftHandMode(settings.leftHandMode, { persist: false });
+    if (typeof settings.bigMainButton === 'boolean') setBigMainButton(settings.bigMainButton);
     setLockMultipleTargets(settings.lockMultipleTargets, { persist: false });
+    setTapToLock(typeof value.tapToLock === 'boolean' ? value.tapToLock : serverDefaultClientSettings.tapToLock !== false);
     setUserInputGainDb(Number(settings.userInputGainDb), { persist: false });
     setVoiceTriggerTargetIdentity(settings.voiceTriggerTarget, { persist: false });
     setVoiceTriggerThresholdDb(Number(settings.voiceTriggerThresholdDb), { persist: false });
@@ -8521,6 +9165,10 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   socket.on('user-audio-settings-updated', ({ settings } = {}) => {
     if (session.kind === 'user') applyUserAudioSettings(settings);
+  });
+
+  socket.on('target-rearrange-permission-updated', ({ allowed, allowTargetAddRemove: addRemove } = {}) => {
+    if (session.kind === 'user') { applyTargetRearrangePermission(allowed, addRemove); if (activeSettingsView === 'arrange') loadArrangeTargets(); }
   });
 
   restartVoiceTriggerMonitorHandler = () => {
@@ -8975,60 +9623,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       talkIcon.alt = '';
       talkIcon.setAttribute('aria-hidden', 'true');
       talkBtn.appendChild(talkIcon);
-      talkBtn.addEventListener('pointerdown', e => {
-        const currentSocketId = resolveCurrentUserSocketId();
-        if (!currentSocketId) return;
-        e.stopPropagation();
-        li.classList.add('ptt-pressing');
-
-        const normalizedTarget = { type: 'user', id: currentSocketId };
-
-        if (hasActiveTalkLocks()) {
-          if (isTalkTargetLocked(normalizedTarget)) {
-            li.classList.remove('ptt-pressing');
-            if (lockMultipleTargetsEnabled) {
-              removeTalkLock(normalizedTarget);
-            } else {
-              handleStopTalking({ preventDefault() {}, currentTarget: talkBtn });
-            }
-            return;
-          }
-          if (!lockMultipleTargetsEnabled) {
-            suspendActiveLockState();
-            handleStopTalking({ preventDefault() {}, currentTarget: null, suppressLockRestore: true });
-          }
-        }
-
-        const startX = e.clientX;
-        let lockedByGesture = false;
-
-        const onMove = (ev) => {
-          if (lockedByGesture || isTalkButtonLocked(talkBtn)) return;
-          if (didReachSlideToLockThreshold(ev.clientX, startX)) {
-            lockedByGesture = true;
-            activateTalkLock(normalizedTarget, talkBtn);
-          }
-        };
-
-        const cleanup = () => {
-          talkBtn.removeEventListener('pointermove', onMove);
-          talkBtn.removeEventListener('pointerup', onEnd);
-          talkBtn.removeEventListener('pointercancel', onEnd);
-          try { talkBtn.releasePointerCapture(e.pointerId); } catch {}
-        };
-
-        const onEnd = (ev) => {
-          cleanup();
-          li.classList.remove('ptt-pressing');
-          handleStopTalking(ev);
-        };
-
-        try { talkBtn.setPointerCapture(e.pointerId); } catch {}
-        talkBtn.addEventListener('pointermove', onMove);
-        talkBtn.addEventListener('pointerup', onEnd);
-        talkBtn.addEventListener('pointercancel', onEnd);
-        handleTalk(e, normalizedTarget);
-      });
+      const getUserTalkTarget = () => {
+        const socketId = resolveCurrentUserSocketId();
+        return socketId ? { type: 'user', id: socketId } : null;
+      };
+      bindTalkPointer(talkBtn, talkBtn, getUserTalkTarget, { row: li });
       if (!isOnline) {
         talkBtn.disabled = true;
       }
@@ -9056,82 +9655,22 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       applyMuteVisualState(li, initialMuted);
 
       if (isOnline) {
-        li.append(icon, info, actions, hint);
+        li.append(icon, createTargetLevelMeter(), info, actions, hint);
       } else {
-        li.append(icon, info, actions);
+        li.append(icon, createTargetLevelMeter(), info, actions);
       }
 
       if (isOnline) {
         const lockEntry = getTalkLockEntry({ type: 'user', id: socketId });
-        if (lockEntry) {
+        if (lockEntry && lockEntry.button !== btnReply) {
           lockEntry.button = talkBtn;
           setTalkButtonLocked(talkBtn, true);
         }
       }
 
-      let rowPttGestureActive = false;
-      let rowPttStartX = 0;
-      let rowPttLockedByGesture = false;
-      li.addEventListener('pointermove', (e) => {
-        if (!rowPttGestureActive) return;
-        if (rowPttLockedByGesture || isTalkButtonLocked(talkBtn)) return;
-        if (didReachSlideToLockThreshold(e.clientX, rowPttStartX)) {
-          const currentSocketId = resolveCurrentUserSocketId();
-          if (!currentSocketId) return;
-          rowPttLockedByGesture = true;
-          activateTalkLock({ type: 'user', id: currentSocketId }, talkBtn);
-        }
-      });
-
-      ['down', 'up', 'leave', 'cancel'].forEach(ev => {
-        li.addEventListener(`pointer${ev}`, e => {
-          if (
-            e.target.closest('.talk-btn') ||
-            e.target.closest('.mute-btn') ||
-            e.target.closest('.volume-slider')
-          ) return;
-          if (ev === 'down') {
-            const currentSocketId = resolveCurrentUserSocketId();
-            if (!currentSocketId) return;
-            const targetData = { type: 'user', id: currentSocketId };
-            const existingLock = getTalkLockEntry(targetData);
-            if (existingLock) {
-              if (lockMultipleTargetsEnabled) {
-                removeTalkLock(targetData);
-              } else {
-                handleStopTalking({ preventDefault() {}, currentTarget: existingLock.button });
-              }
-              return;
-            }
-            if (hasActiveTalkLocks() && !lockMultipleTargetsEnabled) {
-              suspendActiveLockState();
-              handleStopTalking({ preventDefault() {}, currentTarget: null, suppressLockRestore: true });
-              rowPttGestureActive = true;
-              rowPttLockedByGesture = false;
-              rowPttStartX = e.clientX;
-              li.classList.add('ptt-pressing');
-              try { li.setPointerCapture(e.pointerId); } catch {}
-              handleTalk(e, targetData);
-              return;
-            }
-
-            rowPttGestureActive = true;
-            rowPttLockedByGesture = false;
-            rowPttStartX = e.clientX;
-            li.classList.add('ptt-pressing');
-            try { li.setPointerCapture(e.pointerId); } catch {}
-            handleTalk(e, targetData);
-            return;
-          }
-
-          if (ev === 'up' || ev === 'leave' || ev === 'cancel') {
-            if (!rowPttGestureActive) return;
-            rowPttGestureActive = false;
-            li.classList.remove('ptt-pressing');
-            try { li.releasePointerCapture(e.pointerId); } catch {}
-          }
-          handleStopTalking(e);
-        });
+      bindTalkPointer(li, talkBtn, getUserTalkTarget, {
+        row: li,
+        ignore: '.talk-btn, .mute-btn, .volume-slider',
       });
 
       return li;
@@ -9453,7 +9992,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       const productionQuery = session.productionId
         ? `?productionId=${encodeURIComponent(session.productionId)}`
         : '';
-      targets = session.kind === 'guest'
+      targets = remotePanel ? remotePanel.state?.targets || [] : session.kind === 'guest'
         ? await fetchJSON(`/guest/targets${productionQuery}`)
         : await fetchJSON(`/users/${dbUserId}/targets?includeMemberships=1${session.productionId ? `&productionId=${encodeURIComponent(session.productionId)}` : ''}`);
     } catch (err) {
@@ -9622,7 +10161,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
       if (!canTalk) {
         actions.append(muteBtn);
-        li.append(icon, info, actions);
+        li.append(icon, createTargetLevelMeter(), info, actions);
         list.appendChild(li);
         return;
       }
@@ -9644,129 +10183,22 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       talkIcon.alt = '';
       talkIcon.setAttribute('aria-hidden', 'true');
       talkBtn.appendChild(talkIcon);
-      talkBtn.addEventListener('pointerdown', e => {
-        e.stopPropagation();
-        li.classList.add('ptt-pressing');
-
-        const normalizedTarget = { type: 'conference', id };
-
-        if (hasActiveTalkLocks()) {
-          if (isTalkTargetLocked(normalizedTarget)) {
-            li.classList.remove('ptt-pressing');
-            if (lockMultipleTargetsEnabled) {
-              removeTalkLock(normalizedTarget);
-            } else {
-              handleStopTalking({ preventDefault() {}, currentTarget: talkBtn });
-            }
-            return;
-          }
-          if (!lockMultipleTargetsEnabled) {
-            suspendActiveLockState();
-            handleStopTalking({ preventDefault() {}, currentTarget: null, suppressLockRestore: true });
-          }
-        }
-
-        const startX = e.clientX;
-        let lockedByGesture = false;
-
-        const onMove = (ev) => {
-          if (lockedByGesture || isTalkButtonLocked(talkBtn)) return;
-          if (didReachSlideToLockThreshold(ev.clientX, startX)) {
-            lockedByGesture = true;
-            activateTalkLock(normalizedTarget, talkBtn);
-          }
-        };
-
-        const cleanup = () => {
-          talkBtn.removeEventListener('pointermove', onMove);
-          talkBtn.removeEventListener('pointerup', onEnd);
-          talkBtn.removeEventListener('pointercancel', onEnd);
-          try { talkBtn.releasePointerCapture(e.pointerId); } catch {}
-        };
-
-        const onEnd = (ev) => {
-          cleanup();
-          li.classList.remove('ptt-pressing');
-          handleStopTalking(ev);
-        };
-
-        try { talkBtn.setPointerCapture(e.pointerId); } catch {}
-        talkBtn.addEventListener('pointermove', onMove);
-        talkBtn.addEventListener('pointerup', onEnd);
-        talkBtn.addEventListener('pointercancel', onEnd);
-        handleTalk(e, normalizedTarget);
-      });
+      const getConferenceTalkTarget = () => ({ type: 'conference', id });
+      bindTalkPointer(talkBtn, talkBtn, getConferenceTalkTarget, { row: li });
 
       actions.append(muteBtn, talkBtn);
 
-      li.append(icon, info, actions, hint);
+      li.append(icon, createTargetLevelMeter(), info, actions, hint);
 
       const lockEntry = getTalkLockEntry({ type: 'conference', id });
-      if (lockEntry) {
+      if (lockEntry && lockEntry.button !== btnReply) {
         lockEntry.button = talkBtn;
         setTalkButtonLocked(talkBtn, true);
       }
 
-      let rowPttGestureActive = false;
-      let rowPttStartX = 0;
-      let rowPttLockedByGesture = false;
-      li.addEventListener('pointermove', (e) => {
-        if (!rowPttGestureActive) return;
-        if (rowPttLockedByGesture || isTalkButtonLocked(talkBtn)) return;
-        if (didReachSlideToLockThreshold(e.clientX, rowPttStartX)) {
-          rowPttLockedByGesture = true;
-          activateTalkLock({ type: 'conference', id }, talkBtn);
-        }
-      });
-
-      ['down', 'up', 'leave', 'cancel'].forEach(ev => {
-        li.addEventListener(`pointer${ev}`, e => {
-          if (
-            e.target.closest('.talk-btn') ||
-            e.target.closest('.mute-btn') ||
-            e.target.closest('.volume-slider') ||
-            e.target.closest('.conf-icon')
-          ) return;
-          if (ev === 'down') {
-            const targetData = { type: 'conference', id };
-            const existingLock = getTalkLockEntry(targetData);
-            if (existingLock) {
-              if (lockMultipleTargetsEnabled) {
-                removeTalkLock(targetData);
-              } else {
-                handleStopTalking({ preventDefault() {}, currentTarget: existingLock.button });
-              }
-              return;
-            }
-            if (hasActiveTalkLocks() && !lockMultipleTargetsEnabled) {
-              suspendActiveLockState();
-              handleStopTalking({ preventDefault() {}, currentTarget: null, suppressLockRestore: true });
-              rowPttGestureActive = true;
-              rowPttLockedByGesture = false;
-              rowPttStartX = e.clientX;
-              li.classList.add('ptt-pressing');
-              try { li.setPointerCapture(e.pointerId); } catch {}
-              handleTalk(e, targetData);
-              return;
-            }
-
-            rowPttGestureActive = true;
-            rowPttLockedByGesture = false;
-            rowPttStartX = e.clientX;
-            li.classList.add('ptt-pressing');
-            try { li.setPointerCapture(e.pointerId); } catch {}
-            handleTalk(e, targetData);
-            return;
-          }
-
-          if (ev === 'up' || ev === 'leave' || ev === 'cancel') {
-            if (!rowPttGestureActive) return;
-            rowPttGestureActive = false;
-            li.classList.remove('ptt-pressing');
-            try { li.releasePointerCapture(e.pointerId); } catch {}
-          }
-          handleStopTalking(e);
-        });
+      bindTalkPointer(li, talkBtn, getConferenceTalkTarget, {
+        row: li,
+        ignore: '.talk-btn, .mute-btn, .volume-slider, .conf-icon',
       });
 
       list.appendChild(li);
@@ -9870,7 +10302,8 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       actions.classList.add('ptt-actions');
       actions.append(muteBtn, receptionBtn);
 
-      li.append(icon, info, actions);
+      li.append(icon, createTargetLevelMeter(), info, actions);
+      feedVideo.attachTarget(li, key, name);
       list.appendChild(li);
     };
 
@@ -9915,6 +10348,8 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         .map(t => `feed-${t.targetId}`)
     );
 
+    feedVideo.pruneTargets(allowedFeedKeys);
+    list.classList.toggle('has-expanded-video', feedVideo.hasExpanded());
     const feedsToRemove = [];
     audioElements.forEach((entry, mapKey) => {
       if (entry?.type === 'feed' && !allowedFeedKeys.has(entry.key)) {
@@ -9946,6 +10381,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
     if (feedsToRemove.length) {
       applyFeedDucking();
+      syncIncomingLevelMeters();
     }
 
     let removedUnavailableLock = false;
@@ -9990,6 +10426,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
 
   async function handleIncomingProducer(payload) {
+    if (feedVideo.announce(payload)) return;
     if (!payload || typeof payload !== 'object') return;
 
     if (!device || !recvTransport) {
@@ -10006,7 +10443,8 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     await consumeProducerPayload(payload);
   }
 
-  async function consumeProducerPayload({ peerId, speakerUserId = null, producerId, appData }) {
+  async function consumeProducerPayload({ peerId, speakerUserId = null, producerId, appData, kind }) {
+    if (feedVideo.announce({ peerId, producerId, appData, kind })) return;
     const consumeStartedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
       : Date.now();
@@ -10137,7 +10575,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         return;
       }
 
-      const consumer = await recvTransport.consume(consumeParams);
+      const consumer = await recvTransport.consume({ ...consumeParams, ...(isFeed ? { streamId: targetKey } : {}) });
       logReceiveDiagnostic('consumer-created', {
         producerId: effectiveProducerId,
         consumerId: consumer?.id || null,
@@ -10177,7 +10615,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
       if (!peerConsumers.has(streamKey)) peerConsumers.set(streamKey, new Set());
       peerConsumers.get(streamKey).add(consumer);
-      if (mutedPeers.has(targetKey) && !isFeedKey(targetKey)) consumer.pause();
+      if (isFeedKey(targetKey) ? stoppedFeedKeys.has(targetKey) : mutedPeers.has(targetKey)) consumer.pause();
 
       const stream = new MediaStream([consumer.track]);
       const adaptivePlainReceive = shouldUseAdaptivePlainReceivePlayback();
@@ -10262,6 +10700,9 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
           audio.muted = true;
           audio.volume = 0;
           playbackGainNode = gainNode;
+          // Safari may return with its Web Audio context interrupted even though
+          // the feed's media element still reports that it is playing.
+          void resumeAudioContextIfNeeded(feedPlayback.ctx, { label: 'feed playback AudioContext' });
         } catch (err) {
           console.warn('Failed to initialize feed playback bus path:', err);
           gainNode = null;
@@ -10394,6 +10835,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
           : Number(cachedUsers.find((candidate) => String(candidate?.socketId) === String(peerId))?.userId) || null,
       };
       audioElements.set(streamKey, entry);
+      syncIncomingLevelMeters();
       if (!usesSharedAudioElement) {
         audioEntryMap.set(audio, entry);
       }
@@ -10404,7 +10846,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       }
 
       if (isFeed) {
-        if (mutedPeers.has(targetKey)) {
+        if (mutedPeers.has(targetKey) || stoppedFeedKeys.has(targetKey)) {
           muteFeedEntry(entry);
         } else {
           setFeedEntryLevel(entry, entry.volume);
@@ -10465,6 +10907,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
         disposePlaybackEntry(entry);
         audioElements.delete(streamKey);
+        syncIncomingLevelMeters();
 
         if (entry.type === 'feed') {
           const feedId = Number(normalizedAppData.id);
@@ -10494,6 +10937,30 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         return;
       }
 
+      // Resume delivery before play(): Safari can leave play() pending until
+      // packets arrive, while a newly created server consumer starts paused.
+      logReceiveDiagnostic('resume-consumer-start', {
+        producerId: effectiveProducerId,
+        consumerId: consumer.id,
+        streamKey,
+        targetKey,
+      });
+      await new Promise((res) =>
+        socket.emit(isFeed && stoppedFeedKeys.has(targetKey) ? 'pause-consumer' : 'resume-consumer', { consumerId: consumer.id }, res)
+      );
+      logReceiveDiagnostic('resume-consumer-done', {
+        producerId: effectiveProducerId,
+        consumerId: consumer.id,
+        streamKey,
+        targetKey,
+        elapsedMs: Math.round(((typeof performance !== 'undefined' && typeof performance.now === 'function')
+          ? performance.now()
+          : Date.now()) - consumeStartedAt),
+      });
+      // A visibility transition may have disposed this entry while awaiting
+      // the server acknowledgement. Do not restart its detached audio element.
+      if (consumer.closed || audioElements.get(streamKey) !== entry) return;
+
       if (usesSharedAudioElement) {
         if (micPrimed || micTrack?.readyState === 'live') {
           await warmReceiveAudioSession('incoming-producer-before-playback').catch(err => {
@@ -10511,7 +10978,9 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
           reason: 'incoming-producer-playback-bus',
         });
       } else {
-        await attemptPlayAudio(audio, {
+        // Playback can remain pending while iOS is backgrounded. It must not
+        // hold the producer reconciliation queue (including continuous feeds).
+        void attemptPlayAudio(audio, {
           producerId: effectiveProducerId,
           consumerId: consumer.id,
           streamKey,
@@ -10522,25 +10991,6 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       if (isFeed && isOperatorSession()) {
         applyFeedDucking();
       }
-
-      logReceiveDiagnostic('resume-consumer-start', {
-        producerId: effectiveProducerId,
-        consumerId: consumer.id,
-        streamKey,
-        targetKey,
-      });
-      await new Promise((res) =>
-        socket.emit('resume-consumer', { consumerId: consumer.id }, res)
-      );
-      logReceiveDiagnostic('resume-consumer-done', {
-        producerId: effectiveProducerId,
-        consumerId: consumer.id,
-        streamKey,
-        targetKey,
-        elapsedMs: Math.round(((typeof performance !== 'undefined' && typeof performance.now === 'function')
-          ? performance.now()
-          : Date.now()) - consumeStartedAt),
-      });
     } catch (err) {
       if (err?.message === 'Producer not found') {
         logReceiveDiagnostic('consume-skipped-producer-not-found', {
@@ -10572,7 +11022,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   async function requestActiveProducers() {
     if (!isOperatorSession()) return;
-    if (activeProducersSyncInFlight) return;
+    if (activeProducersSyncInFlight) {
+      activeProducersSyncRequested = true;
+      return;
+    }
+    activeProducersSyncRequested = false;
     activeProducersSyncInFlight = true;
     try {
       const payloads = await new Promise((resolve, reject) => {
@@ -10591,9 +11045,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         });
       });
 
+      feedVideo.reconcile(payloads);
       const expectedStreamKeys = new Set();
 
       for (const payload of payloads) {
+        if (feedVideo.announce(payload)) continue;
         const targetKey = targetKeyFromProducerPayload(payload);
         const streamKey = streamKeyFromProducerPayload(payload);
         if (!targetKey || !streamKey) continue;
@@ -10631,6 +11087,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       console.error('Failed to request active producers', err);
     } finally {
       activeProducersSyncInFlight = false;
+      // A foreground transition can invalidate streams during an older sync.
+      // Reconcile once more instead of dropping that request until the timer.
+      if (activeProducersSyncRequested && mediaInitialized && socket.connected) {
+        queueMicrotask(() => requestActiveProducers().catch(() => {}));
+      }
     }
   }
 
@@ -10654,6 +11115,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   // Initialize MediaSoup
   async function initializeMediaSoup() {
+    if (remotePanel) return;
     try {
       console.log("=== Starting MediaSoup initialization ===");
 
@@ -10751,6 +11213,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
                 );
               });
 
+              if (response?.error || !response?.id) throw new Error(response?.error || "Producer not created");
               callback({ id: response.id });
             } catch (error) {
               errback(error);
@@ -10847,6 +11310,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   });
 
   socket.on('consumer-closed', ({ consumerId } = {}) => {
+    if (feedVideo.consumerClosed(consumerId)) return;
     const cleaned = cleanupConsumerById(consumerId);
     if (!cleaned && consumerId) {
       rememberEarlyClosedConsumer(consumerId);
@@ -10857,7 +11321,11 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   });
 
 
-  socket.on("producer-closed", ({ peerId, speakerUserId = null, producerId, appData }) => {
+  socket.on("producer-closed", ({ peerId, speakerUserId = null, producerId, appData, kind }) => {
+    if (window.TalktomeFeedVideo.isVideo({ kind, appData })) {
+      feedVideo.removeProducer(producerId);
+      return;
+    }
     // 1️⃣ Compute the key like always
     let key;
     if (appData?.type === "conference") {
@@ -10916,6 +11384,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       }
     }
 
+    syncIncomingLevelMeters();
   });
 
 
@@ -10971,9 +11440,6 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   function getSpeakerStatusText(targetKey, isSpeaking) {
     if (!isSpeaking) return '';
-    if (targetKey.startsWith('feed-')) {
-      return 'Streaming';
-    }
     if (targetKey.startsWith('conf-')) {
       return getConferenceSpeakerStatusText(targetKey);
     }
@@ -11001,6 +11467,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   }
 
   function updateSpeakerHighlight(targetKey, isSpeaking) {
+    if (isFeedKey(targetKey)) isSpeaking = isTargetSpeaking(targetKey);
     const el = document.getElementById(targetKey);
     const iconCls = targetKey.startsWith("conf-") ? ".conf-icon" : targetKey.startsWith("feed-") ? ".feed-icon" : ".user-icon";
     const icon    = el?.querySelector(iconCls);
@@ -11275,7 +11742,6 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   function applyMuteVisualState(targetEl, nowMuted) {
     if (!targetEl) return;
-    const key = targetEl.id || '';
     targetEl.classList.toggle('muted', nowMuted);
     const muteBtn = targetEl?.querySelector('.mute-btn');
     if (muteBtn) {
@@ -11287,12 +11753,16 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
         muteIcon.src = nowMuted ? UI_ICONS.speakerMuted : UI_ICONS.speakerOn;
       }
     }
-
-    getTargetIconElement(targetEl, key)?.classList.toggle('muted', nowMuted);
   }
 
   function setMuteState(rawId) {
     const key = toKey(rawId);
+    if (remotePanel && !remotePanel.applying) {
+      const targetEl = document.getElementById(key);
+      const muted = !mutedPeers.has(key);
+      remotePanel.command({ kind: 'target-audio', targetType: targetEl.dataset.type, targetId: Number(targetEl.dataset.id), muted });
+      return muted;
+    }
     const targetEl = document.getElementById(key);
     const persistedTargetType = targetEl?.dataset?.type || null;
     const persistedTargetId = Number(targetEl?.dataset?.id);
@@ -11383,6 +11853,10 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
       button.setAttribute('aria-pressed', 'false');
       button.title = 'Hold to talk';
     }
+    if (button === btnReply) {
+      setReplyButtonActive(isLocked);
+      updateReplyButtonState();
+    }
   }
 
   function cancelSuspendedLockRestore() {
@@ -11397,6 +11871,10 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   }
 
   function activateTalkLock(target, button) {
+    if (remotePanel) {
+      remotePanel.command({ kind: 'talk', action: 'lock', ...remoteTarget(target) });
+      return;
+    }
     if (!isOperatorSession()) return;
     if (!target || !button) return;
     const normalizedTarget = normalizePttTarget(target);
@@ -11479,6 +11957,7 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
   }
 
   function removeTalkLock(target) {
+    if (remotePanel) { remotePanel.command({ kind: 'talk', action: 'unlock', ...remoteTarget(target) }); return true; }
     const identity = getTalkTargetIdentity(target);
     const entry = identity ? activeTalkLocks.get(identity) : null;
     if (!entry) return false;
@@ -11545,6 +12024,65 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     toggleTalkLock(target);
   }
 
+  function bindTalkPointer(surface, button, getTarget, { row = null, ignore = '', reply = false } = {}) {
+    let press = null;
+    const hasHold = (id) => remotePanel ? remotePanel.heldInputs.has(String(id)) : activeTalkPointers.has(id);
+
+    surface.addEventListener('pointerdown', (event) => {
+      if (press || event.button !== 0 || button.disabled || !isOperatorSession()
+        || (ignore && event.target.closest(ignore))) return;
+      const ownedLock = reply && getActiveTalkLockEntries().find((entry) => entry.button === button);
+      const target = ownedLock?.target ?? resolveLiveTalkTarget(getTarget());
+      if (!target || (remotePanel && !remotePanel.state?.online)) return;
+      event.preventDefault();
+      if (surface !== row) event.stopPropagation();
+      if (isTalkTargetLocked(target)) {
+        if (reply) setReplyButtonActive(false);
+        removeTalkLock(target);
+        return;
+      }
+      if (!remotePanel && hasActiveTalkLocks() && !lockMultipleTargetsEnabled) {
+        suspendActiveLockState();
+        handleStopTalking({ preventDefault() {}, currentTarget: null, suppressLockRestore: true });
+      }
+      press = { id: event.pointerId, x: event.clientX, y: event.clientY,
+        startedAt: event.timeStamp, moved: false, locked: false, target };
+      row?.classList.add('ptt-pressing');
+      if (reply) setReplyButtonActive(true);
+      try { surface.setPointerCapture(press.id); } catch {}
+      void handleTalk(event, target);
+    });
+
+    const movedTooFar = (event, start) => Math.hypot(event.clientX - start.x, event.clientY - start.y) > 12;
+    surface.addEventListener('pointermove', (event) => {
+      if (!press || event.pointerId !== press.id || press.locked || button.disabled) return;
+      press.moved ||= movedTooFar(event, press);
+      if (hasHold(press.id) && didReachSlideToLockThreshold(event.clientX, press.x)) {
+        press.locked = true;
+        activateTalkLock(press.target, button);
+      }
+    });
+    const finish = (event) => {
+      const start = press;
+      if (!start || event.pointerId !== start.id) return;
+      press = null;
+      row?.classList.remove('ptt-pressing');
+      try { surface.releasePointerCapture(start.id); } catch {}
+      if (!hasHold(start.id)) return;
+      if (!start.locked && !button.disabled && event.type === 'pointerup') {
+        const slid = didReachSlideToLockThreshold(event.clientX, start.x);
+        const tapped = tapToLockEnabled && !start.moved
+          && !movedTooFar(event, start) && event.timeStamp - start.startedAt < 300;
+        if (slid || tapped) activateTalkLock(start.target, button);
+      }
+      handleStopTalking({ preventDefault: () => event.preventDefault(), pointerId: start.id, currentTarget: null });
+    };
+    surface.addEventListener('pointerup', finish);
+    surface.addEventListener('pointercancel', finish);
+    surface.addEventListener('lostpointercapture', finish);
+    if (surface === row) surface.addEventListener('pointerleave', finish);
+  }
+
   async function handleTalk(e, target) {
     e.preventDefault();
     if (!isOperatorSession()) return;
@@ -11556,6 +12094,18 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     }
 
     const inputKey = getTalkInputKey(e);
+    if (remotePanel) {
+      if (!remotePanel.state?.online) return;
+      if (isTalkTargetLocked(normalizedTarget)) {
+        remotePanel.command({ kind: 'talk', action: 'unlock', ...remoteTarget(normalizedTarget) });
+        return;
+      }
+      const key = String(inputKey ?? 'main');
+      remotePanel.heldInputs.set(key, normalizedTarget);
+      const result = await remotePanel.command({ kind: 'talk', action: 'press', ...remoteTarget(normalizedTarget), inputKey: key });
+      if (!result.ok) remotePanel.heldInputs.delete(key);
+      return;
+    }
     if (inputKey !== null) {
       addPressedTalkPointer(inputKey, normalizedTarget);
     } else {
@@ -11774,26 +12324,24 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
     btnReply.setAttribute("aria-pressed", isActive ? "true" : "false");
   }
 
-    btnReply.addEventListener("pointerdown", e => {
-      e.preventDefault();
-      if (!isOperatorSession()) return;
-    const target = getMainButtonTarget();
-    if (!target || btnReply.disabled) return;
-    setReplyButtonActive(true);
-    try { btnReply.setPointerCapture(e.pointerId); } catch {}
-    handleTalk(e, { type: target.type, id: target.id });
-  });
-
-  const handleReplyPointerEnd = (e) => {
-    try { btnReply.releasePointerCapture(e.pointerId); } catch {}
-    handleStopTalking(e);
-  };
-
-  btnReply.addEventListener("pointerup", handleReplyPointerEnd);
-  btnReply.addEventListener("pointercancel", handleReplyPointerEnd);
+  bindTalkPointer(btnReply, btnReply, getMainButtonTarget, { reply: true });
 
   function handleStopTalking(e) {
     e.preventDefault();
+    if (remotePanel) {
+      if (remotePanel.applying && !e.isTrusted && e.pointerId == null && !e.talkInputKey) return;
+      const key = getTalkInputKey(e);
+      if (key !== null && remotePanel.heldInputs.has(String(key))) {
+        remotePanel.heldInputs.delete(String(key));
+        remotePanel.command({ kind: 'talk', action: 'release', inputKey: String(key) });
+      } else if (e.currentTarget && isTalkButtonLocked(e.currentTarget)) {
+        const entry = getActiveTalkLockEntries().find(entry => entry.button === e.currentTarget);
+        if (entry) remotePanel.command({ kind: 'talk', action: 'unlock', ...remoteTarget(entry.target) });
+      } else if (key === null) {
+        remotePanel.command({ kind: 'talk', action: 'stop' });
+      }
+      return;
+    }
     if (!isOperatorSession()) return;
     const shouldRestoreSuspendedLock = Boolean(suspendedLockState) && !e?.suppressLockRestore;
     const inputKey = getTalkInputKey(e);
@@ -11901,6 +12449,14 @@ function emitTargetAudioStateSnapshot(reason = 'target-audio-state') {
 
   // Safety stop so PTT can't get stuck on iOS/background transitions.
   function stopTalkingSafely({ respectLock = false, pointerId = null } = {}) {
+    if (remotePanel) {
+      for (const key of [...remotePanel.heldInputs.keys()]) {
+        if (pointerId !== null && String(pointerId) !== key) continue;
+        remotePanel.heldInputs.delete(key);
+        remotePanel.command({ kind: 'talk', action: 'release', inputKey: key });
+      }
+      return;
+    }
     if (!isOperatorSession()) return;
     // An idle warm producer is already paused; unrelated pointer releases need no stop.
     if ((!producer || producer.closed || producer.paused)

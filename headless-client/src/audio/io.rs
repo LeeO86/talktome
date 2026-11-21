@@ -1,7 +1,7 @@
 //! Owns the cpal capture and playback streams on a dedicated thread, reopens
 //! devices when they fail or disappear and reports their status.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -9,17 +9,50 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig, SupportedStreamConfig};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::codec::SAMPLE_RATE;
-use super::mixer::Mixer;
+use super::mixer::{Mixer, MixerHealth};
 use super::processing::{ProcessingControl, Processor};
 use super::resample::{FromInternal, ToInternal};
 use super::{device_label, device_pcm_id, find_device};
 use crate::config::AudioConfig;
 
+/// Audio with its capture time, so control-plane stalls cannot replay old speech.
+#[derive(Debug)]
+pub struct CapturedFrame {
+    pub samples: Vec<f32>,
+    pub captured: Instant,
+}
+
+impl CapturedFrame {
+    pub fn new(samples: Vec<f32>) -> Self {
+        Self {
+            samples,
+            captured: Instant::now(),
+        }
+    }
+
+    pub fn newest(mut self, queued: &mut mpsc::Receiver<Self>) -> Option<Self> {
+        // Preserve normal batches (e.g. two 5-ms frames from a 10-ms ALSA
+        // callback). Catch up only after an actual scheduling/control stall.
+        if self.captured.elapsed() >= Duration::from_millis(40) {
+            while let Ok(newer) = queued.try_recv() {
+                self = newer;
+            }
+        }
+        self.is_fresh().then_some(self)
+    }
+
+    pub fn is_fresh(&self) -> bool {
+        self.captured.elapsed() <= Duration::from_millis(80)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioStatus {
+    pub system_volume: Option<super::system_volume::SystemVolume>,
+    pub output_levels: super::system_volume::OutputLevels,
     pub capture_ok: bool,
     pub playback_ok: bool,
     pub capture_device: Option<String>,
@@ -37,9 +70,79 @@ impl AudioStatus {
 }
 
 /// Handle to the audio thread.
+/// Device switch requests for the audio thread (remote panel), applied
+/// without a restart. `Some(None)` means the system default device.
+#[derive(Debug, Clone, Default)]
+pub struct DeviceSwitch(Arc<Mutex<PendingSwitch>>);
+
+#[derive(Debug, Default)]
+struct PendingSwitch {
+    input: Option<Option<String>>,
+    output: Option<Option<String>>,
+    pair: Option<PairSwitch>,
+}
+
+#[derive(Debug)]
+struct PairSwitch {
+    input: Option<String>,
+    output: Option<String>,
+    reply: oneshot::Sender<Result<()>>,
+}
+
+impl DeviceSwitch {
+    pub fn request_input(&self, device: Option<String>) {
+        if let Ok(mut pending) = self.0.lock() {
+            pending.input = Some(device);
+        }
+    }
+
+    pub fn request_output(&self, device: Option<String>) {
+        if let Ok(mut pending) = self.0.lock() {
+            pending.output = Some(device);
+        }
+    }
+
+    pub async fn switch_pair(&self, input: Option<String>, output: Option<String>) -> Result<()> {
+        let (reply, result) = oneshot::channel();
+        {
+            let mut pending = self
+                .0
+                .lock()
+                .map_err(|_| anyhow!("Audio thread unavailable"))?;
+            if pending.pair.is_some() {
+                anyhow::bail!("An audio device change is already pending");
+            }
+            pending.pair = Some(PairSwitch {
+                input,
+                output,
+                reply,
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(3), result)
+            .await
+            .context("Audio device change timed out")?
+            .context("Audio thread unavailable")?
+    }
+
+    fn take(&self) -> PendingSwitch {
+        self.0
+            .lock()
+            .map(|mut pending| std::mem::take(&mut *pending))
+            .unwrap_or_default()
+    }
+}
+
+/// True for `tone`, `wav:` and `none`, which run without an ALSA device and
+/// cannot be switched while running.
+pub fn is_virtual_device(device: &Option<String>) -> bool {
+    !wanted(device) || tone_frequency(device).is_some() || wav_sink_path(device).is_some()
+}
+
 pub struct AudioIo {
+    pub system_volume: super::system_volume::Control,
     stop: Arc<AtomicBool>,
     pub status: watch::Receiver<AudioStatus>,
+    pub devices: DeviceSwitch,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -50,12 +153,14 @@ impl AudioIo {
         config: AudioConfig,
         frame_samples: usize,
         mixer: Arc<Mutex<Mixer>>,
-        frames: mpsc::Sender<Vec<f32>>,
+        frames: mpsc::Sender<CapturedFrame>,
         processing: Arc<ProcessingControl>,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let snapshot = processing.snapshot();
         let (status_tx, status_rx) = watch::channel(AudioStatus {
+            system_volume: None,
+            output_levels: Default::default(),
             capture_ok: false,
             playback_ok: false,
             capture_device: None,
@@ -66,6 +171,10 @@ impl AudioIo {
             delay_ms: snapshot.delay_ms,
         });
         let thread_stop = stop.clone();
+        let devices = DeviceSwitch::default();
+        let thread_devices = devices.clone();
+        let system_volume = super::system_volume::Control::default();
+        let thread_system_volume = system_volume.clone();
         let thread = thread::Builder::new()
             .name("talktome-audio".into())
             .spawn(move || {
@@ -77,12 +186,16 @@ impl AudioIo {
                     processing,
                     status_tx,
                     thread_stop,
+                    thread_devices,
+                    thread_system_volume,
                 )
             })
             .expect("spawning audio thread");
         Self {
+            system_volume,
             stop,
             status: status_rx,
+            devices,
             thread: Some(thread),
         }
     }
@@ -122,7 +235,7 @@ fn run_tone_generator(
     frequency: f32,
     frame_samples: usize,
     processor: Arc<Mutex<Processor>>,
-    frames: mpsc::Sender<Vec<f32>>,
+    frames: mpsc::Sender<CapturedFrame>,
     stop: Arc<AtomicBool>,
 ) {
     let mut phase = 0f32;
@@ -149,7 +262,7 @@ fn run_tone_generator(
         pending.extend_from_slice(&processed);
         while pending.len() >= frame_samples {
             let frame: Vec<f32> = pending.drain(..frame_samples).collect();
-            let _ = frames.try_send(frame);
+            let _ = frames.try_send(CapturedFrame::new(frame));
         }
         next += frame_duration;
         let now = Instant::now();
@@ -196,24 +309,29 @@ fn run_wav_sink(path: std::path::PathBuf, mixer: Arc<Mutex<Mixer>>, stop: Arc<At
     let _ = writer.finalize();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_supervisor(
-    config: AudioConfig,
+    mut config: AudioConfig,
     frame_samples: usize,
     mixer: Arc<Mutex<Mixer>>,
-    frames: mpsc::Sender<Vec<f32>>,
+    frames: mpsc::Sender<CapturedFrame>,
     processing: Arc<ProcessingControl>,
     status_tx: watch::Sender<AudioStatus>,
     stop: Arc<AtomicBool>,
+    devices: DeviceSwitch,
+    system_volume: super::system_volume::Control,
 ) {
     let mut capture_wanted = wanted(&config.input_device);
     let mut playback_wanted = wanted(&config.output_device);
     let mut capture: Option<OpenStream> = None;
     let mut playback: Option<OpenStream> = None;
+    let mut output_levels = super::system_volume::OutputLevels::new();
     let mut next_attempt = Instant::now();
     let reopen = Duration::from_millis(config.reopen_ms.max(250));
     let processor = Arc::new(Mutex::new(Processor::new(processing.clone())));
     let mut virtual_threads = Vec::new();
     let mut last_error = None;
+    let mut health = HealthLog::new(Instant::now());
 
     if let Some(frequency) = tone_frequency(&config.input_device) {
         tracing::info!(event = "audio-capture-open", device = "tone", frequency);
@@ -233,6 +351,60 @@ fn run_supervisor(
     while !stop.load(Ordering::Relaxed) {
         let now = Instant::now();
 
+        // The session only sends real ALSA devices here, never tone/wav.
+        let PendingSwitch {
+            input,
+            output,
+            pair,
+        } = devices.take();
+        if let Some(device) = input {
+            tracing::info!(event = "audio-device-switch", direction = "capture", device = ?device);
+            config.input_device = device;
+            capture = None;
+            capture_wanted = true;
+            next_attempt = now;
+        }
+        if let Some(device) = output {
+            tracing::info!(event = "audio-device-switch", direction = "playback", device = ?device);
+            config.output_device = device;
+            playback = None;
+            playback_wanted = true;
+            next_attempt = now;
+        }
+
+        if let Some(request) = pair.filter(|request| !request.reply.is_closed()) {
+            let input_changed = config.input_device != request.input;
+            let output_changed = config.output_device != request.output;
+            let mut next = config.clone();
+            next.input_device = request.input;
+            next.output_device = request.output;
+
+            let changes_virtual_device = input_changed
+                && (tone_frequency(&config.input_device).is_some()
+                    || tone_frequency(&next.input_device).is_some())
+                || output_changed
+                    && (wav_sink_path(&config.output_device).is_some()
+                        || wav_sink_path(&next.output_device).is_some());
+            if changes_virtual_device {
+                let _ = request.reply.send(Err(anyhow!(
+                    "Test tone and WAV devices require a restart to change"
+                )));
+            } else if request.reply.send(Ok(())).is_ok() {
+                // Select the requested devices first. Release superseded streams before
+                // opening replacements so aliases of an exclusive PCM can be switched too.
+                config = next;
+                if input_changed {
+                    capture = None;
+                    capture_wanted = wanted(&config.input_device);
+                }
+                if output_changed {
+                    playback = None;
+                    playback_wanted = wanted(&config.output_device);
+                }
+                next_attempt = now;
+            }
+        }
+
         if let Some(open) = capture.as_ref() {
             if open.failed.load(Ordering::Relaxed) {
                 tracing::warn!(event = "audio-device-lost", direction = "capture", device = %open.name);
@@ -246,6 +418,36 @@ fn run_supervisor(
                 playback = None;
                 next_attempt = now + reopen;
             }
+        }
+
+        // ALSA can keep a stream RUNNING without calling back and without an
+        // error (seen with USB cards). Close and reopen it right away.
+        if let Some(open) = capture.as_mut() {
+            let (callbacks, peak) = open.poll(now);
+            health.capture.add(callbacks, peak);
+            if let Some(silent) = open.stalled(now) {
+                tracing::warn!(event = "audio-stream-stalled", direction = "capture", device = %open.name, silent_ms = silent.as_millis() as u64);
+                capture = None;
+                next_attempt = now;
+            }
+        }
+        if let Some(open) = playback.as_mut() {
+            let (callbacks, peak) = open.poll(now);
+            health.playback.add(callbacks, peak);
+            if let Some(silent) = open.stalled(now) {
+                tracing::warn!(event = "audio-stream-stalled", direction = "playback", device = %open.name, silent_ms = silent.as_millis() as u64);
+                playback = None;
+                next_attempt = now;
+            }
+        }
+        if health.due(now) {
+            let mixer_health = mixer.lock().map(|m| m.health()).unwrap_or_default();
+            health.log(
+                now,
+                capture.as_ref().map(|c| c.name.as_str()),
+                playback.as_ref().map(|p| p.name.as_str()),
+                mixer_health,
+            );
         }
 
         if now >= next_attempt {
@@ -277,6 +479,7 @@ fn run_supervisor(
                 ) {
                     Ok(open) => {
                         tracing::info!(event = "audio-device-restored", direction = "playback", device = %open.name);
+                        output_levels = configure_playback_levels(&open, &config);
                         playback = Some(open);
                     }
                     Err(error) => {
@@ -304,6 +507,12 @@ fn run_supervisor(
             config.output_device.clone()
         };
         let status = AudioStatus {
+            output_levels: if playback.is_some() {
+                output_levels.clone()
+            } else {
+                Default::default()
+            },
+            system_volume: system_volume.poll(playback.as_ref().and_then(|p| p.card)),
             capture_ok: !capture_wanted || capture.is_some(),
             playback_ok: !playback_wanted || playback.is_some(),
             capture_device,
@@ -316,7 +525,7 @@ fn run_supervisor(
         if *status_tx.borrow() != status {
             let _ = status_tx.send(status);
         }
-        thread::sleep(Duration::from_millis(250));
+        system_volume.wait(Duration::from_millis(250));
     }
     drop(capture);
     drop(playback);
@@ -325,10 +534,144 @@ fn run_supervisor(
     }
 }
 
+/// A stream whose callback has not run for this long is treated as hung.
+const STALL_AFTER: Duration = Duration::from_secs(2);
+/// Interval of the `audio-health` log line.
+const HEALTH_EVERY: Duration = Duration::from_secs(300);
+
+/// Callback progress of one stream, written by its callback.
+#[derive(Default)]
+struct StreamActivity {
+    callbacks: AtomicU64,
+    /// Highest absolute sample since the last poll, as `f32` bits. For
+    /// non-negative floats the bit pattern orders like the value.
+    peak: AtomicU32,
+}
+
+impl StreamActivity {
+    fn note(&self, samples: &[f32]) {
+        let peak = samples.iter().fold(0f32, |peak, s| peak.max(s.abs()));
+        self.callbacks.fetch_add(1, Ordering::Relaxed);
+        if peak.is_finite() {
+            self.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// Takes the callback count and peak since the last call.
+    fn take(&self) -> (u64, f32) {
+        let callbacks = self.callbacks.swap(0, Ordering::Relaxed);
+        let peak = f32::from_bits(self.peak.swap(0, Ordering::Relaxed));
+        (callbacks, peak)
+    }
+}
+
 struct OpenStream {
+    card: Option<i32>,
     name: String,
     failed: Arc<AtomicBool>,
+    activity: Arc<StreamActivity>,
+    /// Last time the callback was seen running (opening counts).
+    progress_at: Instant,
     _stream: Stream,
+}
+
+impl OpenStream {
+    fn poll(&mut self, now: Instant) -> (u64, f32) {
+        let (callbacks, peak) = self.activity.take();
+        if callbacks > 0 {
+            self.progress_at = now;
+        }
+        (callbacks, peak)
+    }
+
+    /// How long the callback has been silent, once that reaches `STALL_AFTER`.
+    fn stalled(&self, now: Instant) -> Option<Duration> {
+        stalled_for(self.progress_at, now)
+    }
+}
+
+fn stalled_for(progress_at: Instant, now: Instant) -> Option<Duration> {
+    let silent = now.saturating_duration_since(progress_at);
+    (silent >= STALL_AFTER).then_some(silent)
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct DirectionHealth {
+    callbacks: u64,
+    peak: f32,
+}
+
+impl DirectionHealth {
+    fn add(&mut self, callbacks: u64, peak: f32) {
+        self.callbacks += callbacks;
+        self.peak = self.peak.max(peak);
+    }
+}
+
+/// Accumulates audio activity for the periodic `audio-health` line, so a
+/// silent output can be told apart from missing input after the fact.
+struct HealthLog {
+    since: Instant,
+    capture: DirectionHealth,
+    playback: DirectionHealth,
+    /// Mixer counters at the previous line, for the deltas.
+    mixer: MixerHealth,
+}
+
+impl HealthLog {
+    fn new(now: Instant) -> Self {
+        Self {
+            since: now,
+            capture: DirectionHealth::default(),
+            playback: DirectionHealth::default(),
+            mixer: MixerHealth::default(),
+        }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.since) >= HEALTH_EVERY
+    }
+
+    fn log(
+        &mut self,
+        now: Instant,
+        capture: Option<&str>,
+        playback: Option<&str>,
+        mixer: MixerHealth,
+    ) {
+        tracing::info!(
+            event = "audio-health",
+            playback = playback.unwrap_or("-"),
+            playback_callbacks = self.playback.callbacks,
+            playback_peak_dbfs = peak_dbfs(self.playback.peak),
+            capture = capture.unwrap_or("-"),
+            capture_callbacks = self.capture.callbacks,
+            capture_peak_dbfs = peak_dbfs(self.capture.peak),
+            sources = mixer.sources,
+            active_sources = mixer.active_sources,
+            receive_buffered_ms = mixer.buffered_ms,
+            receive_target_ms = mixer.target_ms,
+            packets = mixer
+                .packets_matched
+                .saturating_sub(self.mixer.packets_matched),
+            unmatched_packets = mixer
+                .packets_unmatched
+                .saturating_sub(self.mixer.packets_unmatched),
+        );
+        *self = Self {
+            mixer,
+            ..Self::new(now)
+        };
+    }
+}
+
+/// Peak as whole dBFS; silence reads -120.
+fn peak_dbfs(peak: f32) -> i32 {
+    if peak <= 1e-6 {
+        -120
+    } else {
+        (20.0 * peak.log10()).round() as i32
+    }
 }
 
 fn pick_device(
@@ -464,12 +807,14 @@ fn build_capture_stream(
     frame_samples: usize,
     processor: &Arc<Mutex<Processor>>,
     control: &Arc<ProcessingControl>,
-    frames: &mpsc::Sender<Vec<f32>>,
+    frames: &mpsc::Sender<CapturedFrame>,
     failed: &Arc<AtomicBool>,
+    activity: &Arc<StreamActivity>,
 ) -> Result<Stream> {
     let processor = Arc::clone(processor);
     let control = Arc::clone(control);
     let frames = frames.clone();
+    let activity = Arc::clone(activity);
     let error_flag = Arc::clone(failed);
     let err_fn = move |error: cpal::Error| {
         note_stream_error("capture", error, &error_flag);
@@ -482,6 +827,7 @@ fn build_capture_stream(
     let mut pending: Vec<f32> = Vec::with_capacity(frame_samples * 4);
 
     let mut handle_samples = move |samples: &[f32]| {
+        let captured = Instant::now();
         control
             .observe_capture_period_ms(callback_period_ms(samples.len() / channels.max(1), rate));
         mono.clear();
@@ -489,6 +835,7 @@ fn build_capture_stream(
             let sum: f32 = frame.iter().sum();
             mono.push(sum / channels as f32);
         }
+        activity.note(&mono);
         converted.clear();
         if resampler.process(&mono, &mut converted).is_err() {
             return;
@@ -503,7 +850,10 @@ fn build_capture_stream(
         while pending.len() >= frame_samples {
             let frame: Vec<f32> = pending.drain(..frame_samples).collect();
             // Never block the audio thread; drop frames if the encoder lags.
-            let _ = frames.try_send(frame);
+            let _ = frames.try_send(CapturedFrame {
+                samples: frame,
+                captured,
+            });
         }
     };
 
@@ -547,8 +897,10 @@ fn build_playback_stream(
     processor: &Arc<Mutex<Processor>>,
     control: &Arc<ProcessingControl>,
     failed: &Arc<AtomicBool>,
+    activity: &Arc<StreamActivity>,
 ) -> Result<Stream> {
     let mixer = Arc::clone(mixer);
+    let activity = Arc::clone(activity);
     let processor = Arc::clone(processor);
     let control = Arc::clone(control);
     let error_flag = Arc::clone(failed);
@@ -581,6 +933,7 @@ fn build_playback_stream(
                 processor.analyze_render(&far_end);
             }
         }
+        activity.note(&mono);
         for (index, frame) in out.chunks_mut(channels.max(1)).enumerate() {
             let sample = mono.get(index).copied().unwrap_or(0.0);
             for slot in frame.iter_mut() {
@@ -625,7 +978,7 @@ fn open_capture(
     frame_samples: usize,
     processor: Arc<Mutex<Processor>>,
     control: Arc<ProcessingControl>,
-    frames: mpsc::Sender<Vec<f32>>,
+    frames: mpsc::Sender<CapturedFrame>,
 ) -> Result<OpenStream> {
     let host = cpal::default_host();
     let device = pick_device(&host, &config.input_device, true)?;
@@ -636,6 +989,7 @@ fn open_capture(
     let format = supported.sample_format();
     let stream_config: StreamConfig = supported.into();
     let failed = Arc::new(AtomicBool::new(false));
+    let activity = Arc::new(StreamActivity::default());
     let period_ms = config.device_period_ms;
     let stream = open_stream_with_period("capture", period_ms, stream_config, |stream_config| {
         build_capture_stream(
@@ -649,6 +1003,7 @@ fn open_capture(
             &control,
             &frames,
             &failed,
+            &activity,
         )
     })?;
     stream.play().context("starting capture stream")?;
@@ -661,8 +1016,11 @@ fn open_capture(
         period_ms
     );
     Ok(OpenStream {
+        card: None,
         name,
         failed,
+        activity,
+        progress_at: Instant::now(),
         _stream: stream,
     })
 }
@@ -675,6 +1033,13 @@ fn open_playback(
 ) -> Result<OpenStream> {
     let host = cpal::default_host();
     let device = pick_device(&host, &config.output_device, false)?;
+    // Resolve through ALSA's actual PCM route, including dmix/asound aliases.
+    // An unresolved route exposes no control rather than using the default card.
+    let card = alsa::PCM::new(&device_pcm_id(&device), alsa::Direction::Playback, true)
+        .and_then(|pcm| pcm.info())
+        .ok()
+        .map(|info| info.get_card())
+        .filter(|c| *c >= 0);
     let name = format!("{} ({})", device_label(&device), device_pcm_id(&device));
     let supported = choose_config(&device, false).context("no usable playback configuration")?;
     let channels = supported.channels() as usize;
@@ -682,6 +1047,7 @@ fn open_playback(
     let format = supported.sample_format();
     let stream_config: StreamConfig = supported.into();
     let failed = Arc::new(AtomicBool::new(false));
+    let activity = Arc::new(StreamActivity::default());
     let period_ms = config.device_period_ms;
     let stream = open_stream_with_period("playback", period_ms, stream_config, |stream_config| {
         build_playback_stream(
@@ -694,6 +1060,7 @@ fn open_playback(
             &processor,
             &control,
             &failed,
+            &activity,
         )
     })?;
     stream.play().context("starting playback stream")?;
@@ -706,17 +1073,158 @@ fn open_playback(
         period_ms
     );
     Ok(OpenStream {
+        card,
         name,
         failed,
+        activity,
+        progress_at: Instant::now(),
         _stream: stream,
     })
+}
+
+fn configure_playback_levels(
+    open: &OpenStream,
+    config: &AudioConfig,
+) -> super::system_volume::OutputLevels {
+    if let Err(error) = super::system_volume::configure_outputs(
+        open.card,
+        config.speaker_level_db,
+        config.headphone_level_db,
+    ) {
+        tracing::warn!(event = "output-level-config-failed", error = %error);
+    }
+    super::system_volume::output_levels(open.card)
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use super::{note_stream_error, requested_buffer_size, tone_frequency, wav_sink_path};
+    use std::time::{Duration, Instant};
+
+    use super::{
+        note_stream_error, peak_dbfs, requested_buffer_size, stalled_for, tone_frequency,
+        wav_sink_path, StreamActivity,
+    };
+
+    #[tokio::test]
+    async fn a_missing_device_does_not_prevent_selecting_or_leaving_a_set() {
+        use super::{AudioConfig, AudioIo, Mixer, ProcessingControl};
+        use std::sync::{Arc, Mutex};
+
+        let config = AudioConfig {
+            input_device: Some("none".into()),
+            output_device: Some("none".into()),
+            ..Default::default()
+        };
+        let processing = ProcessingControl::from_audio(&config);
+        let mixer = Arc::new(Mutex::new(Mixer::new(1.0, -15.0, false, false, 20, 400)));
+        let (frames, _received) = tokio::sync::mpsc::channel(4);
+        let audio = AudioIo::start(config, 240, mixer, frames, processing);
+        let mut status = audio.status.clone();
+
+        let selected = audio
+            .devices
+            .switch_pair(
+                Some("off".into()),
+                Some("talktome-missing-audio-device".into()),
+            )
+            .await;
+        selected.unwrap();
+        let missing = tokio::time::timeout(
+            Duration::from_secs(1),
+            status.wait_for(|status| {
+                status.capture_device.as_deref() == Some("off")
+                    && !status.playback_ok
+                    && status
+                        .last_error
+                        .as_deref()
+                        .is_some_and(|error| error.starts_with("playback:"))
+            }),
+        )
+        .await
+        .map(|result| result.is_ok());
+        let switched = audio
+            .devices
+            .switch_pair(Some("off".into()), Some("off".into()))
+            .await;
+        let new_status = tokio::time::timeout(
+            Duration::from_secs(1),
+            status.wait_for(|status| {
+                status.capture_device.as_deref() == Some("off")
+                    && status.playback_device.as_deref() == Some("off")
+            }),
+        )
+        .await
+        .map(|result| result.is_ok());
+        audio.stop();
+
+        assert!(missing.unwrap());
+        switched.unwrap();
+        assert!(new_status.unwrap());
+    }
+
+    #[test]
+    fn capture_backlog_keeps_only_the_newest_fresh_frame() {
+        use super::CapturedFrame;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let stale = CapturedFrame {
+            samples: vec![1.0],
+            captured: std::time::Instant::now() - std::time::Duration::from_millis(500),
+        };
+        tx.try_send(CapturedFrame::new(vec![2.0])).unwrap();
+        tx.try_send(CapturedFrame::new(vec![3.0])).unwrap();
+        assert_eq!(stale.newest(&mut rx).unwrap().samples, vec![3.0]);
+        assert!(rx.try_recv().is_err());
+        tx.try_send(CapturedFrame::new(vec![5.0])).unwrap();
+        let normal = CapturedFrame::new(vec![4.0]);
+        assert_eq!(normal.newest(&mut rx).unwrap().samples, vec![4.0]);
+        assert_eq!(rx.try_recv().unwrap().samples, vec![5.0]);
+        let stale = CapturedFrame {
+            samples: vec![1.0],
+            captured: std::time::Instant::now() - std::time::Duration::from_millis(500),
+        };
+        assert!(stale.newest(&mut rx).is_none());
+    }
+
+    #[test]
+    fn stale_microphone_audio_is_never_fresh_after_a_control_stall() {
+        let frame = super::CapturedFrame {
+            samples: vec![0.0; 240],
+            captured: std::time::Instant::now() - std::time::Duration::from_millis(500),
+        };
+        assert!(!frame.is_fresh());
+        assert!(super::CapturedFrame::new(vec![0.0; 240]).is_fresh());
+    }
+
+    #[test]
+    fn a_stream_without_callbacks_counts_as_stalled_after_two_seconds() {
+        let opened = Instant::now();
+        assert_eq!(
+            stalled_for(opened, opened + Duration::from_millis(1_900)),
+            None
+        );
+        assert_eq!(
+            stalled_for(opened, opened + Duration::from_millis(2_250)),
+            Some(Duration::from_millis(2_250))
+        );
+    }
+
+    #[test]
+    fn activity_reports_callbacks_and_peak_once() {
+        let activity = StreamActivity::default();
+        activity.note(&[0.1, -0.5, 0.2]);
+        activity.note(&[0.25]);
+        assert_eq!(activity.take(), (2, 0.5));
+        assert_eq!(activity.take(), (0, 0.0));
+    }
+
+    #[test]
+    fn peak_reads_as_dbfs() {
+        assert_eq!(peak_dbfs(0.0), -120);
+        assert_eq!(peak_dbfs(1.0), 0);
+        assert_eq!(peak_dbfs(0.1), -20);
+    }
 
     #[test]
     fn xrun_stays_open_and_other_errors_reopen() {

@@ -1,0 +1,26 @@
+{
+  "images": [
+    {
+      "filename": "TalkToMeMarkGlyph.png",
+      "idiom": "universal",
+      "scale": "1x"
+    },
+    {
+      "filename": "ivan.p@example.net",
+      "idiom": "universal",
+      "scale": "2x"
+    },
+    {
+      "filename": "tom.h@example.org",
+      "idiom": "universal",
+      "scale": "3x"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "template-rendering-intent": "original"
+  }
+}

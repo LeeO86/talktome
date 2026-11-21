@@ -3,6 +3,7 @@
 //! Companion, and publishes state snapshots.
 
 use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,9 +14,10 @@ use tokio::sync::{mpsc, watch};
 
 use super::alerts::{Announcement, ConnectionAlerts, ProbeReply};
 use super::http::{LoginResponse, ServerApi, TargetEntry};
+use super::panel::{self, ConfigPatch, LocalAudio, PanelSettings};
 use super::socketio::{ConnectOptions, SocketClient, SocketEvent};
 use crate::audio::codec::OpusEncoder;
-use crate::audio::io::AudioStatus;
+use crate::audio::io::{is_virtual_device, AudioStatus, CapturedFrame, DeviceSwitch};
 use crate::audio::mixer::Mixer;
 use crate::audio::processing::{ProcessingControl, UserAudioPatch};
 use crate::audio::vox::{peak_db, LevelTrigger};
@@ -26,25 +28,37 @@ use crate::rtc::{
     SIGNAL_TIMEOUT,
 };
 use crate::state::{
-    Command, ConnectionState, IncomingInfo, InputSource, Snapshot, TargetInfo, TargetRef,
+    Command, ConnectionState, IncomingInfo, InputSource, ProductionInfo, Snapshot, TargetInfo,
+    TargetRef,
 };
 use crate::talk::{AudioState, TalkChange, TalkModel, TargetKey};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 
 const ACTIVE_PRODUCER_SYNC: Duration = Duration::from_secs(10);
+const DISPLAY_INTERVAL: Duration = Duration::from_millis(33);
 const SNAPSHOT_DEBOUNCE: Duration = Duration::from_millis(200);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const RECONNECT_BACKOFF: Duration = Duration::from_secs(3);
 const MAX_IDLE_RECV_SECTIONS: usize = 32;
+/// Matches the web client; the server treats stats older than 15 s as stale.
+const NETWORK_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+/// RTCP RTT stays authoritative this long after the last Receiver Report.
+const MEDIA_RTT_FRESH: Duration = Duration::from_secs(10);
+const SIGNALLING_RTT_SMOOTHING: f32 = 0.2;
+/// ALSA device list reused across remote panel reports (one every 2 s).
+const PANEL_DEVICES_MAX_AGE: Duration = Duration::from_secs(30);
 
 /// Inputs shared with the audio thread and surfaces.
 pub struct SessionIo {
+    pub system_volume: crate::audio::system_volume::Control,
     pub commands: mpsc::Receiver<Command>,
     pub snapshots: watch::Sender<Arc<Snapshot>>,
     pub mixer: Arc<Mutex<Mixer>>,
-    pub frames: mpsc::Receiver<Vec<f32>>,
+    pub frames: mpsc::Receiver<CapturedFrame>,
     pub audio_status: watch::Receiver<AudioStatus>,
     pub processing: Arc<ProcessingControl>,
+    pub audio_devices: DeviceSwitch,
     pub shutdown: watch::Receiver<bool>,
 }
 
@@ -82,10 +96,10 @@ struct Connected {
 enum Event {
     Socket(SocketEvent),
     Rtc(RtcEvent),
-    Rx(RxPacket),
     Command(Command),
-    Frame(Vec<f32>),
+    Frame(CapturedFrame),
     AudioStatus,
+    Display,
     Tick,
     Shutdown,
     Probe(ProbeReply),
@@ -113,14 +127,15 @@ pub struct Session {
     online_users: BTreeSet<i64>,
     incoming: Vec<IncomingInfo>,
     incoming_keys: BTreeSet<TargetKey>,
+    last_caller: Option<String>,
     on_air: bool,
     preview: bool,
     server_version: Option<String>,
     connection: ConnectionState,
+    server_unavailable: bool,
     detail: String,
     input_level_db: f32,
     rx_tx: mpsc::Sender<RxPacket>,
-    rx_rx: mpsc::Receiver<RxPacket>,
     snapshot_dirty: bool,
     last_snapshot: Instant,
     audio_state_dirty: bool,
@@ -136,13 +151,41 @@ pub struct Session {
     alerts: ConnectionAlerts,
     probe_tx: mpsc::Sender<ProbeReply>,
     probe_rx: mpsc::Receiver<ProbeReply>,
+    /// Smoothed `connection-health` round trip, the RTT while not talking.
+    signalling_rtt_ms: Option<f32>,
+    /// Last RTCP RTT and when it was measured.
+    media_rtt: Option<(u32, Instant)>,
+    media_rtt_measurements: u64,
     /// Disconnect / reconnect tones. Starts from config and follows a live
     /// `playConnectionSounds` admin update.
     play_connection_sounds: bool,
+    /// Admin remote panel revision and stored preferences.
+    panel: PanelSettings,
+    /// Cached ALSA devices for panel reports and when they were listed.
+    panel_devices: Option<(Vec<Value>, Instant)>,
+    /// Configuration file that remote VOX / lock / profile changes are saved to.
+    config_path: Option<PathBuf>,
+    /// Last per-user audio settings from the server.
+    server_audio: Value,
+    dim_db: f32,
+    dim_feeds_while_speaking: bool,
+    dim_when_addressed: bool,
+    vox_threshold_db: f32,
+    /// Codec profile in the configuration file; the running one changes on restart.
+    saved_profile: String,
+    /// ALSA devices in use; the remote panel can switch them while running.
+    input_device: Option<String>,
+    output_device: Option<String>,
+    active_device_set: usize,
+    /// Wanted production (`user.production`); the remote panel can change it.
+    production: Option<String>,
+    /// Production the server put this client in (its default when none is
+    /// configured), for1 the status key and production page.
+    active_production: Option<String>,
 }
 
 impl Session {
-    pub fn new(config: Arc<Config>, io: SessionIo) -> Result<Self> {
+    pub fn new(config: Arc<Config>, config_path: Option<PathBuf>, io: SessionIo) -> Result<Self> {
         let tls = crate::tls::build_client_config(&config.tls)?;
         let api = ServerApi::new(config.server_url(), tls)?;
         let profile = config.audio.profile;
@@ -175,9 +218,38 @@ impl Session {
                 mixer.set_member_level(conference_id, user_id, level);
             }
         }
-        let (rx_tx, rx_rx) = mpsc::channel(1024);
+        let (rx_tx, mut rx_rx) = mpsc::channel::<RxPacket>(64);
+        // Decode independently of signalling/HTTP waits in the session loop.
+        // The task exits when the session and its transports drop their senders.
+        let receive_mixer = io.mixer.clone();
+        tokio::spawn(async move {
+            while let Some(packet) = rx_rx.recv().await {
+                if packet.arrived.elapsed() > Duration::from_millis(100) {
+                    continue;
+                }
+                if let Ok(mut mixer) = receive_mixer.lock() {
+                    if let Err(error) = mixer.push_rtp_packet(
+                        &packet.consumer_id,
+                        packet.sequence,
+                        packet.timestamp,
+                        &packet.payload,
+                        packet.arrived,
+                    ) {
+                        tracing::debug!(event = "rx-decode-failed", error = %error);
+                    }
+                }
+            }
+        });
         let (probe_tx, probe_rx) = mpsc::channel(32);
         let play_connection_sounds = config.audio.play_connection_sounds;
+        let dim_db = config.audio.dim_db;
+        let dim_feeds_while_speaking = config.audio.dim_feeds_while_speaking;
+        let dim_when_addressed = config.audio.dim_when_addressed;
+        let vox_threshold_db = config.vox.threshold_db;
+        let production = config.user.production.clone();
+        let (input, output) = config.audio.devices_for_set(0);
+        let input_device = input.clone();
+        let output_device = output.clone();
         Ok(Self {
             frame_duration: Duration::from_millis(profile.frame_ms() as u64),
             config,
@@ -193,16 +265,17 @@ impl Session {
             online_users: BTreeSet::new(),
             incoming: Vec::new(),
             incoming_keys: BTreeSet::new(),
+            last_caller: None,
             on_air: false,
             preview: false,
             server_version: None,
             connection: ConnectionState::Disconnected,
+            server_unavailable: false,
             detail: String::new(),
             input_level_db: -120.0,
             rx_tx,
-            rx_rx,
             snapshot_dirty: true,
-            last_snapshot: Instant::now() - SNAPSHOT_DEBOUNCE,
+            last_snapshot: Instant::now() - DISPLAY_INTERVAL,
             audio_state_dirty: false,
             last_audio_snapshot: Instant::now(),
             backoff: Duration::from_secs(1),
@@ -214,7 +287,27 @@ impl Session {
             alerts: ConnectionAlerts::new(),
             probe_tx,
             probe_rx,
+            signalling_rtt_ms: None,
+            media_rtt: None,
+            media_rtt_measurements: 0,
             play_connection_sounds,
+            panel: PanelSettings::default(),
+            panel_devices: None,
+            config_path,
+            server_audio: json!({}),
+            dim_db,
+            dim_feeds_while_speaking,
+            dim_when_addressed,
+            vox_threshold_db,
+            input_device,
+            output_device,
+            active_device_set: 0,
+            production,
+            active_production: None,
+            saved_profile: serde_json::to_value(profile)
+                .ok()
+                .and_then(|p| p.as_str().map(str::to_string))
+                .unwrap_or_else(|| "ultra-low".into()),
         })
     }
 
@@ -289,9 +382,14 @@ impl Session {
     }
 
     fn next_backoff(&mut self) -> Duration {
-        let jitter = rand::rng().random_range(0..500);
-        let delay = self.backoff + Duration::from_millis(jitter);
-        self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
+        let limit = if self.registered_since.is_some() {
+            RECONNECT_BACKOFF
+        } else {
+            MAX_BACKOFF
+        };
+        let jitter = rand::rng().random_range(0..250);
+        let delay = self.backoff.min(limit) + Duration::from_millis(jitter);
+        self.backoff = (self.backoff * 2).min(limit);
         delay
     }
 
@@ -305,19 +403,28 @@ impl Session {
                 _ = wait_true(&mut shutdown) => return true,
                 Some(command) = self.io.commands.recv() => {
                     if matches!(command, Command::Shutdown) { return true; }
-                    self.handle_offline_command(command);
+                    self.handle_offline_command(command).await;
                 }
                 Some(frame) = self.io.frames.recv() => {
-                    self.input_level_db = peak_db(&frame);
+                    self.input_level_db = peak_db(&frame.samples);
                 }
                 _ = self.io.audio_status.changed() => { self.snapshot_dirty = true; }
-                _ = tokio::time::sleep(SNAPSHOT_DEBOUNCE) => { self.publish(false); }
+                _ = tokio::time::sleep(DISPLAY_INTERVAL) => { self.publish(false); }
             }
         }
     }
 
-    fn handle_offline_command(&mut self, command: Command) {
+    async fn handle_offline_command(&mut self, command: Command) {
         match command {
+            Command::LocalPanel(request) => {
+                if !request.is_pending() {
+                    return;
+                }
+                let result = self.handle_local_panel(None, &request.command).await;
+                request.respond(result);
+            }
+            Command::SystemVolume(action) => self.system_volume_command(action),
+            Command::ToggleAudioDeviceSet => self.toggle_audio_device_set().await,
             Command::MuteToggle(key) => {
                 let level = self.audio.toggle_mute(key);
                 self.apply_level(key, level);
@@ -325,6 +432,18 @@ impl Session {
             Command::VolumeStep { target, delta } => {
                 let level = self.audio.step_volume(target, delta);
                 self.apply_level(target, level);
+            }
+            Command::MemberVolumeStep {
+                conference: TargetKey::Conference(conference_id),
+                user_id,
+                delta,
+            } => {
+                let volume = crate::talk::step_target_volume(
+                    self.audio.member_level(conference_id, user_id).volume,
+                    delta,
+                );
+                let level = self.audio.set_member_volume(conference_id, user_id, volume);
+                self.apply_member_level(conference_id, user_id, level);
             }
             Command::VolumeSet { target, volume } => {
                 let level = self.audio.set_volume(target, volume);
@@ -345,7 +464,9 @@ impl Session {
                 let level = self.audio.toggle_member_mute(conference_id, user_id);
                 self.apply_member_level(conference_id, user_id, level);
             }
-            Command::MemberVolumeSet { .. } | Command::MemberMuteToggle { .. } => {}
+            Command::MemberVolumeStep { .. }
+            | Command::MemberVolumeSet { .. }
+            | Command::MemberMuteToggle { .. } => {}
             Command::TalkPress { source, target } => {
                 if !self.target_is_talkable(target) {
                     self.detail = "user offline".into();
@@ -382,6 +503,8 @@ impl Session {
                 self.pending_talk_change = Some(change);
                 self.snapshot_dirty = true;
             }
+            // Used on the next registration.
+            Command::SetProduction(id) => self.save_production(&id),
             Command::Refresh => self.snapshot_dirty = true,
             _ => {}
         }
@@ -391,12 +514,11 @@ impl Session {
     // Connecting
     // ------------------------------------------------------------------
 
-    async fn ensure_token(&mut self) -> Result<String> {
-        if let Some((token, expires)) = &self.token {
-            if Instant::now() + Duration::from_secs(60) < *expires {
-                return Ok(token.clone());
-            }
-        }
+    /// Companion tokens are server-memory sessions, so an unexpired token
+    /// can still be invalid after a restart. Authenticate before every socket
+    /// connection, rather than learning this through a failed registration.
+    async fn authenticate(&mut self) -> Result<String> {
+        self.token = None;
         self.set_connection(ConnectionState::LoggingIn, "");
         self.publish(true);
         let login = self
@@ -419,7 +541,7 @@ impl Session {
     }
 
     fn resolve_production(&self) -> Option<Value> {
-        let wanted = self.config.user.production.as_deref()?.trim();
+        let wanted = self.production.as_deref()?.trim();
         if wanted.is_empty() {
             return None;
         }
@@ -429,10 +551,8 @@ impl Session {
             .map(|l| l.productions.as_slice())
             .unwrap_or(&[]);
         for production in productions {
-            let id_text = match &production.id {
-                Value::Number(n) => n.to_string(),
-                Value::String(s) => s.clone(),
-                _ => continue,
+            let Some(id_text) = production_id_text(&production.id) else {
+                continue;
             };
             if id_text == wanted || production.name.eq_ignore_ascii_case(wanted) {
                 return Some(production.id.clone());
@@ -443,7 +563,7 @@ impl Session {
     }
 
     async fn connect(&mut self) -> Result<Connected> {
-        let token = self.ensure_token().await?;
+        let token = self.authenticate().await?;
         if let Some(version) = self.api.server_app_version().await {
             if self.server_version.as_deref() != Some(version.as_str()) {
                 tracing::info!(event = "server-version", version = %version);
@@ -464,7 +584,7 @@ impl Session {
             ConnectOptions {
                 tls,
                 auth: json!({ "token": token }),
-                connect_timeout: Duration::from_secs(10),
+                connect_timeout: Duration::from_secs(3),
             },
         )
         .await?;
@@ -494,7 +614,10 @@ impl Session {
             media: None,
         };
 
-        self.register(&mut connected).await?;
+        if let Err(error) = self.register(&mut connected).await {
+            connected.socket.close().await;
+            return Err(error);
+        }
         Ok(connected)
     }
 
@@ -514,6 +637,7 @@ impl Session {
                         "force": force,
                         "productionId": connected.production_id,
                         "clientType": super::REGISTERED_CLIENT_TYPE,
+                        "clientVersion": crate::VERSION,
                     }),
                     SIGNAL_TIMEOUT,
                 )
@@ -570,13 +694,25 @@ impl Session {
                 }
             }
             tracing::info!(event = "registered", user = %connected.user_name, id = connected.user_id);
-            if let Some(settings) = ack.get("userAudioSettings") {
-                if !settings.is_null() {
-                    self.apply_user_audio_settings(settings);
-                }
+            // Server-saved settings win for processing and dimming; VOX,
+            // lock-multiple and the codec profile come from the configuration.
+            let server_audio = ack.get("userAudioSettings").filter(|s| s.is_object());
+            if let Some(settings) = server_audio {
+                self.apply_user_audio_settings(settings, false);
             }
+            if let Some(id) = ack.get("productionId").and_then(production_id_text) {
+                connected.production_id = ack.get("productionId").cloned();
+                self.active_production = Some(id);
+            }
+            self.panel = ack
+                .get("panelSettings")
+                .and_then(PanelSettings::from_json)
+                .unwrap_or_default();
             self.set_connection(ConnectionState::Registered, "");
             self.publish(true);
+            let server_audio = server_audio.cloned();
+            self.push_audio_settings(connected, server_audio.as_ref())
+                .await;
             return Ok(());
         }
     }
@@ -628,6 +764,8 @@ impl Session {
         self.media_info = Some(crate::state::MediaInfo {
             send_state: "new".into(),
             recv_state: "new".into(),
+            send_ice_state: "new".into(),
+            recv_ice_state: "new".into(),
             consumers: 0,
             producer_id: Some(send.producer_id.clone()),
             ice_servers: send.ice_servers.clone(),
@@ -820,6 +958,7 @@ impl Session {
             tracing::warn!(event = "targets-failed", error = %format!("{error:#}"));
         }
         self.send_audio_snapshot(&connected, "registered").await;
+        self.report_network_stats(&connected).await;
         if let Some(change) = self.pending_talk_change.take() {
             self.send_talk_change(&mut connected, &change, "reconnected")
                 .await;
@@ -828,9 +967,15 @@ impl Session {
         while self.probe_rx.try_recv().is_ok() {}
         self.alerts.start(Instant::now());
 
+        let mut display = tokio::time::interval(DISPLAY_INTERVAL);
+        display.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut tick = tokio::time::interval(Duration::from_millis(500));
         let mut last_sync = Instant::now();
         let mut last_stats = Instant::now();
+        let mut last_network_report = Instant::now();
+        self.signalling_rtt_ms = None;
+        self.media_rtt = None;
+        self.media_rtt_measurements = 0;
         let mut targets_reload_due: Option<Instant> = None;
         let mut shutdown = self.io.shutdown.clone();
 
@@ -838,12 +983,12 @@ impl Session {
             let event = tokio::select! {
                 Some(event) = connected.events.recv() => Event::Socket(event),
                 event = recv_media_event(&mut connected.media) => Event::Rtc(event),
-                Some(packet) = self.rx_rx.recv() => Event::Rx(packet),
                 Some(command) = self.io.commands.recv() => Event::Command(command),
                 Some(frame) = self.io.frames.recv() => Event::Frame(frame),
                 _ = self.io.audio_status.changed() => Event::AudioStatus,
                 _ = wait_true(&mut shutdown) => Event::Shutdown,
                 _ = tick.tick() => Event::Tick,
+                _ = display.tick() => Event::Display,
                 Some(reply) = self.probe_rx.recv() => Event::Probe(reply),
             };
 
@@ -866,11 +1011,24 @@ impl Session {
                 }
                 Event::Socket(SocketEvent::Connected { .. }) => {}
                 Event::Socket(SocketEvent::Event { name, args, ack }) => {
-                    if let Some(ack) = ack {
-                        ack.respond(vec![]).await;
-                    }
                     let payload = args.into_iter().next().unwrap_or(Value::Null);
+                    // A panel command is answered with its result, everything else at once.
+                    let ack = match ack {
+                        Some(ack) if name != "panel-command" => {
+                            ack.respond(vec![]).await;
+                            None
+                        }
+                        ack => ack,
+                    };
                     match name.as_str() {
+                        "panel-command" => {
+                            let result = self
+                                .handle_panel_command(Some(&mut connected), &payload)
+                                .await;
+                            if let Some(ack) = ack {
+                                ack.respond(vec![result]).await;
+                            }
+                        }
                         "session-kicked" => {
                             tracing::warn!(event = "session-kicked", detail = %payload);
                             self.alerts.suppress_loss();
@@ -889,6 +1047,11 @@ impl Session {
                                 .get("productionId")
                                 .cloned()
                                 .filter(|v| !v.is_null());
+                            self.active_production = connected
+                                .production_id
+                                .as_ref()
+                                .and_then(production_id_text);
+                            self.snapshot_dirty = true;
                             let change = self.talk.reset();
                             self.send_talk_change(&mut connected, &change, "production-reset")
                                 .await;
@@ -901,15 +1064,6 @@ impl Session {
                     }
                 }
                 Event::Rtc(event) => self.handle_rtc_event(&mut connected, event).await,
-                Event::Rx(packet) => {
-                    if let Ok(mut mixer) = self.io.mixer.lock() {
-                        if let Err(error) =
-                            mixer.push_packet(&packet.consumer_id, packet.sequence, &packet.payload)
-                        {
-                            tracing::debug!(event = "rx-decode-failed", error = %error);
-                        }
-                    }
-                }
                 Event::Command(command) => {
                     if matches!(command, Command::Shutdown) {
                         self.shutdown_connected(&mut connected).await;
@@ -919,6 +1073,7 @@ impl Session {
                 }
                 Event::Frame(frame) => self.handle_frame(&mut connected, frame).await,
                 Event::AudioStatus => self.snapshot_dirty = true,
+                Event::Display => {}
                 Event::Tick => {
                     if let Some(due) = targets_reload_due {
                         if Instant::now() >= due {
@@ -926,6 +1081,7 @@ impl Session {
                             if let Err(error) = self.reload_targets(&connected).await {
                                 tracing::warn!(event = "targets-failed", error = %format!("{error:#}"));
                             }
+                            self.reload_productions(&connected).await;
                             self.sync_active_producers(&mut connected).await;
                         }
                     }
@@ -937,6 +1093,10 @@ impl Session {
                     if last_stats.elapsed() >= Duration::from_secs(2) {
                         last_stats = Instant::now();
                         self.refresh_media_stats(&connected).await;
+                    }
+                    if last_network_report.elapsed() >= NETWORK_REPORT_INTERVAL {
+                        last_network_report = Instant::now();
+                        self.report_network_stats(&connected).await;
                     }
                     if self.audio_state_dirty
                         && self.last_audio_snapshot.elapsed() >= SNAPSHOT_DEBOUNCE
@@ -953,6 +1113,7 @@ impl Session {
                     self.snapshot_dirty = true;
                 }
                 Event::Probe(reply) => {
+                    self.note_probe_rtt(reply);
                     let (send_blocks, recv_blocks) = transport_blocks(connected.media.as_ref());
                     let cue = self
                         .alerts
@@ -1061,12 +1222,24 @@ impl Session {
                     self.snapshot_dirty = true;
                 }
             }
+            "force-stop-transmission" => {
+                let change = self.admin_stop_transmission();
+                self.send_talk_change(connected, &change, "admin-stop-transmission")
+                    .await;
+            }
             "api-talk-command" => self.handle_api_talk_command(connected, payload).await,
             "api-target-audio-command" => self.handle_api_audio_command(connected, payload).await,
             "user-audio-settings-updated" => {
-                if let Some(settings) = payload.get("settings") {
-                    self.apply_user_audio_settings(settings);
+                if let Some(settings) = payload.get("settings").filter(|s| s.is_object()) {
+                    self.apply_remote_audio_settings(connected, settings).await;
                 }
+            }
+            "panel-state-request" => {
+                let report = self.panel_report().await;
+                let _ = connected
+                    .socket
+                    .emit("panel-client-state", vec![report])
+                    .await;
             }
             _ => {
                 tracing::trace!(event = "socket-event-ignored", name);
@@ -1096,7 +1269,14 @@ impl Session {
             if let Some(key) = target {
                 self.incoming_keys.insert(key);
             }
-            if let Some(from) = entry.get("fromUserId").and_then(Value::as_i64) {
+            // Only a direct call lights the sender's user key; talking into
+            // a conference or feed lights that key alone.
+            let to_group = matches!(
+                target,
+                Some(TargetKey::Conference(_)) | Some(TargetKey::Feed(_))
+            );
+            if let (Some(from), false) = (entry.get("fromUserId").and_then(Value::as_i64), to_group)
+            {
                 self.incoming_keys.insert(TargetKey::User(from));
             }
             self.incoming.push(IncomingInfo { from_name, target });
@@ -1111,11 +1291,33 @@ impl Session {
                 .or_else(|| reply.get("targetId"))?;
             TargetKey::from_type_and_id(kind, id)
         });
-        self.talk
-            .set_reply_target(crate::talk::TalkModel::resolve_reply_target(
-                reply,
-                self.incoming.iter().map(|incoming| incoming.target),
-            ));
+        // Calls into a listen-only conference cannot be answered there:
+        // they leave Reply (and the last caller) as they were.
+        let listen_only = |key: &TargetKey| {
+            matches!(key, TargetKey::Conference(_))
+                && self
+                    .targets
+                    .iter()
+                    .find(|t| t.key == *key)
+                    .is_some_and(|t| !t.can_talk)
+        };
+        let answerable: Vec<&IncomingInfo> = self
+            .incoming
+            .iter()
+            .filter(|incoming| !incoming.target.as_ref().is_some_and(listen_only))
+            .collect();
+        if let Some(first) = answerable.first() {
+            self.last_caller = Some(first.from_name.clone());
+        }
+        let only_listen_only = !self.incoming.is_empty() && answerable.is_empty();
+        let reply_listen_only = reply.as_ref().is_some_and(listen_only);
+        if !only_listen_only && !(reply_listen_only && answerable.is_empty()) {
+            let target = crate::talk::TalkModel::resolve_reply_target(
+                reply.filter(|key| !listen_only(key)),
+                answerable.iter().map(|incoming| incoming.target),
+            );
+            self.talk.set_reply_target(target);
+        }
         if let Ok(mut mixer) = self.io.mixer.lock() {
             mixer.set_dim_state(self.talk.is_talking(), !self.incoming.is_empty());
         }
@@ -1160,6 +1362,17 @@ impl Session {
             }
             RtcEvent::IceState { direction, state } => {
                 tracing::debug!(event = "ice-state", direction = ?direction, state = %state);
+                if let Some(info) = self.media_info.as_mut() {
+                    match direction {
+                        Direction::Send => {
+                            info.send_ice_state = state.to_string().to_ascii_lowercase()
+                        }
+                        Direction::Recv => {
+                            info.recv_ice_state = state.to_string().to_ascii_lowercase()
+                        }
+                    }
+                    self.snapshot_dirty = true;
+                }
                 if matches!(state, RTCIceConnectionState::Failed) {
                     let cue = self.alerts.on_transport_down();
                     self.play_announcement(cue);
@@ -1207,6 +1420,17 @@ impl Session {
     async fn handle_command(&mut self, connected: &mut Connected, command: Command) {
         let now = Instant::now();
         match command {
+            Command::LocalPanel(request) => {
+                if !request.is_pending() {
+                    return;
+                }
+                let result = self
+                    .handle_local_panel(Some(connected), &request.command)
+                    .await;
+                request.respond(result);
+            }
+            Command::SystemVolume(action) => self.system_volume_command(action),
+            Command::ToggleAudioDeviceSet => self.toggle_audio_device_set().await,
             Command::TalkPress { source, target } => {
                 if !self.target_is_talkable(target) {
                     self.detail = "user offline".into();
@@ -1250,6 +1474,18 @@ impl Session {
                 let level = self.audio.step_volume(target, delta);
                 self.apply_level(target, level);
             }
+            Command::MemberVolumeStep {
+                conference: TargetKey::Conference(conference_id),
+                user_id,
+                delta,
+            } => {
+                let volume = crate::talk::step_target_volume(
+                    self.audio.member_level(conference_id, user_id).volume,
+                    delta,
+                );
+                let level = self.audio.set_member_volume(conference_id, user_id, volume);
+                self.apply_member_level(conference_id, user_id, level);
+            }
             Command::VolumeSet { target, volume } => {
                 let level = self.audio.set_volume(target, volume);
                 self.apply_level(target, level);
@@ -1269,10 +1505,27 @@ impl Session {
                 let level = self.audio.toggle_member_mute(conference_id, user_id);
                 self.apply_member_level(conference_id, user_id, level);
             }
-            Command::MemberVolumeSet { .. } | Command::MemberMuteToggle { .. } => {}
+            Command::MemberVolumeStep { .. }
+            | Command::MemberVolumeSet { .. }
+            | Command::MemberMuteToggle { .. } => {}
+            Command::SetProduction(id) => {
+                if let Err(error) = self.change_production(connected, &id).await {
+                    self.detail = error.to_string();
+                    self.snapshot_dirty = true;
+                }
+            }
             Command::Refresh => self.snapshot_dirty = true,
             Command::Shutdown => {}
         }
+    }
+
+    fn system_volume_command(&self, action: crate::audio::system_volume::Action) {
+        let reply = self.io.system_volume.request(action);
+        tokio::spawn(async move {
+            if let Ok(Err(error)) = reply.await {
+                tracing::warn!(event = "system-volume-failed", %error);
+            }
+        });
     }
 
     fn apply_level(&mut self, key: TargetKey, level: crate::talk::AudioLevel) {
@@ -1300,6 +1553,15 @@ impl Session {
         }
         self.audio_state_dirty = true;
         self.snapshot_dirty = true;
+    }
+
+    fn admin_stop_transmission(&mut self) -> TalkChange {
+        // Keep the level trigger's current state: an active VOX must first
+        // fall silent before a fresh rising edge can start transmission again.
+        let change = self.talk.reset();
+        self.pending_talk_change = None;
+        self.snapshot_dirty = true;
+        change
     }
 
     async fn send_talk_change(
@@ -1371,7 +1633,14 @@ impl Session {
         self.snapshot_dirty = true;
     }
 
-    async fn handle_frame(&mut self, connected: &mut Connected, frame: Vec<f32>) {
+    async fn handle_frame(&mut self, connected: &mut Connected, frame: CapturedFrame) {
+        // Keep the newest capture after a busy control operation, never replay
+        // a FIFO of old microphone audio into an otherwise healthy connection.
+        let Some(frame) = frame.newest(&mut self.io.frames) else {
+            return;
+        };
+        let captured = frame.captured;
+        let frame = frame.samples;
         let level = peak_db(&frame);
         self.input_level_db = level;
         if let Some(trigger) = self.vox.as_mut() {
@@ -1390,13 +1659,19 @@ impl Session {
         if !talking {
             return;
         }
-        if frame.len() != self.encoder.frame_samples() {
+        if captured.elapsed() > Duration::from_millis(80)
+            || frame.len() != self.encoder.frame_samples()
+        {
             return;
         }
         match self.encoder.encode(&frame) {
             Ok(packet) => {
                 if let Some(media) = connected.media.as_ref() {
-                    if let Err(error) = media.send.write_frame(packet, self.frame_duration).await {
+                    if let Err(error) = media
+                        .send
+                        .write_frame(packet, self.frame_duration, captured)
+                        .await
+                    {
                         tracing::debug!(event = "write-frame-failed", error = %error);
                     }
                 }
@@ -1428,7 +1703,12 @@ impl Session {
         };
         match key {
             TargetKey::User(id) => self.online_users.contains(&id),
-            TargetKey::Conference(_) => true,
+            // Listen-only conferences are monitor targets, like feeds.
+            TargetKey::Conference(_) => self
+                .targets
+                .iter()
+                .find(|t| t.key == key)
+                .is_none_or(|t| t.can_talk),
             TargetKey::Feed(_) => false,
         }
     }
@@ -1446,11 +1726,15 @@ impl Session {
         let Some(media) = connected.media.as_ref() else {
             return;
         };
+        // The receive transport has no outbound streams, so its report holds
+        // nothing we use; receive loss comes from the jitter buffers instead.
         let send = crate::rtc::LinkStats::from_report(&media.send.stats_report().await);
-        let recv = crate::rtc::LinkStats::from_report(&media.recv.stats_report().await);
-        let link = send.merge(recv);
-        let conceal = self.io.mixer.lock().ok().and_then(|mixer| {
-            let stats = mixer.receive_stats();
+        let receive = self.io.mixer.lock().ok().map(|mixer| mixer.receive_stats());
+        let link = send.clone().merge(crate::rtc::LinkStats::from_received(
+            receive.map_or(0, |stats| stats.packets),
+            receive.map_or(0, |stats| stats.lost),
+        ));
+        let conceal = receive.and_then(|stats| {
             let den = stats.packets + stats.concealed;
             if den == 0 {
                 None
@@ -1458,12 +1742,90 @@ impl Session {
                 Some(((stats.concealed as f32) / den as f32 * 1000.0).round() / 10.0)
             }
         });
+
+        let now = Instant::now();
+        if send.rtt_measurements < self.media_rtt_measurements {
+            // The send transport was recreated.
+            self.media_rtt = None;
+        }
+        if send.rtt_measurements > self.media_rtt_measurements {
+            if let Some(ms) = send.rtt_ms {
+                self.media_rtt = Some((ms, now));
+            }
+        }
+        self.media_rtt_measurements = send.rtt_measurements;
+        let (rtt_ms, rtt_source) = choose_rtt(self.media_rtt, self.signalling_rtt_ms, now);
+
         if let Some(info) = self.media_info.as_mut() {
-            info.rtt_ms = link.rtt_ms;
+            info.rtt_ms = rtt_ms;
+            info.rtt_source = rtt_source.map(str::to_string);
             info.packet_loss_pct = link.packet_loss_pct;
             info.packets_lost = (link.packets_lost > 0).then_some(link.packets_lost);
             info.packets_received = (link.packets_received > 0).then_some(link.packets_received);
             info.recv_conceal_pct = conceal;
+        }
+    }
+
+    fn note_probe_rtt(&mut self, reply: ProbeReply) {
+        if !reply.ok || reply.generation != self.alerts.generation() {
+            return;
+        }
+        let sample = Instant::now().saturating_duration_since(reply.sent_at);
+        if sample >= super::alerts::PROBE_TIMEOUT {
+            return;
+        }
+        let sample = sample.as_secs_f32() * 1000.0;
+        self.signalling_rtt_ms = Some(match self.signalling_rtt_ms {
+            Some(previous) => previous + (sample - previous) * SIGNALLING_RTT_SMOOTHING,
+            None => sample,
+        });
+    }
+
+    /// Sends the same `media-network-stats` summary as the web client, which
+    /// the server shows as RTT / packet loss on the admin status page.
+    async fn report_network_stats(&self, connected: &Connected) {
+        let output = self.io.audio_status.borrow().playback_device.clone();
+        let server = self.config.server.url.clone();
+        let socket = connected.socket.clone();
+        // DNS and optional device diagnostics must never stall live audio.
+        tokio::spawn(async move {
+            let network = super::device_status::network_type(&server).await;
+            let device = super::device_status::payload(output.as_deref(), network);
+            if let Err(error) = socket.emit("client-device-status", vec![device]).await {
+                tracing::debug!(event = "device-status-failed", error = %error);
+            }
+        });
+        let Some(info) = self.media_info.as_ref() else {
+            return;
+        };
+        let receive = self.io.mixer.lock().ok().map(|mixer| mixer.receive_stats());
+        // Read current receive counters even before the next transport stats poll.
+        let received = info
+            .packets_received
+            .unwrap_or(0)
+            .max(receive.map_or(0, |s| s.packets));
+        let lost = info
+            .packets_lost
+            .unwrap_or(0)
+            .max(receive.map_or(0, |s| s.lost));
+        let loss = if received + lost > 0 {
+            Some(100.0 * lost as f64 / (received + lost) as f64)
+        } else {
+            None
+        };
+        let payload = json!({
+            "roundTripMs": info.rtt_ms,
+            "packetLossPercent": info.packet_loss_pct.map(f64::from).or(loss),
+            "packetsLost": lost,
+            "packetsReceived": received,
+            "packetsDiscarded": receive.map_or(0, |stats| stats.dropped_late),
+        });
+        if let Err(error) = connected
+            .socket
+            .emit("media-network-stats", vec![payload])
+            .await
+        {
+            tracing::debug!(event = "network-stats-failed", error = %error);
         }
     }
 
@@ -1503,7 +1865,8 @@ impl Session {
                 }
             }
             ("release", Some(target)) => {
-                let change = self.talk.release(source, target, now);
+                let tap_to_lock = payload.get("tapToLock").and_then(Value::as_bool);
+                let change = self.talk.release_with_tap(source, target, now, tap_to_lock);
                 (true, None, change)
             }
             ("release", None) => (true, None, None),
@@ -1606,7 +1969,9 @@ impl Session {
             .socket
             .emit(
                 "target-audio-state-snapshot",
-                vec![json!({ "reason": reason, "states": states })],
+                vec![
+                    json!({ "reason": reason, "states": states, "revision": self.panel.revision }),
+                ],
             )
             .await;
         self.audio_state_dirty = false;
@@ -1614,8 +1979,556 @@ impl Session {
     }
 
     // ------------------------------------------------------------------
+    // Admin remote panel (server v1.5.12+)
+    // ------------------------------------------------------------------
+
+    /// The `panel-client-state` payload: what the web client shows in its
+    /// own window, so the admin panel can mirror it.
+    async fn panel_report(&mut self) -> Value {
+        let devices = self.panel_device_list().await;
+        let state = self.talk_change_now();
+        let (mic_level, mic_width) = panel::mic_meter(self.input_level_db);
+        let input = panel::device_id(&self.input_device);
+        let output = panel::device_id(&self.output_device);
+        json!({
+            "revision": self.panel.revision,
+            "storage": panel::storage_with_devices(&self.panel.storage, &input, &output),
+            "runtime": {
+                "mediaConnection": {
+                    "signaling": if self.connection.is_online() { "connected" } else { "failed" },
+                    "heartbeatInterrupted": self.server_unavailable || (self.connection.is_online() && self.alerts.interrupted()),
+                    "send": self.media_info.as_ref().map(|info| info.send_state.as_str()).unwrap_or("idle"),
+                    "receive": self.media_info.as_ref().map(|info| info.recv_state.as_str()).unwrap_or("idle"),
+                    "sendIce": self.media_info.as_ref().map(|info| info.send_ice_state.as_str()).filter(|state| !state.is_empty()).unwrap_or("idle"),
+                    "receiveIce": self.media_info.as_ref().map(|info| info.recv_ice_state.as_str()).filter(|state| !state.is_empty()).unwrap_or("idle"),
+                    "initialized": self.media_info.is_some(),
+                },
+                "devices": devices,
+                "inputDeviceId": input,
+                "outputDeviceId": output,
+                "outputSupported": !is_virtual_device(&self.output_device),
+                "systemVolume": self.io.audio_status.borrow().system_volume,
+                "talking": state.talking,
+                "lockActive": state.lock_active,
+                "target": state.targets.first().map(|t| t.to_talk_target()),
+                "targets": state.targets.iter().map(|t| t.to_talk_target()).collect::<Vec<_>>(),
+                "lockedTargets": self.talk.locked().iter().map(|t| t.to_talk_target()).collect::<Vec<_>>(),
+                "micLevel": mic_level,
+                "micMeterWidth": mic_width,
+            },
+        })
+    }
+
+    async fn panel_device_list(&mut self) -> Vec<Value> {
+        if let Some((devices, at)) = &self.panel_devices {
+            if at.elapsed() < PANEL_DEVICES_MAX_AGE {
+                return devices.clone();
+            }
+        }
+        let input = panel::device_id(&self.input_device);
+        let output = panel::device_id(&self.output_device);
+        let devices = tokio::task::spawn_blocking(move || {
+            let inputs = crate::audio::alsa_pcm_devices(true);
+            let outputs = crate::audio::alsa_pcm_devices(false);
+            panel::devices(&inputs, &outputs, &input, &output)
+        })
+        .await
+        .unwrap_or_default();
+        self.panel_devices = Some((devices.clone(), Instant::now()));
+        devices
+    }
+
+    async fn handle_local_panel(
+        &mut self,
+        connected: Option<&mut Connected>,
+        command: &Value,
+    ) -> Value {
+        let mut command = command.clone();
+        if command["kind"] == "target-audio" {
+            command["audio"] = command.clone();
+        }
+        if command["kind"] == "preferences" {
+            let patch = command.get("patch").and_then(Value::as_object);
+            if let Some(patch) = patch {
+                if patch.len() > 128
+                    || patch
+                        .values()
+                        .any(|v| !v.is_null() && v.as_str().is_none_or(|s| s.len() > 32768))
+                {
+                    return json!({ "ok": false, "error": "Invalid client preferences" });
+                }
+                if let Some(storage) = self.panel.storage.as_object_mut() {
+                    for (key, value) in patch {
+                        if value.is_null() {
+                            storage.remove(key);
+                        } else {
+                            storage.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+            }
+        }
+        // Ordering is server-authorized and is intentionally not a local-only
+        // cosmetic reorder that would disagree with the physical panel.
+        let mut result = match command["kind"].as_str() {
+            Some("order") => json!({ "ok": false, "error": "Change target order in server Admin" }),
+            Some("audio-device-set") => {
+                let outcome = self
+                    .select_audio_device_set(command["index"].as_u64())
+                    .await;
+                let report = self.panel_report().await;
+                match outcome {
+                    Ok(()) => json!({ "ok": true, "report": report }),
+                    Err(error) => {
+                        json!({ "ok": false, "error": error.to_string(), "report": report })
+                    }
+                }
+            }
+            _ => self.handle_panel_command(connected, &command).await,
+        };
+        if result.get("report").is_some() && !self.config.audio.device_sets.is_empty() {
+            result["report"]["runtime"]["audioDeviceSets"] = json!({
+                "names": self.config.audio.device_sets.iter().map(|set| set.name.trim()).collect::<Vec<_>>(),
+                "active": self.active_device_set,
+            });
+        }
+        self.publish(true);
+        result["snapshot"] = json!(self.build_snapshot());
+        result["settings"] = panel::audio_settings(&self.server_audio, &self.local_audio());
+        result
+    }
+
+    /// Applies one `panel-command` and returns the acknowledgement.
+    async fn handle_panel_command(
+        &mut self,
+        mut connected: Option<&mut Connected>,
+        command: &Value,
+    ) -> Value {
+        let kind = command.get("kind").and_then(Value::as_str).unwrap_or("");
+        if kind != "talk" {
+            if let Some(settings) = command
+                .get("panelSettings")
+                .and_then(PanelSettings::from_json)
+            {
+                self.panel = settings;
+            }
+        }
+        tracing::info!(event = "panel-command", kind, action = ?command.get("action"));
+        let mut system_volume = None;
+        let outcome = match kind {
+            "system-volume" => self.panel_system_volume(command).await.map(|value| {
+                system_volume = Some(value);
+                None
+            }),
+            "snapshot" => Ok(None),
+            "talk" => match connected.as_deref_mut() {
+                Some(connected) => self.panel_talk(connected, command).await.map(|()| None),
+                None if command["action"] == "release" => {
+                    let source = InputSource::Companion(
+                        command["inputKey"].as_str().unwrap_or("panel").to_string(),
+                    );
+                    if let Some(change) = self.talk.release_source(&source) {
+                        self.pending_talk_change = Some(change);
+                    }
+                    Ok(None)
+                }
+                None => Err("Server unavailable"),
+            },
+            "target-audio" => self.panel_target_audio(command).map(|()| None),
+            "audio-settings" => match command.get("settings").filter(|s| s.is_object()) {
+                Some(settings) => {
+                    let restart = if let Some(connected) = connected.as_deref_mut() {
+                        self.apply_remote_audio_settings(connected, settings).await
+                    } else {
+                        self.pending_talk_change = self.apply_user_audio_settings(settings, true);
+                        self.saved_profile != self.running_profile()
+                    };
+                    Ok(restart.then_some(
+                        "Saved. The codec profile applies after the headless client restarts.",
+                    ))
+                }
+                None => Err("Invalid audio settings"),
+            },
+            "preferences" => match command.get("patch") {
+                Some(patch) if panel::patch_changes_devices(patch) => {
+                    self.panel_switch_devices(patch).await.map(|()| None)
+                }
+                Some(patch) => self.apply_panel_storage_audio(patch).map(|()| None),
+                _ => Ok(None),
+            },
+            // The server announces the new order with `user-targets-updated`.
+            "order" => Ok(None),
+            "production" => match connected {
+                Some(connected) => self
+                    .panel_change_production(connected, command)
+                    .await
+                    .map(|()| None),
+                None => Err("Server unavailable"),
+            },
+            _ => Err("Unsupported panel action"),
+        };
+        let mut report = self.panel_report().await;
+        if let Some(value) = system_volume {
+            report["runtime"]["systemVolume"] = json!(value);
+        }
+        match outcome {
+            Ok(message) => json!({ "ok": true, "message": message, "report": report }),
+            Err(error) => {
+                tracing::info!(event = "panel-command-rejected", kind, error);
+                json!({ "ok": false, "error": error, "report": report })
+            }
+        }
+    }
+
+    async fn panel_system_volume(
+        &self,
+        command: &Value,
+    ) -> Result<crate::audio::system_volume::SystemVolume, &'static str> {
+        use crate::audio::system_volume::Action;
+        let action = if let Some(volume) = command.get("volume") {
+            let value = volume
+                .as_f64()
+                .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                .ok_or("Invalid system volume")?;
+            Action::Set(value as f32)
+        } else {
+            Action::Mute(
+                command
+                    .get("muted")
+                    .and_then(Value::as_bool)
+                    .ok_or("Invalid system mute")?,
+            )
+        };
+        let reply = self.io.system_volume.request(action);
+        match tokio::time::timeout(Duration::from_secs(2), reply).await {
+            Ok(Ok(Ok(value))) => Ok(value),
+            _ => Err(
+                "Unable to change device volume; check the selected output and its mixer control",
+            ),
+        }
+    }
+
+    async fn panel_talk(
+        &mut self,
+        connected: &mut Connected,
+        command: &Value,
+    ) -> Result<(), &'static str> {
+        let action = command.get("action").and_then(Value::as_str).unwrap_or("");
+        let input_key = command
+            .get("inputKey")
+            .and_then(Value::as_str)
+            .unwrap_or("panel")
+            .to_string();
+        let source = InputSource::Companion(input_key);
+        let target = Self::companion_target(
+            command
+                .get("targetType")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            command.get("targetId").unwrap_or(&Value::Null),
+        );
+        let change = match action {
+            "press" | "lock" | "unlock" => {
+                let target = target
+                    .filter(|t| self.known_target(*t))
+                    .ok_or("Talk target is not available")?;
+                if action != "unlock" && !self.target_is_talkable(target) {
+                    return Err("Talk target is offline");
+                }
+                if action == "press" {
+                    Some(
+                        self.talk
+                            .press(source, target, Instant::now())
+                            .ok_or("Talk target is not available")?,
+                    )
+                } else {
+                    self.talk.set_lock(target, action == "lock")
+                }
+            }
+            "release" => self.talk.release_source(&source),
+            "stop" => Some(self.talk.stop()),
+            _ => return Err("Invalid talk action"),
+        };
+        if let Some(change) = change {
+            self.send_talk_change(connected, &change, "panel").await;
+        }
+        Ok(())
+    }
+
+    fn apply_panel_storage_audio(&mut self, patch: &Value) -> Result<(), &'static str> {
+        let Some(patch) = patch.as_object() else {
+            return Err("Invalid client preferences");
+        };
+        for (key, value) in patch {
+            if key.starts_with("conferenceMemberLevels:user:")
+                || key.starts_with("conferenceListenExclusions:user:")
+            {
+                let data: Value = serde_json::from_str(value.as_str().unwrap_or("{}"))
+                    .map_err(|_| "Invalid member preferences")?;
+                let members: Vec<_> = self
+                    .targets
+                    .iter()
+                    .flat_map(|target| {
+                        let conference = match target.key {
+                            TargetKey::Conference(id) => Some(id),
+                            _ => None,
+                        };
+                        target
+                            .members
+                            .iter()
+                            .filter_map(move |(user, _)| conference.map(|id| (id, *user)))
+                    })
+                    .collect();
+                for (conference, user) in members {
+                    let entry = &data[conference.to_string()];
+                    if key.starts_with("conferenceMemberLevels:") {
+                        let volume = entry[user.to_string()].as_f64().unwrap_or(1.0) as f32;
+                        let level = self.audio.set_member_volume(conference, user, volume);
+                        self.apply_member_level(conference, user, level);
+                    } else {
+                        let muted = entry
+                            .as_array()
+                            .is_some_and(|ids| ids.iter().any(|id| id.as_i64() == Some(user)));
+                        if self.audio.member_level(conference, user).muted != muted {
+                            let level = self.audio.toggle_member_mute(conference, user);
+                            self.apply_member_level(conference, user, level);
+                        }
+                    }
+                }
+            } else if key.starts_with("stoppedFeeds:user:") {
+                let data: Value = serde_json::from_str(value.as_str().unwrap_or("{}"))
+                    .map_err(|_| "Invalid feed preferences")?;
+                let feeds: Vec<_> = self
+                    .targets
+                    .iter()
+                    .filter_map(|t| match t.key {
+                        TargetKey::Feed(id) => Some(id),
+                        _ => None,
+                    })
+                    .collect();
+                for id in feeds {
+                    let target = TargetKey::Feed(id);
+                    let muted = data[format!("feed-{id}")].as_bool().unwrap_or(false);
+                    let level = self.audio.set_level(target, None, Some(muted));
+                    self.apply_level(target, level);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Switches the ALSA capture / playback device from the remote panel and
+    /// saves the choice to the configuration file.
+    async fn panel_switch_devices(&mut self, patch: &Value) -> Result<(), &'static str> {
+        if !self.config.audio.device_sets.is_empty() {
+            return Err("Use the audio set button or edit the two sets in Headless Settings");
+        }
+        let devices = self.panel_device_list().await;
+        let available = |kind: &str, id: &str| {
+            id.is_empty()
+                || devices
+                    .iter()
+                    .any(|d| d["kind"] == kind && d["deviceId"] == id)
+        };
+        let input = panel::patch_device(patch, "preferredAudioInputDeviceId")
+            .filter(|id| *id != panel::device_id(&self.input_device));
+        let output = panel::patch_device(patch, "preferredAudioOutputDeviceId")
+            .filter(|id| *id != panel::device_id(&self.output_device));
+        if input.is_some() && is_virtual_device(&self.input_device)
+            || output.is_some() && is_virtual_device(&self.output_device)
+        {
+            return Err("This client uses a test device; change it in its web interface");
+        }
+        if input
+            .as_deref()
+            .is_some_and(|id| !available("audioinput", id))
+            || output
+                .as_deref()
+                .is_some_and(|id| !available("audiooutput", id))
+        {
+            return Err("Audio device not available on the headless client");
+        }
+        let as_config = |id: String| (!id.is_empty()).then_some(id);
+        let mut values = Vec::new();
+        if let Some(id) = input {
+            self.input_device = as_config(id);
+            self.io
+                .audio_devices
+                .request_input(self.input_device.clone());
+            values.push(("audio", "input_device", json!(self.input_device)));
+        }
+        if let Some(id) = output {
+            self.output_device = as_config(id);
+            self.io
+                .audio_devices
+                .request_output(self.output_device.clone());
+            values.push(("audio", "output_device", json!(self.output_device)));
+        }
+        if values.is_empty() {
+            return Ok(());
+        }
+        // The device in use is listed first; rebuild the list next time.
+        self.panel_devices = None;
+        if let Some(path) = &self.config_path {
+            if let Err(error) = crate::config::update_values(path, &values) {
+                tracing::warn!(event = "config-save-failed", error = %format!("{error:#}"));
+            }
+        }
+        Ok(())
+    }
+
+    async fn toggle_audio_device_set(&mut self) {
+        if self.config.audio.device_sets.len() != 2 {
+            return;
+        }
+        if let Err(error) = self
+            .select_audio_device_set(Some((1 - self.active_device_set) as u64))
+            .await
+        {
+            tracing::warn!(event = "audio-device-set-switch-failed", %error);
+        }
+        self.publish(true);
+    }
+
+    async fn select_audio_device_set(&mut self, index: Option<u64>) -> Result<()> {
+        let index = index
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|&index| index < self.config.audio.device_sets.len())
+            .context("Audio device set not configured")?;
+        if index == self.active_device_set {
+            return Ok(());
+        }
+        let set = &self.config.audio.device_sets[index];
+        self.io
+            .audio_devices
+            .switch_pair(set.input_device.clone(), set.output_device.clone())
+            .await?;
+        self.input_device.clone_from(&set.input_device);
+        self.output_device.clone_from(&set.output_device);
+        self.active_device_set = index;
+        self.panel_devices = None;
+        Ok(())
+    }
+
+    /// Moves this client to another assigned production, like the web
+    /// client's production selector, and saves it as `user.production`.
+    async fn panel_change_production(
+        &mut self,
+        connected: &mut Connected,
+        command: &Value,
+    ) -> Result<(), &'static str> {
+        let id = command
+            .get("productionId")
+            .and_then(production_id_text)
+            .ok_or("Invalid production")?;
+        self.change_production(connected, &id).await
+    }
+
+    /// Switches the active production like the web client's selector and
+    /// saves it as `user.production`.
+    async fn change_production(
+        &mut self,
+        connected: &mut Connected,
+        id: &str,
+    ) -> Result<(), &'static str> {
+        let id = id.trim().to_string();
+        if id.is_empty() {
+            return Err("Invalid production");
+        }
+        if connected
+            .production_id
+            .as_ref()
+            .and_then(production_id_text)
+            == Some(id.clone())
+        {
+            return Ok(());
+        }
+        let change = self.talk.stop();
+        self.send_talk_change(connected, &change, "production-change")
+            .await;
+        let ack = connected
+            .socket
+            .request(
+                "set-active-production",
+                json!({ "productionId": id }),
+                SIGNAL_TIMEOUT,
+            )
+            .await
+            .map_err(|_| "The server did not confirm the production change")?;
+        if ack.get("ok").and_then(Value::as_bool) != Some(true) {
+            tracing::warn!(event = "production-change-refused", production = %id, error = %ack.get("error").cloned().unwrap_or_default());
+            return Err("The server refused the production change");
+        }
+        connected.production_id = ack
+            .get("productionId")
+            .cloned()
+            .filter(|v| !v.is_null())
+            .or_else(|| Some(json!(id)));
+        tracing::info!(event = "production-changed", production = %id);
+        self.active_production = connected
+            .production_id
+            .as_ref()
+            .and_then(production_id_text);
+        self.save_production(&id);
+        if let Err(error) = self.reload_targets(connected).await {
+            tracing::warn!(event = "targets-failed", error = %format!("{error:#}"));
+        }
+        self.snapshot_dirty = true;
+        Ok(())
+    }
+
+    fn save_production(&mut self, id: &str) {
+        self.production = Some(id.to_string());
+        self.snapshot_dirty = true;
+        if let Some(path) = &self.config_path {
+            if let Err(error) =
+                crate::config::update_values(path, &[("user", "production", json!(id))])
+            {
+                tracing::warn!(event = "config-save-failed", error = %format!("{error:#}"));
+            }
+        }
+    }
+
+    fn panel_target_audio(&mut self, command: &Value) -> Result<(), &'static str> {
+        let audio = command.get("audio").unwrap_or(&Value::Null);
+        let key = audio
+            .get("targetType")
+            .and_then(Value::as_str)
+            .zip(audio.get("targetId"))
+            .and_then(|(kind, id)| TargetKey::from_type_and_id(kind, id))
+            .filter(|key| self.targets.iter().any(|t| t.key == *key))
+            .ok_or("Audio target not assigned")?;
+        let volume = audio
+            .get("volume")
+            .and_then(Value::as_f64)
+            .map(|v| v as f32);
+        let muted = audio.get("muted").and_then(Value::as_bool);
+        let level = self.audio.set_level(key, volume, muted);
+        self.apply_level(key, level);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
     // Targets and snapshots
     // ------------------------------------------------------------------
+
+    /// Keeps the Settings production list current after admin changes.
+    async fn reload_productions(&mut self, connected: &Connected) {
+        let Some((token, _)) = self.token.clone() else {
+            return;
+        };
+        match self.api.productions(&token, connected.user_id).await {
+            Ok(productions) => {
+                if let Some(login) = self.login.as_mut() {
+                    login.productions = productions;
+                    self.snapshot_dirty = true;
+                }
+            }
+            Err(error) => {
+                tracing::debug!(event = "productions-failed", error = %format!("{error:#}"));
+            }
+        }
+    }
 
     async fn reload_targets(&mut self, connected: &Connected) -> Result<()> {
         let token = self
@@ -1658,12 +2571,105 @@ impl Session {
         Ok(())
     }
 
-    fn apply_user_audio_settings(&mut self, settings: &Value) {
-        let patch = UserAudioPatch::from_json(settings);
-        if patch.is_empty() {
+    /// Applies settings an admin changed (Admin Users or the remote panel),
+    /// saves the configuration-backed ones and reports back what this client
+    /// really uses. Returns true when the saved codec profile now differs
+    /// from the running one.
+    async fn apply_remote_audio_settings(
+        &mut self,
+        connected: &mut Connected,
+        settings: &Value,
+    ) -> bool {
+        if let Some(change) = self.apply_user_audio_settings(settings, true) {
+            self.send_talk_change(connected, &change, "audio-settings")
+                .await;
+        }
+        self.push_audio_settings(connected, Some(settings)).await;
+        self.saved_profile != self.running_profile()
+    }
+
+    fn running_profile(&self) -> String {
+        serde_json::to_value(self.config.audio.profile)
+            .ok()
+            .and_then(|p| p.as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    fn local_audio(&self) -> LocalAudio {
+        LocalAudio {
+            profile: self.saved_profile.clone(),
+            auto_processing: self.io.processing.auto_processing(),
+            input_gain_db: self.io.processing.input_gain_db(),
+            dim_db: self.dim_db,
+            dim_feeds_while_speaking: self.dim_feeds_while_speaking,
+            dim_when_addressed: self.dim_when_addressed,
+            play_connection_sounds: self.play_connection_sounds,
+            lock_multiple: self.talk.lock_multiple(),
+            vox_enabled: self.vox.is_some(),
+            vox_target: self.talk.vox_target(),
+            vox_threshold_db: self.vox_threshold_db,
+        }
+    }
+
+    /// Sends this client's effective settings to the server when they differ
+    /// from `known` (what the server last told us), so Admin and the remote
+    /// panel show what the headless client really runs with.
+    async fn push_audio_settings(&mut self, connected: &Connected, known: Option<&Value>) {
+        let settings = panel::audio_settings(&self.server_audio, &self.local_audio());
+        if known.is_some_and(|known| !panel::audio_settings_differ(known, &settings)) {
             return;
         }
+        let result = connected
+            .socket
+            .request(
+                "user-audio-settings-update",
+                json!({ "settings": settings, "revision": self.panel.revision }),
+                SIGNAL_TIMEOUT,
+            )
+            .await;
+        match result {
+            Ok(ack) if ack.get("ok").and_then(Value::as_bool) == Some(true) => {
+                tracing::info!(event = "user-audio-settings-reported");
+                self.server_audio = ack.get("settings").cloned().unwrap_or(settings);
+            }
+            Ok(ack) => {
+                let error = ack.get("error").cloned().unwrap_or_default();
+                tracing::warn!(event = "user-audio-settings-report-rejected", %error);
+            }
+            Err(error) => {
+                tracing::debug!(event = "user-audio-settings-report-failed", error = %format!("{error:#}"));
+            }
+        }
+    }
+
+    /// `local` also applies VOX, lock-multiple and the codec profile and saves
+    /// them to the configuration file. Returns a talk change to send when VOX
+    /// stopped talking.
+    fn apply_user_audio_settings(&mut self, settings: &Value, local: bool) -> Option<TalkChange> {
+        let before = self.local_audio();
+        self.server_audio = settings.clone();
+        let change = if local {
+            self.apply_config_patch(ConfigPatch::from_json(settings))
+        } else {
+            None
+        };
+        let patch = UserAudioPatch::from_json(settings);
+        if patch.is_empty() {
+            if local && self.local_audio() != before {
+                self.save_config_audio(&self.local_audio());
+            }
+            return change;
+        }
         self.io.processing.apply_capture_patch(&patch);
+        if let Some(db) = patch.dim_amount_db {
+            self.dim_db = db;
+        }
+        if let Some(enabled) = patch.dim_feeds_while_speaking {
+            self.dim_feeds_while_speaking = enabled;
+        }
+        if let Some(enabled) = patch.dim_when_addressed {
+            self.dim_when_addressed = enabled;
+        }
         if patch.has_dimming() {
             if let Ok(mut mixer) = self.io.mixer.lock() {
                 mixer.set_dimming(
@@ -1674,12 +2680,25 @@ impl Session {
             }
         }
         if let Some(enabled) = patch.play_connection_sounds {
+            // A local Save + Restart must not be undone by an older enabled
+            // value in the registration ack. Explicit live Admin changes can
+            // still turn sounds on again and persist that choice locally.
+            let enabled = if local {
+                enabled
+            } else {
+                self.play_connection_sounds && enabled
+            };
             if self.play_connection_sounds && !enabled {
                 if let Ok(mut mixer) = self.io.mixer.lock() {
                     mixer.clear_cue();
                 }
             }
             self.play_connection_sounds = enabled;
+        }
+        // Save after applying the live patch. Saving earlier captured the old
+        // sound flag, so a process restart could enable connection cues again.
+        if (local || patch.play_connection_sounds.is_some()) && self.local_audio() != before {
+            self.save_config_audio(&self.local_audio());
         }
         tracing::info!(
             event = "user-audio-settings",
@@ -1689,12 +2708,83 @@ impl Session {
             play_connection_sounds = self.play_connection_sounds,
         );
         self.snapshot_dirty = true;
+        change
+    }
+
+    fn apply_config_patch(&mut self, patch: ConfigPatch) -> Option<TalkChange> {
+        let before = self.local_audio();
+        if let Some(enabled) = patch.lock_multiple {
+            self.talk.set_lock_multiple(enabled);
+        }
+        if let Some(profile) = patch.profile {
+            self.saved_profile = profile;
+        }
+        let enabled = patch.vox_enabled.unwrap_or(before.vox_enabled);
+        let target = patch.vox_target.unwrap_or(before.vox_target);
+        let threshold = patch
+            .vox_threshold_db
+            .map(|db| db.clamp(-60.0, -6.0))
+            .unwrap_or(before.vox_threshold_db);
+        let mut change = None;
+        if (enabled, target, threshold)
+            != (
+                before.vox_enabled,
+                before.vox_target,
+                before.vox_threshold_db,
+            )
+        {
+            change = self.talk.set_vox_active(false);
+            self.talk.set_vox_target(target);
+            self.vox_threshold_db = threshold;
+            self.vox = enabled.then(|| LevelTrigger::new(threshold, self.config.vox.hang_ms));
+            tracing::info!(event = "vox-settings", enabled, target = ?target, threshold_db = threshold);
+        }
+        change
+    }
+
+    fn save_config_audio(&self, audio: &LocalAudio) {
+        let Some(path) = &self.config_path else {
+            return;
+        };
+        let values = [
+            ("audio", "profile", json!(audio.profile)),
+            (
+                "audio",
+                "play_connection_sounds",
+                json!(audio.play_connection_sounds),
+            ),
+            ("talk", "lock_multiple", json!(audio.lock_multiple)),
+            ("vox", "enabled", json!(audio.vox_enabled)),
+            (
+                "vox",
+                "target",
+                audio
+                    .vox_target
+                    .map(|t| json!(t.to_string()))
+                    .unwrap_or(Value::Null),
+            ),
+            ("vox", "threshold_db", json!(audio.vox_threshold_db)),
+        ];
+        if let Err(error) = crate::config::update_values(path, &values) {
+            tracing::warn!(event = "config-save-failed", error = %format!("{error:#}"));
+        }
     }
 
     fn set_connection(&mut self, state: ConnectionState, detail: &str) {
+        // Retry phases are transient, not evidence that the server recovered.
+        if state == ConnectionState::Disconnected && !detail.is_empty() {
+            self.server_unavailable = true;
+        } else if state == ConnectionState::Ready {
+            self.server_unavailable = false;
+        }
+        let detail = if self.server_unavailable && detail.is_empty() {
+            self.detail.clone()
+        } else {
+            detail.to_string()
+        };
         if self.connection != state || self.detail != detail {
             self.connection = state;
-            self.detail = detail.to_string();
+            self.detail = detail;
             self.snapshot_dirty = true;
         }
     }
@@ -1775,14 +2865,8 @@ impl Session {
                 .find(|t| t.key == key)
                 .map(|t| t.name.clone())
         });
-        let capture_wanted = !matches!(
-            self.config.audio.input_device.as_deref(),
-            Some("none") | Some("off")
-        );
-        let playback_wanted = !matches!(
-            self.config.audio.output_device.as_deref(),
-            Some("none") | Some("off")
-        );
+        let capture_wanted = !matches!(self.input_device.as_deref(), Some("none") | Some("off"));
+        let playback_wanted = !matches!(self.output_device.as_deref(), Some("none") | Some("off"));
         let media = self.media_info.clone();
         Snapshot {
             instance: self.config.instance.clone(),
@@ -1793,7 +2877,21 @@ impl Session {
                 .unwrap_or_else(|| self.config.user.name.clone()),
             user_id: self.login.as_ref().map(|l| l.user.id),
             server_url: self.config.server.url.clone(),
-            production: self.config.user.production.clone(),
+            production: self
+                .active_production
+                .clone()
+                .or_else(|| self.production.clone()),
+            productions: self
+                .login
+                .iter()
+                .flat_map(|login| &login.productions)
+                .filter_map(|production| {
+                    Some(ProductionInfo {
+                        id: production_id_text(&production.id)?,
+                        name: production.name.clone(),
+                    })
+                })
+                .collect(),
             connection: self.connection,
             detail: self.detail.clone(),
             talking: self.talk.is_talking(),
@@ -1802,12 +2900,20 @@ impl Session {
             preview: self.preview,
             server_version: self.server_version.clone(),
             audio_ok: audio_status.all_ok(capture_wanted, playback_wanted),
+            system_volume: audio_status.system_volume.clone(),
+            output_levels: audio_status.output_levels.clone(),
+            audio_device_set: self.active_device_set,
+            audio_device_set_names: match self.config.audio.device_sets.as_slice() {
+                [first, second] => Some([first.name.trim().into(), second.name.trim().into()]),
+                _ => None,
+            },
             targets,
             reply_target,
             reply_name,
             main_target: self.talk.main_target(),
             main_unavailable: self.talk.main_unavailable(),
             incoming: self.incoming.clone(),
+            last_caller: self.last_caller.clone(),
             input_level_db: self.input_level_db,
             media,
             registered_since_unix: self
@@ -1816,7 +2922,8 @@ impl Session {
                 .map(|d| d.as_secs())
                 .filter(|_| self.connection.is_online()),
             reconnects: self.reconnects,
-            server_not_responding: self.connection.is_online() && self.alerts.interrupted(),
+            server_not_responding: self.server_unavailable
+                || (self.connection.is_online() && self.alerts.interrupted()),
             heartbeat: self
                 .alerts
                 .heartbeat(self.connection.is_online())
@@ -1890,7 +2997,7 @@ impl Session {
         if !self.snapshot_dirty && !force {
             return;
         }
-        if !force && self.last_snapshot.elapsed() < SNAPSHOT_DEBOUNCE {
+        if !force && self.last_snapshot.elapsed() < DISPLAY_INTERVAL {
             return;
         }
         let snapshot = self.build_snapshot();
@@ -1952,6 +3059,33 @@ fn transport_blocks(media: Option<&Media>) -> (bool, bool) {
     (blocks(media.send_state), blocks(media.recv_state))
 }
 
+/// Prefers the media-path RTT while it is fresh. webrtc-rs does not measure
+/// ICE RTT, and RTCP only flows while talking, so the heartbeat fills in.
+fn choose_rtt(
+    media: Option<(u32, Instant)>,
+    signalling_ms: Option<f32>,
+    now: Instant,
+) -> (Option<u32>, Option<&'static str>) {
+    match media {
+        Some((ms, at)) if now.saturating_duration_since(at) < MEDIA_RTT_FRESH => {
+            (Some(ms), Some("media"))
+        }
+        _ => match signalling_ms {
+            Some(ms) => (Some(ms.round() as u32), Some("signalling")),
+            None => (None, None),
+        },
+    }
+}
+
+/// Production ids arrive as numbers from the server; config stores text.
+fn production_id_text(id: &Value) -> Option<String> {
+    match id {
+        Value::Number(n) => Some(n.to_string()),
+        Value::String(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
 fn parse_cut_camera(payload: &Value) -> (bool, bool) {
     if let Some(pgm) = payload.as_bool() {
         return (pgm, false);
@@ -1982,8 +3116,423 @@ fn parse_conference_members(values: &[Value]) -> Vec<(i64, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_conference_members, parse_cut_camera};
+    use super::{choose_rtt, parse_conference_members, parse_cut_camera, MEDIA_RTT_FRESH};
     use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    fn test_session() -> (
+        tempfile::TempDir,
+        super::Session,
+        std::sync::Arc<std::sync::Mutex<crate::audio::mixer::Mixer>>,
+        std::path::PathBuf,
+    ) {
+        use super::{Session, SessionIo};
+        use crate::{
+            audio::{
+                io::{AudioStatus, DeviceSwitch},
+                mixer::Mixer,
+                processing::ProcessingControl,
+            },
+            config::Config,
+            state::{self, Snapshot},
+        };
+        use std::sync::{Arc, Mutex};
+        use tokio::sync::{mpsc, watch};
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.server.url = "http://127.0.0.1:8443".into();
+        config.state_dir = Some(dir.path().join("state"));
+        let path = dir.path().join("client.json");
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let processing = ProcessingControl::from_audio(&config.audio);
+        let mixer = Arc::new(Mutex::new(Mixer::new(1.0, -15.0, false, false, 10, 100)));
+        let channels = state::channels(Snapshot::initial("test", "test"));
+        let (_, frames) = mpsc::channel(1);
+        let (_, audio_status) = watch::channel(AudioStatus {
+            system_volume: None,
+            output_levels: Default::default(),
+            capture_ok: true,
+            playback_ok: true,
+            capture_device: None,
+            playback_device: None,
+            last_error: None,
+            auto_processing: false,
+            aec: false,
+            delay_ms: 0,
+        });
+        let (_, shutdown) = watch::channel(false);
+        let session = Session::new(
+            Arc::new(config),
+            Some(path.clone()),
+            SessionIo {
+                system_volume: Default::default(),
+                commands: channels.commands,
+                snapshots: channels.snapshots,
+                mixer: mixer.clone(),
+                frames,
+                audio_status,
+                processing,
+                audio_devices: DeviceSwitch::default(),
+                shutdown,
+            },
+        )
+        .unwrap();
+        (dir, session, mixer, path)
+    }
+
+    #[tokio::test]
+    async fn reconnect_authenticates_again_even_if_the_old_token_has_not_expired() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for attempt in 1..=2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 2048];
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    assert!(read > 0);
+                    bytes.extend_from_slice(&chunk[..read]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                assert!(String::from_utf8_lossy(&bytes)
+                    .starts_with("POST /api/v1/companion/auth/login "));
+                let body = json!({ "token": format!("new-server-token-{attempt}"), "expiresInMs": 43200000,
+                    "user": { "id": 84, "name": "Cam 1" }, "productions": [] }).to_string();
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let (_dir, mut session, _mixer, _path) = test_session();
+        session.api = super::ServerApi::new(
+            url::Url::parse(&format!("http://{address}")).unwrap(),
+            crate::tls::build_client_config(&session.config.tls).unwrap(),
+        )
+        .unwrap();
+        session.token = Some((
+            "token-from-before-server-restart".into(),
+            Instant::now() + Duration::from_secs(3600),
+        ));
+        for attempt in 1..=2 {
+            let token = tokio::time::timeout(Duration::from_secs(2), session.authenticate())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(token, format!("new-server-token-{attempt}"));
+            assert_eq!(session.login.as_ref().unwrap().user.id, 84);
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconnect_backoff_is_bounded_but_initial_failure_still_backs_off() {
+        let (_dir, mut session, _mixer, _path) = test_session();
+        for _ in 0..10 {
+            session.next_backoff();
+        }
+        assert!(session.next_backoff() >= Duration::from_secs(30));
+        session.registered_since = Some(std::time::SystemTime::now());
+        // Even an already large delay is capped for a previously working panel.
+        for _ in 0..20 {
+            let delay = session.next_backoff();
+            assert!(delay >= Duration::from_secs(3));
+            assert!(delay < Duration::from_millis(3250));
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_stop_clears_holds_locks_and_vox_until_a_fresh_trigger() {
+        use crate::audio::vox::LevelTrigger;
+        use crate::state::{InputSource, TargetRef};
+        let (_dir, mut session, _mixer, _path) = test_session();
+        let now = Instant::now();
+        let target = crate::talk::TargetKey::User(5);
+        let source = InputSource::Companion("panel-hold".into());
+        session
+            .talk
+            .press(source.clone(), TargetRef::Key(target), now);
+        session
+            .talk
+            .set_lock(TargetRef::Key(crate::talk::TargetKey::Conference(7)), true);
+        session.talk.set_vox_target(Some(target));
+        session.vox = Some(LevelTrigger::new(-30.0, 100));
+        assert_eq!(session.vox.as_mut().unwrap().update(-10.0, now), Some(true));
+        session.talk.set_vox_active(true);
+        session.pending_talk_change = Some(session.talk_change_now());
+
+        let change = session.admin_stop_transmission();
+        assert!(!change.talking);
+        assert!(!change.lock_active);
+        assert!(change.targets.is_empty());
+        assert!(session.pending_talk_change.is_none());
+        // Releasing the old held button cannot recreate a tap lock.
+        assert!(session.talk.release_source(&source).is_none());
+        assert_eq!(session.vox.as_mut().unwrap().update(-10.0, now), None);
+        assert!(!session.talk.is_talking());
+        let quiet = now + Duration::from_millis(200);
+        assert_eq!(
+            session.vox.as_mut().unwrap().update(-60.0, quiet),
+            Some(false)
+        );
+        session.talk.set_vox_active(false);
+        assert_eq!(
+            session.vox.as_mut().unwrap().update(-10.0, quiet),
+            Some(true)
+        );
+        assert!(session.talk.set_vox_active(true).unwrap().talking);
+    }
+
+    #[tokio::test]
+    async fn panel_report_includes_media_and_ice_states() {
+        let (_dir, mut session, _mixer, _path) = test_session();
+        session.media_info = Some(crate::state::MediaInfo {
+            send_state: "connected".into(),
+            recv_state: "connecting".into(),
+            send_ice_state: "completed".into(),
+            recv_ice_state: "checking".into(),
+            ..Default::default()
+        });
+        let report = session.panel_report().await;
+        let media = &report["runtime"]["mediaConnection"];
+        assert_eq!(media["send"], "connected");
+        assert_eq!(media["receive"], "connecting");
+        assert_eq!(media["sendIce"], "completed");
+        assert_eq!(media["receiveIce"], "checking");
+        assert_eq!(media["initialized"], true);
+        session.media_info = None;
+        let report = session.panel_report().await;
+        assert_eq!(report["runtime"]["mediaConnection"]["sendIce"], "idle");
+        assert_eq!(report["runtime"]["mediaConnection"]["initialized"], false);
+    }
+
+    #[tokio::test]
+    async fn local_panel_uses_the_shared_audio_and_member_commands_even_offline() {
+        use crate::talk::TargetKey;
+        let (_dir, mut session, _mixer, _path) = test_session();
+        session.targets = vec![
+            super::Target {
+                key: TargetKey::User(5),
+                name: "Director".into(),
+                can_talk: true,
+                members: vec![],
+            },
+            super::Target {
+                key: TargetKey::Conference(7),
+                name: "Crew".into(),
+                can_talk: true,
+                members: vec![(8, "Camera".into())],
+            },
+        ];
+        let result = session.handle_local_panel(None, &json!({ "kind": "target-audio", "targetType": "user", "targetId": 5, "volume": 0.25, "muted": true })).await;
+        assert_eq!(result["ok"], true);
+        assert_eq!(session.audio.level(TargetKey::User(5)).volume, 0.25);
+        assert!(session.audio.level(TargetKey::User(5)).muted);
+        let result = session
+            .handle_local_panel(
+                None,
+                &json!({ "kind": "preferences", "patch": {
+                    "conferenceMemberLevels:user:84": "{\"7\":{\"8\":0.3}}",
+                    "conferenceListenExclusions:user:84": "{\"7\":[8]}"
+                }}),
+            )
+            .await;
+        assert_eq!(result["ok"], true);
+        assert_eq!(session.audio.member_level(7, 8).volume, 0.3);
+        assert!(session.audio.member_level(7, 8).muted);
+        let result = session
+            .handle_local_panel(None, &json!({ "kind": "snapshot" }))
+            .await;
+        assert_eq!(result["ok"], true);
+        assert!(result["snapshot"]["targets"].is_array());
+        assert!(result["report"]["runtime"].is_object());
+        let result = session
+            .handle_local_panel(
+                None,
+                &json!({ "kind": "talk", "action": "press", "targetType": "user", "targetId": 5 }),
+            )
+            .await;
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"], "Server unavailable");
+    }
+
+    #[tokio::test]
+    async fn cancelled_local_panel_requests_cannot_apply_late() {
+        let (_dir, mut session, _mixer, _path) = test_session();
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        let request = std::sync::Arc::new(crate::state::PanelRequest {
+            command: json!({"kind": "preferences", "patch": {"targetHotkeys:84": "{}"}}),
+            reply: std::sync::Mutex::new(Some(reply)),
+        });
+        drop(receive);
+        session
+            .handle_offline_command(crate::state::Command::LocalPanel(request))
+            .await;
+        assert!(session.panel.storage.as_object().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn server_failure_does_not_clear_during_retry_phases() {
+        use crate::state::ConnectionState;
+        let (_dir, mut session, _mixer, _path) = test_session();
+        session.set_connection(ConnectionState::Disconnected, "Connection refused");
+        for phase in [
+            ConnectionState::Connecting,
+            ConnectionState::LoggingIn,
+            ConnectionState::Registering,
+            ConnectionState::Registered,
+        ] {
+            session.set_connection(phase, "");
+            assert!(session.build_snapshot().server_not_responding, "{phase:?}");
+            assert_eq!(session.detail, "Connection refused");
+        }
+        session.set_connection(ConnectionState::Ready, "");
+        assert!(!session.build_snapshot().server_not_responding);
+        assert!(session.detail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn received_audio_is_decoded_without_polling_the_control_loop() {
+        let (_dir, session, mixer, _path) = test_session();
+        mixer
+            .lock()
+            .unwrap()
+            .add_source_from("test", crate::talk::TargetKey::User(1), None)
+            .unwrap();
+        let mut encoder = crate::audio::codec::OpusEncoder::new(20, 64000, false).unwrap();
+        let payload = encoder.encode(&vec![0.2; 960]).unwrap();
+        session
+            .rx_tx
+            .send(crate::rtc::RxPacket {
+                consumer_id: "test".into(),
+                sequence: 1,
+                timestamp: 960,
+                payload,
+                arrived: Instant::now(),
+            })
+            .await
+            .unwrap();
+        // The session/control loop is deliberately never run.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while mixer.lock().unwrap().health().packets_matched == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(mixer.lock().unwrap().receive_stats().packets, 1);
+    }
+
+    #[tokio::test]
+    async fn percent_dial_steps_accumulate_for_targets_and_members_and_clamp_at_limits() {
+        use crate::{state::Command, talk::TargetKey};
+        let (_dir, mut session, _mixer, _path) = test_session();
+        let target = TargetKey::User(5);
+        session.audio.set_volume(target, 0.1);
+        session.audio.set_member_volume(7, 8, 0.1);
+        for _ in 0..10 {
+            session
+                .handle_offline_command(Command::VolumeStep {
+                    target,
+                    delta: 0.04,
+                })
+                .await;
+            session
+                .handle_offline_command(Command::MemberVolumeStep {
+                    conference: TargetKey::Conference(7),
+                    user_id: 8,
+                    delta: 0.04,
+                })
+                .await;
+        }
+        assert!((session.audio.level(target).volume - 0.5).abs() < 0.0001);
+        assert!((session.audio.member_level(7, 8).volume - 0.5).abs() < 0.0001);
+        session
+            .handle_offline_command(Command::VolumeStep { target, delta: 2.0 })
+            .await;
+        session
+            .handle_offline_command(Command::MemberVolumeStep {
+                conference: TargetKey::Conference(7),
+                user_id: 8,
+                delta: -2.0,
+            })
+            .await;
+        assert_eq!(session.audio.level(target).volume, 1.0);
+        assert_eq!(session.audio.member_level(7, 8).volume, 0.0);
+        session
+            .handle_offline_command(Command::MemberVolumeStep {
+                conference: TargetKey::Conference(7),
+                user_id: 8,
+                delta: 0.04,
+            })
+            .await;
+        assert_eq!(session.audio.member_level(7, 8).volume, 0.001);
+    }
+
+    #[tokio::test]
+    async fn admin_connection_sound_mute_stops_audio_and_survives_restart() {
+        use crate::signalling::alerts::Announcement;
+        let (_dir, mut session, mixer, path) = test_session();
+        session.play_announcement(Some(Announcement::Disconnected));
+        session.apply_user_audio_settings(&json!({ "playConnectionSounds": false }), true);
+        session.play_announcement(Some(Announcement::Reconnected));
+        let mut out = vec![0.0; 16_384];
+        mixer.lock().unwrap().render(&mut out);
+        assert!(
+            out.iter().all(|sample| *sample == 0.0),
+            "mute clears pending cues and blocks future ones"
+        );
+        assert!(!session.local_audio().play_connection_sounds);
+        let saved = crate::config::read_document(&path).unwrap();
+        assert_eq!(
+            saved["audio"]["play_connection_sounds"], false,
+            "Admin mute must survive process restart"
+        );
+        // Registration must preserve a local mute even if the server still
+        // remembers enabled. The next settings report synchronizes it back.
+        session.apply_user_audio_settings(&json!({ "playConnectionSounds": true }), false);
+        assert!(!session.local_audio().play_connection_sounds);
+        // A deliberate live Admin change can enable it again.
+        session.apply_user_audio_settings(&json!({ "playConnectionSounds": true }), true);
+        assert!(session.local_audio().play_connection_sounds);
+        session.play_announcement(Some(Announcement::Reconnected));
+        mixer.lock().unwrap().render(&mut out);
+        assert!(out.iter().any(|sample| *sample != 0.0));
+        assert_eq!(
+            crate::config::read_document(&path).unwrap()["audio"]["play_connection_sounds"],
+            true
+        );
+    }
+
+    #[test]
+    fn rtt_prefers_fresh_media_then_falls_back_to_heartbeat() {
+        let now = Instant::now();
+        assert_eq!(
+            choose_rtt(Some((18, now)), Some(41.6), now),
+            (Some(18), Some("media"))
+        );
+        let stale = now - MEDIA_RTT_FRESH - Duration::from_secs(1);
+        assert_eq!(
+            choose_rtt(Some((18, stale)), Some(41.6), now),
+            (Some(42), Some("signalling"))
+        );
+        assert_eq!(choose_rtt(None, None, now), (None, None));
+    }
 
     #[test]
     fn parse_cut_camera_accepts_legacy_bool_and_pgm_prv_object() {

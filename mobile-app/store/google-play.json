@@ -1,0 +1,22 @@
+{
+  "packageName": "com.talktome.mobile",
+  "defaultLanguage": "en-US",
+  "appType": "APP",
+  "suggestedCategory": "PRODUCTIVITY",
+  "price": "FREE",
+  "contactEmail": "talktome@platonstudio.de",
+  "website": "https://github.com/thepoison606/talktome",
+  "privacyPolicyUrl": "https://platonstudio.de/talktome/privacy/",
+  "localizations": {
+    "en-US": {
+      "title": "Talktome Intercom",
+      "shortDescription": "Push-to-talk intercom for teams. Connect to your own Talktome server.",
+      "fullDescription": "Turn your Android phone or tablet into a push-to-talk intercom for your production team.\n\nTalktome Intercom connects to a Talktome server operated by you or your organization. Sign in with an account or a personal login link, select your production, and reach the right people.\n\nTALK AND LISTEN\n• Speak to individual operators or assigned conferences.\n• Listen to program feeds and adjust volume and mute for each target.\n• Use Reply to answer incoming calls and lock a talk button for longer conversations.\n• Choose your audio output and keep your intercom session connected in the background with an ongoing notification.\n\nMADE FOR TEAMWORK\n• Scan server and personal sign-in QR codes.\n• Save multiple server profiles and switch between productions.\n• Use compatible Bluetooth push-to-talk accessories.\n• Adjust your talk targets and audio controls for your production.\n\nBRING YOUR OWN SERVER\nA compatible Talktome server and access from its administrator are required. The app does not include a hosted intercom service. Available targets and permissions depend on your server configuration. Bluetooth accessories are optional.\n\nThe app interface is currently in English.\nPrivacy policy: https://platonstudio.de/talktome/privacy/"
+    },
+    "de-DE": {
+      "title": "Talktome Intercom",
+      "shortDescription": "Push-to-Talk für Teams. Verbinde dich mit deinem eigenen Talktome-Server.",
+      "fullDescription": "Nutze dein Android-Smartphone oder -Tablet als Push-to-Talk-Intercom für dein Produktionsteam.\n\nTalktome Intercom verbindet sich mit einem Talktome-Server, den du oder deine Organisation betreibt. Melde dich mit einem Konto oder einem persönlichen Anmeldelink an, wähle deine Produktion und erreiche die richtigen Personen.\n\nSPRECHEN UND HÖREN\n• Sprich mit einzelnen Operatoren oder zugewiesenen Konferenzen.\n• Höre Programm-Feeds ab und passe Lautstärke und Stummschaltung je Ziel an.\n• Antworte mit Reply auf eingehende Rufe und raste die Sprechtaste für längere Gespräche ein.\n• Wähle deine Audioausgabe und halte deine Intercom-Verbindung mit einer dauerhaften Benachrichtigung auch im Hintergrund aktiv.\n\nFÜR DIE ZUSAMMENARBEIT\n• Scanne Server- und persönliche Anmelde-QR-Codes.\n• Speichere mehrere Serverprofile und wechsle zwischen Produktionen.\n• Verwende kompatible Bluetooth-Sprechtasten.\n• Passe Sprechziele und Audiosteuerung an deine Produktion an.\n\nEIGENER SERVER ERFORDERLICH\nDu benötigst einen kompatiblen Talktome-Server und einen Zugang von dessen Administrator. Die App enthält keinen gehosteten Intercom-Dienst. Verfügbare Ziele und Berechtigungen hängen von der Serverkonfiguration ab. Bluetooth-Zubehör ist optional.\n\nDie App-Oberfläche ist derzeit auf Englisch.\nDatenschutzerklärung: https://platonstudio.de/talktome/privacy/de/"
+    }
+  }
+}

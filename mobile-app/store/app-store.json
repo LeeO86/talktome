@@ -1,0 +1,20 @@
+{
+  "primaryCategory": "PRODUCTIVITY",
+  "price": "FREE",
+  "privacyPolicyUrl": "https://platonstudio.de/talktome/privacy/",
+  "supportUrl": "https://github.com/thepoison606/talktome/blob/main/SUPPORT.md",
+  "localizations": {
+    "en-GB": {
+      "name": "Talktome Intercom",
+      "subtitle": "Live intercom for your team",
+      "keywords": "intercom,push to talk,ptt,broadcast,production,crew,audio,conference,walkie talkie",
+      "description": "Turn your iPhone or iPad into a push-to-talk intercom for your production team.\n\nTalktome Intercom connects to a Talktome server operated by you or your organisation. Sign in with your account or a personal login link, select your production and keep the right people within reach.\n\nTALK AND LISTEN\n• Speak to individual operators or assigned conferences.\n• Listen to programme feeds and adjust volume and mute for each target.\n• Use Reply to answer incoming calls and lock a talk button for longer conversations.\n• Choose your audio output and stay connected with background audio.\n\nMADE FOR TEAM WORK\n• Scan server and personal sign-in QR codes.\n• Save multiple server profiles and switch between productions.\n• Use compatible Bluetooth push-to-talk buttons.\n• Control talking from a paired Apple Watch while audio stays on your iPhone.\n• Check session status with widgets and Live Activities.\n\nBRING YOUR OWN SERVER\nA compatible Talktome server and access from its administrator are required. The app does not include a hosted intercom service. Available targets and permissions depend on your server configuration. Bluetooth accessories and Apple Watch are optional.\n\nPrivacy policy: https://platonstudio.de/talktome/privacy/"
+    },
+    "de-DE": {
+      "name": "Talktome Intercom",
+      "subtitle": "Live-Intercom für dein Team",
+      "keywords": "intercom,sprechanlage,produktion,broadcast,team,funk,ptt,audio,konferenz,crew",
+      "description": "Nutze dein iPhone oder iPad als Push-to-Talk-Intercom für dein Produktionsteam.\n\nTalktome Intercom verbindet sich mit einem Talktome-Server, den du oder deine Organisation betreibt. Melde dich mit deinem Konto oder einem persönlichen Anmeldelink an, wähle deine Produktion und erreiche die richtigen Personen.\n\nSPRECHEN UND HÖREN\n• Sprich mit einzelnen Operatoren oder zugewiesenen Konferenzen.\n• Höre Programm-Feeds ab und passe Lautstärke und Stummschaltung je Ziel an.\n• Antworte mit Reply auf eingehende Rufe und raste die Sprechtaste für längere Gespräche ein.\n• Wähle deine Audioausgabe und bleibe mit Hintergrundaudio verbunden.\n\nFÜR DIE ZUSAMMENARBEIT\n• Scanne Server- und persönliche Anmelde-QR-Codes.\n• Speichere mehrere Serverprofile und wechsle zwischen Produktionen.\n• Verwende kompatible Bluetooth-Sprechtasten.\n• Steuere die Sprechfunktion über eine gekoppelte Apple Watch; das Audio bleibt auf dem iPhone.\n• Sieh den Sitzungsstatus in Widgets und Live Activities.\n\nEIGENER SERVER ERFORDERLICH\nDu benötigst einen kompatiblen Talktome-Server und einen Zugang von dessen Administrator. Die App enthält keinen gehosteten Intercom-Dienst. Verfügbare Ziele und Berechtigungen hängen von der Serverkonfiguration ab. Bluetooth-Zubehör und Apple Watch sind optional.\n\nDie App-Oberfläche ist derzeit auf Englisch.\n\nDatenschutzerklärung: https://platonstudio.de/talktome/privacy/de/"
+    }
+  }
+}

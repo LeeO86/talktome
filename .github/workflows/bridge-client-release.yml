@@ -5,6 +5,15 @@ env:
 
 on:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Version to build and upload to a draft (for example 1.5.10); empty uses Git version'
+        required: false
+        type: string
+      source_ref:
+        description: 'Optional source tag or commit to build with this workflow revision'
+        required: false
+        type: string
   push:
     branches:
       - "main"
@@ -13,9 +22,16 @@ on:
     paths:
       - ".github/workflows/bridge-client-release.yml"
       - "bridge-client/**"
+      - "public/audioMeter.js"
+      - "public/bridgeAudioLevels.js"
+      - "public/bridgeTalkTrigger.js"
+      - "public/targetPicker.js"
+      - "public/targetPicker.css"
       - "vendor/tray-icon/**"
       - "scripts/resolve-build-version.js"
       - "scripts/upload-release-asset.sh"
+      - "scripts/notarize-macos.py"
+      - "scripts/ci-notarize-macos.py"
 
 concurrency:
   group: bridge-builds-${{ github.workflow }}-${{ github.ref }}
@@ -37,30 +53,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.source_ref || github.ref }}
           fetch-depth: 0
 
       - name: Resolve version from Git tags
         id: build-version
         shell: bash
-        run: |
-          if node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"; then
-            exit 0
-          fi
-          # No v* tag reachable (e.g. a fresh fork): fall back to a development
-          # version so pushes to main still produce packages. Releases always
-          # come from tags and use the shared resolver above.
-          count="$(git rev-list --count HEAD)"
-          sha="$(git rev-parse --short=8 HEAD)"
-          version="0.0.0-dev.${count}"
-          {
-            echo "version=v${version}"
-            echo "app_version=${version}"
-            echo "safe_version=v${version}-${sha}"
-            echo "base_version=0.0.0"
-            echo "is_release=false"
-            echo "git_sha=${sha}"
-          } >> "$GITHUB_OUTPUT"
-          echo "No release tag found; using development version ${version}"
+        env:
+          TALKTOME_BUILD_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || '' }}
+        run: node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"
 
   build:
     name: Build Bridge ${{ matrix.name }}
@@ -77,7 +78,7 @@ jobs:
       matrix:
         include:
           - name: macOS arm64
-            os: macos-14
+            os: macos-15
             ffmpeg_source: macos-lgpl
             ffmpeg_sidecar: ffmpeg-aarch64-apple-darwin
             artifact_name: talktome_bridge_macos_arm64
@@ -93,12 +94,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.source_ref || github.ref }}
           fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: bridge-client/package-lock.json
 
@@ -177,6 +179,24 @@ jobs:
           npm run prepare:omt -- --release --force
           npm exec tauri build -- --bundles nsis --config tauri.release-version.json
 
+      - name: Sign and notarize macOS Bridge
+        if: matrix.ffmpeg_source == 'macos-lgpl' && vars.MACOS_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          shopt -s nullglob
+          dmgs=(bridge-client/src-tauri/target/release/bundle/dmg/*.dmg)
+          [[ ${#dmgs[@]} -eq 1 ]] || { echo 'Expected one Bridge DMG before signing' >&2; exit 1; }
+          python3 scripts/ci-notarize-macos.py \
+            --app "bridge-client/src-tauri/target/release/bundle/macos/Talktome Bridge.app" \
+            --entitlements bridge-client/src-tauri/Entitlements.plist \
+            --output-dmg "${dmgs[0]}"
+
       - name: Verify macOS Bridge version
         if: matrix.ffmpeg_source == 'macos-lgpl'
         shell: bash
@@ -250,13 +270,15 @@ jobs:
           path: ${{ env.BRIDGE_INSTALLER_PATH }}
 
       - name: Upload Bridge artifact to draft release
-        if: startsWith(github.ref, 'refs/tags/')
+        # Unsigned macOS artifacts stay in Actions; local signing supplies the release DMGs.
+        if: (matrix.ffmpeg_source == 'windows-lgpl' || vars.MACOS_SIGNING_ENABLED == 'true') && (startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_version != ''))
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.version.outputs.version }}
         run: >-
           bash scripts/upload-release-asset.sh
-          "$GITHUB_REF_NAME"
+          "$RELEASE_TAG"
           "$BRIDGE_INSTALLER_PATH"
-          "$GITHUB_REF_NAME - macOS + Windows"
+          "$RELEASE_TAG - macOS + Windows"

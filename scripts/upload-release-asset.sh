@@ -56,4 +56,8 @@ ensure_draft_release() {
 }
 
 ensure_draft_release
+if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]]; then
+  printf 'Refusing to replace assets of published release %s.\n' "$TAG" >&2
+  exit 1
+fi
 retry_command gh release upload "$TAG" "$ASSET_PATH" --clobber

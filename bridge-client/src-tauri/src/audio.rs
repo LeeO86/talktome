@@ -12,6 +12,8 @@ use crate::network_audio;
 pub struct AudioInventory {
     pub host: String,
     pub devices: Vec<AudioDeviceInfo>,
+    #[serde(default, rename = "videoSources")]
+    pub video_sources: Vec<crate::video_media::VideoSource>,
     #[serde(default)]
     pub warnings: Vec<String>,
 }
@@ -136,6 +138,7 @@ pub fn list_audio_devices() -> Result<AudioInventory, String> {
 
     Ok(AudioInventory {
         host: host_name,
+        video_sources: Vec::new(),
         devices,
         warnings,
     })
@@ -552,4 +555,14 @@ fn stable_enough_device_id(host_name: &str, direction: &str, index: usize, name:
         .join("-");
 
     format!("{host_name}:{direction}:{index}:{normalized_name}")
+}
+
+#[cfg(test)]
+mod inventory_diagnostic {
+    #[test]
+    #[ignore = "queries the real audio drivers on this machine"]
+    fn inspect_native_inventory() {
+        let inventory = super::list_audio_devices().expect("query inventory");
+        eprintln!("{}", serde_json::to_string_pretty(&inventory).unwrap());
+    }
 }

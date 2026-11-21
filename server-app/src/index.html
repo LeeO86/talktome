@@ -66,16 +66,14 @@
             <span>Media network</span>
             <select id="media-network-mode">
               <option value="auto">Automatic (all adapters)</option>
-              <option value="interface">Preferred adapter</option>
+              <option value="interface">Selected adapters</option>
               <option value="manual">Manual address</option>
             </select>
           </label>
-          <label id="interface-row" class="manual-address-row" hidden>
-            <span>Network adapter</span>
-            <select id="media-interface-name">
-              <option value="">Select adapter</option>
-            </select>
-          </label>
+          <div id="interface-row" class="manual-address-row" hidden>
+            <span id="media-interface-label">Network adapters</span>
+            <div id="media-interface-name" class="media-adapter-options" role="group" aria-labelledby="media-interface-label"></div>
+          </div>
           <label id="manual-address-row" class="manual-address-row" hidden>
             <span>Announced address</span>
             <input id="media-announced-address" spellcheck="false" />

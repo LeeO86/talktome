@@ -7,7 +7,7 @@ use std::ptr;
 use std::sync::{
     atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
     mpsc::{sync_channel, SyncSender, TrySendError},
-    Arc, Mutex, OnceLock,
+    Arc, Mutex, OnceLock, TryLockError,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -44,6 +44,10 @@ const WINDOWS_NDI_RUNTIME_DIRECTORIES: &[&str] = &[
 static NDI_DISCOVERY_LOCK: Mutex<()> = Mutex::new(());
 static NDI_SOURCE_CACHE: OnceLock<Mutex<CachedSources>> = OnceLock::new();
 static NDI_CHANNEL_COUNT_CACHE: OnceLock<Mutex<HashMap<String, u16>>> = OnceLock::new();
+// NDI keeps process-wide state after initialize(). Unloading its DLL after an
+// inventory/status query can crash in native teardown. Retain one initialized
+// API for the process lifetime; a failed load remains retryable.
+static NDI_API: Mutex<Option<Arc<NdiApi>>> = Mutex::new(None);
 
 type NdiInstance = *mut c_void;
 
@@ -102,6 +106,23 @@ type RecvCreateFn = unsafe extern "C" fn(*const NdiRecvCreateV3) -> NdiInstance;
 type RecvDestroyFn = unsafe extern "C" fn(NdiInstance);
 type RecvCaptureFn =
     unsafe extern "C" fn(NdiInstance, *mut c_void, *mut NdiAudioFrameV3, *mut c_void, u32) -> i32;
+#[repr(C)]
+#[derive(Default)]
+struct NdiVideoFrame {
+    width: i32,
+    height: i32,
+    fourcc: i32,
+    frame_rate_n: i32,
+    frame_rate_d: i32,
+    aspect_ratio: f32,
+    frame_format: i32,
+    timecode: i64,
+    data: *mut u8,
+    stride: i32,
+    metadata: *const c_char,
+    timestamp: i64,
+}
+type RecvFreeVideoFn = unsafe extern "C" fn(NdiInstance, *const NdiVideoFrame);
 type RecvFreeAudioFn = unsafe extern "C" fn(NdiInstance, *const NdiAudioFrameV3);
 type SendCreateFn = unsafe extern "C" fn(*const NdiSendCreate) -> NdiInstance;
 type SendDestroyFn = unsafe extern "C" fn(NdiInstance);
@@ -120,6 +141,7 @@ struct NdiApi {
     recv_destroy: RecvDestroyFn,
     recv_capture: RecvCaptureFn,
     recv_free_audio: RecvFreeAudioFn,
+    recv_free_video: RecvFreeVideoFn,
     send_create: SendCreateFn,
     send_destroy: SendDestroyFn,
     send_audio: SendAudioFn,
@@ -160,7 +182,19 @@ pub struct NdiOutputRuntime {
 }
 
 impl NdiApi {
-    fn load() -> Result<Self, String> {
+    fn load() -> Result<Arc<Self>, String> {
+        let mut cached = NDI_API
+            .lock()
+            .map_err(|_| "NDI Runtime lock poisoned".to_string())?;
+        if let Some(api) = cached.as_ref() {
+            return Ok(Arc::clone(api));
+        }
+        let api = Arc::new(Self::load_uncached()?);
+        *cached = Some(Arc::clone(&api));
+        Ok(api)
+    }
+
+    fn load_uncached() -> Result<Self, String> {
         let (library, runtime_path) = load_runtime_library()?;
         unsafe {
             let initialize = load_symbol::<InitializeFn>(&library, b"NDIlib_initialize\0")?;
@@ -174,6 +208,7 @@ impl NdiApi {
                 recv_destroy: load_symbol(&library, b"NDIlib_recv_destroy\0")?,
                 recv_capture: load_symbol(&library, b"NDIlib_recv_capture_v3\0")?,
                 recv_free_audio: load_symbol(&library, b"NDIlib_recv_free_audio_v3\0")?,
+                recv_free_video: load_symbol(&library, b"NDIlib_recv_free_video_v2\0")?,
                 send_create: load_symbol(&library, b"NDIlib_send_create\0")?,
                 send_destroy: load_symbol(&library, b"NDIlib_send_destroy\0")?,
                 send_audio: load_symbol(&library, b"NDIlib_send_send_audio_v3\0")?,
@@ -545,6 +580,14 @@ fn probe_input_channel_count(
 }
 
 pub fn audio_devices(wait: Duration) -> Vec<AudioDeviceInfo> {
+    audio_devices_impl(wait, true)
+}
+
+pub fn snapshot_devices(wait: Duration) -> Vec<AudioDeviceInfo> {
+    audio_devices_impl(wait, false)
+}
+
+fn audio_devices_impl(wait: Duration, probe_channels: bool) -> Vec<AudioDeviceInfo> {
     let Ok(api) = NdiApi::load() else {
         return Vec::new();
     };
@@ -558,7 +601,11 @@ pub fn audio_devices(wait: Duration) -> Vec<AudioDeviceInfo> {
             let detected_channels = probe_input_channel_count(
                 &api,
                 &source,
-                remaining.min(NDI_CHANNEL_PROBE_PER_SOURCE),
+                if probe_channels {
+                    remaining.min(NDI_CHANNEL_PROBE_PER_SOURCE)
+                } else {
+                    Duration::ZERO
+                },
             );
             if let Some(channels) = detected_channels {
                 cache_input_channel_count(&source.id, channels);
@@ -618,15 +665,22 @@ impl NdiApi {
         &self,
         requested_wait: Duration,
     ) -> Result<Vec<DiscoveredSource>, String> {
-        let _discovery = NDI_DISCOVERY_LOCK
-            .lock()
-            .map_err(|_| "NDI discovery lock poisoned".to_string())?;
         let cache = NDI_SOURCE_CACHE.get_or_init(|| Mutex::new(CachedSources::default()));
-        let cache_is_empty = cache
+        let _discovery = match NDI_DISCOVERY_LOCK.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => {
+                return cache
+                    .lock()
+                    .map(|cache| cache.sources.clone())
+                    .map_err(|_| "NDI source cache lock poisoned".to_string());
+            }
+            Err(TryLockError::Poisoned(_)) => return Err("NDI discovery lock poisoned".to_string()),
+        };
+        let initial_discovery = cache
             .lock()
-            .map(|cache| cache.sources.is_empty())
+            .map(|cache| cache.updated_at.is_none())
             .unwrap_or(true);
-        let wait = if cache_is_empty {
+        let wait = if initial_discovery {
             requested_wait.max(NDI_INITIAL_DISCOVERY_WAIT)
         } else {
             requested_wait
@@ -1072,6 +1126,29 @@ pub(crate) mod tests {
     use super::*;
 
     #[test]
+    fn concurrent_discovery_uses_the_cache_without_waiting() {
+        let Ok(api) = NdiApi::load() else {
+            return;
+        };
+        let _guard = NDI_DISCOVERY_LOCK.lock().unwrap();
+        let started = Instant::now();
+        api.discover_resilient(Duration::from_secs(2)).unwrap();
+        assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    #[test]
+    fn runtime_stays_loaded_after_the_last_query_handle_is_dropped() {
+        let Ok(api) = NdiApi::load() else {
+            return;
+        };
+        let retained = Arc::downgrade(&api);
+        drop(api);
+        let retained = retained.upgrade().expect("NDI Runtime must remain loaded");
+        assert!(Arc::ptr_eq(&retained, &NdiApi::load().unwrap()));
+        assert!(!retained.version_string().unwrap_or_default().is_empty());
+    }
+
+    #[test]
     fn source_ids_are_stable_and_distinct() {
         assert_eq!(
             input_device_id("HOST (Source)"),
@@ -1209,6 +1286,70 @@ pub(crate) mod tests {
         drop(input);
     }
 
+    #[test]
+    #[ignore = "requires installed NDI Runtime and local NDI networking"]
+    fn ndi_video_loopback() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let sender_stop = Arc::clone(&stop);
+        let sender = thread::spawn(move || {
+            let api = NdiApi::load().expect("NDI Runtime required");
+            let name = CString::new("Talktome Video NDI Test").unwrap();
+            let settings = NdiSendCreate {
+                ndi_name: name.as_ptr(),
+                groups: ptr::null(),
+                clock_video: false,
+                clock_audio: false,
+            };
+            let sender = unsafe { (api.send_create)(&settings) };
+            assert!(!sender.is_null());
+            let _guard = NdiSenderGuard { api: &api, sender };
+            type SendVideo = unsafe extern "C" fn(NdiInstance, *const NdiVideoFrame);
+            let send: SendVideo =
+                unsafe { *api._library.get(b"NDIlib_send_send_video_v2\0").unwrap() };
+            let mut pixels = vec![180u8; 1280 * 720 * 4];
+            let mut next = Instant::now();
+            let mut frame_number = 0usize;
+            while !sender_stop.load(Ordering::Relaxed) {
+                // Move a visible bar across the full 720p picture rather than
+                // benchmarking an unchanging frame that the codec can skip.
+                for y in 0..720 {
+                    for x in 0..1280 {
+                        let value = if (x + frame_number * 12) % 1280 < 80 { 50 } else { 180 };
+                        let offset = (y * 1280 + x) * 4;
+                        pixels[offset..offset + 3].fill(value);
+                    }
+                }
+                frame_number = frame_number.wrapping_add(1);
+                let frame = NdiVideoFrame {
+                    width: 1280,
+                    height: 720,
+                    fourcc: i32::from_le_bytes(*b"BGRA"),
+                    frame_rate_n: 30,
+                    frame_rate_d: 1,
+                    aspect_ratio: 0.0,
+                    frame_format: 1,
+                    timecode: NDI_TIMECODE_SYNTHESIZE,
+                    data: pixels.as_mut_ptr(),
+                    stride: 1280 * 4,
+                    metadata: ptr::null(),
+                    timestamp: 0,
+                };
+                unsafe {
+                    send(sender, &frame);
+                };
+                next += Duration::from_nanos(1_000_000_000 / 30);
+                thread::sleep(next.saturating_duration_since(Instant::now()));
+            }
+        });
+        thread::sleep(Duration::from_millis(750));
+        let result = std::panic::catch_unwind(|| {
+            crate::video_media::tests::run_external_video_probe("ndi", "Talktome Video NDI Test")
+        });
+        stop.store(true, Ordering::Relaxed);
+        sender.join().unwrap();
+        result.unwrap();
+    }
+
     pub(crate) fn run_external_audio_probe(source_name: &str) {
         let executable = std::env::current_exe().expect("resolve current NDI test executable");
         let output = std::process::Command::new(executable)
@@ -1228,4 +1369,75 @@ pub(crate) mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+pub fn video_sources(wait: Duration) -> Vec<crate::video_media::VideoSource> {
+    NdiApi::load()
+        .ok()
+        .and_then(|api| api.discover_resilient(wait).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|source| crate::video_media::VideoSource {
+            id: source.id,
+            name: format!("NDI · {}", source.name),
+            protocol: "ndi".into(),
+        })
+        .collect()
+}
+pub fn capture_video(
+    device_id: &str,
+    mut sink: crate::video_media::VideoSink,
+) -> Result<(), String> {
+    let api = NdiApi::load()?;
+    let name = CString::new(source_name_for_device(&api, device_id)?)
+        .map_err(|_| "Invalid NDI source name")?;
+    let receiver_name = CString::new("Talktome Bridge video").unwrap();
+    let settings = NdiRecvCreateV3 {
+        source: NdiSource {
+            ndi_name: name.as_ptr(),
+            url_address: ptr::null(),
+        },
+        color_format: 0,
+        bandwidth: 100,
+        allow_video_fields: false,
+        receiver_name: receiver_name.as_ptr(),
+    };
+    let receiver = unsafe { (api.recv_create)(&settings) };
+    if receiver.is_null() {
+        return Err("NDI video receiver could not be created".into());
+    }
+    let _guard = NdiReceiverGuard {
+        api: &api,
+        receiver,
+    };
+    while !sink.stop.load(Ordering::Relaxed) {
+        let mut frame = NdiVideoFrame::default();
+        let kind = unsafe {
+            (api.recv_capture)(
+                receiver,
+                (&mut frame as *mut NdiVideoFrame).cast(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                100,
+            )
+        };
+        if kind == 1 {
+            sink.set_source_rate(frame.frame_rate_n, frame.frame_rate_d);
+            let result = if [i32::from_le_bytes(*b"BGRA"), i32::from_le_bytes(*b"BGRX")]
+                .contains(&frame.fourcc)
+            {
+                unsafe { sink.bgra(frame.width, frame.height, frame.stride, frame.data, None) }
+            } else {
+                Err(format!(
+                    "NDI returned unsupported video format {:08x}",
+                    frame.fourcc
+                ))
+            };
+            unsafe { (api.recv_free_video)(receiver, &frame) };
+            result?;
+        } else if kind == NDI_FRAME_TYPE_ERROR {
+            return Err("NDI video source disconnected".into());
+        }
+    }
+    Ok(())
 }

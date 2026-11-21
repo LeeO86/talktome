@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use bytes::Bytes;
@@ -75,6 +75,8 @@ pub enum RtcEvent {
 pub struct RxPacket {
     pub consumer_id: String,
     pub sequence: u16,
+    pub timestamp: u32,
+    pub arrived: Instant,
     pub payload: Bytes,
 }
 
@@ -332,10 +334,37 @@ fn usable_ip_filter(ip: IpAddr) -> bool {
     }
 }
 
+#[derive(Default)]
+struct SendTimeline {
+    previous: Option<(Instant, Duration)>,
+}
+
+impl SendTimeline {
+    fn gap(&mut self, captured: Instant, duration: Duration) -> Duration {
+        let gap = self
+            .previous
+            .map(|(previous, frame)| {
+                captured
+                    .saturating_duration_since(previous)
+                    .saturating_sub(frame)
+            })
+            .unwrap_or_default();
+        self.previous = Some((captured, duration));
+        // Normal callback batching and scheduling jitter must not change the
+        // media clock. Actual pauses/control stalls must advance it.
+        if gap >= Duration::from_millis(40) {
+            gap
+        } else {
+            Duration::ZERO
+        }
+    }
+}
+
 /// The send transport with its single warm "talk" producer.
 pub struct SendTransport {
     pc: Arc<RTCPeerConnection>,
     track: Arc<TrackLocalStaticSample>,
+    timeline: Mutex<SendTimeline>,
     pub transport_id: String,
     pub producer_id: String,
     /// ICE server URLs actually handed to webrtc-rs (for diagnostics).
@@ -454,6 +483,7 @@ impl SendTransport {
         Ok(Self {
             pc,
             track,
+            timeline: Mutex::new(SendTimeline::default()),
             transport_id: info.id,
             producer_id,
             ice_servers: if effective.is_empty() {
@@ -501,9 +531,26 @@ impl SendTransport {
     }
 
     /// Writes one encoded Opus frame; dropped while not talking.
-    pub async fn write_frame(&self, opus: Bytes, duration: Duration) -> Result<()> {
+    pub async fn write_frame(
+        &self,
+        opus: Bytes,
+        duration: Duration,
+        captured: Instant,
+    ) -> Result<()> {
         if !self.talking.load(Ordering::Relaxed) || self.closed.load(Ordering::Relaxed) {
             return Ok(());
+        }
+        let mut timeline = self.timeline.lock().await;
+        let gap = timeline.gap(captured, duration);
+        if !gap.is_zero() {
+            // An empty Opus sample advances RTP time without emitting packets
+            // or claiming sequence-number loss during a deliberate pause.
+            self.track
+                .write_sample(&Sample {
+                    duration: gap,
+                    ..Default::default()
+                })
+                .await?;
         }
         self.track
             .write_sample(&Sample {
@@ -606,24 +653,32 @@ impl RecvTransport {
                     })
                     .await;
                 tracing::info!(event = "consumer-track", consumer = %consumer_id, ssrc);
-                loop {
-                    match track.read_rtp().await {
-                        Ok((packet, _)) => {
-                            let out = RxPacket {
-                                consumer_id: consumer_id.clone(),
-                                sequence: packet.header.sequence_number,
-                                payload: packet.payload,
-                            };
-                            if rx_packets.send(out).await.is_err() {
+                // webrtc-rs holds the on_track handler lock until this future
+                // returns, so reading here would hold back every later track
+                // (a call while a feed plays) until this one ends. Read in a
+                // task of its own.
+                tokio::spawn(async move {
+                    loop {
+                        match track.read_rtp().await {
+                            Ok((packet, _)) => {
+                                let out = RxPacket {
+                                    consumer_id: consumer_id.clone(),
+                                    sequence: packet.header.sequence_number,
+                                    timestamp: packet.header.timestamp,
+                                    arrived: Instant::now(),
+                                    payload: packet.payload,
+                                };
+                                if rx_packets.send(out).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(error) => {
+                                tracing::debug!(event = "consumer-track-ended", consumer = %consumer_id, error = %error);
                                 break;
                             }
                         }
-                        Err(error) => {
-                            tracing::debug!(event = "consumer-track-ended", consumer = %consumer_id, error = %error);
-                            break;
-                        }
                     }
-                }
+                });
             })
         }));
 
@@ -771,10 +826,6 @@ impl RecvTransport {
         Ok(())
     }
 
-    pub async fn stats_report(&self) -> webrtc::stats::StatsReport {
-        self.pc.get_stats().await
-    }
-
     pub async fn close(&self) {
         self.closed.store(true, Ordering::Relaxed);
         self.consumers.lock().await.clear();
@@ -782,94 +833,199 @@ impl RecvTransport {
     }
 }
 
-/// ICE/RTP stats flattened for the status page.
+/// RTP stats flattened for the status page.
+///
+/// webrtc-rs never fills in the ICE candidate-pair round-trip time, so the
+/// only media-path RTT is the one derived from mediasoup's RTCP Receiver
+/// Reports for our producer. Those only arrive once we have sent RTP.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LinkStats {
     pub rtt_ms: Option<u32>,
     pub packet_loss_pct: Option<f32>,
     pub packets_lost: u64,
     pub packets_received: u64,
+    /// RTCP RTT samples taken so far; grows when `rtt_ms` is refreshed.
+    pub rtt_measurements: u64,
 }
 
 impl LinkStats {
     pub fn from_report(report: &webrtc::stats::StatsReport) -> Self {
         use webrtc::stats::StatsReportType;
         let mut rtts = Vec::new();
-        let mut lost: i64 = 0;
+        let mut lost: u64 = 0;
         let mut received: u64 = 0;
+        let mut rtt_measurements = 0;
         for item in report.reports.values() {
-            match item {
-                StatsReportType::CandidatePair(pair) if pair.nominated => {
-                    if pair.current_round_trip_time.is_finite()
-                        && pair.current_round_trip_time > 0.0
-                    {
-                        rtts.push((pair.current_round_trip_time * 1000.0) as f32);
+            if let StatsReportType::RemoteInboundRTP(remote) = item {
+                lost += remote.packets_lost.max(0) as u64;
+                received += remote.packets_received;
+                rtt_measurements += remote.round_trip_time_measurements;
+                // Already milliseconds in webrtc-rs, unlike the W3C field.
+                if let Some(rtt) = remote.round_trip_time {
+                    if rtt.is_finite() && rtt > 0.0 {
+                        rtts.push(rtt as f32);
                     }
                 }
-                StatsReportType::RemoteInboundRTP(remote) => {
-                    lost += remote.packets_lost.max(0);
-                    received += remote.packets_received;
-                    if let Some(rtt) = remote.round_trip_time {
-                        if rtt.is_finite() && rtt > 0.0 {
-                            rtts.push((rtt * 1000.0) as f32);
-                        }
-                    }
-                }
-                _ => {}
             }
         }
-        let packet_loss_pct = if received + lost.max(0) as u64 > 0 {
-            Some((lost.max(0) as f32) / (received as f32 + lost.max(0) as f32) * 100.0)
-        } else {
-            None
-        };
         Self {
-            rtt_ms: if rtts.is_empty() {
-                None
-            } else {
-                Some((rtts.iter().sum::<f32>() / rtts.len() as f32).round() as u32)
-            },
-            packet_loss_pct: packet_loss_pct.map(|v| (v * 10.0).round() / 10.0),
-            packets_lost: lost.max(0) as u64,
+            rtt_ms: average_ms(&rtts),
+            packet_loss_pct: loss_pct(lost, received),
+            packets_lost: lost,
             packets_received: received,
+            rtt_measurements,
+        }
+    }
+
+    /// Receive-side counters taken from our own RTP sequence tracking.
+    pub fn from_received(packets_received: u64, packets_lost: u64) -> Self {
+        Self {
+            packet_loss_pct: loss_pct(packets_lost, packets_received),
+            packets_lost,
+            packets_received,
+            ..Self::default()
         }
     }
 
     pub fn merge(self, other: Self) -> Self {
-        let mut rtts = Vec::new();
-        if let Some(ms) = self.rtt_ms {
-            rtts.push(ms as f32);
-        }
-        if let Some(ms) = other.rtt_ms {
-            rtts.push(ms as f32);
-        }
+        let rtts: Vec<f32> = [self.rtt_ms, other.rtt_ms]
+            .into_iter()
+            .flatten()
+            .map(|ms| ms as f32)
+            .collect();
         let packets_lost = self.packets_lost + other.packets_lost;
         let packets_received = self.packets_received + other.packets_received;
-        let packet_loss_pct = if packets_received + packets_lost > 0 {
-            Some(
-                ((packets_lost as f32) / (packets_received as f32 + packets_lost as f32) * 1000.0)
-                    .round()
-                    / 10.0,
-            )
-        } else {
-            self.packet_loss_pct.or(other.packet_loss_pct)
-        };
         Self {
-            rtt_ms: if rtts.is_empty() {
-                None
-            } else {
-                Some((rtts.iter().sum::<f32>() / rtts.len() as f32).round() as u32)
-            },
-            packet_loss_pct,
+            rtt_ms: average_ms(&rtts),
+            packet_loss_pct: loss_pct(packets_lost, packets_received),
             packets_lost,
             packets_received,
+            rtt_measurements: self.rtt_measurements + other.rtt_measurements,
         }
+    }
+}
+
+fn average_ms(values: &[f32]) -> Option<u32> {
+    if values.is_empty() {
+        None
+    } else {
+        Some((values.iter().sum::<f32>() / values.len() as f32).round() as u32)
+    }
+}
+
+fn loss_pct(lost: u64, received: u64) -> Option<f32> {
+    let total = lost + received;
+    if total == 0 {
+        None
+    } else {
+        Some(((lost as f32) / (total as f32) * 1000.0).round() / 10.0)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::opus_fmtp_line;
+    use super::{opus_fmtp_line, LinkStats};
+    use tokio::time::Instant;
+    use webrtc::stats::{RTCStatsType, RemoteInboundRTPStats, StatsReport, StatsReportType};
+
+    #[test]
+    fn send_clock_advances_across_pauses_but_not_callback_batching() {
+        let now = std::time::Instant::now();
+        let frame = std::time::Duration::from_millis(5);
+        let mut timeline = super::SendTimeline::default();
+        assert!(timeline.gap(now, frame).is_zero());
+        assert!(timeline.gap(now, frame).is_zero());
+        assert!(timeline
+            .gap(now + std::time::Duration::from_millis(10), frame)
+            .is_zero());
+        assert_eq!(
+            timeline.gap(now + std::time::Duration::from_millis(510), frame),
+            std::time::Duration::from_millis(495)
+        );
+    }
+
+    #[test]
+    fn empty_opus_sample_advances_timestamp_without_creating_packet_loss() {
+        use webrtc::rtp::{
+            codecs::opus::OpusPayloader,
+            packetizer::{new_packetizer, Packetizer},
+            sequence::new_random_sequencer,
+        };
+        let mut packetizer = new_packetizer(
+            1200,
+            111,
+            1,
+            Box::new(OpusPayloader),
+            Box::new(new_random_sequencer()),
+            48000,
+        );
+        let payload = bytes::Bytes::from_static(&[0xf8, 0xff, 0xfe]);
+        let before = packetizer.packetize(&payload, 960).unwrap();
+        assert!(packetizer
+            .packetize(&bytes::Bytes::new(), 96000)
+            .unwrap()
+            .is_empty());
+        let after = packetizer.packetize(&payload, 960).unwrap();
+        assert_eq!(
+            after[0].header.sequence_number,
+            before[0].header.sequence_number.wrapping_add(1)
+        );
+        assert_eq!(
+            after[0]
+                .header
+                .timestamp
+                .wrapping_sub(before[0].header.timestamp),
+            96960
+        );
+    }
+
+    fn remote_inbound(rtt_ms: Option<f64>, received: u64, lost: i64) -> StatsReportType {
+        StatsReportType::RemoteInboundRTP(RemoteInboundRTPStats {
+            timestamp: Instant::now(),
+            stats_type: RTCStatsType::RemoteInboundRTP,
+            id: "remote".into(),
+            ssrc: 1,
+            kind: "audio".into(),
+            packets_received: received,
+            packets_lost: lost,
+            local_id: "local".into(),
+            round_trip_time: rtt_ms,
+            total_round_trip_time: rtt_ms.unwrap_or(0.0),
+            fraction_lost: 0.0,
+            round_trip_time_measurements: u64::from(rtt_ms.is_some()),
+        })
+    }
+
+    #[test]
+    fn remote_inbound_rtt_is_already_milliseconds() {
+        let mut report = StatsReport {
+            reports: Default::default(),
+        };
+        report
+            .reports
+            .insert("remote".into(), remote_inbound(Some(23.4), 990, 10));
+        let stats = LinkStats::from_report(&report);
+        assert_eq!(stats.rtt_ms, Some(23));
+        assert_eq!(stats.rtt_measurements, 1);
+        assert_eq!(stats.packet_loss_pct, Some(1.0));
+    }
+
+    #[test]
+    fn merge_weights_loss_by_packets_and_keeps_rtt() {
+        let send = LinkStats {
+            rtt_ms: Some(30),
+            packet_loss_pct: Some(0.0),
+            packets_lost: 0,
+            packets_received: 900,
+            rtt_measurements: 3,
+        };
+        let merged = send.merge(LinkStats::from_received(90, 10));
+        assert_eq!(merged.rtt_ms, Some(30));
+        assert_eq!(merged.packets_lost, 10);
+        assert_eq!(merged.packets_received, 990);
+        assert_eq!(merged.packet_loss_pct, Some(1.0));
+        assert_eq!(LinkStats::from_received(0, 0).packet_loss_pct, None);
+    }
 
     #[test]
     fn opus_fmtp_advertises_ptime_and_keeps_router_minptime() {

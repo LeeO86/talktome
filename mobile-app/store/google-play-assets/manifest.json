@@ -1,0 +1,32 @@
+{
+  "note": "Store graphics, not app screenshots. Icon exported from the existing app icon; feature graphics drawn by render.py. Re-render on macOS with Pillow and Arial system fonts.",
+  "assets": [
+    {
+      "file": "feature-de-DE.png",
+      "pixels": [
+        1024,
+        500
+      ],
+      "mode": "RGB",
+      "sha256": "ceda626e4bc9dea41a68117590628fcdc517a4803f49122591a861b6ccd6c575"
+    },
+    {
+      "file": "feature-en-US.png",
+      "pixels": [
+        1024,
+        500
+      ],
+      "mode": "RGB",
+      "sha256": "3096e5511fa86dc8419da333ad8a3d347524ef4a28b83b0ee75ad8afe7bdf8ce"
+    },
+    {
+      "file": "icon-512.png",
+      "pixels": [
+        512,
+        512
+      ],
+      "mode": "RGBA",
+      "sha256": "dc44450e5ffa89d34dbd8a1cdd965533d45a88827495258c4ba883702cb69a16"
+    }
+  ]
+}

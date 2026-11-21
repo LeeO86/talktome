@@ -30,22 +30,29 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
     let restart_requested = Arc::new(AtomicBool::new(false));
     spawn_signal_handler(shutdown_tx.clone());
 
-    let mixer = Arc::new(Mutex::new(Mixer::new(
-        config.audio.default_volume_linear(),
-        config.audio.dim_db,
-        config.audio.dim_feeds_while_speaking,
-        config.audio.dim_when_addressed,
-        config.audio.jitter_min_ms,
-        config.audio.jitter_max_ms,
-    )));
+    let mixer = Arc::new(Mutex::new(
+        Mixer::new(
+            config.audio.default_volume_linear(),
+            config.audio.dim_db,
+            config.audio.dim_feeds_while_speaking,
+            config.audio.dim_when_addressed,
+            config.audio.jitter_min_ms,
+            config.audio.jitter_max_ms,
+        )
+        .with_jitter_start(config.audio.jitter_start_ms),
+    ));
     let frame_samples =
         (crate::audio::codec::SAMPLE_RATE * config.audio.profile.frame_ms() / 1000) as usize;
     // Four frames is enough slack for the session loop to encode. A deeper
     // queue would send audio that is already late (64 × 20 ms was over a second).
     let (frames_tx, frames_rx) = mpsc::channel(4);
     let processing = ProcessingControl::from_audio(&config.audio);
+    let mut audio_config = config.audio.clone();
+    let (input, output) = config.audio.devices_for_set(0);
+    audio_config.input_device.clone_from(input);
+    audio_config.output_device.clone_from(output);
     let audio_io = AudioIo::start(
-        config.audio.clone(),
+        audio_config,
         frame_samples,
         mixer.clone(),
         frames_tx,
@@ -55,8 +62,12 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
     let state::Channels {
         commands: cmd_rx,
         snapshots: snapshot_tx,
-        bus,
+        mut bus,
     } = state::channels(Snapshot::initial(&config.instance, &config.user.name));
+    bus.restart = Some(state::RestartRequest::new(
+        restart_requested.clone(),
+        shutdown_tx.clone(),
+    ));
 
     let mut tasks = tokio::task::JoinSet::new();
     tasks.spawn(mirror_audio_status(
@@ -98,13 +109,16 @@ pub async fn run(loaded: LoadedConfig) -> Result<RunOutcome> {
 
     let session = Session::new(
         config.clone(),
+        config_path.clone(),
         SessionIo {
+            system_volume: audio_io.system_volume.clone(),
             commands: cmd_rx,
             snapshots: snapshot_tx,
             mixer,
             frames: frames_rx,
             audio_status: audio_io.status.clone(),
             processing,
+            audio_devices: audio_io.devices.clone(),
             shutdown: shutdown_rx,
         },
     )?;

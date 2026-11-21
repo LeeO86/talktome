@@ -1,4 +1,12 @@
+import { createCredentialStore } from './credentialStore.js';
+import '../../public/bridgeTalkTrigger.js';
+import '../../public/targetPicker.js';
+import '../../public/targetPicker.css';
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { audioLevels, audioMeter, gainLabel, renderPortAudioControl } from './portAudioControls.js';
+
+const bridgeTalkTrigger = globalThis.TalktomeBridgeTalkTrigger;
+const targetPicker = globalThis.TalktomeTargetPicker;
 
 const deviceList = document.getElementById("device-list");
 const deviceSummary = document.getElementById("device-summary");
@@ -9,6 +17,7 @@ const localPortList = document.getElementById("local-port-list");
 const addPortButton = document.getElementById("add-port");
 const stopAllPortsButton = document.getElementById("stop-all-ports");
 const serverUrlInput = document.getElementById("server-url");
+const allowInsecureTlsInput = document.getElementById("allow-insecure-tls");
 const apiKeyInput = document.getElementById("api-key");
 const bridgeNameInput = document.getElementById("bridge-name");
 const announceStatus = document.getElementById("announce-status");
@@ -28,6 +37,17 @@ const audioScanStatus = document.getElementById("audio-scan-status");
 const invoke = window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI__?.event?.listen;
 
+async function loadBridgeAppVersion() {
+  if (!invoke) return;
+  try {
+    const version = await invoke('get_bridge_app_version');
+    const label = document.getElementById('bridge-app-version');
+    if (label && typeof version === 'string' && version) label.textContent = `v${version}`;
+  } catch (error) {
+    console.warn('Unable to read Bridge version:', error);
+  }
+}
+
 const STORAGE_KEYS = {
   serverUrl: "talktome:bridge-server-url",
   apiKey: "talktome:bridge-api-key",
@@ -35,6 +55,11 @@ const STORAGE_KEYS = {
   bridgeId: "talktome:bridge-id",
   bridgeToken: "talktome:bridge-token"
 };
+const bridgeCredentials = createCredentialStore(invoke, localStorage, STORAGE_KEYS);
+let credentialInputServer = "";
+let managedEventStreamsNeedRestart = false;
+let nextManagedEventStreamVersion = 0;
+
 const MANAGED_EVENT_FALLBACK_POLL_MS = 250;
 // This timer only reads the lightweight device snapshot. Full format discovery
 // runs at startup, on manual refresh, or after the snapshot actually changes.
@@ -42,6 +67,7 @@ const MANAGED_INVENTORY_WATCH_MS = 5_000;
 const MANAGED_INVENTORY_RETRY_MS = 30_000;
 const MANAGED_RETRY_MS = 2_000;
 const MANAGED_LEVEL_TRIGGER_POLL_MS = 50;
+const MANAGED_LEVEL_TEXT_REFRESH_MS = 250;
 const MANAGED_LEVEL_TRIGGER_ATTACK_MS = 45;
 const MANAGED_LEVEL_TRIGGER_RELEASE_MS = 450;
 const MANAGED_INPUT_ACTIVITY_GRACE_MS = 2000;
@@ -62,6 +88,10 @@ const ALLOWED_OMT_INFORMATION_URLS = new Set([
 ]);
 
 let currentInventory = null;
+let lastFullInventoryScanAt = 0;
+let bridgeQuitting = false;
+let lastManagedAnnounceAt = 0;
+listen?.('bridge-quitting', () => { bridgeQuitting = true; });
 let portRows = [];
 let nextPortNumber = 1;
 let statusPollTimer = null;
@@ -94,11 +124,16 @@ let bridgeSettingsApplyQueued = false;
 const managedSessions = new Map();
 const nativeEventStreamSessions = new Map();
 const managedPortDrafts = new Map();
+const managedSelectValues = new WeakMap();
 const managedPortEditStates = new Map();
 const managedPortDraftRevisions = new Map();
 const managedPortAutoSaveTimers = new Map();
 const managedPortSaveInFlight = new Set();
 const managedPortSaveQueued = new Set();
+const managedAudioEdits = new Map();
+let managedAudioPopover = null;
+let managedAudioMeterTimer = null;
+let managedAudioMeterBusy = false;
 
 function withTimeout(promise, milliseconds, label) {
   return new Promise((resolve, reject) => {
@@ -181,15 +216,36 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-function loadBridgeSettings() {
+async function loadBridgeSettings() {
   serverUrlInput.value = localStorage.getItem(STORAGE_KEYS.serverUrl) || "";
-  apiKeyInput.value = localStorage.getItem(STORAGE_KEYS.apiKey) || "";
   bridgeNameInput.value = localStorage.getItem(STORAGE_KEYS.bridgeName) || "Bridge";
+  loadBridgeTlsChoice();
+  await loadBridgeCredentials(true);
+}
+
+function credentialServer() {
+  try { return normalizeServerUrl(serverUrlInput.value); } catch { return ""; }
+}
+
+async function loadBridgeCredentials(migrate = false) {
+  const serverUrl = credentialServer();
+  if (!serverUrl) return;
+  const credentials = await bridgeCredentials.load(serverUrl, migrate);
+  if (credentialServer() !== serverUrl || credentialInputServer === serverUrl) return;
+  apiKeyInput.value = credentials.apiKey;
+  credentialInputServer = serverUrl;
+}
+
+function saveBridgeCredentials() {
+  const serverUrl = credentialServer();
+  if (!serverUrl || credentialInputServer !== serverUrl) return Promise.resolve();
+  const current = bridgeCredentials.get(serverUrl);
+  const apiKey = apiKeyInput.value.trim();
+  return bridgeCredentials.save(serverUrl, { apiKey, bridgeToken: current.apiKey === apiKey ? current.bridgeToken : "" });
 }
 
 function saveBridgeSettings() {
   localStorage.setItem(STORAGE_KEYS.serverUrl, serverUrlInput.value.trim());
-  localStorage.setItem(STORAGE_KEYS.apiKey, apiKeyInput.value.trim());
   localStorage.setItem(STORAGE_KEYS.bridgeName, bridgeNameInput.value.trim());
 }
 
@@ -249,14 +305,14 @@ function renderNdiStatus(status) {
   ndiRuntime.dataset.state = available ? "available" : "unavailable";
   if (!available) {
     const error = String(status?.error || "NDI Runtime not found");
-    const timedOut = /timed out|did not respond/i.test(error);
+    const timedOut = /timed out|did not respond|query is still running/i.test(error);
     ndiRuntimeDetail.textContent = timedOut
-      ? "Backend did not respond. NDI devices were skipped for this session."
+      ? "NDI query is taking longer than expected. Try Refresh again shortly."
       : "Runtime not installed. NDI devices are hidden until the current NDI Runtime is installed.";
     ndiRuntimeDetail.title = error;
     if (ndiRuntimeLink) {
       ndiRuntimeLink.href = timedOut ? "https://ndi.video/" : "https://ndi.video/tools/";
-      ndiRuntimeLink.textContent = timedOut ? "NDI® information" : "Download NDI\nTools";
+      ndiRuntimeLink.textContent = "Info";
     }
     return;
   }
@@ -266,7 +322,7 @@ function renderNdiStatus(status) {
   ndiRuntimeDetail.title = String(status?.runtimePath || "");
   if (ndiRuntimeLink) {
     ndiRuntimeLink.href = "https://ndi.video/";
-    ndiRuntimeLink.textContent = "NDI® information";
+    ndiRuntimeLink.textContent = "Info";
   }
 }
 
@@ -277,9 +333,9 @@ function renderOmtStatus(status) {
   const version = String(status?.version || "OMT");
   if (!available) {
     const error = String(status?.error || "Bundled OMT backend not found");
-    const timedOut = /timed out|did not respond/i.test(error);
+    const timedOut = /timed out|did not respond|query is still running/i.test(error);
     omtRuntimeDetail.textContent = timedOut
-      ? "Backend did not respond. OMT devices were skipped for this session."
+      ? "OMT query is taking longer than expected. Try Refresh again shortly."
       : "Bundled backend unavailable. Reinstall the Bridge to restore OMT devices.";
     omtRuntimeDetail.title = error;
     return;
@@ -397,7 +453,7 @@ async function listenForAutostartChanges() {
 
 function inventorySignature(inventory) {
   if (!inventory) return "";
-  const devices = (inventory.devices || []).map((device) => ({
+  const devices = (inventory.devices || []).filter(device => device.id !== 'bridge:none').map((device) => ({
     id: device.id || "",
     name: device.name || "",
     direction: device.direction || "",
@@ -418,13 +474,14 @@ function inventorySignature(inventory) {
 
   return JSON.stringify({
     host: inventory.host || "",
-    devices
+    devices,
+    videoSources: inventory.videoSources || []
   });
 }
 
 function audioDeviceSnapshotSignature(snapshot) {
   if (!snapshot) return "";
-  const devices = (snapshot.devices || []).map((device) => ({
+  const devices = (snapshot.devices || []).filter(device => device.id !== 'bridge:none').map((device) => ({
     id: device.id || "",
     name: device.name || "",
     direction: device.direction || "",
@@ -441,8 +498,20 @@ function audioDeviceSnapshotSignature(snapshot) {
   });
 }
 
+function bridgeAllowsUntrustedTls() {
+  return credentialServer().startsWith("https:") && allowInsecureTlsInput.checked;
+}
+
+function loadBridgeTlsChoice() {
+  allowInsecureTlsInput.checked = localStorage.getItem(`talktome:bridge-tls-insecure:${credentialServer()}`) === "true";
+}
+
 function getBridgeCredential() {
-  return localStorage.getItem(STORAGE_KEYS.bridgeToken) || apiKeyInput.value.trim();
+  const serverUrl = credentialServer();
+  if (!serverUrl || serverUrl !== credentialInputServer) return "";
+  const current = bridgeCredentials.get(serverUrl);
+  const apiKey = apiKeyInput.value.trim();
+  return (current.apiKey === apiKey ? current.bridgeToken : "") || apiKey;
 }
 
 function normalizeServerUrl(value) {
@@ -488,6 +557,7 @@ async function bridgeApi(method, path, body = null) {
   return invoke("bridge_api_request", {
     serverUrl: normalizeServerUrl(serverUrlInput.value),
     apiKey: getBridgeCredential(),
+    allowInsecureTls: bridgeAllowsUntrustedTls(),
     method,
     path,
     body
@@ -519,15 +589,6 @@ function installWindowFocusSuppressionForControls() {
 
 function managedSessionPath(session, suffix = "") {
   return `/api/v1/bridge/sessions/${encodeURIComponent(session.sessionId)}${suffix}`;
-}
-
-function managedSessionEventStreamUrl(session) {
-  const url = new URL(
-    managedSessionPath(session, "/events/stream"),
-    `${normalizeServerUrl(serverUrlInput.value)}/`
-  );
-  url.searchParams.set("apiKey", getBridgeCredential());
-  return url.toString();
 }
 
 function bridgePortKey(port) {
@@ -597,12 +658,30 @@ function getManagedOutputAudioState(session, output) {
   const targetKeys = getManagedOutputTargetKeys(output);
   for (const key of targetKeys) {
     const state = session.targetAudioStates.get(key);
-    if (state) return state;
+    if (state) return getManagedPanelOutputState(session, output, state);
   }
-  return {
-    volume: MANAGED_DEFAULT_TARGET_VOLUME,
-    muted: false
-  };
+  return getManagedPanelOutputState(session, output, { volume: MANAGED_DEFAULT_TARGET_VOLUME, muted: false });
+}
+
+function getManagedPanelOutputState(session, output, state) {
+  const storage = session.panelSettings?.storage || {};
+  const conferenceId = output?.appData?.type === 'conference' ? Number(output.appData.id) : null;
+  const sourceUserId = Number(output?.speakerUserId);
+  let memberLevel = 1;
+  let memberMuted = false;
+  if (conferenceId != null && Number.isFinite(sourceUserId)) {
+    try {
+      const excluded = JSON.parse(storage[`conferenceListenExclusions:user:${session.port.userId}`] || '{}');
+      const levels = JSON.parse(storage[`conferenceMemberLevels:user:${session.port.userId}`] || '{}');
+      memberMuted = (excluded[conferenceId] || []).includes(sourceUserId);
+      memberLevel = Math.max(0, Math.min(1, Number(levels[conferenceId]?.[sourceUserId] ?? 1)));
+    } catch {}
+  }
+  let feedStopped = false;
+  if (output?.appData?.type === 'feed') {
+    try { feedStopped = Boolean(JSON.parse(storage[`stoppedFeeds:user:${session.port.userId}`] || '{}')[`feed-${output.appData.id}`]); } catch {}
+  }
+  return { ...state, volume: state.volume * memberLevel, muted: state.muted || memberMuted || feedStopped };
 }
 
 function getManagedRetryDelay(session) {
@@ -617,6 +696,7 @@ function findInventoryDevice(direction, assignment) {
 }
 
 function getManagedAssignmentUnavailableReason(direction, assignment) {
+  if (assignment?.deviceId === 'bridge:none' || (direction === 'input' && /^bridge:tone:(400|1000)$/.test(assignment?.deviceId))) return '';
   const label = direction === "output" ? "Output" : "Input";
   if (!assignment?.deviceId) {
     return direction === "output" ? "" : `${label} device is not configured`;
@@ -666,12 +746,20 @@ async function stopManagedInputPath(session, reason = "input-stop") {
     await applyManagedTalkState(session, {
       talking: false,
       targets: [],
-      source: session.talkSource || "external"
+      source: session.talkSource || "external",
+      preserveAlwaysOn: false
     }).catch((error) => {
       recordManagedLifecycle(session, "input-talk-release-error", String(error?.message || error));
     });
   }
   await invoke("stop_bridge_input", { streamId: session.inputStreamId }).catch(() => {});
+  session.talking = false;
+  session.talkSource = null;
+  session.lockActive = false;
+  session.targets = [];
+  session.panelBaseTalkState = null;
+  session.panelTalkInputs?.clear();
+  session.panelTalkLocks?.clear();
   session.producerId = null;
   session.inputStartedAt = 0;
   session.inputReady = false;
@@ -697,8 +785,9 @@ async function auditManagedSessionDevices() {
       continue;
     }
 
+    if (session.port.kind === "feed" && !session.port.input?.deviceId && session.port.videoSource) continue;
     if (!currentInventory?.devices?.length) continue;
-    const inputUnavailableReason = getManagedAssignmentUnavailableReason("input", session.port.input);
+    const inputUnavailableReason = session.port.testToneHz ? '' : getManagedAssignmentUnavailableReason("input", session.port.input);
     if (inputUnavailableReason) {
       if (session.inputReady || session.inputStarting) {
         await stopManagedInputPath(session, "input-device-unavailable");
@@ -878,6 +967,7 @@ function bridgePortSignature(port) {
     userId: port.userId ?? null,
     feedId: port.feedId ?? null,
     input: bridgeAssignmentSignature(port.input),
+    testToneHz: port.testToneHz || 0,
     output: bridgePortHasOutput(port) ? bridgeAssignmentSignature(port.output) : null,
   });
 }
@@ -895,22 +985,21 @@ function getManagedPortDraft(port) {
   const key = bridgePortKey(port);
   const draft = managedPortDrafts.get(key) || {};
   const trigger = port.trigger || {};
-  const triggerTarget = trigger.target || {};
   return {
+    videoSource: draft.videoSource ?? port.videoSource ?? "",
     input: {
-      deviceId: draft.input?.deviceId ?? port.input?.deviceId ?? "",
+      deviceId: (draft.input?.deviceId ?? port.input?.deviceId) || "bridge:none",
       leftChannel: draft.input?.leftChannel ?? port.input?.leftChannel ?? null,
       rightChannel: draft.input?.rightChannel ?? port.input?.rightChannel ?? null,
     },
     output: bridgePortHasOutput(port) ? {
-      deviceId: draft.output?.deviceId ?? port.output?.deviceId ?? "",
+      deviceId: (draft.output?.deviceId ?? port.output?.deviceId) || "bridge:none",
       leftChannel: draft.output?.leftChannel ?? port.output?.leftChannel ?? null,
       rightChannel: draft.output?.rightChannel ?? port.output?.rightChannel ?? null,
     } : null,
     trigger: port.kind === "user" ? {
-      mode: draft.trigger?.mode ?? (trigger.mode === "audio-level" ? "audio-level" : "external"),
-      targetType: draft.trigger?.targetType ?? (triggerTarget.type || ""),
-      targetId: draft.trigger?.targetId ?? (triggerTarget.id ?? null),
+      mode: draft.trigger?.mode ?? bridgeTalkTrigger.mode(trigger.mode),
+      targets: draft.trigger?.targets ?? bridgeTalkTrigger.fromTrigger(trigger),
       thresholdDb: draft.trigger?.thresholdDb ?? (trigger.thresholdDb ?? MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB),
     } : null,
   };
@@ -918,16 +1007,15 @@ function getManagedPortDraft(port) {
 
 function buildManagedDeviceOptions(direction, selectedDeviceId) {
   const devices = devicesByDirection(direction);
-  const selected = String(selectedDeviceId || "");
+  const selected = String(selectedDeviceId || "bridge:none");
   const hasSelected = devices.some((device) => device.id === selected);
   const options = [];
-  if (!selected) {
-    options.push('<option value="">Select device</option>');
-  } else if (!hasSelected) {
+  options.push(`<option value="bridge:none"${selected === 'bridge:none' ? ' selected' : ''}>None</option>`);
+  if (selected && selected !== 'bridge:none' && !hasSelected) {
     options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(`${selected} (saved, unavailable)`)}</option>`);
   }
 
-  devices.forEach((device) => {
+  devices.filter(device => device.id !== 'bridge:none').forEach((device) => {
     const selectedAttr = device.id === selected ? " selected" : "";
     const suffix = device.is_default ? " (default)" : "";
     options.push(`<option value="${escapeHtml(device.id)}"${selectedAttr}>${escapeHtml(`${getDeviceLabel(device)}${suffix}`)}</option>`);
@@ -937,6 +1025,7 @@ function buildManagedDeviceOptions(direction, selectedDeviceId) {
 }
 
 function buildManagedChannelOptions(device, selectedLeft, selectedRight) {
+  if (device?.id === 'bridge:none') return '<option value="1:2" selected>—</option>';
   const normalizedLeft = Number(selectedLeft);
   const normalizedRight = Number(selectedRight);
   const selectedPair = (
@@ -1026,8 +1115,258 @@ function formatManagedReturnPathStatus(session) {
   return base;
 }
 
+function audioEditKey(port, direction) { return `${bridgePortKey(port)}:${direction}`; }
+
+function getManagedAudioLevel(port, direction) {
+  const edit = managedAudioEdits.get(audioEditKey(port, direction));
+  return audioLevels.normalizeLevel(edit?.dirty ? edit.level : port.audioLevels?.[direction], direction);
+}
+
+async function applyManagedPortAudioLevel(port, direction, level = getManagedAudioLevel(port, direction)) {
+  if (!invoke) throw new Error('Native audio control is unavailable');
+  await invoke('set_bridge_port_audio_level', { request: { portId: port.id, direction, level } });
+}
+
+async function syncManagedPortAudioLevels(port) {
+  for (const direction of ['input', 'output']) {
+    if (direction === 'output' && !bridgePortHasOutput(port)) continue;
+    const edit = managedAudioEdits.get(audioEditKey(port, direction));
+    if (edit?.dirty) continue;
+    const session = managedSessions.get(bridgePortKey(port));
+    const level = getManagedAudioLevel(port, direction);
+    const signature = JSON.stringify(level);
+    session.appliedAudioLevels ||= {};
+    if (session.appliedAudioLevels[direction] !== signature) {
+      await applyManagedPortAudioLevel(port, direction, level);
+      session.appliedAudioLevels[direction] = signature;
+    }
+  }
+}
+
+function managedAudioControl(port, direction) {
+  return getManagedPortElement(bridgePortKey(port))?.querySelector(`[data-audio-direction="${direction}"]`);
+}
+
+function updateManagedAudioControl(port, direction) {
+  const control = managedAudioControl(port, direction);
+  if (!control) return;
+  const level = getManagedAudioLevel(port, direction);
+  const edit = managedAudioEdits.get(audioEditKey(port, direction));
+  const button = control.querySelector('[data-audio-open]');
+  button.title = `${direction === 'input' ? 'Input gain' : 'Output volume'}: ${gainLabel(level)}`;
+  button.classList.toggle('is-adjusted', level.gainDb !== 0 || level.muted || Boolean(level.noiseSuppression));
+  for (const selector of ['[data-audio-range]', '[data-audio-number]']) {
+    const input = control.querySelector(selector);
+    if (input !== document.activeElement) input.value = String(level.gainDb);
+  }
+  control.querySelector('[data-audio-mute]').checked = level.muted;
+  const noise = control.querySelector('[data-audio-noise]');
+  if (noise) noise.checked = Boolean(level.noiseSuppression);
+  control.querySelector('[data-audio-mute-label]').textContent = level.muted ? 'Muted' : 'Mute';
+  const [min, max] = audioLevels.LIMITS[direction];
+  control.querySelector('[data-audio-step="-0.5"]').disabled = level.gainDb <= min;
+  control.querySelector('[data-audio-step="0.5"]').disabled = level.gainDb >= max;
+  const status = control.querySelector('[data-audio-save]');
+  status.textContent = edit?.error || (edit?.dirty || edit?.saving ? 'Saving…' : '');
+  const tone = control.querySelector('[data-audio-tone]');
+  if (tone && tone !== document.activeElement) tone.value = String(port.testToneHz || 0);
+  status.classList.toggle('is-error', Boolean(edit?.error));
+  control.querySelector('[data-audio-retry]').hidden = !edit?.error;
+}
+
+async function persistManagedAudioLevel(port, direction) {
+  const edit = managedAudioEdits.get(audioEditKey(port, direction));
+  if (!edit?.dirty || edit.saving) return;
+  edit.saving = true;
+  const revision = edit.revision;
+  // Omitted means 'keep the existing setting' to legacy gain editors.
+  // Send false explicitly when this UI switches suppression off.
+  const level = { ...edit.level, ...(direction === 'input' ? { noiseSuppression: Boolean(edit.level.noiseSuppression) } : {}) };
+  try {
+    await edit.nativePromise;
+    const result = await bridgeApi('PUT', `/api/v1/bridge/${encodeURIComponent(managedBridgeConfig.bridgeId)}/ports/${port.kind}/${bridgePortTargetId(port)}/levels/${direction}`, level);
+    if (direction === 'input' && Boolean(result.audioLevels?.input?.noiseSuppression) !== Boolean(level.noiseSuppression)) {
+      throw new Error('Noise suppression was not saved by the server. Retry after updating the server.');
+    }
+    port.audioLevels = { ...port.audioLevels, [direction]: result.audioLevels[direction] };
+    const current = (managedBridgeConfig?.ports || []).find(entry => bridgePortKey(entry) === bridgePortKey(port));
+    if (current) current.audioLevels = { ...current.audioLevels, [direction]: result.audioLevels[direction] };
+    if (edit.revision === revision) { edit.dirty = false; edit.error = null; }
+  } catch (error) {
+    edit.error = String(error?.message || error);
+    edit.retryAt = Date.now() + 5000;
+  } finally {
+    edit.saving = false;
+    updateManagedAudioControl(port, direction);
+    if (edit.revision !== revision) {
+      clearTimeout(edit.timer);
+      edit.timer = setTimeout(() => persistManagedAudioLevel(port, direction), 0);
+    }
+  }
+}
+
+function changeManagedAudioLevel(port, direction, value) {
+  const key = audioEditKey(port, direction);
+  const edit = managedAudioEdits.get(key) || { revision: 0 };
+  const normalized = audioLevels.normalizeLevel(value, direction);
+  const previous = getManagedAudioLevel(port, direction);
+  if (!edit.error && normalized.gainDb === previous.gainDb && normalized.muted === previous.muted && Boolean(normalized.noiseSuppression) === Boolean(previous.noiseSuppression)) return;
+  edit.level = normalized;
+  edit.revision++;
+  edit.dirty = true;
+  edit.error = null;
+  // Preserve the ordering of drag updates at the native command boundary.
+  const level = { ...edit.level };
+  edit.nativePromise = (edit.nativePromise || Promise.resolve()).catch(() => {}).then(() => applyManagedPortAudioLevel(port, direction, level));
+  edit.nativePromise.catch(() => {});
+  managedAudioEdits.set(key, edit);
+  clearTimeout(edit.timer);
+  edit.timer = setTimeout(() => persistManagedAudioLevel(port, direction), 250);
+  updateManagedAudioControl(port, direction);
+}
+
+function closeManagedAudioPopover(restoreFocus = true) {
+  if (!managedAudioPopover) return;
+  const { panel, button } = managedAudioPopover;
+  managedAudioPopover = null;
+  panel.hidden = true;
+  button.setAttribute('aria-expanded', 'false');
+  clearInterval(managedAudioMeterTimer);
+  managedAudioMeterTimer = null;
+  if (restoreFocus) button.focus({ preventScroll: true });
+}
+
+function positionManagedAudioPopover() {
+  if (!managedAudioPopover) return;
+  const { panel, button } = managedAudioPopover;
+  const box = button.getBoundingClientRect();
+  panel.style.left = `${Math.max(8, Math.min(innerWidth - panel.offsetWidth - 8, box.right - panel.offsetWidth))}px`;
+  panel.style.top = `${Math.max(8, box.bottom + panel.offsetHeight + 8 > innerHeight ? box.top - panel.offsetHeight - 8 : box.bottom + 8)}px`;
+}
+
+async function pollManagedAudioMeter() {
+  const open = managedAudioPopover;
+  if (!open || !invoke || managedAudioMeterBusy || document.hidden) return;
+  managedAudioMeterBusy = true;
+  try {
+    const status = await invoke('get_bridge_media_status');
+    if (managedAudioPopover !== open) return;
+    const rows = open.direction === 'input'
+      ? (status.inputStreamStats || []).filter(row => row.streamId === `${open.port.id}:input`)
+      : (status.outputStreamStats || []).filter(row => row.streamId.startsWith(`${open.port.id}:consumer:`));
+    const now = Date.now();
+    let rmsDb = -120;
+    let active = false;
+    for (const row of rows) {
+      const frames = row.capturedFrames ?? row.decodedFrames;
+      const previous = open.meters.get(row.streamId);
+      const changed = frames > 0 && frames !== previous?.frames;
+      const at = changed ? now : previous?.at || 0;
+      const clipped = Number(row.clippedSamples || 0);
+      if (previous && clipped > previous.clipped) open.clipUntil = now + 1200;
+      open.meters.set(row.streamId, { frames, at, clipped });
+      if (now - at > 500 || !Number.isFinite(row.rmsDb)) continue;
+      active = true;
+      rmsDb = Math.max(rmsDb, row.rmsDb);
+    }
+    const meter = open.panel.querySelector('[role="meter"]');
+    const meterMinDb = Number(meter.getAttribute('aria-valuemin'));
+    const displayedDb = Math.max(meterMinDb, Math.min(0, rmsDb));
+    meter.setAttribute('aria-valuenow', String(displayedDb));
+    const fill = open.panel.querySelector('[data-audio-meter-fill]');
+    audioMeter.renderLevel(fill, (displayedDb - meterMinDb) / -meterMinDb * 100, meterMinDb);
+    const muted = getManagedAudioLevel(open.port, open.direction).muted;
+    const inputSession = open.direction === 'input' ? managedSessions.get(bridgePortKey(open.port)) : null;
+    if (inputSession) {
+      updateManagedInputLevelDisplay(inputSession, rows[0]);
+    } else if (open.levelTextActive !== active || open.levelTextMuted !== muted
+      || now - (open.lastLevelTextAt || 0) >= MANAGED_LEVEL_TEXT_REFRESH_MS) {
+      const label = open.direction === 'input' ? 'Input level' : 'Output level';
+      open.panel.querySelector('[data-audio-meter-label]').textContent = `${label}: ${active ? `${rmsDb.toFixed(1)} dBFS` : 'No audio'}${muted ? ' - Muted' : ''}`;
+      open.lastLevelTextAt = now;
+      open.levelTextActive = active;
+      open.levelTextMuted = muted;
+    }
+    open.panel.querySelector('[data-audio-clip]').hidden = now > (open.clipUntil || 0);
+  } catch {
+    if (managedAudioPopover === open) {
+      open.panel.querySelector('[data-audio-meter-label]').textContent = 'Meter unavailable';
+      open.lastLevelTextAt = 0;
+    }
+  } finally { managedAudioMeterBusy = false; }
+}
+
+function handleManagedAudioClick(event) {
+  const control = event.target.closest('[data-audio-direction]');
+  if (!control) return;
+  const key = control.closest('[data-managed-port-key]')?.dataset.managedPortKey;
+  const port = (managedBridgeConfig?.ports || []).find(port => bridgePortKey(port) === key);
+  if (!port) return;
+  const direction = control.dataset.audioDirection;
+  if (event.target.closest('[data-audio-open]')) {
+    const button = control.querySelector('[data-audio-open]');
+    const wasOpen = managedAudioPopover?.button === button;
+    closeManagedAudioPopover(false);
+    if (wasOpen) return;
+    const panel = control.querySelector('.port-audio-popover');
+    panel.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    managedAudioPopover = { port, direction, panel, button, meters: new Map() };
+    positionManagedAudioPopover();
+    updateManagedAudioControl(port, direction);
+    panel.querySelector('[data-audio-range]').focus({ preventScroll: true });
+    pollManagedAudioMeter();
+    managedAudioMeterTimer = setInterval(pollManagedAudioMeter, 125);
+  } else if (event.target.closest('[data-audio-close]')) closeManagedAudioPopover();
+  else if (event.target.closest('[data-audio-step]')) {
+    const level = getManagedAudioLevel(port, direction);
+    const step = Number(event.target.closest('[data-audio-step]').dataset.audioStep);
+    changeManagedAudioLevel(port, direction, { ...level, gainDb: level.gainDb + step });
+  }
+  else if (event.target.closest('[data-audio-reset]')) changeManagedAudioLevel(port, direction, { ...getManagedAudioLevel(port, direction), gainDb: 0, muted: false });
+  else if (event.target.closest('[data-audio-retry]')) changeManagedAudioLevel(port, direction, getManagedAudioLevel(port, direction));
+}
+
+async function changeManagedTestTone(port, frequency) {
+  const control = managedAudioControl(port, 'input');
+  const select = control?.querySelector('[data-audio-tone]');
+  if (select) select.disabled = true;
+  try {
+    await bridgeApi('PUT', `/api/v1/bridge/${encodeURIComponent(managedBridgeConfig.bridgeId)}/ports/${port.kind}/${bridgePortTargetId(port)}/tone`, { frequency });
+    const config = await bridgeApi('GET', `/api/v1/bridge/${encodeURIComponent(managedBridgeConfig.bridgeId)}/config`);
+    await reconcileManagedBridgeConfig(config);
+  } catch (error) {
+    const status = control?.querySelector('[data-audio-save]');
+    if (status) { status.textContent = String(error?.message || error); status.classList.add('is-error'); }
+  } finally {
+    if (select) { select.disabled = false; const current = managedBridgeConfig?.ports?.find(p => bridgePortKey(p) === bridgePortKey(port)); select.value = String(current?.testToneHz || 0); }
+  }
+}
+
+function handleManagedAudioInput(event) {
+  const input = event.target;
+  if (!input.matches('[data-audio-range], [data-audio-number], [data-audio-mute], [data-audio-noise], [data-audio-tone]')) return;
+  if (input.matches('[data-audio-mute], [data-audio-noise], [data-audio-tone]') && event.type !== 'change') return;
+  const control = input.closest('[data-audio-direction]');
+  const port = (managedBridgeConfig?.ports || []).find(port => bridgePortKey(port) === control.closest('[data-managed-port-key]').dataset.managedPortKey);
+  if (!port) return;
+  const direction = control.dataset.audioDirection;
+  const level = getManagedAudioLevel(port, direction);
+  if (input.matches('[data-audio-tone]')) { void changeManagedTestTone(port, Number(input.value)); return; }
+  if (input.matches('[data-audio-noise]')) level.noiseSuppression = input.checked;
+  else if (input.matches('[data-audio-mute]')) level.muted = input.checked;
+  else {
+    if (!input.value.trim() || !Number.isFinite(Number(input.value))) return;
+    level.gainDb = Number(input.value);
+  }
+  changeManagedAudioLevel(port, direction, level);
+  if (event.type === 'change' && input.matches('[data-audio-number]')) {
+    input.value = String(getManagedAudioLevel(port, direction).gainDb);
+  }
+}
+
 function renderManagedAssignmentControls(port, direction, assignment) {
-  const device = findDeviceByDirectionAndId(direction, assignment.deviceId);
+  const device = findDeviceByDirectionAndId(direction, assignment.deviceId || 'bridge:none');
   const labelPrefix = direction === "output" ? "Output" : "Input";
   return `
     <label class="managed-port-control managed-port-control--device">
@@ -1036,9 +1375,10 @@ function renderManagedAssignmentControls(port, direction, assignment) {
         ${buildManagedDeviceOptions(direction, assignment.deviceId)}
       </select>
     </label>
+    ${renderPortAudioControl(escapeHtml(port.id), direction, getManagedAudioLevel(port, direction))}
     <label class="managed-port-control managed-port-control--channel">
       <span>${labelPrefix} channel</span>
-      <select data-managed-port-control data-field="${direction}Channel">
+      <select data-managed-port-control data-field="${direction}Channel" ${device?.id === 'bridge:none' ? 'disabled' : ''}>
         ${buildManagedChannelOptions(device, assignment.leftChannel, assignment.rightChannel)}
       </select>
     </label>
@@ -1046,65 +1386,45 @@ function renderManagedAssignmentControls(port, direction, assignment) {
 }
 
 function buildManagedTriggerTargetOptions(port, triggerDraft, { includeUnavailable = true } = {}) {
-  const selectedType = String(triggerDraft?.targetType || "").trim().toLowerCase();
-  const selectedId = Number(triggerDraft?.targetId);
-  const selected = selectedType && Number.isFinite(selectedId) ? `${selectedType}:${selectedId}` : "";
-  const targets = Array.isArray(port.triggerTargets) ? port.triggerTargets : [];
-  const options = ['<option value="">Select target</option>'];
-  let hasSelected = false;
-
-  targets.forEach((target) => {
-    const type = String(target.type || "").trim().toLowerCase();
-    const id = Number(target.id);
-    if (!["user", "conference"].includes(type) || !Number.isFinite(id)) return;
-    const value = `${type}:${id}`;
-    const selectedAttr = value === selected ? " selected" : "";
-    if (selectedAttr) hasSelected = true;
-    const typeLabel = type === "conference" ? "conference" : "user";
-    options.push(`<option value="${escapeHtml(value)}"${selectedAttr}>${escapeHtml(`${target.name || value} (${typeLabel})`)}</option>`);
-  });
-
-  if (includeUnavailable && selected && !hasSelected) {
-    options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(`${selected} (saved, unavailable)`)}</option>`);
+  const selected = new Set(bridgeTalkTrigger.targets(triggerDraft?.targets).map(target => `${target.type}:${target.id}`));
+  const options = new Map((port.triggerTargets || []).filter(target => ['user', 'conference'].includes(target.type))
+    .map(target => [`${target.type}:${target.id}`, { label: target.name, type: target.type }]));
+  if (includeUnavailable) for (const key of selected) {
+    if (!options.has(key)) options.set(key, { label: key, type: key.split(':')[0], unavailable: true });
   }
+  return [...options].map(([value, option]) => ({ value, ...option }));
+}
 
-  return options.join("");
+function managedTriggerHint(mode) {
+  return mode === 'always-on'
+    ? 'Sends continuously to all selected targets. Resumes after reconnects. Change mode to stop.'
+    : mode === 'audio-level' ? 'Sends to all selected targets when the input exceeds the threshold.'
+      : 'Targets are supplied by API / Companion commands.';
 }
 
 function renderManagedTriggerControls(port, draft) {
-  if (port.kind !== "user") return "";
-  const triggerDraft = draft.trigger || {};
-  const mode = triggerDraft.mode === "audio-level" ? "audio-level" : "external";
-  const threshold = Number(triggerDraft.thresholdDb);
-  const thresholdValue = Number.isFinite(threshold)
-    ? Math.max(MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB, Math.min(MANAGED_LEVEL_TRIGGER_MAX_THRESHOLD_DB, Math.round(threshold)))
-    : MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB;
-  const showDetails = mode === "audio-level";
-
-  return `
-    <div class="managed-port-trigger-grid">
-      <label class="managed-port-control">
-        <span>Talk trigger</span>
-        <select data-managed-port-control data-field="triggerMode">
-          <option value="external"${mode === "audio-level" ? "" : " selected"}>External trigger</option>
-          <option value="audio-level"${mode === "audio-level" ? " selected" : ""}>Audio level</option>
-        </select>
-      </label>
-      <label class="managed-port-control"${showDetails ? "" : " hidden"}>
-        <span>Trigger target</span>
-        <select data-managed-port-control data-field="triggerTarget">
-          ${buildManagedTriggerTargetOptions(port, triggerDraft)}
-        </select>
-      </label>
-      <label class="managed-port-control managed-port-control--threshold"${showDetails ? "" : " hidden"}>
-        <span class="managed-port-threshold-label">
-          <span>Threshold</span>
-          <output data-trigger-threshold-value>${escapeHtml(thresholdValue)} dBFS</output>
-        </span>
-        <input data-managed-port-control data-field="triggerThreshold" type="range" min="${MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB}" max="${MANAGED_LEVEL_TRIGGER_MAX_THRESHOLD_DB}" step="1" value="${escapeHtml(thresholdValue)}" aria-label="Audio trigger threshold">
-      </label>
+  if (port.kind !== 'user') return '';
+  const trigger = draft.trigger || {};
+  const mode = bridgeTalkTrigger.mode(trigger.mode);
+  const threshold = Number(trigger.thresholdDb ?? MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB);
+  const hint = managedTriggerHint(mode);
+  return `<div class="managed-port-trigger-grid ${mode !== 'audio-level' ? 'managed-port-trigger-grid--simple' : ''}">
+    <label class="managed-port-control"><span>Talk trigger</span>
+      <select data-managed-port-control data-field="triggerMode">
+        <option value="external" ${mode === 'external' ? 'selected' : ''}>External API / Companion</option>
+        <option value="audio-level" ${mode === 'audio-level' ? 'selected' : ''}>Audio level</option>
+        <option value="always-on" ${mode === 'always-on' ? 'selected' : ''}>Always on</option>
+      </select>
+    </label>
+    <label class="managed-port-control managed-port-control--threshold" ${mode === 'audio-level' ? '' : 'hidden'}>
+      <span class="managed-port-threshold-label"><span>Threshold</span><output data-trigger-threshold-value>${escapeHtml(threshold)} dBFS</output></span>
+      <input data-managed-port-control data-field="triggerThreshold" type="range" min="${MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB}" max="${MANAGED_LEVEL_TRIGGER_MAX_THRESHOLD_DB}" step="1" value="${escapeHtml(threshold)}" aria-label="Audio trigger threshold">
+    </label>
+    <div class="managed-port-control managed-port-control--targets" ${mode === 'external' ? 'hidden' : ''}>
+      <span id="${escapeHtml(port.id)}-talk-targets-label" title="${escapeHtml(hint)} Targets are global. Selected conferences also open return audio; mute or adjust it in the Panel.">Talk targets ⓘ</span>
+      <div data-managed-target-picker data-selected-targets="${escapeHtml(JSON.stringify(bridgeTalkTrigger.targets(trigger.targets)))}" role="group" aria-labelledby="${escapeHtml(port.id)}-talk-targets-label"></div>
     </div>
-  `;
+  </div>`;
 }
 
 function getManagedPortElement(key) {
@@ -1114,6 +1434,7 @@ function getManagedPortElement(key) {
 
 function readManagedPortAssignmentFromElement(card, direction) {
   const deviceId = card.querySelector(`[data-field="${direction}Device"]`)?.value || "";
+  if (deviceId === 'bridge:none') return { deviceId, leftChannel: 1, rightChannel: 2 };
   const channelValue = card.querySelector(`[data-field="${direction}Channel"]`)?.value || "";
   const pair = parsePair(channelValue);
   return {
@@ -1124,21 +1445,15 @@ function readManagedPortAssignmentFromElement(card, direction) {
 }
 
 function readManagedTriggerFromElement(card) {
-  const mode = card.querySelector('[data-field="triggerMode"]')?.value === "audio-level"
-    ? "audio-level"
-    : "external";
-  const targetValue = card.querySelector('[data-field="triggerTarget"]')?.value || "";
-  const thresholdValue = Number(card.querySelector('[data-field="triggerThreshold"]')?.value);
-  const [targetType, rawTargetId] = targetValue.split(":");
-  const targetId = Number(rawTargetId);
-  return {
-    mode,
-    targetType: targetType === "user" || targetType === "conference" ? targetType : "",
-    targetId: Number.isFinite(targetId) ? targetId : null,
-    thresholdDb: Number.isFinite(thresholdValue)
-      ? Math.max(MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB, Math.min(MANAGED_LEVEL_TRIGGER_MAX_THRESHOLD_DB, thresholdValue))
-      : MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB,
-  };
+  const mode = bridgeTalkTrigger.mode(card.querySelector('[data-field="triggerMode"]')?.value);
+  const targets = targetPicker.read(card.querySelector('[data-managed-target-picker]')).map(value => {
+    const [type, id] = value.split(':');
+    return { type, id: Number(id) };
+  });
+  const threshold = Number(card.querySelector('[data-field="triggerThreshold"]')?.value);
+  return { mode, targets, thresholdDb: Number.isFinite(threshold)
+    ? Math.max(MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB, Math.min(MANAGED_LEVEL_TRIGGER_MAX_THRESHOLD_DB, threshold))
+    : MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB };
 }
 
 function updateManagedPortDraftFromElement(card) {
@@ -1147,6 +1462,7 @@ function updateManagedPortDraftFromElement(card) {
   const port = (managedBridgeConfig?.ports || []).find((entry) => bridgePortKey(entry) === key);
   if (!port) return;
   const draft = {
+    videoSource: card.querySelector('[data-field="videoSource"]')?.value || "",
     input: readManagedPortAssignmentFromElement(card, "input"),
     output: bridgePortHasOutput(port)
       ? readManagedPortAssignmentFromElement(card, "output")
@@ -1174,16 +1490,11 @@ function validateManagedPortAssignment(assignment, label) {
 }
 
 function validateManagedTrigger(trigger) {
-  if (!trigger || trigger.mode !== "audio-level") return;
-  if (
-    !["user", "conference"].includes(trigger.targetType) ||
-    !Number.isInteger(Number(trigger.targetId)) ||
-    Number(trigger.targetId) < 1
-  ) {
-    throw new Error("Audio level trigger requires a selected user or conference target");
-  }
-  if (!Number.isFinite(Number(trigger.thresholdDb))) {
-    throw new Error("Audio level trigger threshold is invalid");
+  if (!trigger) return;
+  const targets = bridgeTalkTrigger.targets(trigger.targets, null, { strict: true });
+  if (trigger.mode !== 'external' && !targets.length) throw new Error('Select at least one talk target');
+  if (trigger.mode === 'audio-level' && !Number.isFinite(Number(trigger.thresholdDb))) {
+    throw new Error('Audio level trigger threshold is invalid');
   }
 }
 
@@ -1195,37 +1506,37 @@ async function saveManagedBridgePort(key) {
 
   const card = getManagedPortElement(key);
   if (!card) return;
-  updateManagedPortDraftFromElement(card);
-  const saveRevision = managedPortDraftRevisions.get(key) || 0;
-  const draft = managedPortDrafts.get(key) || getManagedPortDraft(port);
-
-  validateManagedPortAssignment(draft.input, "Input");
-  if (bridgePortHasOutput(port)) {
-    validateManagedPortAssignment(draft.output, "Output");
-  }
-  validateManagedTrigger(draft.trigger);
-
-  const payload = {
-    enabled: true,
-    inputDevice: draft.input.deviceId,
-    inputLeftChannel: draft.input.leftChannel,
-    inputRightChannel: draft.input.rightChannel,
-  };
-  if (bridgePortHasOutput(port)) {
-    payload.outputDevice = draft.output.deviceId;
-    payload.outputLeftChannel = draft.output.leftChannel;
-    payload.outputRightChannel = draft.output.rightChannel;
-  }
-  if (port.kind === "user") {
-    payload.triggerMode = draft.trigger?.mode === "audio-level" ? "audio-level" : "external";
-    payload.triggerThresholdDb = draft.trigger?.thresholdDb ?? MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB;
-    payload.triggerTargetType = draft.trigger?.mode === "audio-level" ? (draft.trigger?.targetType || "") : "";
-    payload.triggerTargetId = draft.trigger?.mode === "audio-level" ? (draft.trigger?.targetId ?? null) : null;
-  }
-
-  managedPortEditStates.set(key, { saving: true });
-  renderManagedBridgePorts();
   try {
+    updateManagedPortDraftFromElement(card);
+    const saveRevision = managedPortDraftRevisions.get(key) || 0;
+    const draft = managedPortDrafts.get(key) || getManagedPortDraft(port);
+
+    if (draft.input.deviceId || port.kind !== "feed" || !draft.videoSource) validateManagedPortAssignment(draft.input, "Input");
+    if (bridgePortHasOutput(port)) {
+      validateManagedPortAssignment(draft.output, "Output");
+    }
+    validateManagedTrigger(draft.trigger);
+
+    const payload = {
+      ...(port.kind === "feed" ? { videoSource: draft.videoSource } : {}),
+      enabled: true,
+      inputDevice: draft.input.deviceId,
+      inputLeftChannel: draft.input.leftChannel,
+      inputRightChannel: draft.input.rightChannel,
+    };
+    if (bridgePortHasOutput(port)) {
+      payload.outputDevice = draft.output.deviceId;
+      payload.outputLeftChannel = draft.output.leftChannel;
+      payload.outputRightChannel = draft.output.rightChannel;
+    }
+    if (port.kind === "user") {
+      payload.triggerMode = bridgeTalkTrigger.mode(draft.trigger?.mode);
+      payload.triggerThresholdDb = draft.trigger?.thresholdDb ?? MANAGED_LEVEL_TRIGGER_DEFAULT_THRESHOLD_DB;
+      payload.triggerTargets = draft.trigger?.targets || [];
+    }
+
+    managedPortEditStates.set(key, { saving: true });
+    renderManagedBridgePorts();
     await suppressWindowFocusHide(500);
     const config = await bridgeApi(
       "PUT",
@@ -1279,6 +1590,35 @@ async function runManagedPortAutoSave(key) {
   }
 }
 
+function listenForSelectValueChange(select, callback) {
+  let lastValue = select.value;
+  const onSelection = () => {
+    if (select.value === lastValue) return;
+    lastValue = select.value;
+    callback();
+  };
+  select.addEventListener('input', onSelection);
+  select.addEventListener('change', onSelection);
+}
+
+function syncManagedTriggerControls(card, mode) {
+  // Update dependent fields without replacing the focused native select.
+  // WebView2 may defer `change` until blur, but sends `input` on selection.
+  card.querySelector('.managed-port-trigger-grid')?.classList.toggle(
+    'managed-port-trigger-grid--simple', mode !== 'audio-level'
+  );
+  const threshold = card.querySelector('.managed-port-control--threshold');
+  if (threshold) threshold.hidden = mode !== 'audio-level';
+  const targets = card.querySelector('.managed-port-control--targets');
+  if (targets) {
+    targets.hidden = mode === 'external';
+    const label = targets.querySelector('span[title]');
+    if (label) label.title = `${managedTriggerHint(mode)} Targets are global. Selected conferences also open return audio; mute or adjust it in the Panel.`;
+  }
+  const meter = card.querySelector('[data-managed-input-level]');
+  if (meter) meter.hidden = mode !== 'audio-level';
+}
+
 function handleManagedPortControlChange(event) {
   const control = event.target;
   if (
@@ -1289,6 +1629,12 @@ function handleManagedPortControlChange(event) {
   }
   const card = control.closest("[data-managed-port-key]");
   if (!(card instanceof HTMLElement)) return;
+  const isSelect = control instanceof HTMLSelectElement;
+  if (isSelect) {
+    // A later change/blur must not save again or reset the newly chosen channels.
+    if (managedSelectValues.get(control) === control.value) return;
+    managedSelectValues.set(control, control.value);
+  }
   const portKey = card.dataset.managedPortKey || "";
 
   const field = control.dataset.field || "";
@@ -1321,11 +1667,13 @@ function handleManagedPortControlChange(event) {
     const channelSelect = card.querySelector(`[data-field="${direction}Channel"]`);
     if (channelSelect instanceof HTMLSelectElement) {
       const device = findDeviceByDirectionAndId(direction, control.value);
+      channelSelect.disabled = control.value === 'bridge:none';
       channelSelect.innerHTML = buildManagedChannelOptions(device, null, null);
       const firstRealOptionIndex = Array.from(channelSelect.options).findIndex((option) => option.value);
       if (firstRealOptionIndex >= 0) {
         channelSelect.selectedIndex = firstRealOptionIndex;
       }
+      managedSelectValues.set(channelSelect, channelSelect.value);
     }
   }
 
@@ -1340,55 +1688,11 @@ function handleManagedPortControlChange(event) {
       finishManagedRangeInteraction();
     }
   }
-  if (field === "triggerMode") {
-    const showDetails = control.value === "audio-level";
-    for (const detail of card.querySelectorAll('[data-field="triggerTarget"], [data-field="triggerThreshold"]')) {
-      if (detail.parentElement instanceof HTMLElement) detail.parentElement.hidden = !showDetails;
-    }
-    const inputLevel = card.querySelector('[data-managed-input-level]');
-    if (inputLevel instanceof HTMLElement) inputLevel.hidden = !showDetails;
+  if (field === 'triggerMode') {
+    syncManagedTriggerControls(card, bridgeTalkTrigger.mode(control.value));
     requestBridgeWindowResize();
-    const session = managedSessions.get(portKey);
-    const nextMode = control.value === "audio-level" ? "audio-level" : "external";
-    const previousMode = session?.port?.trigger?.mode === "audio-level"
-      ? "audio-level"
-      : "external";
-    if (
-      session
-      && nextMode === "external"
-      && (
-        previousMode === "audio-level"
-        || session.talking
-        || session.levelTriggerState?.active
-        || session.levelTriggerState?.releaseRequired
-      )
-    ) {
-      session.port = {
-        ...session.port,
-        trigger: {
-          ...(session.port.trigger || {}),
-          mode: "external",
-          target: null
-        }
-      };
-      recordManagedLifecycle(
-        session,
-        "level-trigger-mode-change",
-        `${previousMode}->external talking=${session.talking} source=${session.talkSource || "unknown"}`
-      );
-      disableManagedLevelTrigger(session, { forceRelease: true }).catch((error) => {
-        recordManagedLifecycle(
-          session,
-          "level-trigger-release-error",
-          String(error?.message || error)
-        );
-        setManagedSessionError(session, error);
-        renderManagedBridgePorts();
-      });
-    }
-    renderManagedBridgePorts();
   }
-  if (event.type === "change") {
+  if (isSelect || event.type === "change") {
     scheduleManagedPortAutoSave(portKey);
   }
 }
@@ -1409,7 +1713,40 @@ function finishManagedRangeInteraction() {
   window.requestAnimationFrame(renderManagedBridgePorts);
 }
 
+function renderManagedVideoControls(port, draft) {
+  if (port.kind !== 'feed') return '';
+  const sources = currentInventory?.videoSources || [];
+  const options = [{ id: '', name: 'Off' }, ...sources];
+  if (draft.videoSource && !sources.some(source => source.id === draft.videoSource)) {
+    options.push({ id: draft.videoSource, name: `${draft.videoSource} (saved, unavailable)` });
+  }
+  return `<label class="field-group managed-video-source">Video source (optional)
+    <select data-field="videoSource" data-managed-port-control${port.videoAllowed === false ? ' disabled title="Video disabled by administrator"' : ''}>${options.map(source => `<option value="${escapeHtml(source.id)}"${source.id === draft.videoSource ? ' selected' : ''}>${escapeHtml(source.name)}</option>`).join('')}</select></label>`;
+}
+
+function managedFeedVideoStatus(port, session) {
+  if (!port.videoSource) return '';
+  return `Video: ${port.videoAllowed === false ? "Disabled by administrator" : session?.videoError || (session?.videoFrames ? "Live" : "Waiting for source…")}`;
+}
+
 function renderManagedBridgePorts() {
+  // Refresh labels and save errors without rebuilding a focused control.
+  for (const port of managedBridgeConfig?.ports || []) {
+    const key = bridgePortKey(port);
+    const card = getManagedPortElement(key);
+    const feedback = card?.querySelector('[data-managed-port-save-error]');
+    const error = managedPortEditStates.get(key)?.error;
+    const message = error ? `Not saved: ${error}` : '';
+    if (feedback && feedback.textContent !== message) {
+      feedback.textContent = message;
+      requestBridgeWindowResize();
+    }
+    const status = card?.querySelector('[data-video-status]');
+    if (!status) continue;
+    status.textContent = managedFeedVideoStatus(port, managedSessions.get(bridgePortKey(port)));
+    status.hidden = !status.textContent;
+  }
+  if (managedAudioPopover || targetPicker.isOpen()) return;
   const activeElement = document.activeElement;
   const managedControlFocused = (
     activeElement instanceof HTMLElement
@@ -1460,17 +1797,20 @@ function renderManagedBridgePorts() {
           <span class="managed-port-state ${escapeHtml(state.className)}">${escapeHtml(state.label)}</span>
         </div>
       </div>
+      ${port.testToneHz ? `<div class="managed-port-state warning" role="status">Input test tone: ${escapeHtml(String(port.testToneHz))} Hz · −20 dBFS RMS before gain</div>` : ''}
       <div class="managed-port-routing-grid">
         ${renderManagedAssignmentControls(port, "input", draft.input)}
         ${hasOutput ? renderManagedAssignmentControls(port, "output", draft.output) : ""}
+        ${renderManagedVideoControls(port, draft)}
       </div>
       ${renderManagedTriggerControls(port, draft)}
       ${hasOutput || port.kind === "user" ? `<div class="managed-port-status-row">
         ${hasOutput ? `<small>${escapeHtml(formatManagedReturnPathStatus(session))}</small>` : "<span></span>"}
         ${port.kind === "user" ? `<small class="managed-port-input-level" data-managed-input-level${draft.trigger?.mode === "audio-level" ? "" : " hidden"}>Input level: waiting…</small>` : ""}
       </div>` : ""}
+      ${port.kind === "feed" ? `<small data-video-status${port.videoSource ? "" : " hidden"}>${escapeHtml(managedFeedVideoStatus(port, session))}</small>` : ""}
       ${sessionError ? `<div class="managed-port-error">${escapeHtml(sessionError)}</div>` : ""}
-      ${editState.error ? `<div class="managed-port-error">${escapeHtml(editState.error)}</div>` : ""}
+      <div class="managed-port-error" data-managed-port-save-error role="status" aria-atomic="true">${editState.error ? `Not saved: ${escapeHtml(editState.error)}` : ""}</div>
       </article>
     `;
   }).join("");
@@ -1478,6 +1818,18 @@ function renderManagedBridgePorts() {
   if (html !== lastManagedBridgePortsHtml) {
     bridgePorts.innerHTML = html;
     lastManagedBridgePortsHtml = html;
+    for (const port of configuredPorts.filter(port => port.kind === 'user')) {
+      const card = getManagedPortElement(bridgePortKey(port));
+      const picker = card?.querySelector('[data-managed-target-picker]');
+      if (!picker) continue;
+      const draft = getManagedPortDraft(port);
+      targetPicker.mount(picker, buildManagedTriggerTargetOptions(port, draft.trigger),
+        bridgeTalkTrigger.targets(draft.trigger?.targets).map(target => `${target.type}:${target.id}`), () => {
+          updateManagedPortDraftFromElement(card);
+          scheduleManagedPortAutoSave(bridgePortKey(port));
+          requestBridgeWindowResize();
+        });
+    }
   }
   requestBridgeWindowResize();
 }
@@ -1497,7 +1849,7 @@ function codecParametersToFmtp(parameters = {}) {
 }
 
 async function startManagedConsumer(session, producerPayload) {
-  if (!bridgePortHasOutput(session.port)) return;
+  if (!bridgePortHasOutput(session.port) || session.port.output?.deviceId === "bridge:none") return;
   const producerId = String(producerPayload?.producerId || "");
   if (!producerId || session.outputs.has(producerId)) return;
 
@@ -1522,7 +1874,8 @@ async function startManagedConsumer(session, producerPayload) {
     const reserved = await invoke("reserve_bridge_output", {
       request: {
         streamId,
-        assignment: session.port.output
+        assignment: session.port.output,
+        audioLevel: getManagedAudioLevel(session.port, 'output')
       }
     });
     const consumer = await bridgeApi("POST", managedSessionPath(session, "/consumers"), {
@@ -1558,6 +1911,7 @@ async function startManagedConsumer(session, producerPayload) {
       {}
     );
     await applyManagedOutputAudioState(session, output);
+    await applyManagedPortAudioLevel(session.port, 'output');
   } catch (error) {
     session.outputs.delete(producerId);
     await invoke("stop_bridge_output", { streamId }).catch(() => {});
@@ -1654,22 +2008,45 @@ function resolveBridgeCommandTargets(session, payload) {
   return Number.isFinite(id) ? [{ type, id }] : [];
 }
 
-function getManagedTriggerTarget(port) {
-  const trigger = port?.trigger || {};
-  const target = trigger.target || {};
-  const type = String(target.type || "").toLowerCase();
-  const id = Number(target.id);
-  if ((type === "user" || type === "conference") && Number.isFinite(id) && id > 0) {
-    return { type, id };
-  }
-  return null;
+function getManagedTriggerTargets(port) {
+  if (!['audio-level', 'always-on'].includes(port?.trigger?.mode)) return [];
+  const targets = bridgeTalkTrigger.fromTrigger(port?.trigger);
+  if (!Array.isArray(port?.triggerTargets)) return targets;
+  const allowed = new Set(port.triggerTargets.map(target => `${target.type}:${target.id}`));
+  return targets.filter(target => allowed.has(`${target.type}:${target.id}`));
 }
 
-function managedTalkTargetsMatch(currentTargets, nextTarget) {
-  if (!nextTarget || !Array.isArray(currentTargets) || currentTargets.length !== 1) return false;
-  const current = currentTargets[0] || {};
-  return String(current.type || "").toLowerCase() === nextTarget.type
-    && Number(current.id) === Number(nextTarget.id);
+function managedTalkTargetsMatch(currentTargets, nextTargets) {
+  return bridgeTalkTrigger.matches(currentTargets, nextTargets);
+}
+
+async function ensureManagedAlwaysOn(session) {
+  if (session.port.kind !== 'user' || session.port.trigger?.mode !== 'always-on'
+    || !session.ready || session.starting || !session.inputReady || !session.producerId
+    || session.automaticReleaseRequired) return;
+  const targets = getManagedTriggerTargets(session.port);
+  if (!targets.length) {
+    if (session.talking && session.talkSource === 'always-on') {
+      await applyManagedTalkState(session, { talking: false, targets: [], preserveAlwaysOn: false });
+    }
+    return;
+  }
+  const current = new Set((session.targets || []).map(target => `${target.type}:${target.id}`));
+  if (session.talking && targets.every(target => current.has(`${target.type}:${target.id}`))) return;
+  await applyManagedTalkState(session, { talking: true, targets, source: 'always-on' });
+}
+
+async function syncManagedAutomaticTalk(session) {
+  if (session.automaticReleaseRequired) {
+    await applyManagedTalkState(session, { talking: false, targets: [], preserveAlwaysOn: false });
+    session.automaticReleaseRequired = false;
+  }
+  await ensureManagedAlwaysOn(session);
+  if (session.automaticRetryAt) {
+    session.error = null;
+    session.statusLabel = null;
+    session.automaticRetryAt = 0;
+  }
 }
 
 function getManagedLevelTriggerThreshold(port) {
@@ -1683,27 +2060,9 @@ function isManagedLevelTriggerEnabled(port) {
 }
 
 function getManagedEffectiveTriggerPort(session) {
-  const port = session?.port;
-  if (!port || port.kind !== "user") return port;
-  const draft = managedPortDrafts.get(bridgePortKey(port))?.trigger;
-  if (!draft) return port;
-
-  const mode = draft.mode === "audio-level" ? "audio-level" : "external";
-  const targetType = String(draft.targetType || "").trim().toLowerCase();
-  const targetId = Number(draft.targetId);
-  return {
-    ...port,
-    trigger: {
-      ...(port.trigger || {}),
-      mode,
-      target: mode === "audio-level"
-        && (targetType === "user" || targetType === "conference")
-        && Number.isFinite(targetId)
-        ? { type: targetType, id: targetId }
-        : null,
-      thresholdDb: draft.thresholdDb ?? port.trigger?.thresholdDb
-    }
-  };
+  // Only saved configuration may open a microphone automatically. Incomplete
+  // edits (especially a new mode with no targets yet) stay in the form draft.
+  return session?.port;
 }
 
 function isManagedLevelTriggerEnabledForSession(session) {
@@ -1764,32 +2123,59 @@ function getManagedInputLevelMap(status) {
 function updateManagedInputLevelDisplay(session, inputStats) {
   const card = getManagedPortElement(bridgePortKey(session.port));
   const display = card?.querySelector("[data-managed-input-level]");
-  if (!(display instanceof HTMLElement)) return;
+  const popoverLabel = managedAudioPopover?.direction === 'input'
+    && bridgePortKey(managedAudioPopover.port) === bridgePortKey(session.port)
+    ? managedAudioPopover.panel.querySelector('[data-audio-meter-label]') : null;
+  if (!(display instanceof HTMLElement) && !popoverLabel) return;
 
   const rmsDb = Number(inputStats?.rmsDb);
   const capturedFrames = Number(inputStats?.capturedFrames);
-  const elapsed = Date.now() - Number(session.inputStartedAt || Date.now());
-  display.classList.remove("warning");
+  const now = Date.now();
+  const elapsed = now - Number(session.inputStartedAt || now);
+  const muted = getManagedAudioLevel(session.port, 'input').muted;
+  const intentionalSilence = session.port.input?.deviceId === 'bridge:none' && !session.port.testToneHz;
+  const mode = intentionalSilence ? 'none' : muted ? 'muted'
+    : Number.isFinite(capturedFrames) && capturedFrames <= 0
+      ? elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS ? 'no-input' : 'waiting'
+      : !Number.isFinite(rmsDb) ? 'unavailable'
+        : elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS && rmsDb <= -119.9 ? 'silent' : 'active';
+  const previous = session.inputLevelTextUpdate;
+  if (previous && previous.display === display && previous.mode === mode
+    && now - previous.at < MANAGED_LEVEL_TEXT_REFRESH_MS) {
+    if (popoverLabel) popoverLabel.textContent = previous.text;
+    return;
+  }
+  let text;
+  let warning = false;
 
-  if (Number.isFinite(capturedFrames) && capturedFrames <= 0) {
-    display.textContent = elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS
-      ? "No input audio — check microphone permission"
+  if (intentionalSilence) {
+    text = 'Input: None';
+  } else if (muted) {
+    text = Number.isFinite(rmsDb)
+      ? `Input level: ${rmsDb.toFixed(1)} dBFS - Muted`
+      : 'Input level: Muted';
+    warning = true;
+  } else if (Number.isFinite(capturedFrames) && capturedFrames <= 0) {
+    text = elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS
+      ? "No input audio - check microphone permission"
       : "Input level: waiting…";
-    display.classList.toggle("warning", elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS);
-    return;
+    warning = elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS;
+  } else if (!Number.isFinite(rmsDb)) {
+    text = "Input level unavailable";
+    warning = true;
+  } else {
+    text = `Input level: ${rmsDb.toFixed(1)} dBFS`;
+    if (elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS && rmsDb <= -119.9) {
+      text += " - check device and channels";
+      warning = true;
+    }
   }
-
-  if (!Number.isFinite(rmsDb)) {
-    display.textContent = "Input level unavailable";
-    display.classList.add("warning");
-    return;
+  session.inputLevelTextUpdate = { display, mode, at: now, text };
+  if (display instanceof HTMLElement) {
+    display.textContent = text;
+    display.classList.toggle('warning', warning);
   }
-
-  display.textContent = `Input level: ${rmsDb.toFixed(1)} dBFS`;
-  if (elapsed >= MANAGED_INPUT_ACTIVITY_GRACE_MS && rmsDb <= MANAGED_LEVEL_TRIGGER_MIN_THRESHOLD_DB) {
-    display.textContent += " — check device and channels";
-    display.classList.add("warning");
-  }
+  if (popoverLabel) popoverLabel.textContent = text;
 }
 
 async function sendManagedCommandResult(session, payload, result) {
@@ -1802,9 +2188,19 @@ async function sendManagedCommandResult(session, payload, result) {
   });
 }
 
-async function performManagedTalkState(session, { talking, targets, lockActive = false, source = "external" }) {
+async function performManagedTalkState(session, { talking, targets, lockActive = false, source = "external", preserveAlwaysOn = true }) {
   if (session.port.kind === "feed") {
     throw new Error("Feed bridge ports do not support talk state");
+  }
+  if (preserveAlwaysOn && session.port.trigger?.mode === 'always-on') {
+    const automatic = getManagedTriggerTargets(session.port);
+    // A manual press/release must not close the permanently configured route.
+    targets = bridgeTalkTrigger.targets([...(talking ? targets : []), ...automatic]);
+    talking = targets.length > 0;
+    if (talking && bridgeTalkTrigger.matches(targets, automatic)) {
+      source = 'always-on';
+      lockActive = false;
+    }
   }
   if (talking) {
     if (!session.inputReady || !session.producerId) {
@@ -1836,6 +2232,7 @@ async function performManagedTalkState(session, { talking, targets, lockActive =
   }
   session.talking = Boolean(talking);
   session.talkSource = talking ? source : null;
+  if (source !== "panel") session.panelBaseTalkState = null;
   if (source !== "level" && session.levelTriggerState) {
     session.levelTriggerState.revision = Number(session.levelTriggerState.revision || 0) + 1;
     session.levelTriggerState.active = false;
@@ -1860,6 +2257,11 @@ function applyManagedTalkState(session, request) {
       recordManagedLifecycle(session, "level-trigger-start-skipped", "trigger mode is no longer audio-level");
       return false;
     }
+    if (request?.talking && ['always-on', 'level'].includes(request.source)) {
+      if (request.source === 'always-on' && session.port.trigger?.mode !== 'always-on') return false;
+      request = { ...request, targets: getManagedTriggerTargets(session.port) };
+      if (!request.targets.length) return false;
+    }
     return performManagedTalkState(session, request);
   };
 
@@ -1868,6 +2270,25 @@ function applyManagedTalkState(session, request) {
     .then(operation);
   session.talkStateQueue = queued;
   return queued;
+}
+
+async function applyManagedCompanionTalkState(session, request) {
+  const panelTargets = [...(session.panelTalkLocks?.values() || []), ...(session.panelTalkInputs?.values() || [])];
+  if (!panelTargets.length) {
+    session.panelBaseTalkState = null;
+    return applyManagedTalkState(session, request);
+  }
+  // Companion owns the underlying external intent. Updating it while a panel
+  // holds Talk must not interrupt that hold or restore a released Companion input.
+  session.panelBaseTalkState = {
+    targets: request.talking ? request.targets : [], lockActive: Boolean(request.lockActive), source: "external",
+  };
+  const base = session.panelBaseTalkState;
+  const targets = [...new Map([...base.targets, ...panelTargets].map(target => [`${target.type}:${target.id}`, target])).values()];
+  return applyManagedTalkState(session, {
+    talking: targets.length > 0, targets, source: "panel",
+    lockActive: Boolean(session.panelTalkLocks?.size) || (base.lockActive && base.targets.length > 0),
+  });
 }
 
 async function handleManagedTalkCommand(session, payload) {
@@ -1880,11 +2301,11 @@ async function handleManagedTalkCommand(session, payload) {
       return;
     }
     if (payload.action === "release") {
-      await applyManagedTalkState(session, { talking: false, targets: [] });
+      await applyManagedCompanionTalkState(session, { talking: false, targets: [] });
       await sendManagedCommandResult(session, payload, {
         ok: true,
-        talking: false,
-        lockActive: false
+        talking: session.talking,
+        lockActive: session.lockActive
       });
       return;
     }
@@ -1898,12 +2319,12 @@ async function handleManagedTalkCommand(session, payload) {
       return;
     }
 
-    if (payload.action === "lock-toggle" && session.lockActive) {
-      await applyManagedTalkState(session, { talking: false, targets: [] });
+    if (payload.action === "lock-toggle" && (session.panelBaseTalkState?.lockActive ?? session.lockActive)) {
+      await applyManagedCompanionTalkState(session, { talking: false, targets: [] });
       await sendManagedCommandResult(session, payload, {
         ok: true,
-        talking: false,
-        lockActive: false
+        talking: session.talking,
+        lockActive: session.lockActive
       });
       return;
     }
@@ -1917,13 +2338,13 @@ async function handleManagedTalkCommand(session, payload) {
         return;
       }
       const lockActive = payload.action === "lock-toggle";
-      await applyManagedTalkState(session, { talking: true, targets, lockActive });
+      await applyManagedCompanionTalkState(session, { talking: true, targets, lockActive });
       await sendManagedCommandResult(session, payload, {
         ok: true,
-        talking: true,
-        lockActive,
-        target: targets[0],
-        targets
+        talking: session.talking,
+        lockActive: session.lockActive,
+        target: session.targets[0],
+        targets: session.targets
       });
       return;
     }
@@ -1938,6 +2359,81 @@ async function handleManagedTalkCommand(session, payload) {
       reason: String(error.message || error)
     }).catch(() => {});
     throw error;
+  }
+}
+
+function getManagedPanelReport(session) {
+  return {
+    revision: Number(session.panelSettings?.revision) || 0,
+    storage: session.panelSettings?.storage || {},
+    audioStates: [...session.targetAudioStates.values()].map(({ targetType, targetId, volume, muted }) => ({ targetType, targetId, volume, muted })),
+    runtime: {
+      devices: [], outputSupported: false,
+      talking: session.talking, targets: session.targets || [],
+      lockedTargets: session.lockActive ? session.targets || [] : [],
+    },
+  };
+}
+
+async function handleManagedPanelCommand(session, payload) {
+  try {
+    if (payload.kind !== 'talk') session.panelSettings = payload.panelSettings || session.panelSettings;
+    if (payload.kind === 'target-audio') {
+      const state = normalizeManagedTargetAudioState(payload.audio);
+      if (!state) throw new Error('Invalid audio target');
+      session.targetAudioStates.set(state.key, state);
+      await applyManagedTargetAudioState(session, state);
+    } else if (payload.kind === 'preferences') {
+      if (Object.keys(payload.patch || {}).some(key => key.startsWith('preferredAudio'))) {
+        throw new Error('Bridge audio devices are configured in Admin Users');
+      }
+      for (const output of session.outputs.values()) await applyManagedOutputAudioState(session, output);
+    } else if (payload.kind === 'talk') {
+      if (!(session.panelTalkInputs instanceof Map)) session.panelTalkInputs = new Map();
+      if (!(session.panelTalkLocks instanceof Map)) session.panelTalkLocks = new Map();
+      if (payload.action === 'stop') {
+        session.panelTalkInputs.clear(); session.panelTalkLocks.clear(); session.panelBaseTalkState = null;
+        await applyManagedTalkState(session, { talking: false, targets: [] });
+      } else {
+        const targets = resolveBridgeCommandTargets(session, payload);
+        const target = targets[0];
+        const key = target ? `${target.type}:${target.id}` : '';
+        if (payload.action === 'press' || payload.action === 'lock') {
+          if (!target) throw new Error('Talk target is not available');
+          if (!session.inputReady || !session.producerId) throw new Error('Input device is unavailable');
+          if (!session.panelBaseTalkState) session.panelBaseTalkState = {
+            targets: session.talkSource !== 'panel' && session.talking ? [...session.targets] : [],
+            lockActive: session.lockActive, source: session.talkSource || "external",
+          };
+          if (payload.action === 'press') session.panelTalkInputs.set(payload.inputKey, target);
+          else session.panelTalkLocks.set(key, target);
+        } else if (payload.action === 'release') {
+          if (!session.panelTalkInputs.has(payload.inputKey)) return sendManagedCommandResult(session, payload, { ok: true, report: getManagedPanelReport(session) });
+          session.panelTalkInputs.delete(payload.inputKey);
+          if (session.talkSource !== 'panel') return sendManagedCommandResult(session, payload, { ok: true, report: getManagedPanelReport(session) });
+        } else if (payload.action === 'unlock') {
+          session.panelTalkLocks.delete(key);
+          if (session.panelBaseTalkState) session.panelBaseTalkState.targets = session.panelBaseTalkState.targets.filter(entry => `${entry.type}:${entry.id}` !== key);
+          else if (session.lockActive) await applyManagedTalkState(session, { talking: false, targets: [] });
+        }
+        const base = session.panelBaseTalkState || { targets: [], lockActive: false };
+        const all = new Map([...base.targets, ...session.panelTalkLocks.values(), ...session.panelTalkInputs.values()].map(target => [`${target.type}:${target.id}`, target]));
+        await applyManagedTalkState(session, {
+          talking: all.size > 0, targets: [...all.values()],
+          lockActive: session.panelTalkLocks.size > 0 || (base.lockActive && base.targets.length > 0),
+          source: session.panelTalkInputs.size || session.panelTalkLocks.size ? 'panel' : base.source || 'external',
+        });
+        if (!session.panelTalkInputs.size && !session.panelTalkLocks.size) session.panelBaseTalkState = null;
+      }
+    } else if (payload.kind === 'audio-settings') {
+      return sendManagedCommandResult(session, payload, { ok: true, message: 'Saved for browser client', report: getManagedPanelReport(session) });
+    } else if (payload.kind === 'production') {
+      throw new Error('Bridge routing is configured in Admin Users');
+    }
+    await sendManagedCommandResult(session, payload, { ok: true, report: getManagedPanelReport(session) });
+    renderManagedBridgePorts();
+  } catch (error) {
+    await sendManagedCommandResult(session, payload, { ok: false, reason: error.message, report: getManagedPanelReport(session) });
   }
 }
 
@@ -1960,6 +2456,12 @@ async function handleManagedEvent(session, event) {
       session.replyTarget = payload.state?.replyTarget || null;
       session.addressedNow = payload.state?.addressedNow || [];
       renderManagedBridgePorts();
+      break;
+    case "panel-command":
+      await handleManagedPanelCommand(session, payload);
+      break;
+    case "panel-state-request":
+      await sendManagedCommandResult(session, {}, { ok: true, report: getManagedPanelReport(session) });
       break;
     case "api-talk-command":
       await handleManagedTalkCommand(session, payload);
@@ -2088,7 +2590,7 @@ async function startNativeManagedEventStream(session) {
   const listenerReady = await ensureNativeBridgeEventListener();
   if (!listenerReady) return false;
 
-  const streamId = `${session.port.id}:events:${session.sessionId}`;
+  const streamId = `${session.port.id}:events:${session.sessionId}:${++nextManagedEventStreamVersion}`;
   session.eventStreamId = streamId;
   nativeEventStreamSessions.set(streamId, session);
   await invoke("start_bridge_event_stream", {
@@ -2096,6 +2598,7 @@ async function startNativeManagedEventStream(session) {
       streamId,
       serverUrl: normalizeServerUrl(serverUrlInput.value),
       apiKey: getBridgeCredential(),
+    allowInsecureTls: bridgeAllowsUntrustedTls(),
       path: managedSessionPath(session, "/events/stream"),
       inputStreamId: session.inputStreamId,
       outputStreamPrefix: `${session.port.id}:consumer:`
@@ -2105,10 +2608,11 @@ async function startNativeManagedEventStream(session) {
 }
 
 function stopManagedEventStream(session) {
+  let stopped = Promise.resolve();
   if (session?.eventStreamId) {
     const streamId = session.eventStreamId;
     nativeEventStreamSessions.delete(streamId);
-    invoke?.("stop_bridge_event_stream", { streamId }).catch(() => {});
+    stopped = invoke?.("stop_bridge_event_stream", { streamId }).catch(() => {}) || stopped;
     session.eventStreamId = null;
   }
   if (session?.eventSource) {
@@ -2118,10 +2622,19 @@ function stopManagedEventStream(session) {
   if (session) {
     session.eventStreamActive = false;
   }
+  return stopped;
+}
+
+async function restartManagedEventStreamsIfNeeded() {
+  if (!managedEventStreamsNeedRestart) return;
+  managedEventStreamsNeedRestart = false;
+  for (const session of managedSessions.values()) {
+    if (session.ready && !session.eventStreamId) await startManagedEventStream(session);
+  }
 }
 
 async function startManagedEventStream(session) {
-  stopManagedEventStream(session);
+  await stopManagedEventStream(session);
   try {
     if (await startNativeManagedEventStream(session)) {
       return true;
@@ -2134,56 +2647,9 @@ async function startManagedEventStream(session) {
     setManagedSessionError(session, error);
   }
 
-  if (!window.EventSource || !session?.sessionId || !getBridgeCredential()) {
-    return false;
-  }
-
-  const source = new EventSource(managedSessionEventStreamUrl(session));
-  session.eventSource = source;
-  session.eventStreamActive = false;
-
-  source.addEventListener("open", () => {
-    if (session.eventSource !== source) return;
-    session.eventStreamActive = true;
-    session.error = null;
-    renderManagedBridgePorts();
-  });
-
-  source.addEventListener("bridge-event", (message) => {
-    if (session.eventSource !== source) return;
-    try {
-      const event = JSON.parse(message.data || "{}");
-      enqueueManagedEvent(session, event);
-    } catch (error) {
-      session.error = `Failed to parse bridge event: ${String(error.message || error)}`;
-      renderManagedBridgePorts();
-    }
-  });
-
-  source.addEventListener("session-closed", (message) => {
-    if (session.eventSource !== source) return;
-    source.close();
-    session.eventSource = null;
-    session.eventStreamActive = false;
-    if (session.ready) {
-      try {
-        const payload = JSON.parse(message.data || "{}");
-        session.error = payload.reason || "Bridge session closed";
-      } catch {
-        session.error = "Bridge session closed";
-      }
-      session.ready = false;
-      renderManagedBridgePorts();
-    }
-  });
-
-  source.addEventListener("error", () => {
-    if (session.eventSource !== source) return;
-    session.eventStreamActive = false;
-    renderManagedBridgePorts();
-  });
-
-  return true;
+  // Browser EventSource cannot set Authorization headers. Use the existing
+  // authenticated polling fallback instead of exposing a key in the URL.
+  return false;
 }
 
 async function pollManagedEvents() {
@@ -2210,6 +2676,28 @@ async function pollManagedEvents() {
     renderManagedBridgePorts();
   }
 }
+
+let bridgePortReportBusy = false;
+async function reportManagedPorts() {
+  if (bridgeQuitting || bridgePortReportBusy || !invoke || !managedBridgeConfig?.bridgeId) return;
+  bridgePortReportBusy = true;
+  try {
+    const media = await invoke('get_bridge_media_status');
+    const ports = {};
+    for (const session of managedSessions.values()) {
+      const input = (media.inputStreamStats || []).find(row => row.streamId === session.inputStreamId);
+      const outputs = (media.outputStreamStats || []).filter(row => row.streamId.startsWith(`${session.port.id}:consumer:`));
+      const meter = rows => ({ rmsDb: Math.max(-120, ...rows.map(row => Number.isFinite(row.rmsDb) ? row.rmsDb : -120)), peakDb: Math.max(-120, ...rows.map(row => Number.isFinite(row.peakDb) ? row.peakDb : -120)) });
+      ports[bridgePortKey(session.port)] = {
+        state: session.statusLabel || (session.ready ? 'Connected' : 'Reconnecting'),
+        error: [session.error, session.inputError].filter(Boolean).join(' · '),
+        input: meter(input ? [input] : []), output: meter(outputs),
+      };
+    }
+    await bridgeApi('POST', `/api/v1/bridge/${encodeURIComponent(managedBridgeConfig.bridgeId)}/status`, { ports });
+  } catch {} finally { bridgePortReportBusy = false; }
+}
+setInterval(reportManagedPorts, 250);
 
 async function heartbeatManagedSessions() {
   const sessions = [...managedSessions.values()].filter((session) => (
@@ -2249,11 +2737,13 @@ async function heartbeatManagedSessions() {
           ? null
           : (input || outputs.length ? { input, outputs } : null),
         networkStats: Number.isFinite(session.lastHeartbeatRoundTripMs)
+          && performance.now() - session.lastHeartbeatMeasuredAt < 30_000
           ? { roundTripMs: session.lastHeartbeatRoundTripMs }
           : null,
         lifecycleEvents: session.lifecycleEvents?.splice(0) || []
       });
       session.lastHeartbeatRoundTripMs = Math.round(performance.now() - heartbeatStartedAt);
+      session.lastHeartbeatMeasuredAt = performance.now();
       if (session.error && session.statusLabel === "Server offline") {
         session.error = null;
         session.statusLabel = null;
@@ -2301,7 +2791,7 @@ async function processManagedLevelTriggers() {
     session.ready
     && session.inputReady
     && !session.starting
-    && isManagedLevelTriggerEnabledForSession(session)
+    && (isManagedLevelTriggerEnabledForSession(session) || session.port.trigger?.mode === 'always-on' || session.automaticReleaseRequired)
   ));
   if (!sessions.length) return;
 
@@ -2315,7 +2805,17 @@ async function processManagedLevelTriggers() {
     const now = Date.now();
 
     for (const session of sessions) {
-      if (!session.ready || session.starting) continue;
+      if (!session.ready || session.starting || !session.inputReady) continue;
+      if (session.port.trigger?.mode === 'always-on' || session.automaticReleaseRequired) {
+        if (session.automaticRetryAt > Date.now()) continue;
+        try {
+          await syncManagedAutomaticTalk(session);
+        } catch (error) {
+          session.automaticRetryAt = Date.now() + 1000;
+          setManagedSessionError(session, error);
+        }
+        continue;
+      }
       if (!isManagedLevelTriggerEnabledForSession(session)) {
         await disableManagedLevelTrigger(session).catch((error) => {
           setManagedSessionError(session, error);
@@ -2323,7 +2823,7 @@ async function processManagedLevelTriggers() {
         continue;
       }
       const effectivePort = getManagedEffectiveTriggerPort(session);
-      const triggerTarget = getManagedTriggerTarget(effectivePort);
+      const triggerTargets = getManagedTriggerTargets(effectivePort);
       const state = session.levelTriggerState || {
         active: false,
         aboveSince: 0,
@@ -2339,7 +2839,7 @@ async function processManagedLevelTriggers() {
       const triggerRevision = Number(state.revision || 0);
       const levelDb = Number(inputStats?.rmsDb);
 
-      if (!triggerTarget) {
+      if (!triggerTargets.length) {
         if (state.active && session.talking && session.talkSource === "level") {
           state.pending = true;
           try {
@@ -2371,7 +2871,7 @@ async function processManagedLevelTriggers() {
           try {
             const started = await applyManagedTalkState(session, {
               talking: true,
-              targets: [triggerTarget],
+              targets: triggerTargets,
               source: "level"
             });
             if (
@@ -2480,11 +2980,12 @@ function createManagedSession(port) {
 }
 
 async function startManagedInputPath(session, { reason = "input-start" } = {}) {
+  if (!session.port.testToneHz && session.port.kind === 'feed' && !session.port.input?.deviceId && session.port.videoSource) return false;
   if (session.inputReady || session.inputStarting) return session.inputReady;
   if (!session.sessionId) throw new Error("Bridge session is not ready for input");
 
   if (currentInventory?.devices?.length) {
-    const unavailableReason = getManagedAssignmentUnavailableReason("input", session.port.input);
+    const unavailableReason = session.port.testToneHz ? '' : getManagedAssignmentUnavailableReason("input", session.port.input);
     if (unavailableReason) {
       setManagedInputError(session, new Error(unavailableReason));
       return false;
@@ -2503,11 +3004,15 @@ async function startManagedInputPath(session, { reason = "input-start" } = {}) {
     await invoke("start_bridge_input", {
       request: {
         streamId: session.inputStreamId,
-        assignment: session.port.input,
+        assignment: session.port.testToneHz
+          ? { deviceId: `bridge:tone:${session.port.testToneHz}`, leftChannel: 1, rightChannel: 2 }
+          : session.port.input,
         rtpIp: transport.ip,
         rtpPort: Number(transport.port),
         payloadType: rtp.payloadType,
-        ssrc: rtp.ssrc
+        ssrc: rtp.ssrc,
+        cname: transport.cname || '',
+        audioLevel: getManagedAudioLevel(session.port, 'input')
       }
     });
     session.inputStartedAt = Date.now();
@@ -2516,6 +3021,7 @@ async function startManagedInputPath(session, { reason = "input-start" } = {}) {
     session.inputReady = true;
     clearManagedInputError(session);
     recordManagedLifecycle(session, "producer-started", `reason=${reason}`);
+    await ensureManagedAlwaysOn(session);
     return true;
   } catch (error) {
     await invoke("stop_bridge_input", { streamId: session.inputStreamId }).catch(() => {});
@@ -2530,6 +3036,71 @@ async function startManagedInputPath(session, { reason = "input-start" } = {}) {
     return false;
   } finally {
     session.inputStarting = false;
+  }
+}
+
+async function stopManagedVideoPath(session) {
+  if (session.port.kind !== "feed") return;
+  session.videoRevision = (session.videoRevision || 0) + 1;
+  await invoke('stop_bridge_video', { streamId: `${session.port.id}:video` }).catch(() => {});
+  if (session.sessionId) await bridgeApi('DELETE', managedSessionPath(session, '/video')).catch(() => {});
+  session.videoProducerId = null;
+  session.videoFrames = 0;
+  session.videoPublished = false;
+  session.videoStartedAt = 0;
+}
+
+async function startManagedVideoPath(session) {
+  if (session.port.kind !== 'feed' || session.port.videoAllowed === false || !session.port.videoSource || !session.sessionId || session.videoStarting || session.videoProducerId) return;
+  session.videoStarting = true;
+  const revision = session.videoRevision || 0;
+  const sourceId = session.port.videoSource;
+  const path = managedSessionPath(session);
+  const active = () => revision === (session.videoRevision || 0) && session.sessionId && session.port.videoAllowed !== false && session.port.videoSource === sourceId;
+  try {
+    const transport = await bridgeApi('POST', path + '/video-send-transport', {});
+    if (!active()) { await bridgeApi('DELETE', path + '/video').catch(() => {}); return; }
+    const producer = await bridgeApi('POST', path + '/video-producer', {});
+    if (!active()) { await bridgeApi('DELETE', path + '/video').catch(() => {}); return; }
+    await invoke('start_bridge_video', { request: { streamId: `${session.port.id}:video`, sourceId,
+      rtpIp: transport.ip, rtpPort: transport.port, payloadType: transport.payloadType, ssrc: transport.ssrc, cname: transport.cname } });
+    if (!active()) { await stopManagedVideoPath(session); return; }
+    session.videoProducerId = producer.id;
+    session.videoStartedAt = Date.now();
+    session.videoError = null;
+  } catch (error) {
+    if (active()) {
+      await stopManagedVideoPath(session);
+      session.videoError = String(error?.message || error);
+      session.videoRetryAt = Date.now() + 5000;
+    }
+  } finally { session.videoStarting = false; }
+}
+
+async function auditManagedVideoStatus() {
+  const feeds = [...managedSessions.values()].filter(session => session.ready && session.port.kind === 'feed' && session.port.videoAllowed !== false && session.port.videoSource);
+  if (!feeds.length) return;
+  const statuses = await withTimeout(invoke('get_bridge_video_status'), 3000, 'Video status');
+  for (const session of feeds) {
+    if (session.videoStarting) continue;
+    if (!session.videoProducerId) {
+      if (!session.videoRetryAt || session.videoRetryAt <= Date.now()) await startManagedVideoPath(session);
+      continue;
+    }
+    const status = statuses.find(entry => entry.streamId === `${session.port.id}:video`);
+    const stalled = Date.now() - session.videoStartedAt > 10000
+      && (!status?.encodedFrames || status.lastFrameAgeMs > 5000);
+    if (status?.error || !status?.running || stalled) {
+      await stopManagedVideoPath(session);
+      session.videoError = status?.error || 'Source unavailable; reconnecting…';
+      session.videoRetryAt = Date.now() + 5000;
+    } else {
+      session.videoFrames = status.encodedFrames;
+      if (session.videoFrames > 0 && !session.videoPublished) {
+        await bridgeApi('POST', managedSessionPath(session, `/producers/${session.videoProducerId}/resume`), {});
+        session.videoPublished = true;
+      }
+    }
   }
 }
 
@@ -2583,6 +3154,11 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
       feedId: port.kind === "feed" ? port.feedId : null
     });
     session.sessionId = registered.sessionId;
+    session.panelSettings = registered.panelSettings || { revision: 0, storage: {} };
+    for (const rawState of registered.targetAudioStates || []) {
+      const state = normalizeManagedTargetAudioState(rawState);
+      if (state) session.targetAudioStates.set(state.key, state);
+    }
     recordManagedLifecycle(session, "session-created", `reason=${reason}`);
     await startManagedInputPath(session, { reason });
     if (bridgePortHasPersistentNetworkOutput(port)) {
@@ -2595,6 +3171,7 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
       });
     }
     session.ready = true;
+    await startManagedVideoPath(session);
     recordManagedLifecycle(
       session,
       "session-ready",
@@ -2618,12 +3195,14 @@ async function startManagedSession(port, { reuse = false, silentRetry = false, r
   } finally {
     session.starting = false;
     session.backgroundRetry = false;
+    await ensureManagedAlwaysOn(session).catch(error => setManagedSessionError(session, error));
     renderManagedBridgePorts();
   }
 }
 
 async function stopManagedSession(session, { remove = true, reason = "client-stop" } = {}) {
   stopManagedEventStream(session);
+  await stopManagedVideoPath(session);
   for (const output of [...session.outputs.values()]) {
     await stopManagedConsumer(session, output).catch(() => {});
   }
@@ -2650,6 +3229,9 @@ async function stopManagedSession(session, { remove = true, reason = "client-sto
   session.talkSource = null;
   session.lockActive = false;
   session.targets = [];
+  session.panelBaseTalkState = null;
+  session.panelTalkInputs?.clear();
+  session.panelTalkLocks?.clear();
   session.replyTarget = null;
   session.addressedNow = [];
   if (session.levelTriggerState) {
@@ -2660,15 +3242,42 @@ async function stopManagedSession(session, { remove = true, reason = "client-sto
     session.levelTriggerState.pending = false;
     session.levelTriggerState.releaseRequired = false;
   }
+  session.automaticReleaseRequired = false;
+  session.automaticRetryAt = 0;
   session.ready = false;
   session.starting = false;
   session.backgroundRetry = false;
   if (remove) managedSessions.delete(bridgePortKey(session.port));
 }
 
+function reconcileManagedAudioEdits(config) {
+  for (const port of config?.ports || []) {
+    for (const direction of ['input', 'output']) {
+      const edit = managedAudioEdits.get(audioEditKey(port, direction));
+      if (!edit?.dirty || edit.saving) continue;
+      if (JSON.stringify(audioLevels.normalizeLevel(port.audioLevels?.[direction], direction)) === JSON.stringify(edit.level)) {
+        edit.dirty = false; edit.error = null;
+      } else if (edit.error && Date.now() >= (edit.retryAt || 0)) {
+        void persistManagedAudioLevel(port, direction);
+      }
+    }
+  }
+}
+
 async function reconcileManagedBridgeConfig(config) {
+  // Empty assignments mean intentional silence until a device is chosen.
+  for (const port of config?.ports || []) {
+    if (!port.input?.deviceId && !port.videoSource) port.input = { deviceId: 'bridge:none', leftChannel: 1, rightChannel: 2 };
+    if (port.kind === 'user' && !port.output?.deviceId) port.output = { deviceId: 'bridge:none', leftChannel: 1, rightChannel: 2 };
+  }
   managedBridgeConfig = config;
+  reconcileManagedAudioEdits(config);
+  if (managedAudioPopover) {
+    const current = config?.ports?.find(port => bridgePortKey(port) === bridgePortKey(managedAudioPopover.port));
+    if (current) { managedAudioPopover.port = current; updateManagedAudioControl(current, managedAudioPopover.direction); }
+  }
   const wanted = new Map((config?.ports || []).map((port) => [bridgePortKey(port), port]));
+  if (managedAudioPopover && !wanted.has(bridgePortKey(managedAudioPopover.port))) closeManagedAudioPopover(false);
 
   for (const [key, session] of [...managedSessions.entries()]) {
     const nextPort = wanted.get(key);
@@ -2681,45 +3290,33 @@ async function reconcileManagedBridgeConfig(config) {
       await stopManagedSession(session, { reason: "port-config-changed" });
       continue;
     }
-    const levelTriggerWasEnabled = isManagedLevelTriggerEnabled(session.port);
+    const previousMode = bridgeTalkTrigger.mode(session.port.trigger?.mode);
+    const nextMode = bridgeTalkTrigger.mode(nextPort.trigger?.mode);
+    const targetsChanged = !managedTalkTargetsMatch(getManagedTriggerTargets(session.port), getManagedTriggerTargets(nextPort));
+    const videoChanged = session.port.videoSource !== nextPort.videoSource || session.port.videoAllowed !== nextPort.videoAllowed;
+    if (videoChanged) await stopManagedVideoPath(session);
     session.port = nextPort;
+    if (videoChanged && session.ready) await startManagedVideoPath(session);
     session.signature = nextSignature;
-    if (
-      !isManagedLevelTriggerEnabled(nextPort)
-      && (
-        levelTriggerWasEnabled
-        || session.levelTriggerState?.releaseRequired
-        || (session.talking && session.talkSource === "level")
-      )
-    ) {
-      await disableManagedLevelTrigger(session, {
-        forceRelease: levelTriggerWasEnabled || Boolean(session.levelTriggerState?.releaseRequired)
-      }).catch((error) => {
-        setManagedSessionError(session, error);
-      });
-    } else if (session.talking && session.talkSource === "level") {
-      const nextTarget = getManagedTriggerTarget(nextPort);
-      if (nextTarget && !managedTalkTargetsMatch(session.targets, nextTarget)) {
-        const state = session.levelTriggerState;
-        if (state) state.pending = true;
-        try {
-          await applyManagedTalkState(session, {
-            talking: true,
-            targets: [nextTarget],
-            source: "level"
-          });
-          recordManagedLifecycle(
-            session,
-            "level-trigger-target-updated",
-            `${nextTarget.type}:${nextTarget.id}`
-          );
-        } catch (error) {
-          setManagedSessionError(session, error);
-        } finally {
-          if (state) state.pending = false;
-        }
+    await syncManagedPortAudioLevels(nextPort);
+    if ((previousMode !== nextMode || targetsChanged) && previousMode !== 'external') {
+      // Discard only transient talk state; the new saved automatic route is
+      // applied below. Never restore a removed destination from a panel lock.
+      session.panelBaseTalkState = null;
+      session.panelTalkInputs?.clear();
+      session.panelTalkLocks?.clear();
+      if (session.levelTriggerState) {
+        session.levelTriggerState.revision += 1;
+        session.levelTriggerState.active = false;
+        session.levelTriggerState.aboveSince = 0;
+        session.levelTriggerState.belowSince = 0;
       }
+      session.automaticReleaseRequired = true;
     }
+    await syncManagedAutomaticTalk(session).catch(error => {
+      session.automaticRetryAt = Date.now() + 1000;
+      setManagedSessionError(session, error);
+    });
   }
   for (const [key, port] of wanted) {
     const session = managedSessions.get(key);
@@ -2729,6 +3326,7 @@ async function reconcileManagedBridgeConfig(config) {
       await startManagedSession(port, { reuse: true, silentRetry: true, reason: "config-retry" });
     }
   }
+  await restartManagedEventStreamsIfNeeded();
   renderManagedBridgePorts();
 }
 
@@ -2812,7 +3410,7 @@ async function retryDueManagedSessions() {
 }
 
 async function syncManagedBridge() {
-  if (managedSyncRunning) return;
+  if (bridgeQuitting || managedSyncRunning) return;
   // Do not reconnect with a partially edited address or credential. Apart from
   // producing avoidable failures, programmatic connection updates can disturb
   // the text selection in Windows WebView2 while the user is still typing.
@@ -2820,7 +3418,7 @@ async function syncManagedBridge() {
   if (!serverUrlInput.value.trim() || !getBridgeCredential()) return;
   managedSyncRunning = true;
   try {
-    await announceBridge({ quiet: true, syncConfig: false });
+    if (Date.now() - lastManagedAnnounceAt >= 10000) await announceBridge({ quiet: true, syncConfig: false });
     const bridgeId = localStorage.getItem(STORAGE_KEYS.bridgeId) || "";
     if (!bridgeId) throw new Error("Bridge announce did not return an ID");
     setServerConnectionState("connected");
@@ -2874,7 +3472,8 @@ async function watchManagedInventory() {
     managedInventoryWatchRetryAt = 0;
     if (!lastAudioDeviceSnapshotSignature) {
       lastAudioDeviceSnapshotSignature = nextSnapshotSignature;
-    } else if (nextSnapshotSignature && nextSnapshotSignature !== lastAudioDeviceSnapshotSignature) {
+    } else if (nextSnapshotSignature && (nextSnapshotSignature !== lastAudioDeviceSnapshotSignature
+      || inventoryNeedsRetry(currentInventory, lastFullInventoryScanAt))) {
       const inventory = await refreshManagedInventoryOnly();
       const nextInventorySignature = inventorySignature(inventory);
       if (nextInventorySignature && nextInventorySignature !== lastAnnouncedInventorySignature) {
@@ -2883,6 +3482,7 @@ async function watchManagedInventory() {
     }
     await auditManagedSessionDevices();
     await auditManagedNativeMediaStatus();
+    await auditManagedVideoStatus();
     renderManagedBridgePorts();
   } catch (error) {
     console.warn("managed inventory watch failed", error);
@@ -2896,7 +3496,7 @@ async function watchManagedInventory() {
 
 function startManagedConnectionRetry() {
   if (!managedHeartbeatTimer) {
-    managedHeartbeatTimer = window.setInterval(syncManagedBridge, 10_000);
+    managedHeartbeatTimer = window.setInterval(syncManagedBridge, 2_000);
   }
 }
 
@@ -3054,8 +3654,31 @@ function renderBridgeStatus(status) {
   renderManagedBridgePorts();
 }
 
+function virtualSilenceDevice(direction) {
+  return {
+    id: 'bridge:none', name: 'None', direction,
+    is_default: false, max_channels: 2, supports_48k: true,
+    supported_configs: [{ channels: 2, min_sample_rate: 48000, max_sample_rate: 48000, sample_format: 'f32', min_buffer_size: null, max_buffer_size: null }],
+    channel_pairs: [{ label: '1/2', left_channel: 1, right_channel: 2 }],
+  };
+}
+
+function inventoryNeedsRetry(inventory, scannedAt, now = Date.now()) {
+  if (now - scannedAt < 30000) return false;
+  return inventoryScanIncomplete(inventory);
+}
+
+function inventoryScanIncomplete(inventory) {
+  const hardware = (inventory?.devices || []).filter(device => !/^(bridge|ndi|omt):/.test(device.id || ''));
+  return !hardware.length || Boolean(inventory?.warnings?.length);
+}
+
 function renderInventory(inventory) {
+  lastFullInventoryScanAt = Date.now();
+  inventory.devices = (inventory.devices || []).filter(device => device.id !== 'bridge:none');
+  for (const direction of ['input', 'output']) inventory.devices.push(virtualSilenceDevice(direction));
   currentInventory = inventory;
+  if (refreshButton) refreshButton.hidden = !inventoryScanIncomplete(inventory);
   lastAudioDeviceSnapshotSignature = audioDeviceSnapshotSignature(inventory);
   renderSummary(inventory);
   if (audioScanStatus) {
@@ -3085,9 +3708,11 @@ function renderInventory(inventory) {
 }
 
 async function announceBridge({ quiet = false, syncConfig = true } = {}) {
+  await loadBridgeCredentials();
   const serverUrl = normalizeServerUrl(serverUrlInput.value);
   const apiKey = apiKeyInput.value.trim();
-  const bridgeToken = localStorage.getItem(STORAGE_KEYS.bridgeToken) || "";
+  const currentCredentials = bridgeCredentials.get(serverUrl);
+  const bridgeToken = currentCredentials.apiKey === apiKey ? currentCredentials.bridgeToken : "";
   const credential = bridgeToken || apiKey;
   const bridgeName = bridgeNameInput.value.trim() || "Bridge";
   if (!credential) {
@@ -3095,6 +3720,7 @@ async function announceBridge({ quiet = false, syncConfig = true } = {}) {
   }
 
   saveBridgeSettings();
+  await saveBridgeCredentials();
   if (!quiet) {
     setBridgeConnectionError();
     setServerConnectionState("connecting");
@@ -3109,6 +3735,7 @@ async function announceBridge({ quiet = false, syncConfig = true } = {}) {
       return invoke("announce_bridge", {
         serverUrl,
         apiKey: authToken,
+        allowInsecureTls: bridgeAllowsUntrustedTls(),
         bridgeId: bridgeId || null,
         bridgeName,
         inventory: currentInventory
@@ -3151,12 +3778,13 @@ async function announceBridge({ quiet = false, syncConfig = true } = {}) {
   }
   const announcedBridge = announceResponse?.bridge || announceResponse || {};
   if (announceResponse?.bridgeToken) {
-    localStorage.setItem(STORAGE_KEYS.bridgeToken, announceResponse.bridgeToken);
+    await bridgeCredentials.save(serverUrl, { apiKey, bridgeToken: announceResponse.bridgeToken });
   }
 
   if (announcedBridge.id) {
     localStorage.setItem(STORAGE_KEYS.bridgeId, announcedBridge.id);
   }
+  lastManagedAnnounceAt = Date.now();
   lastAnnouncedInventorySignature = inventorySignature(currentInventory);
   setBridgeConnectionError();
   if (connectionStatus) {
@@ -3226,7 +3854,7 @@ async function runBridgeSettingsApply() {
 }
 
 function populateDeviceSelect(select, direction, preferredValue) {
-  const devices = devicesByDirection(direction);
+  const devices = devicesByDirection(direction).filter(device => device.id !== 'bridge:none');
   select.innerHTML = "";
 
   devices.forEach((device) => {
@@ -3408,23 +4036,23 @@ function renderPortRow(row) {
   row.refs.label.addEventListener("input", () => {
     row.label = row.refs.label.value.trim() || row.id;
   });
-  row.refs.inputDevice.addEventListener("change", () => {
+  listenForSelectValueChange(row.refs.inputDevice, () => {
     row.inputDeviceId = row.refs.inputDevice.value;
     populatePairSelect(row.inputDeviceId, row.refs.inputPair, row.inputPair);
     row.inputPair = row.refs.inputPair.value;
     updatePortControlState(row);
   });
-  row.refs.outputDevice.addEventListener("change", () => {
+  listenForSelectValueChange(row.refs.outputDevice, () => {
     row.outputDeviceId = row.refs.outputDevice.value;
     populatePairSelect(row.outputDeviceId, row.refs.outputPair, row.outputPair);
     row.outputPair = row.refs.outputPair.value;
     updatePortControlState(row);
   });
-  row.refs.inputPair.addEventListener("change", () => {
+  listenForSelectValueChange(row.refs.inputPair, () => {
     row.inputPair = row.refs.inputPair.value;
     updatePortControlState(row);
   });
-  row.refs.outputPair.addEventListener("change", () => {
+  listenForSelectValueChange(row.refs.outputPair, () => {
     row.outputPair = row.refs.outputPair.value;
     updatePortControlState(row);
   });
@@ -3501,8 +4129,8 @@ function renderStoppedPort(row) {
   updatePortControlState(row);
   row.refs.leftDb.textContent = "-120.0 dBFS";
   row.refs.rightDb.textContent = "-120.0 dBFS";
-  row.refs.leftMeter.style.width = "0%";
-  row.refs.rightMeter.style.width = "0%";
+  audioMeter.renderLevel(row.refs.leftMeter, 0);
+  audioMeter.renderLevel(row.refs.rightMeter, 0);
   row.refs.status.textContent = "Stopped";
 }
 
@@ -3511,8 +4139,8 @@ function renderRunningPort(row, status) {
   updatePortControlState(row);
   row.refs.leftDb.textContent = formatDb(status.rms_left_db);
   row.refs.rightDb.textContent = formatDb(status.rms_right_db);
-  row.refs.leftMeter.style.width = `${meterPercent(status.rms_left_db)}%`;
-  row.refs.rightMeter.style.width = `${meterPercent(status.rms_right_db)}%`;
+  audioMeter.renderLevel(row.refs.leftMeter, meterPercent(status.rms_left_db));
+  audioMeter.renderLevel(row.refs.rightMeter, meterPercent(status.rms_right_db));
 
   const inputConfig = status.input_config
     ? `${status.input_config.channels} ch ${status.input_config.sample_rate} Hz ${status.input_config.sample_format}`
@@ -3659,7 +4287,7 @@ async function refreshDevices() {
 
   if (refreshButton) {
     refreshButton.disabled = true;
-    refreshButton.textContent = "Refreshing";
+    refreshButton.textContent = "Retrying…";
   }
   try {
     // Inventory probes each backend with a native timeout first. Status checks
@@ -3669,7 +4297,7 @@ async function refreshDevices() {
     ]);
     const inventory = inventoryResult[0].status === "fulfilled"
       ? inventoryResult[0].value
-      : { host: "Unavailable", devices: [], warnings: [String(inventoryResult[0].reason)] };
+      : { ...(currentInventory || { host: "Unavailable", devices: [] }), warnings: [String(inventoryResult[0].reason)] };
     if (inventoryResult[0].status === "fulfilled") {
       managedInventoryWatchRetryAt = 0;
     }
@@ -3737,7 +4365,7 @@ async function refreshDevices() {
     }
     if (refreshButton) {
       refreshButton.disabled = false;
-      refreshButton.textContent = "Refresh";
+      refreshButton.textContent = "Retry";
     }
   }
 }
@@ -3752,12 +4380,29 @@ omtRuntimeLink?.addEventListener("click", openOmtInformation);
 autostartInput.addEventListener("change", setAutostartState);
 bridgePorts?.addEventListener("change", handleManagedPortControlChange);
 bridgePorts?.addEventListener("input", handleManagedPortControlChange);
+bridgePorts?.addEventListener('click', handleManagedAudioClick);
+bridgePorts?.addEventListener('input', handleManagedAudioInput);
+bridgePorts?.addEventListener('change', handleManagedAudioInput);
+document.addEventListener('pointerdown', event => {
+  if (managedAudioPopover && !event.target.closest('[data-audio-direction]')) closeManagedAudioPopover(false);
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && managedAudioPopover) { event.preventDefault(); closeManagedAudioPopover(); }
+});
+window.addEventListener('resize', positionManagedAudioPopover);
+document.querySelector('.shell')?.addEventListener('scroll', positionManagedAudioPopover);
 bridgePorts?.addEventListener("pointerdown", startManagedRangeInteraction);
 window.addEventListener("pointerup", finishManagedRangeInteraction);
 window.addEventListener("pointercancel", finishManagedRangeInteraction);
 [serverUrlInput, apiKeyInput, bridgeNameInput].forEach((input) => {
   input.addEventListener("input", () => {
     saveBridgeSettings();
+    if (input === serverUrlInput && credentialServer() !== credentialInputServer) {
+      apiKeyInput.value = "";
+      credentialInputServer = "";
+      loadBridgeTlsChoice();
+    }
+    if (input === apiKeyInput) credentialInputServer = credentialServer();
     if (bridgeSettingsApplyTimer) {
       window.clearTimeout(bridgeSettingsApplyTimer);
       bridgeSettingsApplyTimer = null;
@@ -3769,6 +4414,13 @@ window.addEventListener("pointercancel", finishManagedRangeInteraction);
     scheduleBridgeSettingsApply(0);
   });
   input.addEventListener("change", () => scheduleBridgeSettingsApply(0));
+});
+allowInsecureTlsInput.addEventListener("change", async () => {
+  const serverUrl = credentialServer();
+  if (serverUrl) localStorage.setItem(`talktome:bridge-tls-insecure:${serverUrl}`, String(allowInsecureTlsInput.checked));
+  await Promise.all([...managedSessions.values()].map(stopManagedEventStream));
+  managedEventStreamsNeedRestart = true;
+  scheduleBridgeSettingsApply(0);
 });
 window.addEventListener("beforeunload", () => {
   if (managedHeartbeatTimer) window.clearInterval(managedHeartbeatTimer);
@@ -3784,9 +4436,10 @@ window.addEventListener("beforeunload", () => {
   invoke?.("stop_all_bridge_media").catch(() => {});
 });
 
-loadBridgeSettings();
+const credentialsReady = loadBridgeSettings().catch(error => setBridgeConnectionError(error));
+loadBridgeAppVersion();
 installWindowFocusSuppressionForControls();
 installBridgeWindowAutoResize();
 loadAutostartState();
 listenForAutostartChanges();
-refreshDevices();
+credentialsReady.then(() => refreshDevices());

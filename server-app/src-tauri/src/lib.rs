@@ -391,7 +391,7 @@ fn normalized_runtime_config(
         return Err("Manual media network mode requires an announced address.".to_string());
     }
     if config.media_network_mode == "interface" && config.media_interface_name.is_none() {
-        return Err("Preferred media network adapter is required.".to_string());
+        return Err("A media network adapter must be selected.".to_string());
     }
     if config.media_network_mode != "manual" {
         config.media_announced_address = None;
@@ -436,7 +436,21 @@ fn write_runtime_config(config: &ServerRuntimeConfig) -> Result<PathBuf, String>
         .parent()
         .ok_or_else(|| "runtime config path has no parent directory".to_string())?;
     fs::create_dir_all(parent).map_err(|err| format!("failed to create config dir: {err}"))?;
-    let contents = serde_json::to_string_pretty(config)
+    // Preserve settings managed by the web admin, including reverse-proxy access.
+    let mut saved: serde_json::Value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let updated =
+        serde_json::to_value(config).map_err(|err| format!("failed to serialize config: {err}"))?;
+    if let (Some(saved), Some(updated)) = (saved.as_object_mut(), updated.as_object()) {
+        saved.remove("mediaInterfaceName");
+        saved.remove("mediaAnnouncedAddress");
+        saved.extend(updated.clone());
+    } else {
+        saved = updated;
+    }
+    let contents = serde_json::to_string_pretty(&saved)
         .map_err(|err| format!("failed to serialize config: {err}"))?;
     fs::write(&path, format!("{contents}\n"))
         .map_err(|err| format!("failed to write config: {err}"))?;
@@ -469,11 +483,13 @@ fn admin_host_from_config(
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            if let Some(interface) = available_interfaces
-                .iter()
-                .find(|interface| interface.name == interface_name)
-            {
-                return interface.address.clone();
+            for selected_name in interface_name.split(',').map(str::trim) {
+                if let Some(interface) = available_interfaces
+                    .iter()
+                    .find(|interface| interface.name == selected_name)
+                {
+                    return interface.address.clone();
+                }
             }
         }
     }
@@ -495,6 +511,28 @@ fn admin_url(
 }
 
 fn admin_url_from_config() -> String {
+    let saved: serde_json::Value = fs::read_to_string(runtime_config_path())
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mode = env::var("TALKTOME_TLS_MODE")
+        .ok()
+        .unwrap_or_else(|| saved["tlsMode"].as_str().unwrap_or("internal").to_string());
+    if mode == "proxy" {
+        let public_url = env::var("TALKTOME_PUBLIC_URL")
+            .ok()
+            .or_else(|| env::var("PUBLIC_URL").ok())
+            .unwrap_or_else(|| saved["publicUrl"].as_str().unwrap_or("").to_string());
+        if public_url.starts_with("https://") {
+            return format!("{}/admin", public_url.trim_end_matches('/'));
+        }
+        let config = load_runtime_config().unwrap_or_default();
+        return format!(
+            "http://{}:{}/admin",
+            admin_host_from_config(&config, &get_available_media_network_interfaces()),
+            config.https_port
+        );
+    }
     let config = load_runtime_config().unwrap_or_default();
     admin_url(&config, &get_available_media_network_interfaces())
 }
@@ -543,6 +581,24 @@ mod admin_url_tests {
         assert_eq!(
             admin_url(&config, &interfaces),
             "https://10.0.0.15:443/admin"
+        );
+    }
+
+    #[test]
+    fn selected_adapters_use_the_first_available_selected_address() {
+        let config = ServerRuntimeConfig {
+            https_port: 8443,
+            media_network_mode: "interface".to_string(),
+            media_interface_name: Some("missing, en1, en0".to_string()),
+            ..ServerRuntimeConfig::default()
+        };
+        let interfaces = [
+            interface("en0", "192.168.1.20"),
+            interface("en1", "10.0.0.15"),
+        ];
+        assert_eq!(
+            admin_url(&config, &interfaces),
+            "https://10.0.0.15:8443/admin"
         );
     }
 
@@ -713,7 +769,8 @@ fn configure_server_command(_command: &mut Command) {
 }
 
 fn append_log(app: &AppHandle, line: String) {
-    let became_ready = line.contains("HTTPS Server running on port");
+    let became_ready = line.contains("HTTPS Server running on port")
+        || line.contains("HTTP Server running on port");
     let timestamped_line = timestamp_log_line(&line);
     if let Some(state) = app.try_state::<Mutex<ServerManager>>() {
         if let Ok(mut manager) = state.lock() {

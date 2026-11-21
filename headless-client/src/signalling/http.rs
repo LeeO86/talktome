@@ -72,6 +72,7 @@ impl ServerApi {
     pub fn new(base: Url, tls: Arc<rustls::ClientConfig>) -> Result<Self> {
         let client = reqwest::Client::builder()
             .use_preconfigured_tls((*tls).clone())
+            .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_secs(15))
             .user_agent(format!("talktome-headless/{}", crate::VERSION))
             .build()
@@ -149,6 +150,25 @@ impl ServerApi {
             bail!("loading targets failed ({status}): {message}");
         }
         response.json().await.context("parsing targets response")
+    }
+
+    /// `GET /users/:id/productions` — the productions this user may join.
+    pub async fn productions(&self, token: &str, user_id: i64) -> Result<Vec<Production>> {
+        let response = self
+            .client
+            .get(self.url(&format!("/users/{user_id}/productions"))?)
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("productions request failed")?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("loading productions failed ({status})");
+        }
+        response
+            .json()
+            .await
+            .context("parsing productions response")
     }
 }
 

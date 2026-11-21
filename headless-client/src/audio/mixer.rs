@@ -39,8 +39,17 @@ pub fn format_volume_db(volume: f32) -> String {
     if db <= MUTE_DB {
         "-inf dB".into()
     } else {
-        format!("{db:.0} dB")
+        format!("{db:.1} dB")
     }
+}
+
+pub fn format_volume_percent(volume: f32) -> String {
+    let volume = if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    format!("{:.0}%", volume * 100.0)
 }
 
 pub fn step_volume_db(current: f32, delta_db: f32) -> f32 {
@@ -66,11 +75,28 @@ pub struct Mixer {
     talking: bool,
     addressed: bool,
     jitter_min_ms: u32,
+    jitter_start_ms: u32,
     jitter_max_ms: u32,
     /// Output peak of the last render, for meters.
     pub output_peak: f32,
     /// One-shot connection cue mixed on top of the intercom bus.
     cue: VecDeque<f32>,
+    /// Packets handed to a known stream, and packets for a consumer the
+    /// mixer has no stream for (counted for the health log).
+    packets_matched: u64,
+    packets_unmatched: u64,
+}
+
+/// Counters for the periodic `audio-health` log line.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct MixerHealth {
+    pub sources: usize,
+    /// Sources that received a packet in the last 500 ms.
+    pub active_sources: usize,
+    pub packets_matched: u64,
+    pub packets_unmatched: u64,
+    pub buffered_ms: u32,
+    pub target_ms: u32,
 }
 
 impl Mixer {
@@ -93,13 +119,22 @@ impl Mixer {
             talking: false,
             addressed: false,
             jitter_min_ms,
+            jitter_start_ms: jitter_min_ms,
             jitter_max_ms,
             output_peak: 0.0,
             cue: VecDeque::new(),
+            packets_matched: 0,
+            packets_unmatched: 0,
         }
     }
 
     /// Replaces any cue still playing. The web client stops the previous tone.
+    /// Depth new streams start at (see `audio.jitter_start_ms`).
+    pub fn with_jitter_start(mut self, start_ms: u32) -> Self {
+        self.jitter_start_ms = start_ms;
+        self
+    }
+
     pub fn enqueue_cue(&mut self, samples: &[f32]) {
         self.cue.clear();
         self.cue.extend(samples.iter().copied());
@@ -120,7 +155,11 @@ impl Mixer {
             Source {
                 key,
                 speaker,
-                buffer: StreamBuffer::new(self.jitter_min_ms, self.jitter_max_ms)?,
+                buffer: StreamBuffer::with_start(
+                    self.jitter_min_ms,
+                    self.jitter_start_ms,
+                    self.jitter_max_ms,
+                )?,
             },
         );
         Ok(())
@@ -163,13 +202,35 @@ impl Mixer {
         }
     }
 
+    #[cfg(test)]
     pub fn push_packet(&mut self, consumer_id: &str, seq: u16, payload: &[u8]) -> Result<bool> {
+        self.push_rtp_packet(
+            consumer_id,
+            seq,
+            u32::from(seq) * 960,
+            payload,
+            std::time::Instant::now(),
+        )
+    }
+
+    pub fn push_rtp_packet(
+        &mut self,
+        consumer_id: &str,
+        seq: u16,
+        timestamp: u32,
+        payload: &[u8],
+        arrived: std::time::Instant,
+    ) -> Result<bool> {
         match self.sources.get_mut(consumer_id) {
             Some(source) => {
-                source.buffer.push(seq, payload)?;
+                self.packets_matched += 1;
+                source.buffer.push(seq, timestamp, payload, arrived)?;
                 Ok(true)
             }
-            None => Ok(false),
+            None => {
+                self.packets_unmatched += 1;
+                Ok(false)
+            }
         }
     }
 
@@ -257,12 +318,39 @@ impl Mixer {
         keys
     }
 
+    pub fn health(&self) -> MixerHealth {
+        MixerHealth {
+            sources: self.sources.len(),
+            active_sources: self
+                .sources
+                .values()
+                .filter(|s| s.buffer.last_packet().elapsed() < Duration::from_millis(500))
+                .count(),
+            packets_matched: self.packets_matched,
+            packets_unmatched: self.packets_unmatched,
+            buffered_ms: self
+                .sources
+                .values()
+                .map(|s| s.buffer.buffered_ms())
+                .max()
+                .unwrap_or(0),
+            target_ms: self
+                .sources
+                .values()
+                .filter(|s| s.buffer.is_active())
+                .map(|s| s.buffer.target_ms())
+                .max()
+                .unwrap_or(0),
+        }
+    }
+
     /// Sum of per-stream jitter/PLC counters, for the status page.
     pub fn receive_stats(&self) -> StreamStats {
         let mut total = StreamStats::default();
         for source in self.sources.values() {
             let stats = source.buffer.stats;
             total.packets += stats.packets;
+            total.lost += stats.lost;
             total.concealed += stats.concealed;
             total.dropped_late += stats.dropped_late;
             total.dropped_overflow += stats.dropped_overflow;
@@ -314,6 +402,24 @@ mod tests {
     }
 
     #[test]
+    fn target_db_readouts_match_web_mobile_amplitude() {
+        assert_eq!(format_volume_db(0.9), "-0.9 dB");
+        assert_eq!(format_volume_db(1.0), "0.0 dB");
+        assert_eq!(format_volume_db(0.5), "-6.0 dB");
+        assert_eq!(format_volume_db(0.0), "-inf dB");
+        assert_eq!(format_volume_db(f32::NAN), "-inf dB");
+    }
+
+    #[test]
+    fn deck_percentages_match_the_linear_bar_position() {
+        assert_eq!(format_volume_percent(0.5), "50%");
+        assert_eq!(format_volume_percent(0.0), "0%");
+        assert_eq!(format_volume_percent(1.0), "100%");
+        assert_eq!(format_volume_percent(1.2), "100%");
+        assert_eq!(format_volume_percent(f32::NAN), "0%");
+    }
+
+    #[test]
     fn applies_volume_mute_and_feed_dim() {
         let mut mixer = Mixer::new(1.0, -20.0, true, false, 20, 200);
         mixer
@@ -331,6 +437,9 @@ mod tests {
             mixer.push_packet("f1", i as u16, p).unwrap();
         }
         assert!(!mixer.push_packet("nope", 0, &conf[0]).unwrap());
+        let health = mixer.health();
+        assert_eq!((health.sources, health.active_sources), (2, 2));
+        assert_eq!(health.packets_unmatched, 1);
 
         let mut out = vec![0f32; 960];
         mixer.render(&mut out);
@@ -374,8 +483,8 @@ mod tests {
         assert_eq!(volume_to_db(0.0), MUTE_DB);
         let quieter = step_volume_db(1.0, -6.0);
         assert!((volume_to_db(quieter) + 6.0).abs() < 0.05);
-        assert_eq!(format_volume_db(1.0), "0 dB");
-        assert_eq!(format_volume_db(0.0), "-inf dB");
+        assert_eq!(format_volume_percent(1.0), "100%");
+        assert_eq!(format_volume_percent(0.0), "0%");
     }
 
     #[test]

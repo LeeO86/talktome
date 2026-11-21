@@ -2118,18 +2118,18 @@ var mediasoupClient = (() => {
         } else {
           params.ordered = true;
         }
-        if (params.maxPacketLifeTime && typeof params.maxPacketLifeTime !== "number") {
+        if (params.maxPacketLifeTime !== void 0 && typeof params.maxPacketLifeTime !== "number") {
           throw new TypeError("invalid params.maxPacketLifeTime");
         }
-        if (params.maxRetransmits && typeof params.maxRetransmits !== "number") {
+        if (params.maxRetransmits !== void 0 && typeof params.maxRetransmits !== "number") {
           throw new TypeError("invalid params.maxRetransmits");
         }
-        if (params.maxPacketLifeTime && params.maxRetransmits) {
+        if (params.maxPacketLifeTime !== void 0 && params.maxRetransmits !== void 0) {
           throw new TypeError("cannot provide both maxPacketLifeTime and maxRetransmits");
         }
-        if (orderedGiven && params.ordered && (params.maxPacketLifeTime || params.maxRetransmits)) {
+        if (orderedGiven && params.ordered && (params.maxPacketLifeTime !== void 0 || params.maxRetransmits !== void 0)) {
           throw new TypeError("cannot be ordered with maxPacketLifeTime or maxRetransmits");
-        } else if (!orderedGiven && (params.maxPacketLifeTime || params.maxRetransmits)) {
+        } else if (!orderedGiven && (params.maxPacketLifeTime !== void 0 || params.maxRetransmits !== void 0)) {
           params.ordered = false;
         }
         if (params.label && typeof params.label !== "string") {
@@ -2602,6 +2602,7 @@ var mediasoupClient = (() => {
         }
       }
       function getRtpCapabilities({ direction, extendedRtpCapabilities }) {
+        const isSending = direction === "sendonly";
         const rtpCapabilities = {
           codecs: [],
           headerExtensions: []
@@ -2610,23 +2611,23 @@ var mediasoupClient = (() => {
           const codec = {
             kind: extendedCodec.kind,
             mimeType: extendedCodec.mimeType,
-            preferredPayloadType: extendedCodec.remotePayloadType,
+            preferredPayloadType: isSending ? extendedCodec.localPayloadType : extendedCodec.remotePayloadType,
             clockRate: extendedCodec.clockRate,
             channels: extendedCodec.channels,
             parameters: extendedCodec.localParameters,
             rtcpFeedback: extendedCodec.rtcpFeedback
           };
           rtpCapabilities.codecs.push(codec);
-          if (!extendedCodec.remoteRtxPayloadType) {
+          if (!extendedCodec.localRtxPayloadType || !extendedCodec.remoteRtxPayloadType) {
             continue;
           }
           const rtxCodec = {
             kind: extendedCodec.kind,
             mimeType: `${extendedCodec.kind}/rtx`,
-            preferredPayloadType: extendedCodec.remoteRtxPayloadType,
+            preferredPayloadType: isSending ? extendedCodec.localRtxPayloadType : extendedCodec.remoteRtxPayloadType,
             clockRate: extendedCodec.clockRate,
             parameters: {
-              apt: extendedCodec.remotePayloadType
+              apt: isSending ? extendedCodec.localPayloadType : extendedCodec.remotePayloadType
             },
             rtcpFeedback: []
           };
@@ -2639,7 +2640,7 @@ var mediasoupClient = (() => {
           const ext = {
             kind: extendedExtension.kind,
             uri: extendedExtension.uri,
-            preferredId: extendedExtension.recvId,
+            preferredId: isSending ? extendedExtension.sendId : extendedExtension.recvId,
             preferredEncrypt: extendedExtension.encrypt ?? false,
             direction: extendedExtension.direction
           };
@@ -3648,9 +3649,22 @@ var mediasoupClient = (() => {
             logger.debug("replaceTrack() | same track, ignored");
             return;
           }
-          await new Promise((resolve, reject) => {
-            this.safeEmit("@replacetrack", track, resolve, reject);
-          });
+          try {
+            await new Promise((resolve, reject) => {
+              this.safeEmit("@replacetrack", track, resolve, reject);
+            });
+            if (this._closed) {
+              throw new errors_1.InvalidStateError("closed");
+            }
+          } catch (error) {
+            if (track && this._stopTracks) {
+              try {
+                track.stop();
+              } catch (error2) {
+              }
+            }
+            throw error;
+          }
           this.destroyTrack();
           this._track = track;
           if (this._track && this._disableTrackOnPause) {
@@ -3678,7 +3692,6 @@ var mediasoupClient = (() => {
           }
           await new Promise((resolve, reject) => {
             this.safeEmit("@setmaxspatiallayer", spatialLayer, resolve, reject);
-          }).catch(() => {
           });
           this._maxSpatialLayer = spatialLayer;
         }
@@ -4518,6 +4531,10 @@ var mediasoupClient = (() => {
           }
           logger.debug("close()");
           this._closed = true;
+          for (const task of this._pendingConsumerTasks) {
+            task.reject(new errors_1.InvalidStateError("closed"));
+          }
+          this._pendingConsumerTasks = [];
           this._awaitQueue.stop();
           this._handler.close();
           this._connectionState = "closed";
@@ -4583,9 +4600,15 @@ var mediasoupClient = (() => {
         /**
          * Create a Producer.
          */
-        async produce({ track, streamId, encodings, codecOptions, headerExtensionOptions, codec, stopTracks = true, disableTrackOnPause = true, zeroRtpOnPause = false, onRtpSender, appData = {} } = {}) {
+        async produce({ track, streamId, encodings, codecOptions, codec, stopTracks = true, disableTrackOnPause = true, zeroRtpOnPause = false, onRtpSender, appData = {} } = {}) {
           logger.debug("produce() [track:%o]", track);
           if (this._closed) {
+            if (track && stopTracks) {
+              try {
+                track.stop();
+              } catch (error) {
+              }
+            }
             throw new errors_1.InvalidStateError("closed");
           } else if (!track) {
             throw new TypeError("missing track");
@@ -4648,7 +4671,6 @@ var mediasoupClient = (() => {
               streamId,
               encodings: normalizedEncodings,
               codecOptions,
-              headerExtensionOptions,
               codec,
               onRtpSender
             });
@@ -4754,7 +4776,7 @@ var mediasoupClient = (() => {
           } else if (appData && typeof appData !== "object") {
             throw new TypeError("if given, appData must be an object");
           }
-          if (maxPacketLifeTime || maxRetransmits) {
+          if (maxPacketLifeTime !== void 0 || maxRetransmits !== void 0) {
             ordered = false;
           }
           return this._awaitQueue.push(async () => {
@@ -4767,15 +4789,24 @@ var mediasoupClient = (() => {
                 protocol
               }
             });
-            ortc.validateAndNormalizeSctpStreamParameters(sctpStreamParameters);
-            const { id } = await new Promise((resolve, reject) => {
-              this.safeEmit("producedata", {
-                sctpStreamParameters,
-                label,
-                protocol,
-                appData
-              }, resolve, reject);
-            });
+            let id;
+            try {
+              ortc.validateAndNormalizeSctpStreamParameters(sctpStreamParameters);
+              ({ id } = await new Promise((resolve, reject) => {
+                this.safeEmit("producedata", {
+                  sctpStreamParameters,
+                  label,
+                  protocol,
+                  appData
+                }, resolve, reject);
+              }));
+            } catch (error) {
+              try {
+                dataChannel.close();
+              } catch (error2) {
+              }
+              throw error;
+            }
             const dataProducer = new DataProducer_1.DataProducer({
               id,
               dataChannel,
@@ -6651,7 +6682,6 @@ var mediasoupClient = (() => {
       exports.extractDtlsParameters = extractDtlsParameters;
       exports.getCname = getCname;
       exports.applyCodecParameters = applyCodecParameters;
-      exports.addHeaderExtension = addHeaderExtension;
       var sdpTransform = __importStar(require_lib3());
       function extractRtpCapabilities({ sdpObject }) {
         const codecsMap = /* @__PURE__ */ new Map();
@@ -6813,15 +6843,6 @@ var mediasoupClient = (() => {
           }
         }
       }
-      function addHeaderExtension({ offerMediaObject, headerExtensionUri, headerExtensionId }) {
-        if (!offerMediaObject.ext) {
-          offerMediaObject.ext = [];
-        }
-        offerMediaObject.ext.push({
-          uri: headerExtensionUri,
-          value: headerExtensionId
-        });
-      }
     }
   });
 
@@ -6952,8 +6973,8 @@ var mediasoupClient = (() => {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.addNackSupportForOpus = addNackSupportForOpus;
-      exports.addHeaderExtensionSupport = addHeaderExtensionSupport;
       exports.getMsidStreamIdAndTrackId = getMsidStreamIdAndTrackId;
+      exports.applyForcedRtpExtensions = applyForcedRtpExtensions;
       function addNackSupportForOpus(rtpCapabilities) {
         for (const codec of rtpCapabilities.codecs ?? []) {
           if ((codec.mimeType.toLowerCase() === "audio/opus" || codec.mimeType.toLowerCase() === "audio/multiopus") && !codec.rtcpFeedback?.some((fb) => fb.type === "nack" && !fb.parameter)) {
@@ -6964,35 +6985,6 @@ var mediasoupClient = (() => {
           }
         }
       }
-      function addHeaderExtensionSupport(rtpCapabilities, headerExtension) {
-        let preferredId;
-        const existingHeaderExtension = rtpCapabilities.headerExtensions?.find((exten) => exten.uri === headerExtension.uri);
-        if (existingHeaderExtension) {
-          if (existingHeaderExtension.kind === headerExtension.kind) {
-            return;
-          } else {
-            preferredId = existingHeaderExtension.preferredId;
-          }
-        }
-        if (!rtpCapabilities.headerExtensions) {
-          rtpCapabilities.headerExtensions = [];
-        }
-        if (preferredId === void 0) {
-          preferredId = 1;
-          const setPreferredIds = new Set(rtpCapabilities.headerExtensions.map((exten) => exten.preferredId));
-          while (setPreferredIds.has(preferredId)) {
-            ++preferredId;
-          }
-        }
-        const newHeaderExtension = {
-          kind: headerExtension.kind,
-          uri: headerExtension.uri,
-          preferredId,
-          preferredEncrypt: false,
-          direction: headerExtension.direction
-        };
-        rtpCapabilities.headerExtensions.push(newHeaderExtension);
-      }
       function getMsidStreamIdAndTrackId(msid) {
         if (!msid || typeof msid !== "string") {
           return { msidStreamId: void 0, msidTrackId: void 0 };
@@ -7002,6 +6994,27 @@ var mediasoupClient = (() => {
           return { msidStreamId: void 0, msidTrackId: void 0 };
         }
         return { msidStreamId, msidTrackId };
+      }
+      function applyForcedRtpExtensions(transceiver, forcedRtpExtensions) {
+        if (!transceiver.getHeaderExtensionsToNegotiate || !transceiver.setHeaderExtensionsToNegotiate) {
+          return false;
+        }
+        if (Object.keys(forcedRtpExtensions).length === 0) {
+          return false;
+        }
+        let extensionsToNegotiate = transceiver.getHeaderExtensionsToNegotiate();
+        extensionsToNegotiate = extensionsToNegotiate.map((extenCap) => {
+          const uri = extenCap.uri;
+          const enabled = forcedRtpExtensions[uri];
+          if (enabled === true) {
+            extenCap.direction = "sendrecv";
+          } else if (enabled === false) {
+            extenCap.direction = "stopped";
+          }
+          return extenCap;
+        });
+        transceiver.setHeaderExtensionsToNegotiate(extensionsToNegotiate);
+        return true;
       }
     }
   });
@@ -7072,6 +7085,7 @@ var mediasoupClient = (() => {
         _remoteSdp;
         // Callback to request sending extended RTP capabilities on demand.
         _getSendExtendedRtpCapabilities;
+        _forcedRtpExtensions;
         // Initial server side DTLS role. If not 'auto', it will force the opposite
         // value in client side.
         _forcedLocalDtlsRole;
@@ -7090,10 +7104,10 @@ var mediasoupClient = (() => {
         /**
          * Creates a factory function.
          */
-        static createFactory() {
+        static createFactory({ forcedRtpExtensions }) {
           return {
             name: NAME,
-            factory: (options) => new _Chrome111(options),
+            factory: (options) => new _Chrome111({ ...options, forcedRtpExtensions }),
             getNativeRtpCapabilities: async ({ direction }) => {
               logger.debug("getNativeRtpCapabilities() [direction:%o]", direction);
               let pc = new RTCPeerConnection({
@@ -7103,11 +7117,17 @@ var mediasoupClient = (() => {
                 rtcpMuxPolicy: "require"
               });
               try {
-                pc.addTransceiver("audio", { direction });
-                pc.addTransceiver("video", {
+                const audioTransceiver = pc.addTransceiver("audio", { direction });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(audioTransceiver, forcedRtpExtensions);
+                }
+                const videoTransceiver = pc.addTransceiver("video", {
                   direction,
                   sendEncodings: [{ scalabilityMode: "L3T3" }]
                 });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(videoTransceiver, forcedRtpExtensions);
+                }
                 const offer = await pc.createOffer();
                 try {
                   pc.close();
@@ -7128,18 +7148,15 @@ var mediasoupClient = (() => {
             }
           };
         }
-        static getLocalRtpCapabilities(localSdpObject, extraHeaderExtensions = []) {
+        static getLocalRtpCapabilities(localSdpObject) {
           const nativeRtpCapabilities = sdpCommonUtils.extractRtpCapabilities({
             sdpObject: localSdpObject
           });
           ortc.validateAndNormalizeRtpCapabilities(nativeRtpCapabilities);
           ortcUtils.addNackSupportForOpus(nativeRtpCapabilities);
-          for (const headerExtension of extraHeaderExtensions) {
-            ortcUtils.addHeaderExtensionSupport(nativeRtpCapabilities, headerExtension);
-          }
           return nativeRtpCapabilities;
         }
-        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities }) {
+        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities, forcedRtpExtensions }) {
           super();
           logger.debug("constructor()");
           this._direction = direction;
@@ -7151,6 +7168,7 @@ var mediasoupClient = (() => {
             sctpParameters
           });
           this._getSendExtendedRtpCapabilities = getSendExtendedRtpCapabilities;
+          this._forcedRtpExtensions = forcedRtpExtensions;
           if (dtlsParameters.role && dtlsParameters.role !== "auto") {
             this._forcedLocalDtlsRole = dtlsParameters.role === "server" ? "client" : "server";
           }
@@ -7230,7 +7248,7 @@ var mediasoupClient = (() => {
           this.assertNotClosed();
           return this._pc.getStats();
         }
-        async send({ track, streamId, encodings, codecOptions, headerExtensionOptions, codec, onRtpSender }) {
+        async send({ track, streamId, encodings, codecOptions, codec, onRtpSender }) {
           this.assertNotClosed();
           this.assertSendDirection();
           logger.debug("send() [kind:%s, track.id:%s, streamId:%s]", track.kind, track.id, streamId);
@@ -7253,90 +7271,87 @@ var mediasoupClient = (() => {
             streams: [this._sendStream],
             sendEncodings: encodings
           });
-          if (onRtpSender) {
-            onRtpSender(transceiver.sender);
-          }
-          let offer = await this._pc.createOffer();
-          let localSdpObject = sdpTransform.parse(offer.sdp);
-          if (localSdpObject.extmapAllowMixed) {
-            this._remoteSdp.setSessionExtmapAllowMixed();
-          }
-          const extraHeaderExtensions = [];
-          if (headerExtensionOptions?.absCaptureTime) {
-            extraHeaderExtensions.push({
-              uri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
-              kind: track.kind,
-              direction: "sendonly"
+          try {
+            if (this._forcedRtpExtensions) {
+              ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
+            }
+            if (onRtpSender) {
+              onRtpSender(transceiver.sender);
+            }
+            const offer = await this._pc.createOffer();
+            let localSdpObject = sdpTransform.parse(offer.sdp);
+            if (localSdpObject.extmapAllowMixed) {
+              this._remoteSdp.setSessionExtmapAllowMixed();
+            }
+            const nativeRtpCapabilities = _Chrome111.getLocalRtpCapabilities(localSdpObject);
+            const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
+            const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
+            const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
+            if (!this._transportReady) {
+              await this.setupTransport({
+                localDtlsRole: this._forcedLocalDtlsRole ?? "client",
+                localSdpObject
+              });
+            }
+            logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
+            await this._pc.setLocalDescription(offer);
+            const localId = transceiver.mid;
+            sendingRtpParameters.mid = localId;
+            localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
+            const offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
+            sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
+              offerMediaObject
             });
-          }
-          const nativeRtpCapabilities = _Chrome111.getLocalRtpCapabilities(localSdpObject, extraHeaderExtensions);
-          const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
-          const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
-          const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
-          if (!this._transportReady) {
-            await this.setupTransport({
-              localDtlsRole: this._forcedLocalDtlsRole ?? "client",
-              localSdpObject
+            sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
+            if (!encodings) {
+              sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+            } else if (encodings.length === 1) {
+              const newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+              Object.assign(newEncodings[0], encodings[0]);
+              sendingRtpParameters.encodings = newEncodings;
+            } else {
+              sendingRtpParameters.encodings = encodings;
+            }
+            this._remoteSdp.send({
+              offerMediaObject,
+              reuseMid: mediaSectionIdx.reuseMid,
+              offerRtpParameters: sendingRtpParameters,
+              answerRtpParameters: sendingRemoteRtpParameters,
+              codecOptions
             });
-          }
-          if (headerExtensionOptions?.absCaptureTime) {
-            const offerMediaObject2 = localSdpObject.media[mediaSectionIdx.idx];
-            sdpCommonUtils.addHeaderExtension({
-              offerMediaObject: offerMediaObject2,
-              headerExtensionUri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
-              headerExtensionId: sendingRemoteRtpParameters.headerExtensions.find((headerExtension) => headerExtension.uri === "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time").id
-            });
-            offer = {
-              type: "offer",
-              sdp: sdpTransform.write(localSdpObject)
+            const answer = {
+              type: "answer",
+              sdp: this._remoteSdp.getSdp()
             };
+            logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
+            await this._pc.setRemoteDescription(answer);
+            this._mapMidTransceiver.set(localId, transceiver);
+            return {
+              localId,
+              rtpParameters: sendingRtpParameters,
+              rtpSender: transceiver.sender
+            };
+          } catch (error) {
+            try {
+              if (this._pc.signalingState === "have-local-offer") {
+                try {
+                  await this._pc.setLocalDescription({ type: "rollback" });
+                } catch (error2) {
+                }
+              }
+              transceiver.stop();
+            } catch (error3) {
+            }
+            throw error;
           }
-          logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
-          await this._pc.setLocalDescription(offer);
-          const localId = transceiver.mid;
-          sendingRtpParameters.mid = localId;
-          localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
-          const offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-          sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
-            offerMediaObject
-          });
-          sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
-          if (!encodings) {
-            sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
-              offerMediaObject,
-              codecs: sendingRtpParameters.codecs
-            });
-          } else if (encodings.length === 1) {
-            const newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
-              offerMediaObject,
-              codecs: sendingRtpParameters.codecs
-            });
-            Object.assign(newEncodings[0], encodings[0]);
-            sendingRtpParameters.encodings = newEncodings;
-          } else {
-            sendingRtpParameters.encodings = encodings;
-          }
-          this._remoteSdp.send({
-            offerMediaObject,
-            reuseMid: mediaSectionIdx.reuseMid,
-            offerRtpParameters: sendingRtpParameters,
-            answerRtpParameters: sendingRemoteRtpParameters,
-            codecOptions
-          });
-          const answer = {
-            type: "answer",
-            sdp: this._remoteSdp.getSdp()
-          };
-          logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
-          await this._pc.setRemoteDescription(answer);
-          this._mapMidTransceiver.set(localId, transceiver);
-          return {
-            localId,
-            rtpParameters: sendingRtpParameters,
-            rtpSender: transceiver.sender
-          };
         }
         async stopSending(localId) {
           this.assertSendDirection();
@@ -7498,25 +7513,39 @@ var mediasoupClient = (() => {
           const dataChannel = this._pc.createDataChannel(sctpStreamParameters.label, options);
           this._nextSendSctpStreamId = ++this._nextSendSctpStreamId % (this._pc.sctp?.maxChannels ?? 65536);
           if (!this._hasDataChannelMediaSection) {
-            const offer = await this._pc.createOffer();
-            const localSdpObject = sdpTransform.parse(offer.sdp);
-            const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
-            if (!this._transportReady) {
-              await this.setupTransport({
-                localDtlsRole: this._forcedLocalDtlsRole ?? "client",
-                localSdpObject
-              });
+            try {
+              const offer = await this._pc.createOffer();
+              const localSdpObject = sdpTransform.parse(offer.sdp);
+              const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
+              if (!this._transportReady) {
+                await this.setupTransport({
+                  localDtlsRole: this._forcedLocalDtlsRole ?? "client",
+                  localSdpObject
+                });
+              }
+              logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
+              await this._pc.setLocalDescription(offer);
+              this._remoteSdp.sendSctpAssociation({ offerMediaObject });
+              const answer = {
+                type: "answer",
+                sdp: this._remoteSdp.getSdp()
+              };
+              logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
+              await this._pc.setRemoteDescription(answer);
+              this._hasDataChannelMediaSection = true;
+            } catch (error) {
+              try {
+                if (this._pc.signalingState === "have-local-offer") {
+                  try {
+                    await this._pc.setLocalDescription({ type: "rollback" });
+                  } catch (error2) {
+                  }
+                }
+                dataChannel.close();
+              } catch (error3) {
+              }
+              throw error;
             }
-            logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
-            await this._pc.setLocalDescription(offer);
-            this._remoteSdp.sendSctpAssociation({ offerMediaObject });
-            const answer = {
-              type: "answer",
-              sdp: this._remoteSdp.getSdp()
-            };
-            logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
-            await this._pc.setRemoteDescription(answer);
-            this._hasDataChannelMediaSection = true;
           }
           const newSctpStreamParameters = {
             streamId: options.id,
@@ -7558,6 +7587,9 @@ var mediasoupClient = (() => {
               const transceiver = this._pc.getTransceivers().find((t) => t.mid === localId);
               if (!transceiver) {
                 throw new Error("transceiver not found");
+              }
+              if (this._forcedRtpExtensions) {
+                ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
               }
               onRtpReceiver(transceiver.receiver);
             }
@@ -7862,6 +7894,7 @@ var mediasoupClient = (() => {
         _remoteSdp;
         // Callback to request sending extended RTP capabilities on demand.
         _getSendExtendedRtpCapabilities;
+        _forcedRtpExtensions;
         // Initial server side DTLS role. If not 'auto', it will force the opposite
         // value in client side.
         _forcedLocalDtlsRole;
@@ -7880,10 +7913,10 @@ var mediasoupClient = (() => {
         /**
          * Creates a factory function.
          */
-        static createFactory() {
+        static createFactory({ forcedRtpExtensions }) {
           return {
             name: NAME,
-            factory: (options) => new _Chrome74(options),
+            factory: (options) => new _Chrome74({ ...options, forcedRtpExtensions }),
             getNativeRtpCapabilities: async ({ direction }) => {
               logger.debug("getNativeRtpCapabilities() [direction:%o]", direction);
               let pc = new RTCPeerConnection({
@@ -7893,8 +7926,14 @@ var mediasoupClient = (() => {
                 rtcpMuxPolicy: "require"
               });
               try {
-                pc.addTransceiver("audio", { direction });
-                pc.addTransceiver("video", { direction });
+                const audioTransceiver = pc.addTransceiver("audio", { direction });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(audioTransceiver, forcedRtpExtensions);
+                }
+                const videoTransceiver = pc.addTransceiver("video", { direction });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(videoTransceiver, forcedRtpExtensions);
+                }
                 const offer = await pc.createOffer();
                 try {
                   pc.close();
@@ -7915,18 +7954,15 @@ var mediasoupClient = (() => {
             }
           };
         }
-        static getLocalRtpCapabilities(localSdpObject, extraHeaderExtensions = []) {
+        static getLocalRtpCapabilities(localSdpObject) {
           const nativeRtpCapabilities = sdpCommonUtils.extractRtpCapabilities({
             sdpObject: localSdpObject
           });
           ortc.validateAndNormalizeRtpCapabilities(nativeRtpCapabilities);
           ortcUtils.addNackSupportForOpus(nativeRtpCapabilities);
-          for (const headerExtension of extraHeaderExtensions) {
-            ortcUtils.addHeaderExtensionSupport(nativeRtpCapabilities, headerExtension);
-          }
           return nativeRtpCapabilities;
         }
-        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities }) {
+        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities, forcedRtpExtensions }) {
           super();
           logger.debug("constructor()");
           this._direction = direction;
@@ -7938,6 +7974,7 @@ var mediasoupClient = (() => {
             sctpParameters
           });
           this._getSendExtendedRtpCapabilities = getSendExtendedRtpCapabilities;
+          this._forcedRtpExtensions = forcedRtpExtensions;
           if (dtlsParameters.role && dtlsParameters.role !== "auto") {
             this._forcedLocalDtlsRole = dtlsParameters.role === "server" ? "client" : "server";
           }
@@ -8017,7 +8054,7 @@ var mediasoupClient = (() => {
           this.assertNotClosed();
           return this._pc.getStats();
         }
-        async send({ track, streamId, encodings, codecOptions, headerExtensionOptions, codec }) {
+        async send({ track, streamId, encodings, codecOptions, codec, onRtpSender }) {
           this.assertNotClosed();
           this.assertSendDirection();
           logger.debug("send() [kind:%s, track.id:%s, streamId:%s]", track.kind, track.id, streamId);
@@ -8032,116 +8069,116 @@ var mediasoupClient = (() => {
             streams: [this._sendStream],
             sendEncodings: encodings
           });
-          let offer = await this._pc.createOffer();
-          let localSdpObject = sdpTransform.parse(offer.sdp);
-          if (localSdpObject.extmapAllowMixed) {
-            this._remoteSdp.setSessionExtmapAllowMixed();
-          }
-          const extraHeaderExtensions = [];
-          if (headerExtensionOptions?.absCaptureTime) {
-            extraHeaderExtensions.push({
-              uri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
-              kind: track.kind,
-              direction: "sendonly"
-            });
-          }
-          const nativeRtpCapabilities = _Chrome74.getLocalRtpCapabilities(localSdpObject, extraHeaderExtensions);
-          const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
-          const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
-          const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
-          if (!this._transportReady) {
-            await this.setupTransport({
-              localDtlsRole: this._forcedLocalDtlsRole ?? "client",
-              localSdpObject
-            });
-          }
-          let hackVp9Svc = false;
-          const layers = (0, scalabilityModes_1.parse)((encodings ?? [{}])[0].scalabilityMode);
-          let offerMediaObject;
-          if (encodings?.length === 1 && layers.spatialLayers > 1 && sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp9") {
-            logger.debug("send() | enabling legacy simulcast for VP9 SVC");
-            hackVp9Svc = true;
-            localSdpObject = sdpTransform.parse(offer.sdp);
-            offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-            sdpUnifiedPlanUtils.addLegacySimulcast({
-              offerMediaObject,
-              numStreams: layers.spatialLayers
-            });
-            offer = {
-              type: "offer",
-              sdp: sdpTransform.write(localSdpObject)
-            };
-          }
-          logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
-          if (headerExtensionOptions?.absCaptureTime) {
-            offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-            sdpCommonUtils.addHeaderExtension({
-              offerMediaObject,
-              headerExtensionUri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
-              headerExtensionId: sendingRemoteRtpParameters.headerExtensions.find((headerExtension) => headerExtension.uri === "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time").id
-            });
-            offer = {
-              type: "offer",
-              sdp: sdpTransform.write(localSdpObject)
-            };
-          }
-          await this._pc.setLocalDescription(offer);
-          const localId = transceiver.mid;
-          sendingRtpParameters.mid = localId;
-          localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
-          offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-          sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
-            offerMediaObject
-          });
-          sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
-          if (!encodings) {
-            sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
-              offerMediaObject,
-              codecs: sendingRtpParameters.codecs
-            });
-          } else if (encodings.length === 1) {
-            let newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
-              offerMediaObject,
-              codecs: sendingRtpParameters.codecs
-            });
-            Object.assign(newEncodings[0], encodings[0]);
-            if (hackVp9Svc) {
-              newEncodings = [newEncodings[0]];
+          try {
+            if (this._forcedRtpExtensions) {
+              ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
             }
-            sendingRtpParameters.encodings = newEncodings;
-          } else {
-            sendingRtpParameters.encodings = encodings;
-          }
-          if (sendingRtpParameters.encodings.length > 1 && (sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp8" || sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/h264")) {
-            for (const encoding of sendingRtpParameters.encodings) {
-              if (encoding.scalabilityMode) {
-                encoding.scalabilityMode = `L1T${layers.temporalLayers}`;
-              } else {
-                encoding.scalabilityMode = "L1T3";
+            if (onRtpSender) {
+              onRtpSender(transceiver.sender);
+            }
+            let offer = await this._pc.createOffer();
+            let localSdpObject = sdpTransform.parse(offer.sdp);
+            if (localSdpObject.extmapAllowMixed) {
+              this._remoteSdp.setSessionExtmapAllowMixed();
+            }
+            const nativeRtpCapabilities = _Chrome74.getLocalRtpCapabilities(localSdpObject);
+            const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
+            const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
+            const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
+            if (!this._transportReady) {
+              await this.setupTransport({
+                localDtlsRole: this._forcedLocalDtlsRole ?? "client",
+                localSdpObject
+              });
+            }
+            let hackVp9Svc = false;
+            const layers = (0, scalabilityModes_1.parse)((encodings ?? [{}])[0].scalabilityMode);
+            let offerMediaObject;
+            if (encodings?.length === 1 && layers.spatialLayers > 1 && sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp9") {
+              logger.debug("send() | enabling legacy simulcast for VP9 SVC");
+              hackVp9Svc = true;
+              localSdpObject = sdpTransform.parse(offer.sdp);
+              offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
+              sdpUnifiedPlanUtils.addLegacySimulcast({
+                offerMediaObject,
+                numStreams: layers.spatialLayers
+              });
+              offer = {
+                type: "offer",
+                sdp: sdpTransform.write(localSdpObject)
+              };
+            }
+            logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
+            await this._pc.setLocalDescription(offer);
+            const localId = transceiver.mid;
+            sendingRtpParameters.mid = localId;
+            localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
+            offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
+            sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
+              offerMediaObject
+            });
+            sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
+            if (!encodings) {
+              sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+            } else if (encodings.length === 1) {
+              let newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+              Object.assign(newEncodings[0], encodings[0]);
+              if (hackVp9Svc) {
+                newEncodings = [newEncodings[0]];
+              }
+              sendingRtpParameters.encodings = newEncodings;
+            } else {
+              sendingRtpParameters.encodings = encodings;
+            }
+            if (sendingRtpParameters.encodings.length > 1 && (sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp8" || sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/h264")) {
+              for (const encoding of sendingRtpParameters.encodings) {
+                if (encoding.scalabilityMode) {
+                  encoding.scalabilityMode = `L1T${layers.temporalLayers}`;
+                } else {
+                  encoding.scalabilityMode = "L1T3";
+                }
               }
             }
+            this._remoteSdp.send({
+              offerMediaObject,
+              reuseMid: mediaSectionIdx.reuseMid,
+              offerRtpParameters: sendingRtpParameters,
+              answerRtpParameters: sendingRemoteRtpParameters,
+              codecOptions
+            });
+            const answer = {
+              type: "answer",
+              sdp: this._remoteSdp.getSdp()
+            };
+            logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
+            await this._pc.setRemoteDescription(answer);
+            this._mapMidTransceiver.set(localId, transceiver);
+            return {
+              localId,
+              rtpParameters: sendingRtpParameters,
+              rtpSender: transceiver.sender
+            };
+          } catch (error) {
+            try {
+              if (this._pc.signalingState === "have-local-offer") {
+                try {
+                  await this._pc.setLocalDescription({ type: "rollback" });
+                } catch (error2) {
+                }
+              }
+              transceiver.stop();
+            } catch (error3) {
+            }
+            throw error;
           }
-          this._remoteSdp.send({
-            offerMediaObject,
-            reuseMid: mediaSectionIdx.reuseMid,
-            offerRtpParameters: sendingRtpParameters,
-            answerRtpParameters: sendingRemoteRtpParameters,
-            codecOptions
-          });
-          const answer = {
-            type: "answer",
-            sdp: this._remoteSdp.getSdp()
-          };
-          logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
-          await this._pc.setRemoteDescription(answer);
-          this._mapMidTransceiver.set(localId, transceiver);
-          return {
-            localId,
-            rtpParameters: sendingRtpParameters,
-            rtpSender: transceiver.sender
-          };
         }
         async stopSending(localId) {
           this.assertSendDirection();
@@ -8303,25 +8340,39 @@ var mediasoupClient = (() => {
           const dataChannel = this._pc.createDataChannel(sctpStreamParameters.label, options);
           this._nextSendSctpStreamId = ++this._nextSendSctpStreamId % (this._pc.sctp?.maxChannels ?? 65536);
           if (!this._hasDataChannelMediaSection) {
-            const offer = await this._pc.createOffer();
-            const localSdpObject = sdpTransform.parse(offer.sdp);
-            const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
-            if (!this._transportReady) {
-              await this.setupTransport({
-                localDtlsRole: this._forcedLocalDtlsRole ?? "client",
-                localSdpObject
-              });
+            try {
+              const offer = await this._pc.createOffer();
+              const localSdpObject = sdpTransform.parse(offer.sdp);
+              const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
+              if (!this._transportReady) {
+                await this.setupTransport({
+                  localDtlsRole: this._forcedLocalDtlsRole ?? "client",
+                  localSdpObject
+                });
+              }
+              logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
+              await this._pc.setLocalDescription(offer);
+              this._remoteSdp.sendSctpAssociation({ offerMediaObject });
+              const answer = {
+                type: "answer",
+                sdp: this._remoteSdp.getSdp()
+              };
+              logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
+              await this._pc.setRemoteDescription(answer);
+              this._hasDataChannelMediaSection = true;
+            } catch (error) {
+              try {
+                if (this._pc.signalingState === "have-local-offer") {
+                  try {
+                    await this._pc.setLocalDescription({ type: "rollback" });
+                  } catch (error2) {
+                  }
+                }
+                dataChannel.close();
+              } catch (error3) {
+              }
+              throw error;
             }
-            logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
-            await this._pc.setLocalDescription(offer);
-            this._remoteSdp.sendSctpAssociation({ offerMediaObject });
-            const answer = {
-              type: "answer",
-              sdp: this._remoteSdp.getSdp()
-            };
-            logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
-            await this._pc.setRemoteDescription(answer);
-            this._hasDataChannelMediaSection = true;
           }
           const newSctpStreamParameters = {
             streamId: options.id,
@@ -8356,6 +8407,20 @@ var mediasoupClient = (() => {
           };
           logger.debug("receive() | calling pc.setRemoteDescription() [offer:%o]", offer);
           await this._pc.setRemoteDescription(offer);
+          for (const options of optionsList) {
+            const { trackId, onRtpReceiver } = options;
+            if (onRtpReceiver) {
+              const localId = mapLocalId.get(trackId);
+              const transceiver = this._pc.getTransceivers().find((t) => t.mid === localId);
+              if (!transceiver) {
+                throw new Error("transceiver not found");
+              }
+              if (this._forcedRtpExtensions) {
+                ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
+              }
+              onRtpReceiver(transceiver.receiver);
+            }
+          }
           let answer = await this._pc.createAnswer();
           const localSdpObject = sdpTransform.parse(answer.sdp);
           for (const options of optionsList) {
@@ -8656,6 +8721,7 @@ var mediasoupClient = (() => {
         _remoteSdp;
         // Callback to request sending extended RTP capabilities on demand.
         _getSendExtendedRtpCapabilities;
+        _forcedRtpExtensions;
         // RTCPeerConnection instance.
         _pc;
         // Map of RTCTransceivers indexed by MID.
@@ -8671,10 +8737,10 @@ var mediasoupClient = (() => {
         /**
          * Creates a factory function.
          */
-        static createFactory() {
+        static createFactory({ forcedRtpExtensions }) {
           return {
             name: NAME,
-            factory: (options) => new _Firefox120(options),
+            factory: (options) => new _Firefox120({ ...options, forcedRtpExtensions }),
             getNativeRtpCapabilities: async ({ direction }) => {
               logger.debug("getNativeRtpCapabilities() [direction:%o]", direction);
               let pc = new RTCPeerConnection({
@@ -8688,14 +8754,20 @@ var mediasoupClient = (() => {
               const fakeStream = canvas.captureStream();
               const fakeVideoTrack = fakeStream.getVideoTracks()[0];
               try {
-                pc.addTransceiver("audio", { direction });
-                pc.addTransceiver(fakeVideoTrack, {
+                const audioTransceiver = pc.addTransceiver("audio", { direction });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(audioTransceiver, forcedRtpExtensions);
+                }
+                const videoTransceiver = pc.addTransceiver(fakeVideoTrack, {
                   direction,
                   sendEncodings: [
                     { rid: "r0", maxBitrate: 1e5 },
                     { rid: "r1", maxBitrate: 5e5 }
                   ]
                 });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(videoTransceiver, forcedRtpExtensions);
+                }
                 const offer = await pc.createOffer();
                 try {
                   canvas.remove();
@@ -8739,7 +8811,7 @@ var mediasoupClient = (() => {
           ortc.validateAndNormalizeRtpCapabilities(nativeRtpCapabilities);
           return nativeRtpCapabilities;
         }
-        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities }) {
+        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities, forcedRtpExtensions }) {
           super();
           logger.debug("constructor()");
           this._direction = direction;
@@ -8751,6 +8823,7 @@ var mediasoupClient = (() => {
             sctpParameters
           });
           this._getSendExtendedRtpCapabilities = getSendExtendedRtpCapabilities;
+          this._forcedRtpExtensions = forcedRtpExtensions;
           this._pc = new RTCPeerConnection({
             iceServers: iceServers ?? [],
             iceTransportPolicy: iceTransportPolicy ?? "all",
@@ -8839,76 +8912,93 @@ var mediasoupClient = (() => {
             streams: [this._sendStream],
             sendEncodings: encodings
           });
-          if (onRtpSender) {
-            onRtpSender(transceiver.sender);
-          }
-          const offer = await this._pc.createOffer();
-          let localSdpObject = sdpTransform.parse(offer.sdp);
-          if (localSdpObject.extmapAllowMixed) {
-            this._remoteSdp.setSessionExtmapAllowMixed();
-          }
-          const nativeRtpCapabilities = _Firefox120.getLocalRtpCapabilities(localSdpObject);
-          const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
-          const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
-          const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
-          if (!this._transportReady) {
-            await this.setupTransport({ localDtlsRole: "client", localSdpObject });
-          }
-          const layers = (0, scalabilityModes_1.parse)((encodings ?? [{}])[0].scalabilityMode);
-          logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
-          await this._pc.setLocalDescription(offer);
-          const localId = transceiver.mid;
-          sendingRtpParameters.mid = localId;
-          localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
-          const offerMediaObject = localSdpObject.media[localSdpObject.media.length - 1];
-          sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
-            offerMediaObject
-          });
-          sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
-          if (!encodings) {
-            sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
-              offerMediaObject,
-              codecs: sendingRtpParameters.codecs
+          try {
+            if (this._forcedRtpExtensions) {
+              ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
+            }
+            if (onRtpSender) {
+              onRtpSender(transceiver.sender);
+            }
+            const offer = await this._pc.createOffer();
+            let localSdpObject = sdpTransform.parse(offer.sdp);
+            if (localSdpObject.extmapAllowMixed) {
+              this._remoteSdp.setSessionExtmapAllowMixed();
+            }
+            const nativeRtpCapabilities = _Firefox120.getLocalRtpCapabilities(localSdpObject);
+            const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
+            const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
+            const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
+            if (!this._transportReady) {
+              await this.setupTransport({ localDtlsRole: "client", localSdpObject });
+            }
+            const layers = (0, scalabilityModes_1.parse)((encodings ?? [{}])[0].scalabilityMode);
+            logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
+            await this._pc.setLocalDescription(offer);
+            const localId = transceiver.mid;
+            sendingRtpParameters.mid = localId;
+            localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
+            const offerMediaObject = localSdpObject.media[localSdpObject.media.length - 1];
+            sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
+              offerMediaObject
             });
-          } else if (encodings.length === 1) {
-            const newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
-              offerMediaObject,
-              codecs: sendingRtpParameters.codecs
-            });
-            Object.assign(newEncodings[0], encodings[0]);
-            sendingRtpParameters.encodings = newEncodings;
-          } else {
-            sendingRtpParameters.encodings = encodings;
-          }
-          if (sendingRtpParameters.encodings.length > 1 && (sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp8" || sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/h264")) {
-            for (const encoding of sendingRtpParameters.encodings) {
-              if (encoding.scalabilityMode) {
-                encoding.scalabilityMode = `L1T${layers.temporalLayers}`;
-              } else {
-                encoding.scalabilityMode = "L1T3";
+            sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
+            if (!encodings) {
+              sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+            } else if (encodings.length === 1) {
+              const newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+              Object.assign(newEncodings[0], encodings[0]);
+              sendingRtpParameters.encodings = newEncodings;
+            } else {
+              sendingRtpParameters.encodings = encodings;
+            }
+            if (sendingRtpParameters.encodings.length > 1 && (sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp8" || sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/h264")) {
+              for (const encoding of sendingRtpParameters.encodings) {
+                if (encoding.scalabilityMode) {
+                  encoding.scalabilityMode = `L1T${layers.temporalLayers}`;
+                } else {
+                  encoding.scalabilityMode = "L1T3";
+                }
               }
             }
+            this._remoteSdp.send({
+              offerMediaObject,
+              offerRtpParameters: sendingRtpParameters,
+              answerRtpParameters: sendingRemoteRtpParameters,
+              codecOptions
+            });
+            const answer = {
+              type: "answer",
+              sdp: this._remoteSdp.getSdp()
+            };
+            logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
+            await this._pc.setRemoteDescription(answer);
+            this._mapMidTransceiver.set(localId, transceiver);
+            return {
+              localId,
+              rtpParameters: sendingRtpParameters,
+              rtpSender: transceiver.sender
+            };
+          } catch (error) {
+            try {
+              if (this._pc.signalingState === "have-local-offer") {
+                try {
+                  await this._pc.setLocalDescription({ type: "rollback" });
+                } catch (error2) {
+                }
+              }
+              transceiver.stop();
+            } catch (error3) {
+            }
+            throw error;
           }
-          this._remoteSdp.send({
-            offerMediaObject,
-            offerRtpParameters: sendingRtpParameters,
-            answerRtpParameters: sendingRemoteRtpParameters,
-            codecOptions
-          });
-          const answer = {
-            type: "answer",
-            sdp: this._remoteSdp.getSdp()
-          };
-          logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
-          await this._pc.setRemoteDescription(answer);
-          this._mapMidTransceiver.set(localId, transceiver);
-          return {
-            localId,
-            rtpParameters: sendingRtpParameters,
-            rtpSender: transceiver.sender
-          };
         }
         async stopSending(localId) {
           this.assertSendDirection();
@@ -9064,22 +9154,39 @@ var mediasoupClient = (() => {
           const dataChannel = this._pc.createDataChannel(sctpStreamParameters.label, options);
           this._nextSendSctpStreamId = ++this._nextSendSctpStreamId % (this._pc.sctp?.maxChannels ?? 65536);
           if (!this._hasDataChannelMediaSection) {
-            const offer = await this._pc.createOffer();
-            const localSdpObject = sdpTransform.parse(offer.sdp);
-            const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
-            if (!this._transportReady) {
-              await this.setupTransport({ localDtlsRole: "client", localSdpObject });
+            try {
+              const offer = await this._pc.createOffer();
+              const localSdpObject = sdpTransform.parse(offer.sdp);
+              const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
+              if (!this._transportReady) {
+                await this.setupTransport({
+                  localDtlsRole: "client",
+                  localSdpObject
+                });
+              }
+              logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
+              await this._pc.setLocalDescription(offer);
+              this._remoteSdp.sendSctpAssociation({ offerMediaObject });
+              const answer = {
+                type: "answer",
+                sdp: this._remoteSdp.getSdp()
+              };
+              logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
+              await this._pc.setRemoteDescription(answer);
+              this._hasDataChannelMediaSection = true;
+            } catch (error) {
+              try {
+                if (this._pc.signalingState === "have-local-offer") {
+                  try {
+                    await this._pc.setLocalDescription({ type: "rollback" });
+                  } catch (error2) {
+                  }
+                }
+                dataChannel.close();
+              } catch (error3) {
+              }
+              throw error;
             }
-            logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
-            await this._pc.setLocalDescription(offer);
-            this._remoteSdp.sendSctpAssociation({ offerMediaObject });
-            const answer = {
-              type: "answer",
-              sdp: this._remoteSdp.getSdp()
-            };
-            logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
-            await this._pc.setRemoteDescription(answer);
-            this._hasDataChannelMediaSection = true;
           }
           const newSctpStreamParameters = {
             streamId: options.id,
@@ -9121,6 +9228,9 @@ var mediasoupClient = (() => {
               const transceiver = this._pc.getTransceivers().find((t) => t.mid === localId);
               if (!transceiver) {
                 throw new Error("transceiver not found");
+              }
+              if (this._forcedRtpExtensions) {
+                ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
               }
               onRtpReceiver(transceiver.receiver);
             }
@@ -9417,6 +9527,7 @@ var mediasoupClient = (() => {
         _remoteSdp;
         // Callback to request sending extended RTP capabilities on demand.
         _getSendExtendedRtpCapabilities;
+        _forcedRtpExtensions;
         // Initial server side DTLS role. If not 'auto', it will force the opposite
         // value in client side.
         _forcedLocalDtlsRole;
@@ -9435,10 +9546,10 @@ var mediasoupClient = (() => {
         /**
          * Creates a factory function.
          */
-        static createFactory() {
+        static createFactory({ forcedRtpExtensions }) {
           return {
             name: NAME,
-            factory: (options) => new _Safari12(options),
+            factory: (options) => new _Safari12({ ...options, forcedRtpExtensions }),
             getNativeRtpCapabilities: async ({ direction }) => {
               logger.debug("getNativeRtpCapabilities() [direction:%o]", direction);
               let pc = new RTCPeerConnection({
@@ -9448,8 +9559,14 @@ var mediasoupClient = (() => {
                 rtcpMuxPolicy: "require"
               });
               try {
-                pc.addTransceiver("audio", { direction });
-                pc.addTransceiver("video", { direction });
+                const audioTransceiver = pc.addTransceiver("audio", { direction });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(audioTransceiver, forcedRtpExtensions);
+                }
+                const videoTransceiver = pc.addTransceiver("video", { direction });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(videoTransceiver, forcedRtpExtensions);
+                }
                 const offer = await pc.createOffer();
                 try {
                   pc.close();
@@ -9470,18 +9587,15 @@ var mediasoupClient = (() => {
             }
           };
         }
-        static getLocalRtpCapabilities(localSdpObject, extraHeaderExtensions = []) {
+        static getLocalRtpCapabilities(localSdpObject) {
           const nativeRtpCapabilities = sdpCommonUtils.extractRtpCapabilities({
             sdpObject: localSdpObject
           });
           ortc.validateAndNormalizeRtpCapabilities(nativeRtpCapabilities);
           ortcUtils.addNackSupportForOpus(nativeRtpCapabilities);
-          for (const headerExtension of extraHeaderExtensions) {
-            ortcUtils.addHeaderExtensionSupport(nativeRtpCapabilities, headerExtension);
-          }
           return nativeRtpCapabilities;
         }
-        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities }) {
+        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities, forcedRtpExtensions }) {
           super();
           logger.debug("constructor()");
           this._direction = direction;
@@ -9493,6 +9607,7 @@ var mediasoupClient = (() => {
             sctpParameters
           });
           this._getSendExtendedRtpCapabilities = getSendExtendedRtpCapabilities;
+          this._forcedRtpExtensions = forcedRtpExtensions;
           if (dtlsParameters.role && dtlsParameters.role !== "auto") {
             this._forcedLocalDtlsRole = dtlsParameters.role === "server" ? "client" : "server";
           }
@@ -9578,119 +9693,110 @@ var mediasoupClient = (() => {
           this.assertNotClosed();
           return this._pc.getStats();
         }
-        async send({ track, streamId, encodings, codecOptions, headerExtensionOptions, codec, onRtpSender }) {
+        async send({ track, streamId, encodings, codecOptions, codec, onRtpSender }) {
           this.assertNotClosed();
           this.assertSendDirection();
           logger.debug("send() [kind:%s, track.id:%s, streamId:%s]", track.kind, track.id, streamId);
+          if (encodings && encodings.length > 1) {
+            let maxTemporalLayers = 1;
+            for (const encoding of encodings) {
+              const temporalLayers = encoding.scalabilityMode ? (0, scalabilityModes_1.parse)(encoding.scalabilityMode).temporalLayers : 3;
+              if (temporalLayers > maxTemporalLayers) {
+                maxTemporalLayers = temporalLayers;
+              }
+            }
+            encodings.forEach((encoding, idx) => {
+              encoding.rid = `r${idx}`;
+              encoding.scalabilityMode = `L1T${maxTemporalLayers}`;
+            });
+          }
           const mediaSectionIdx = this._remoteSdp.getNextMediaSectionIdx();
           const transceiver = this._pc.addTransceiver(track, {
             direction: "sendonly",
-            streams: [this._sendStream]
+            streams: [this._sendStream],
+            sendEncodings: encodings
           });
-          if (onRtpSender) {
-            onRtpSender(transceiver.sender);
-          }
-          let offer = await this._pc.createOffer();
-          let localSdpObject = sdpTransform.parse(offer.sdp);
-          if (localSdpObject.extmapAllowMixed) {
-            this._remoteSdp.setSessionExtmapAllowMixed();
-          }
-          const extraHeaderExtensions = [];
-          if (headerExtensionOptions?.absCaptureTime) {
-            extraHeaderExtensions.push({
-              uri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
-              kind: track.kind,
-              direction: "sendonly"
-            });
-          }
-          const nativeRtpCapabilities = _Safari12.getLocalRtpCapabilities(localSdpObject, extraHeaderExtensions);
-          const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
-          const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
-          const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
-          let offerMediaObject;
-          if (!this._transportReady) {
-            await this.setupTransport({
-              localDtlsRole: this._forcedLocalDtlsRole ?? "client",
-              localSdpObject
-            });
-          }
-          const layers = (0, scalabilityModes_1.parse)((encodings ?? [{}])[0].scalabilityMode);
-          if (encodings && encodings.length > 1) {
-            logger.debug("send() | enabling legacy simulcast");
-            localSdpObject = sdpTransform.parse(offer.sdp);
-            offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-            sdpUnifiedPlanUtils.addLegacySimulcast({
-              offerMediaObject,
-              numStreams: encodings.length
-            });
-            offer = {
-              type: "offer",
-              sdp: sdpTransform.write(localSdpObject)
-            };
-          }
-          if (headerExtensionOptions?.absCaptureTime) {
-            offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-            sdpCommonUtils.addHeaderExtension({
-              offerMediaObject,
-              headerExtensionUri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
-              headerExtensionId: sendingRemoteRtpParameters.headerExtensions.find((headerExtension) => headerExtension.uri === "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time").id
-            });
-            offer = {
-              type: "offer",
-              sdp: sdpTransform.write(localSdpObject)
-            };
-          }
-          logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
-          await this._pc.setLocalDescription(offer);
-          const localId = transceiver.mid;
-          sendingRtpParameters.mid = localId;
-          localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
-          offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-          sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
-            offerMediaObject
-          });
-          sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
-          sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
-            offerMediaObject,
-            codecs: sendingRtpParameters.codecs
-          });
-          if (encodings) {
-            for (let idx = 0; idx < sendingRtpParameters.encodings.length; ++idx) {
-              if (encodings[idx]) {
-                Object.assign(sendingRtpParameters.encodings[idx], encodings[idx]);
-              }
+          try {
+            if (this._forcedRtpExtensions) {
+              ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
             }
-          }
-          if (sendingRtpParameters.encodings.length > 1 && (sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp8" || sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/h264")) {
-            for (const encoding of sendingRtpParameters.encodings) {
-              if (encoding.scalabilityMode) {
-                encoding.scalabilityMode = `L1T${layers.temporalLayers}`;
-              } else {
-                encoding.scalabilityMode = "L1T3";
-              }
+            if (onRtpSender) {
+              onRtpSender(transceiver.sender);
             }
+            const offer = await this._pc.createOffer();
+            let localSdpObject = sdpTransform.parse(offer.sdp);
+            if (localSdpObject.extmapAllowMixed) {
+              this._remoteSdp.setSessionExtmapAllowMixed();
+            }
+            const nativeRtpCapabilities = _Safari12.getLocalRtpCapabilities(localSdpObject);
+            const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
+            const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
+            const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
+            if (!this._transportReady) {
+              await this.setupTransport({
+                localDtlsRole: this._forcedLocalDtlsRole ?? "client",
+                localSdpObject
+              });
+            }
+            logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
+            await this._pc.setLocalDescription(offer);
+            const localId = transceiver.mid;
+            sendingRtpParameters.mid = localId;
+            localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
+            const offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
+            sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
+              offerMediaObject
+            });
+            sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
+            if (!encodings) {
+              sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+            } else if (encodings.length === 1) {
+              const newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+              Object.assign(newEncodings[0], encodings[0]);
+              sendingRtpParameters.encodings = newEncodings;
+            } else {
+              sendingRtpParameters.encodings = encodings;
+            }
+            this._remoteSdp.send({
+              offerMediaObject,
+              reuseMid: mediaSectionIdx.reuseMid,
+              offerRtpParameters: sendingRtpParameters,
+              answerRtpParameters: sendingRemoteRtpParameters,
+              codecOptions
+            });
+            const answer = {
+              type: "answer",
+              sdp: this._remoteSdp.getSdp()
+            };
+            logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
+            await this._pc.setRemoteDescription(answer);
+            this._mapMidTransceiver.set(localId, transceiver);
+            return {
+              localId,
+              rtpParameters: sendingRtpParameters,
+              rtpSender: transceiver.sender
+            };
+          } catch (error) {
+            try {
+              if (this._pc.signalingState === "have-local-offer") {
+                try {
+                  await this._pc.setLocalDescription({ type: "rollback" });
+                } catch (error2) {
+                }
+              }
+              transceiver.stop();
+            } catch (error3) {
+            }
+            throw error;
           }
-          this._remoteSdp.send({
-            offerMediaObject,
-            reuseMid: mediaSectionIdx.reuseMid,
-            offerRtpParameters: sendingRtpParameters,
-            answerRtpParameters: sendingRemoteRtpParameters,
-            codecOptions
-          });
-          const answer = {
-            type: "answer",
-            sdp: this._remoteSdp.getSdp()
-          };
-          logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
-          await this._pc.setRemoteDescription(answer);
-          this._mapMidTransceiver.set(localId, transceiver);
-          return {
-            localId,
-            rtpParameters: sendingRtpParameters,
-            rtpSender: transceiver.sender
-          };
         }
         async stopSending(localId) {
           this.assertSendDirection();
@@ -9852,25 +9958,39 @@ var mediasoupClient = (() => {
           const dataChannel = this._pc.createDataChannel(sctpStreamParameters.label, options);
           this._nextSendSctpStreamId = ++this._nextSendSctpStreamId % (this._pc.sctp?.maxChannels ?? 65536);
           if (!this._hasDataChannelMediaSection) {
-            const offer = await this._pc.createOffer();
-            const localSdpObject = sdpTransform.parse(offer.sdp);
-            const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
-            if (!this._transportReady) {
-              await this.setupTransport({
-                localDtlsRole: this._forcedLocalDtlsRole ?? "client",
-                localSdpObject
-              });
+            try {
+              const offer = await this._pc.createOffer();
+              const localSdpObject = sdpTransform.parse(offer.sdp);
+              const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
+              if (!this._transportReady) {
+                await this.setupTransport({
+                  localDtlsRole: this._forcedLocalDtlsRole ?? "client",
+                  localSdpObject
+                });
+              }
+              logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
+              await this._pc.setLocalDescription(offer);
+              this._remoteSdp.sendSctpAssociation({ offerMediaObject });
+              const answer = {
+                type: "answer",
+                sdp: this._remoteSdp.getSdp()
+              };
+              logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
+              await this._pc.setRemoteDescription(answer);
+              this._hasDataChannelMediaSection = true;
+            } catch (error) {
+              try {
+                if (this._pc.signalingState === "have-local-offer") {
+                  try {
+                    await this._pc.setLocalDescription({ type: "rollback" });
+                  } catch (error2) {
+                  }
+                }
+                dataChannel.close();
+              } catch (error3) {
+              }
+              throw error;
             }
-            logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
-            await this._pc.setLocalDescription(offer);
-            this._remoteSdp.sendSctpAssociation({ offerMediaObject });
-            const answer = {
-              type: "answer",
-              sdp: this._remoteSdp.getSdp()
-            };
-            logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
-            await this._pc.setRemoteDescription(answer);
-            this._hasDataChannelMediaSection = true;
           }
           const newSctpStreamParameters = {
             streamId: options.id,
@@ -9912,6 +10032,9 @@ var mediasoupClient = (() => {
               const transceiver = this._pc.getTransceivers().find((t) => t.mid === localId);
               if (!transceiver) {
                 throw new Error("transceiver not found");
+              }
+              if (this._forcedRtpExtensions) {
+                ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
               }
               onRtpReceiver(transceiver.receiver);
             }
@@ -10215,6 +10338,7 @@ var mediasoupClient = (() => {
         _remoteSdp;
         // Callback to request sending extended RTP capabilities on demand.
         _getSendExtendedRtpCapabilities;
+        _forcedRtpExtensions;
         // Initial server side DTLS role. If not 'auto', it will force the opposite
         // value in client side.
         _forcedLocalDtlsRole;
@@ -10233,10 +10357,10 @@ var mediasoupClient = (() => {
         /**
          * Creates a factory function.
          */
-        static createFactory() {
+        static createFactory({ forcedRtpExtensions }) {
           return {
             name: NAME,
-            factory: (options) => new _ReactNative106(options),
+            factory: (options) => new _ReactNative106({ ...options, forcedRtpExtensions }),
             getNativeRtpCapabilities: async ({ direction }) => {
               logger.debug("getNativeRtpCapabilities() [direction:%o]", direction);
               let pc = new RTCPeerConnection({
@@ -10246,8 +10370,14 @@ var mediasoupClient = (() => {
                 rtcpMuxPolicy: "require"
               });
               try {
-                pc.addTransceiver("audio", { direction });
-                pc.addTransceiver("video", { direction });
+                const audioTransceiver = pc.addTransceiver("audio", { direction });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(audioTransceiver, forcedRtpExtensions);
+                }
+                const videoTransceiver = pc.addTransceiver("video", { direction });
+                if (forcedRtpExtensions) {
+                  ortcUtils.applyForcedRtpExtensions(videoTransceiver, forcedRtpExtensions);
+                }
                 const offer = await pc.createOffer();
                 try {
                   pc.close();
@@ -10268,18 +10398,15 @@ var mediasoupClient = (() => {
             }
           };
         }
-        static getLocalRtpCapabilities(localSdpObject, extraHeaderExtensions = []) {
+        static getLocalRtpCapabilities(localSdpObject) {
           const nativeRtpCapabilities = sdpCommonUtils.extractRtpCapabilities({
             sdpObject: localSdpObject
           });
           ortc.validateAndNormalizeRtpCapabilities(nativeRtpCapabilities);
           ortcUtils.addNackSupportForOpus(nativeRtpCapabilities);
-          for (const headerExtension of extraHeaderExtensions) {
-            ortcUtils.addHeaderExtensionSupport(nativeRtpCapabilities, headerExtension);
-          }
           return nativeRtpCapabilities;
         }
-        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities }) {
+        constructor({ direction, iceParameters, iceCandidates, dtlsParameters, sctpParameters, iceServers, iceTransportPolicy, additionalSettings, getSendExtendedRtpCapabilities, forcedRtpExtensions }) {
           super();
           logger.debug("constructor()");
           this._direction = direction;
@@ -10291,6 +10418,7 @@ var mediasoupClient = (() => {
             sctpParameters
           });
           this._getSendExtendedRtpCapabilities = getSendExtendedRtpCapabilities;
+          this._forcedRtpExtensions = forcedRtpExtensions;
           if (dtlsParameters.role && dtlsParameters.role !== "auto") {
             this._forcedLocalDtlsRole = dtlsParameters.role === "server" ? "client" : "server";
           }
@@ -10374,7 +10502,7 @@ var mediasoupClient = (() => {
           this.assertNotClosed();
           return this._pc.getStats();
         }
-        async send({ track, streamId, encodings, codecOptions, headerExtensionOptions, codec, onRtpSender }) {
+        async send({ track, streamId, encodings, codecOptions, codec, onRtpSender }) {
           this.assertNotClosed();
           this.assertSendDirection();
           logger.debug("send() [kind:%s, track.id:%s, streamId:%s]", track.kind, track.id, streamId);
@@ -10389,126 +10517,123 @@ var mediasoupClient = (() => {
             streams: [this._sendStream],
             sendEncodings: encodings
           });
-          if (onRtpSender) {
-            onRtpSender(transceiver.sender);
-          }
-          let offer = await this._pc.createOffer();
-          let localSdpObject = sdpTransform.parse(offer.sdp);
-          if (localSdpObject.extmapAllowMixed) {
-            this._remoteSdp.setSessionExtmapAllowMixed();
-          }
-          const extraHeaderExtensions = [];
-          if (headerExtensionOptions?.absCaptureTime) {
-            extraHeaderExtensions.push({
-              uri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
-              kind: track.kind,
-              direction: "sendonly"
-            });
-          }
-          const nativeRtpCapabilities = _ReactNative106.getLocalRtpCapabilities(localSdpObject, extraHeaderExtensions);
-          const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
-          const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
-          const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
-          sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
-          if (!this._transportReady) {
-            await this.setupTransport({
-              localDtlsRole: this._forcedLocalDtlsRole ?? "client",
-              localSdpObject
-            });
-          }
-          let hackVp9Svc = false;
-          const layers = (0, scalabilityModes_1.parse)((encodings ?? [{}])[0].scalabilityMode);
-          let offerMediaObject;
-          if (encodings?.length === 1 && layers.spatialLayers > 1 && sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp9") {
-            logger.debug("send() | enabling legacy simulcast for VP9 SVC");
-            hackVp9Svc = true;
-            localSdpObject = sdpTransform.parse(offer.sdp);
-            offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-            sdpUnifiedPlanUtils.addLegacySimulcast({
-              offerMediaObject,
-              numStreams: layers.spatialLayers
-            });
-            offer = {
-              type: "offer",
-              sdp: sdpTransform.write(localSdpObject)
-            };
-          }
-          if (headerExtensionOptions?.absCaptureTime) {
-            offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-            sdpCommonUtils.addHeaderExtension({
-              offerMediaObject,
-              headerExtensionUri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
-              headerExtensionId: sendingRemoteRtpParameters.headerExtensions.find((headerExtension) => headerExtension.uri === "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time").id
-            });
-            offer = {
-              type: "offer",
-              sdp: sdpTransform.write(localSdpObject)
-            };
-          }
-          logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
-          await this._pc.setLocalDescription(offer);
-          let localId = transceiver.mid ?? void 0;
-          if (!localId) {
-            logger.warn("send() | missing transceiver.mid (bug in react-native-webrtc, using a workaround");
-          }
-          sendingRtpParameters.mid = localId;
-          localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
-          offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
-          sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
-            offerMediaObject
-          });
-          sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
-          if (!encodings) {
-            sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
-              offerMediaObject,
-              codecs: sendingRtpParameters.codecs
-            });
-          } else if (encodings.length === 1) {
-            let newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
-              offerMediaObject,
-              codecs: sendingRtpParameters.codecs
-            });
-            Object.assign(newEncodings[0], encodings[0]);
-            if (hackVp9Svc) {
-              newEncodings = [newEncodings[0]];
+          try {
+            if (this._forcedRtpExtensions) {
+              ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
             }
-            sendingRtpParameters.encodings = newEncodings;
-          } else {
-            sendingRtpParameters.encodings = encodings;
-          }
-          if (sendingRtpParameters.encodings.length > 1 && (sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp8" || sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/h264")) {
-            for (const encoding of sendingRtpParameters.encodings) {
-              if (encoding.scalabilityMode) {
-                encoding.scalabilityMode = `L1T${layers.temporalLayers}`;
-              } else {
-                encoding.scalabilityMode = "L1T3";
+            if (onRtpSender) {
+              onRtpSender(transceiver.sender);
+            }
+            let offer = await this._pc.createOffer();
+            let localSdpObject = sdpTransform.parse(offer.sdp);
+            if (localSdpObject.extmapAllowMixed) {
+              this._remoteSdp.setSessionExtmapAllowMixed();
+            }
+            const nativeRtpCapabilities = _ReactNative106.getLocalRtpCapabilities(localSdpObject);
+            const sendExtendedRtpCapabilities = this._getSendExtendedRtpCapabilities(nativeRtpCapabilities);
+            const sendingRtpParameters = ortc.getSendingRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRtpParameters.codecs = ortc.reduceCodecs(sendingRtpParameters.codecs, codec);
+            const sendingRemoteRtpParameters = ortc.getSendingRemoteRtpParameters(track.kind, sendExtendedRtpCapabilities);
+            sendingRemoteRtpParameters.codecs = ortc.reduceCodecs(sendingRemoteRtpParameters.codecs, codec);
+            if (!this._transportReady) {
+              await this.setupTransport({
+                localDtlsRole: this._forcedLocalDtlsRole ?? "client",
+                localSdpObject
+              });
+            }
+            let hackVp9Svc = false;
+            const layers = (0, scalabilityModes_1.parse)((encodings ?? [{}])[0].scalabilityMode);
+            let offerMediaObject;
+            if (encodings?.length === 1 && layers.spatialLayers > 1 && sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp9") {
+              logger.debug("send() | enabling legacy simulcast for VP9 SVC");
+              hackVp9Svc = true;
+              localSdpObject = sdpTransform.parse(offer.sdp);
+              offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
+              sdpUnifiedPlanUtils.addLegacySimulcast({
+                offerMediaObject,
+                numStreams: layers.spatialLayers
+              });
+              offer = {
+                type: "offer",
+                sdp: sdpTransform.write(localSdpObject)
+              };
+            }
+            logger.debug("send() | calling pc.setLocalDescription() [offer:%o]", offer);
+            await this._pc.setLocalDescription(offer);
+            let localId = transceiver.mid ?? void 0;
+            if (!localId) {
+              logger.warn("send() | missing transceiver.mid (bug in react-native-webrtc, using a workaround");
+            }
+            sendingRtpParameters.mid = localId;
+            localSdpObject = sdpTransform.parse(this._pc.localDescription.sdp);
+            offerMediaObject = localSdpObject.media[mediaSectionIdx.idx];
+            sendingRtpParameters.rtcp.cname = sdpCommonUtils.getCname({
+              offerMediaObject
+            });
+            sendingRtpParameters.msid = `${streamId ?? this._sendStream.id} ${track.id}`;
+            if (!encodings) {
+              sendingRtpParameters.encodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+            } else if (encodings.length === 1) {
+              let newEncodings = sdpUnifiedPlanUtils.getRtpEncodings({
+                offerMediaObject,
+                codecs: sendingRtpParameters.codecs
+              });
+              Object.assign(newEncodings[0], encodings[0]);
+              if (hackVp9Svc) {
+                newEncodings = [newEncodings[0]];
+              }
+              sendingRtpParameters.encodings = newEncodings;
+            } else {
+              sendingRtpParameters.encodings = encodings;
+            }
+            if (sendingRtpParameters.encodings.length > 1 && (sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/vp8" || sendingRtpParameters.codecs[0].mimeType.toLowerCase() === "video/h264")) {
+              for (const encoding of sendingRtpParameters.encodings) {
+                if (encoding.scalabilityMode) {
+                  encoding.scalabilityMode = `L1T${layers.temporalLayers}`;
+                } else {
+                  encoding.scalabilityMode = "L1T3";
+                }
               }
             }
+            this._remoteSdp.send({
+              offerMediaObject,
+              reuseMid: mediaSectionIdx.reuseMid,
+              offerRtpParameters: sendingRtpParameters,
+              answerRtpParameters: sendingRemoteRtpParameters,
+              codecOptions
+            });
+            const answer = {
+              type: "answer",
+              sdp: this._remoteSdp.getSdp()
+            };
+            logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
+            await this._pc.setRemoteDescription(answer);
+            if (!localId) {
+              localId = transceiver.mid;
+              sendingRtpParameters.mid = localId;
+            }
+            this._mapMidTransceiver.set(localId, transceiver);
+            return {
+              localId,
+              rtpParameters: sendingRtpParameters,
+              rtpSender: transceiver.sender
+            };
+          } catch (error) {
+            try {
+              if (this._pc.signalingState === "have-local-offer") {
+                try {
+                  await this._pc.setLocalDescription({ type: "rollback" });
+                } catch (error2) {
+                }
+              }
+              transceiver.stop();
+            } catch (error3) {
+            }
+            throw error;
           }
-          this._remoteSdp.send({
-            offerMediaObject,
-            reuseMid: mediaSectionIdx.reuseMid,
-            offerRtpParameters: sendingRtpParameters,
-            answerRtpParameters: sendingRemoteRtpParameters,
-            codecOptions
-          });
-          const answer = {
-            type: "answer",
-            sdp: this._remoteSdp.getSdp()
-          };
-          logger.debug("send() | calling pc.setRemoteDescription() [answer:%o]", answer);
-          await this._pc.setRemoteDescription(answer);
-          if (!localId) {
-            localId = transceiver.mid;
-            sendingRtpParameters.mid = localId;
-          }
-          this._mapMidTransceiver.set(localId, transceiver);
-          return {
-            localId,
-            rtpParameters: sendingRtpParameters,
-            rtpSender: transceiver.sender
-          };
         }
         async stopSending(localId) {
           this.assertSendDirection();
@@ -10670,25 +10795,39 @@ var mediasoupClient = (() => {
           const dataChannel = this._pc.createDataChannel(sctpStreamParameters.label, options);
           this._nextSendSctpStreamId = ++this._nextSendSctpStreamId % (this._pc.sctp?.maxChannels ?? 65536);
           if (!this._hasDataChannelMediaSection) {
-            const offer = await this._pc.createOffer();
-            const localSdpObject = sdpTransform.parse(offer.sdp);
-            const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
-            if (!this._transportReady) {
-              await this.setupTransport({
-                localDtlsRole: this._forcedLocalDtlsRole ?? "client",
-                localSdpObject
-              });
+            try {
+              const offer = await this._pc.createOffer();
+              const localSdpObject = sdpTransform.parse(offer.sdp);
+              const offerMediaObject = localSdpObject.media.find((m) => m.type === "application");
+              if (!this._transportReady) {
+                await this.setupTransport({
+                  localDtlsRole: this._forcedLocalDtlsRole ?? "client",
+                  localSdpObject
+                });
+              }
+              logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
+              await this._pc.setLocalDescription(offer);
+              this._remoteSdp.sendSctpAssociation({ offerMediaObject });
+              const answer = {
+                type: "answer",
+                sdp: this._remoteSdp.getSdp()
+              };
+              logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
+              await this._pc.setRemoteDescription(answer);
+              this._hasDataChannelMediaSection = true;
+            } catch (error) {
+              try {
+                if (this._pc.signalingState === "have-local-offer") {
+                  try {
+                    await this._pc.setLocalDescription({ type: "rollback" });
+                  } catch (error2) {
+                  }
+                }
+                dataChannel.close();
+              } catch (error3) {
+              }
+              throw error;
             }
-            logger.debug("sendDataChannel() | calling pc.setLocalDescription() [offer:%o]", offer);
-            await this._pc.setLocalDescription(offer);
-            this._remoteSdp.sendSctpAssociation({ offerMediaObject });
-            const answer = {
-              type: "answer",
-              sdp: this._remoteSdp.getSdp()
-            };
-            logger.debug("sendDataChannel() | calling pc.setRemoteDescription() [answer:%o]", answer);
-            await this._pc.setRemoteDescription(answer);
-            this._hasDataChannelMediaSection = true;
           }
           const newSctpStreamParameters = {
             streamId: options.id,
@@ -10730,6 +10869,9 @@ var mediasoupClient = (() => {
               const transceiver = this._pc.getTransceivers().find((t) => t.mid === localId);
               if (!transceiver) {
                 throw new Error("transceiver not found");
+              }
+              if (this._forcedRtpExtensions) {
+                ortcUtils.applyForcedRtpExtensions(transceiver, this._forcedRtpExtensions);
               }
               onRtpReceiver(transceiver.receiver);
             }
@@ -11072,7 +11214,7 @@ var mediasoupClient = (() => {
          *
          * @throws {UnsupportedError} if device is not supported.
          */
-        static async factory({ handlerName, handlerFactory } = {}) {
+        static async factory({ handlerName, handlerFactory, forcedRtpExtensions } = {}) {
           logger.debug("factory()");
           if (handlerName && handlerFactory) {
             throw new TypeError("just one of handlerName or handlerInterface can be given");
@@ -11083,14 +11225,18 @@ var mediasoupClient = (() => {
               throw new errors_1.UnsupportedError("device not supported");
             }
           }
-          return new _Device({ handlerName, handlerFactory });
+          return new _Device({
+            handlerName,
+            handlerFactory,
+            forcedRtpExtensions
+          });
         }
         /**
          * Create a new Device to connect to mediasoup server.
          *
          * @throws {UnsupportedError} if device is not supported.
          */
-        constructor({ handlerName, handlerFactory } = {}) {
+        constructor({ handlerName, handlerFactory, forcedRtpExtensions } = {}) {
           logger.debug("constructor()");
           if (handlerName && handlerFactory) {
             throw new TypeError("just one of handlerName or handlerInterface can be given");
@@ -11110,23 +11256,33 @@ var mediasoupClient = (() => {
             }
             switch (handlerName) {
               case "Chrome111": {
-                this._handlerFactory = Chrome111_1.Chrome111.createFactory();
+                this._handlerFactory = Chrome111_1.Chrome111.createFactory({
+                  forcedRtpExtensions
+                });
                 break;
               }
               case "Chrome74": {
-                this._handlerFactory = Chrome74_1.Chrome74.createFactory();
+                this._handlerFactory = Chrome74_1.Chrome74.createFactory({
+                  forcedRtpExtensions
+                });
                 break;
               }
               case "Firefox120": {
-                this._handlerFactory = Firefox120_1.Firefox120.createFactory();
+                this._handlerFactory = Firefox120_1.Firefox120.createFactory({
+                  forcedRtpExtensions
+                });
                 break;
               }
               case "Safari12": {
-                this._handlerFactory = Safari12_1.Safari12.createFactory();
+                this._handlerFactory = Safari12_1.Safari12.createFactory({
+                  forcedRtpExtensions
+                });
                 break;
               }
               case "ReactNative106": {
-                this._handlerFactory = ReactNative106_1.ReactNative106.createFactory();
+                this._handlerFactory = ReactNative106_1.ReactNative106.createFactory({
+                  forcedRtpExtensions
+                });
                 break;
               }
               default: {
@@ -12664,13 +12820,6 @@ var mediasoupClient = (() => {
               preferredId: 11,
               preferredEncrypt: false,
               direction: "sendrecv"
-            },
-            {
-              kind: "video",
-              uri: "urn:ietf:params:rtp-hdrext:toffset",
-              preferredId: 12,
-              preferredEncrypt: false,
-              direction: "sendrecv"
             }
           ]
         });
@@ -12808,11 +12957,6 @@ var mediasoupClient = (() => {
               kind: "video",
               uri: "urn:ietf:params:rtp-hdrext:sdes:mid",
               preferredId: 1
-            },
-            {
-              kind: "video",
-              uri: "urn:ietf:params:rtp-hdrext:toffset",
-              preferredId: 2
             },
             {
               kind: "video",
@@ -13067,10 +13211,6 @@ var mediasoupClient = (() => {
                   {
                     uri: "urn:3gpp:video-orientation",
                     id: 11
-                  },
-                  {
-                    uri: "urn:ietf:params:rtp-hdrext:toffset",
-                    id: 12
                   }
                 ],
                 rtcp: {
@@ -13139,10 +13279,6 @@ var mediasoupClient = (() => {
                   {
                     uri: "urn:3gpp:video-orientation",
                     id: 11
-                  },
-                  {
-                    uri: "urn:ietf:params:rtp-hdrext:toffset",
-                    id: 12
                   }
                 ],
                 rtcp: {
@@ -13225,7 +13361,7 @@ var mediasoupClient = (() => {
       var debug_1 = __importDefault(require_browser());
       exports.debug = debug_1.default;
       exports.types = __importStar(require_types());
-      exports.version = "3.22.0";
+      exports.version = "3.24.5";
       var Device_1 = require_Device();
       Object.defineProperty(exports, "Device", { enumerable: true, get: function() {
         return Device_1.Device;

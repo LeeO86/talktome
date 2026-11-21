@@ -1,0 +1,91 @@
+function normalizeConnectUrl(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(trimmed);
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function isLocalOnlyConnectUrl(value) {
+  const normalized = normalizeConnectUrl(value);
+  if (!normalized) return false;
+
+  const hostname = new URL(normalized).hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+
+  return hostname === "localhost"
+    || hostname.endsWith(".localhost")
+    || hostname === "0.0.0.0"
+    || hostname === "::"
+    || hostname === "::1"
+    || hostname === "0:0:0:0:0:0:0:0"
+    || hostname === "0:0:0:0:0:0:0:1"
+    || /^127(?:\.\d{1,3}){3}$/.test(hostname)
+    || hostname.endsWith(":127.0.0.1");
+}
+
+function isMdnsConnectUrl(value) {
+  const normalized = normalizeConnectUrl(value);
+  if (!normalized) return false;
+
+  const hostname = new URL(normalized).hostname.toLowerCase();
+  return hostname.endsWith(".local");
+}
+
+function selectAdminQrUrl({ configuredUrl, requestUrl, adapterUrl } = {}) {
+  const configured = normalizeConnectUrl(configuredUrl);
+  const requested = normalizeConnectUrl(requestUrl);
+  const adapter = normalizeConnectUrl(adapterUrl);
+
+  if (configured) return configured;
+  if (requested && !isLocalOnlyConnectUrl(requested) && !isMdnsConnectUrl(requested)) {
+    return requested;
+  }
+  return adapter || configured || requested;
+}
+
+function buildLoginUrl(connectUrl, token) {
+  const normalized = normalizeConnectUrl(connectUrl);
+  const normalizedToken = typeof token === "string" ? token.trim() : "";
+  if (!normalized || !normalizedToken) return "";
+  return `${normalized}/#login=${encodeURIComponent(normalizedToken)}`;
+}
+
+function buildGuestLoginUrl(connectUrl) {
+  const normalized = normalizeConnectUrl(connectUrl);
+  return normalized ? `${normalized}/#guest` : "";
+}
+
+function buildMediaNetworkQrTargets({ addresses = [], protocol = "https", port, tlsMode = "internal", publicUrl, proxyUrl } = {}) {
+  const configured = normalizeConnectUrl(publicUrl);
+  if (configured) return [{ address: new URL(configured).hostname, qrUrl: configured }];
+  const activeAddresses = [...new Set(addresses.filter(Boolean))];
+  if (tlsMode === "proxy") {
+    const qrUrl = normalizeConnectUrl(proxyUrl);
+    return activeAddresses.length && qrUrl ? [{ address: new URL(qrUrl).hostname, qrUrl }] : [];
+  }
+  return activeAddresses.map(address => {
+    const host = address.includes(":") ? `[${address}]` : address;
+    return { address, qrUrl: normalizeConnectUrl(`${protocol}://${host}:${port}`) };
+  }).filter(target => target.qrUrl);
+}
+
+module.exports = {
+  buildMediaNetworkQrTargets,
+  buildGuestLoginUrl,
+  buildLoginUrl,
+  isLocalOnlyConnectUrl,
+  isMdnsConnectUrl,
+  normalizeConnectUrl,
+  selectAdminQrUrl,
+};

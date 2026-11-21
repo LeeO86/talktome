@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <provider
+      android:name=".TalkToMeTrustProvider"
+      android:authorities="${applicationId}.talktome.certtrust"
+      android:exported="false"
+      android:initOrder="2147483647" />
+  </application>
+</manifest>

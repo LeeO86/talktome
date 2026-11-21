@@ -12,8 +12,10 @@
     dimWhenAddressed: true,
     audioAutoProcessing: false,
     playConnectionSounds: true,
+    showIncomingLevels: false,
     leftHandMode: false,
     lockMultipleTargets: false,
+    tapToLock: true,
     userInputGainDb: 18,
     voiceTriggerEnabled: false,
     voiceTriggerTarget: '',
@@ -40,7 +42,7 @@
       if (DIM_AMOUNT_DB_OPTIONS.includes(number)) output.dimAmountDb = number;
       else reject('Invalid dim amount.');
     }
-    ['dimFeedsWhileSpeaking', 'dimWhenAddressed', 'audioAutoProcessing', 'playConnectionSounds', 'leftHandMode', 'lockMultipleTargets', 'voiceTriggerEnabled']
+    ['dimFeedsWhileSpeaking', 'dimWhenAddressed', 'audioAutoProcessing', 'playConnectionSounds', 'showIncomingLevels', 'leftHandMode', 'bigMainButton', 'lockMultipleTargets', 'tapToLock', 'voiceTriggerEnabled']
       .forEach((key) => {
         if (!has(key)) return;
         if (typeof value[key] === 'boolean') output[key] = value[key];
@@ -48,7 +50,7 @@
       });
     if (has('userInputGainDb')) {
       const number = Number(value.userInputGainDb);
-      if (Number.isFinite(number) && number >= -30 && number <= 40) output.userInputGainDb = Math.round(number * 2) / 2;
+      if (Number.isFinite(number) && number >= -40 && number <= 40) output.userInputGainDb = Math.round(number * 2) / 2;
       else reject('Invalid manual mic gain.');
     }
     if (has('voiceTriggerThresholdDb')) {
@@ -64,13 +66,22 @@
     return output;
   }
 
+  function normalizeForSave(value) {
+    const settings = normalize(value, { strict: true });
+    if (!Object.hasOwn(value, 'tapToLock')) delete settings.tapToLock;
+    return settings;
+  }
+
   function resolve(value, configuredDefaults = {}) {
+    const defaults = normalize(configuredDefaults, { partial: true });
+    // Layout defaults are applied by each client until explicitly overridden per user.
+    delete defaults.bigMainButton;
     return {
       ...DEFAULTS,
-      ...normalize(configuredDefaults, { partial: true }),
+      ...defaults,
       ...normalize(value, { partial: true }),
     };
   }
 
-  return Object.freeze({ AUDIO_PROFILES, DIM_AMOUNT_DB_OPTIONS, DEFAULTS, normalize, resolve });
+  return Object.freeze({ AUDIO_PROFILES, DIM_AMOUNT_DB_OPTIONS, DEFAULTS, normalize, normalizeForSave, resolve });
 }));

@@ -36,7 +36,6 @@
     <div id="password-dialog" class="dialog is-hidden" role="dialog" aria-modal="true" aria-labelledby="password-title">
       <form id="password-form" class="dialog-panel">
         <h2 id="password-title">Change admin password</h2>
-        <p id="password-intro" class="muted">The default password is in use. Choose a new one before continuing.</p>
         <label class="field">
           <span>Current password</span>
           <input type="password" name="current" autocomplete="current-password" required />
@@ -96,78 +95,83 @@
 
       <section id="view-status" class="view">
         <div class="grid status-grid">
-          <article class="card card-connection">
-            <header class="card-header">
-              <h2>Connection</h2>
-              <span id="conn-state" class="badge">offline</span>
-            </header>
-            <dl class="kv" id="conn-details"></dl>
-          </article>
+          <div class="status-col status-col-connection">
+            <article class="card card-connection">
+              <header class="card-header">
+                <h2>Connection</h2>
+                <span id="conn-state" class="badge">offline</span>
+              </header>
+              <p id="conn-error" class="connection-error is-hidden" role="status"></p>
+              <dl class="kv" id="conn-details"></dl>
+            </article>
+          </div>
+          <div class="status-col status-col-io">
+            <article class="card card-audio">
+              <header class="card-header">
+                <h2>Audio</h2>
+                <span id="audio-state" class="badge">unknown</span>
+              </header>
+              <dl class="kv" id="audio-details"></dl>
+              <div class="meter" aria-label="Input level">
+                <div id="input-meter" class="meter__bar"></div>
+                <span id="input-level" class="meter__label">-∞ dBFS</span>
+              </div>
+            </article>
 
-          <article class="card card-audio">
-            <header class="card-header">
-              <h2>Audio</h2>
-              <span id="audio-state" class="badge">unknown</span>
-            </header>
-            <dl class="kv" id="audio-details"></dl>
-            <div class="meter" aria-label="Input level">
-              <div id="input-meter" class="meter__bar"></div>
-              <span id="input-level" class="meter__label">-∞ dBFS</span>
-            </div>
-          </article>
+            <article class="card card-gpio">
+              <header class="card-header">
+                <h2>GPIO</h2>
+                <span id="gpio-state" class="badge">disabled</span>
+              </header>
+              <div id="gpio-error" class="form-message"></div>
+              <h3 class="subheading">Outputs</h3>
+              <div class="table-scroll">
+                <table class="table" id="gpio-outputs">
+                  <thead><tr><th>Output</th><th>Line</th><th>State</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <h3 class="subheading">Inputs</h3>
+              <div class="table-scroll">
+                <table class="table" id="gpio-inputs">
+                  <thead><tr><th>Line</th><th>Action</th><th>Target</th><th>State</th><th>Events</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </article>
+          </div>
+          <div class="status-col status-col-system">
+            <article class="card card-service">
+              <header class="card-header">
+                <h2>Service</h2>
+                <span id="service-state" class="badge">running</span>
+              </header>
+              <dl class="kv" id="service-details"></dl>
+            </article>
 
-          <article class="card card-gpio">
-            <header class="card-header">
-              <h2>GPIO</h2>
-              <span id="gpio-state" class="badge">disabled</span>
-            </header>
-            <div id="gpio-error" class="form-message"></div>
-            <h3 class="subheading">Outputs</h3>
-            <table class="table" id="gpio-outputs">
-              <thead><tr><th>Output</th><th>Line</th><th>State</th></tr></thead>
-              <tbody></tbody>
-            </table>
-            <h3 class="subheading">Inputs</h3>
-            <table class="table" id="gpio-inputs">
-              <thead><tr><th>Line</th><th>Action</th><th>Target</th><th>State</th><th>Events</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </article>
+            <article class="card card-deck">
+              <header class="card-header">
+                <h2>Stream Deck</h2>
+                <span id="deck-state" class="badge">disabled</span>
+              </header>
+              <dl class="kv" id="deck-details"></dl>
+              <a href="#deck" class="btn btn-small" data-view="deck">Open deck view</a>
+            </article>
 
-          <article class="card card-socket">
-            <header class="card-header">
-              <h2>Local socket</h2>
-              <span id="socket-state" class="badge">disabled</span>
-            </header>
-            <div id="socket-error" class="form-message"></div>
-            <dl class="kv" id="socket-details"></dl>
-          </article>
-
-          <article class="card card-deck">
-            <header class="card-header">
-              <h2>Stream Deck</h2>
-              <span id="deck-state" class="badge">disabled</span>
-            </header>
-            <dl class="kv" id="deck-details"></dl>
-            <a href="#deck" class="btn btn-small" data-view="deck">Open deck view</a>
-          </article>
-
-          <article class="card card-service">
-            <header class="card-header">
-              <h2>Service</h2>
-              <span id="service-state" class="badge">running</span>
-            </header>
-            <dl class="kv" id="service-details"></dl>
-          </article>
+            <article class="card card-socket">
+              <header class="card-header">
+                <h2>Local socket</h2>
+                <span id="socket-state" class="badge">disabled</span>
+              </header>
+              <div id="socket-error" class="form-message"></div>
+              <dl class="kv" id="socket-details"></dl>
+            </article>
+          </div>
         </div>
       </section>
 
       <section id="view-remote" class="view is-hidden">
-        <ul id="targets-list"></ul>
-        <p id="targets-empty" class="muted remote-empty is-hidden">No targets assigned to this user yet. Assign them in Talktome Admin.</p>
-        <div class="reply-bar">
-          <button id="reply" type="button" data-label="🔊 REPLY" aria-label="Reply" disabled></button>
-        </div>
+        <iframe id="remote-panel" title="Talktome remote control" allow="autoplay"></iframe>
       </section>
 
       <section id="view-deck" class="view is-hidden">
@@ -201,25 +205,6 @@
         </article>
       </section>
     </main>
-
-    <div
-      id="conference-members-modal"
-      class="conference-members-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="conference-members-modal-description"
-      hidden
-    >
-      <section class="conference-members-modal__card">
-        <p id="conference-members-modal-description" class="conference-members-modal__description">
-          Choose who you hear in this conference.
-        </p>
-        <div id="conference-members-modal-list" class="conference-members-list"></div>
-        <footer class="conference-members-modal__footer">
-          <button id="conference-members-modal-done" class="conference-members-modal__done" type="button">Done</button>
-        </footer>
-      </section>
-    </div>
 
     <script src="/app.js?v=__VERSION__"></script>
   </body>

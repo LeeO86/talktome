@@ -184,6 +184,18 @@ impl TalkModel {
         self.vox_target = target;
     }
 
+    pub fn vox_target(&self) -> Option<TargetKey> {
+        self.vox_target
+    }
+
+    pub fn lock_multiple(&self) -> bool {
+        self.lock_multiple
+    }
+
+    pub fn set_lock_multiple(&mut self, enabled: bool) {
+        self.lock_multiple = enabled;
+    }
+
     pub fn locked(&self) -> &BTreeSet<TargetKey> {
         &self.locked
     }
@@ -260,11 +272,21 @@ impl TalkModel {
         target: TargetRef,
         now: Instant,
     ) -> Option<TalkChange> {
+        self.release_with_tap(source, target, now, None)
+    }
+
+    pub fn release_with_tap(
+        &mut self,
+        source: InputSource,
+        target: TargetRef,
+        now: Instant,
+        tap_to_lock: Option<bool>,
+    ) -> Option<TalkChange> {
         let (key, held) = self.held.remove(&(source, target))?;
         let mut toggled = None;
-        if now.duration_since(held.since) < Duration::from_millis(self.tap_ms)
-            && !held.unlocked_on_press
-        {
+        let tap = tap_to_lock
+            .unwrap_or_else(|| now.duration_since(held.since) < Duration::from_millis(self.tap_ms));
+        if tap && !held.unlocked_on_press {
             self.lock(key);
             toggled = Some((key, true));
         }
@@ -287,6 +309,36 @@ impl TalkModel {
             true
         };
         Some(self.change(Some((key, now_locked))))
+    }
+
+    /// Releases every key `source` holds, without the tap-to-lock rule: the
+    /// admin remote panel sends its own `lock` after a tap.
+    pub fn release_source(&mut self, source: &InputSource) -> Option<TalkChange> {
+        let before = self.held.len();
+        self.held.retain(|(held_by, _), _| held_by != source);
+        (self.held.len() != before).then(|| self.change(None))
+    }
+
+    /// Locks or unlocks a target. `None` when it is already in that state or
+    /// cannot be talked to.
+    pub fn set_lock(&mut self, target: TargetRef, locked: bool) -> Option<TalkChange> {
+        let key = self.resolve(target)?;
+        if self.locked.contains(&key) == locked {
+            return None;
+        }
+        if locked {
+            self.lock(key);
+        } else {
+            self.locked.remove(&key);
+        }
+        Some(self.change(Some((key, locked))))
+    }
+
+    /// Stops all held and locked talk; an active VOX keeps talking.
+    pub fn stop(&mut self) -> TalkChange {
+        self.held.clear();
+        self.locked.clear();
+        self.change(None)
     }
 
     pub fn clear_locks(&mut self) -> TalkChange {
@@ -405,10 +457,26 @@ impl AudioState {
         level
     }
 
+    pub fn set_level(
+        &mut self,
+        key: TargetKey,
+        volume: Option<f32>,
+        muted: Option<bool>,
+    ) -> AudioLevel {
+        let mut level = self.level(key);
+        if let Some(volume) = volume {
+            level.volume = volume.clamp(0.0, 1.0);
+        }
+        if let Some(muted) = muted {
+            level.muted = muted;
+        }
+        self.levels.insert(key, level.clone());
+        level
+    }
+
     pub fn step_volume(&mut self, key: TargetKey, delta: f32) -> AudioLevel {
         let current = self.level(key).volume;
-        // Round to two decimals so repeated steps stay on clean values.
-        let next = ((current + delta) * 100.0).round() / 100.0;
+        let next = step_target_volume(current, delta);
         self.set_volume(key, next)
     }
 
@@ -503,12 +571,91 @@ impl AudioState {
     }
 }
 
+/// Preserve percentage steps above -20 dB; extend the quiet end in 1 dB
+/// increments per default 4% tick, down to -60 dB before silence.
+pub fn step_target_volume(current: f32, delta: f32) -> f32 {
+    if !delta.is_finite() || delta == 0.0 {
+        return current;
+    }
+    if delta.abs() >= 1.0 {
+        return (current + delta).clamp(0.0, 1.0);
+    }
+    let mut volume = current.clamp(0.0, 1.0);
+    let mut remaining = delta.abs().min(2.0);
+    while remaining > 0.000001 {
+        let step = remaining.min(0.04);
+        remaining -= step;
+        if volume < 0.1 - 0.000001 || (volume <= 0.1 + 0.000001 && delta < 0.0) {
+            if volume == 0.0 {
+                if delta > 0.0 {
+                    volume = 0.001;
+                }
+            } else {
+                let db = 20.0 * volume.log10() + delta.signum() * step / 0.04;
+                volume = if db < -60.0001 {
+                    0.0
+                } else {
+                    10f32.powf(db / 20.0).min(0.1)
+                };
+            }
+        } else {
+            volume = ((volume + delta.signum() * step) * 100.0).round() / 100.0;
+            volume = volume.clamp(if delta < 0.0 { 0.1 } else { 0.0 }, 1.0);
+        }
+    }
+    volume
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn deck(n: u8) -> InputSource {
         InputSource::StreamDeck { device: 0, key: n }
+    }
+
+    #[test]
+    fn quiet_volume_steps_reach_minus_sixty_before_silence() {
+        let mut volume = 0.1;
+        for _ in 0..40 {
+            volume = step_target_volume(volume, -0.04);
+        }
+        assert!((20.0 * volume.log10() + 60.0).abs() < 0.001);
+        assert_eq!(step_target_volume(volume, -0.04), 0.0);
+        assert_eq!(step_target_volume(0.0, 0.04), 0.001);
+        assert!((step_target_volume(0.001, 0.04) - 10f32.powf(-59.0 / 20.0)).abs() < 0.000001);
+        assert!((step_target_volume(0.5, -0.04) - 0.46).abs() < 0.000001);
+        let grouped = step_target_volume(0.1, -0.12);
+        let single = (0..3).fold(0.1, |v, _| step_target_volume(v, -0.04));
+        assert!((grouped - single).abs() < 0.000001);
+    }
+
+    #[test]
+    fn companion_release_uses_the_reported_gesture() {
+        let mut model = TalkModel::new(250, false);
+        let source = InputSource::Companion("demo".into());
+        let target = TargetRef::Key(TargetKey::Conference(1));
+        let t0 = Instant::now();
+        model.press(source.clone(), target, t0).unwrap();
+        let change = model
+            .release_with_tap(source.clone(), target, t0, Some(false))
+            .unwrap();
+        assert!(!change.talking);
+        model.press(source.clone(), target, t0).unwrap();
+        let change = model
+            .release_with_tap(
+                source.clone(),
+                target,
+                t0 + Duration::from_secs(1),
+                Some(true),
+            )
+            .unwrap();
+        assert!(change.lock_active);
+        model.press(source.clone(), target, t0).unwrap();
+        let change = model
+            .release_with_tap(source, target, t0, Some(true))
+            .unwrap();
+        assert!(!change.talking);
     }
 
     #[test]
@@ -640,6 +787,27 @@ mod tests {
             TalkModel::resolve_reply_target(None, [conference]),
             conference
         );
+    }
+
+    #[test]
+    fn panel_release_never_locks_and_lock_is_explicit() {
+        let mut model = TalkModel::new(250, false);
+        let conf = TargetKey::Conference(1);
+        let panel = InputSource::Companion("panel:a:main".into());
+        let now = Instant::now();
+        model
+            .press(panel.clone(), TargetRef::Key(conf), now)
+            .unwrap();
+        // A tap: the panel releases and then sends its own lock.
+        let change = model.release_source(&panel).unwrap();
+        assert!(!change.talking);
+        assert!(model.release_source(&panel).is_none());
+        let change = model.set_lock(TargetRef::Key(conf), true).unwrap();
+        assert_eq!(change.lock_toggled, Some((conf, true)));
+        assert!(model.set_lock(TargetRef::Key(conf), true).is_none());
+        assert!(model.is_talking());
+        let change = model.stop();
+        assert!(!change.talking && !change.lock_active);
     }
 
     #[test]

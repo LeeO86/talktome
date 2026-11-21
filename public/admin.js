@@ -1,3 +1,5 @@
+const bridgeTalkTrigger = globalThis.TalktomeBridgeTalkTrigger;
+const PANEL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 8h4M7 12h2M15 8v4"/></svg>';
 const adminState = {
   isAuthenticated: false,
   isGlobalAdmin: false,
@@ -54,9 +56,15 @@ const adminApp = document.getElementById('admin-app');
 const adminBar = document.getElementById('admin-bar');
 const adminBarMessage = document.getElementById('admin-bar-message');
 const adminNameLabel = document.getElementById('admin-name-label');
+const adminReleaseNotice = document.getElementById('admin-release-notice');
 const adminLogoutBtn = document.getElementById('admin-logout');
 const adminNavLinks = [...document.querySelectorAll('[data-admin-nav]')];
+const configTabs = [...document.querySelectorAll('[data-config-tab]')];
+let activeConfigCategory = 'network';
 const statusUsersBody = document.getElementById('status-users-body');
+const statusUserControls = document.getElementById('status-users-controls');
+const statusUserFilterToggle = document.getElementById('status-user-filter-toggle');
+const statusUserFilterPanel = document.getElementById('status-user-filter-panel');
 const statusFeedsBody = document.getElementById('status-feeds-body');
 const statusBridgesBody = document.getElementById('status-bridges-body');
 const statusCompanionsBody = document.getElementById('status-companions-body');
@@ -98,6 +106,7 @@ const configImportFile = document.getElementById('config-import-file');
 const automaticBackupForm = document.getElementById('config-auto-backup-form');
 const automaticBackupEnabled = document.getElementById('config-auto-backup-enabled');
 const automaticBackupInterval = document.getElementById('config-auto-backup-interval');
+let savedAutomaticBackupSettings = null;
 const apiKeyRegenerateBtn = document.getElementById('api-key-regenerate-btn');
 const apiKeyCopyBtn = document.getElementById('api-key-copy-btn');
 const apiKeyValueInput = document.getElementById('api-key-value');
@@ -105,9 +114,6 @@ const containerRestartPanel = document.getElementById('container-restart-panel')
 const containerRestartBtn = document.getElementById('container-restart-btn');
 const mediaNetworkMeta = document.getElementById('media-network-meta');
 const mediaNetworkQrContainer = document.getElementById('media-network-qr');
-const mediaNetworkQrButton = document.getElementById('media-network-qr-button');
-const mediaNetworkQrImage = document.getElementById('media-network-qr-image');
-const mediaNetworkQrDownloadButton = document.getElementById('media-network-qr-download');
 const guestLoginEnabledInput = document.getElementById('guest-login-enabled');
 const guestLoginStatus = document.getElementById('guest-login-status');
 const guestLoginProfile = document.getElementById('guest-login-profile');
@@ -118,8 +124,13 @@ const defaultClientDimSelf = document.getElementById('default-client-dim-self');
 const defaultClientDimIncoming = document.getElementById('default-client-dim-incoming');
 const defaultClientAudioProcessing = document.getElementById('default-client-audio-processing');
 const defaultClientConnectionSounds = document.getElementById('default-client-connection-sounds');
+const defaultClientIncomingLevels = document.getElementById('default-client-incoming-levels');
 const defaultClientLeftHand = document.getElementById('default-client-left-hand');
+const defaultClientBigMainButton = document.getElementById('default-client-big-main-button');
 const defaultClientLockMultiple = document.getElementById('default-client-lock-multiple');
+const defaultClientAllowFeedVideo = document.getElementById('default-client-allow-feed-video');
+const defaultClientAllowTargetAddRemove = document.getElementById('default-client-allow-target-add-remove');
+const defaultClientAllowTargetRearrange = document.getElementById('default-client-allow-target-rearrange');
 const adminImageLightbox = document.getElementById('admin-image-lightbox');
 const adminImageLightboxClose = document.getElementById('admin-image-lightbox-close');
 const adminImageLightboxTitle = document.getElementById('admin-image-lightbox-title');
@@ -135,6 +146,7 @@ const adminActionDialogInput = document.getElementById('admin-action-dialog-inpu
 const adminActionDialogPasswordToggle = document.getElementById('admin-action-dialog-password-toggle');
 const adminActionDialogError = document.getElementById('admin-action-dialog-error');
 const adminActionDialogCancel = document.getElementById('admin-action-dialog-cancel');
+const adminActionDialogAlternative = document.getElementById('admin-action-dialog-alternative');
 const adminActionDialogConfirm = document.getElementById('admin-action-dialog-confirm');
 
 let activeAdminActionDialog = null;
@@ -174,6 +186,7 @@ function openAdminActionDialog({
   inputType = 'text',
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
+  alternativeLabel = '',
   danger = false,
   required = false,
   minLength = 0,
@@ -213,6 +226,8 @@ function openAdminActionDialog({
     adminActionDialogPasswordToggle.title = 'Show password';
     adminActionDialogCancel.textContent = cancelLabel;
     adminActionDialogCancel.classList.toggle('is-hidden', !canCancel);
+    adminActionDialogAlternative.textContent = alternativeLabel;
+    adminActionDialogAlternative.classList.toggle('is-hidden', !alternativeLabel);
     adminActionDialogConfirm.textContent = confirmLabel;
     adminActionDialogConfirm.classList.toggle('danger', Boolean(danger));
     showAdminActionDialogError('');
@@ -281,6 +296,7 @@ adminActionDialogForm?.addEventListener('submit', (event) => {
   closeAdminActionDialog(true);
 });
 
+adminActionDialogAlternative?.addEventListener('click', () => closeAdminActionDialog('alternative'));
 adminActionDialogCancel?.addEventListener('click', () => closeAdminActionDialog(null));
 adminActionDialog?.addEventListener('pointerdown', (event) => {
   if (event.target === adminActionDialog && activeAdminActionDialog?.canCancel) {
@@ -369,8 +385,8 @@ const collapsibleAdminSections = {
 };
 
 const ADMIN_SECTION_COLLAPSED_STORAGE_PREFIX = 'talktome:admin-section-collapsed:';
+const ADMIN_RELEASE_CHECK_INTERVAL = 30 * 60 * 1000;
 
-let currentMediaNetworkQrState = null;
 let currentAdminImageLightboxState = null;
 let currentBridgeRegistry = [];
 let currentAdminCatalog = { users: [], conferences: [], feeds: [] };
@@ -382,7 +398,12 @@ let statusEventSource = null;
 let statusClockTimer = null;
 let statusFallbackTimer = null;
 let statusHealthTimer = null;
+let adminReleaseTimer;
+let adminReleaseRequest = null;
+let adminReleaseDue = 0;
 let latestAdminStatus = null;
+const statusUserFilters = { productionId: '' };
+let statusUserProductionOptionsKey = '';
 let serverReachable = null;
 let activeAdminView = null;
 let productionSummaries = [];
@@ -409,8 +430,59 @@ function focusAdminLoginNameField() {
   });
 }
 
+function showAdminReleaseNotice(version) {
+  if (!adminReleaseNotice || adminReleaseNotice.dataset.version === version) return;
+  adminReleaseNotice.dataset.version = version;
+  if (!version) {
+    adminReleaseNotice.replaceChildren();
+    return;
+  }
+  const link = document.createElement('a');
+  link.className = 'admin-bar__release';
+  link.href = 'https://github.com/thepoison606/talktome/releases/latest';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.title = `Talktome ${version} on GitHub`;
+  link.textContent = 'New Version available';
+  adminReleaseNotice.replaceChildren(link);
+}
+
+async function checkAdminRelease() {
+  window.clearTimeout(adminReleaseTimer);
+  if (!adminReleaseNotice || !adminState.isAuthenticated || document.hidden || adminReleaseRequest) return;
+
+  const delay = adminReleaseDue - Date.now();
+  if (delay > 0) {
+    adminReleaseTimer = window.setTimeout(checkAdminRelease, delay);
+    return;
+  }
+
+  const request = new AbortController();
+  adminReleaseRequest = request;
+  try {
+    const response = await authedFetch('/admin/release-update', { priority: 'low', signal: request.signal });
+    if (response.ok) {
+      const { version } = await response.json();
+      if (adminReleaseRequest === request) showAdminReleaseNotice(version || '');
+    }
+  } catch {
+    // The version notice is optional when the service or network is unavailable.
+  } finally {
+    if (adminReleaseRequest === request) {
+      adminReleaseRequest = null;
+      adminReleaseDue = Date.now() + ADMIN_RELEASE_CHECK_INTERVAL;
+      void checkAdminRelease();
+    }
+  }
+}
+
 function showLogin(message) {
   stopStatusStream();
+  window.clearTimeout(adminReleaseTimer);
+  adminReleaseRequest?.abort();
+  adminReleaseRequest = null;
+  adminReleaseDue = 0;
+  showAdminReleaseNotice('');
   closeAdminImageLightbox();
   clearApiKeyField();
   if (adminLogin) adminLogin.classList.remove('is-hidden');
@@ -429,6 +501,7 @@ function showAdminApp() {
   if (adminLogin) adminLogin.classList.add('is-hidden');
   if (adminApp) adminApp.classList.remove('is-hidden');
   if (adminBar) adminBar.classList.remove('is-hidden');
+  void checkAdminRelease();
   activateAdminView(getAdminViewFromHash() || activeAdminView || adminNavLinks[0]?.dataset.adminNav || 'status', {
     updateHash: false,
   });
@@ -511,12 +584,6 @@ function setAdminSectionCollapsed(sectionKey, collapsed, { persist = true } = {}
     section.buttonEl.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${section.label.toLowerCase()} section`);
   }
 
-  if (!collapsed && sectionKey === 'config') {
-    window.requestAnimationFrame(() => {
-      syncMediaNetworkQrPreviewSize();
-    });
-  }
-
   if (!persist) return;
 
   try {
@@ -548,7 +615,8 @@ function getKnownAdminViews() {
 function getAdminViewFromHash() {
   const hash = window.location.hash.replace(/^#/, '');
   if (!hash) return null;
-  const normalized = hash.endsWith('-section') ? hash.slice(0, -8) : hash;
+  const section = hash.split('/')[0];
+  const normalized = section.endsWith('-section') ? section.slice(0, -8) : section;
   return getKnownAdminViews().includes(normalized) ? normalized : null;
 }
 
@@ -558,6 +626,10 @@ function activateAdminView(sectionKey, { updateHash = true, replaceHash = false 
   if (!nextSectionKey) return;
 
   activeAdminView = nextSectionKey;
+  if (nextSectionKey === 'config') {
+    const category = window.location.hash.startsWith('#config/') ? window.location.hash.split('/')[1] : activeConfigCategory;
+    activateConfigCategory(category);
+  }
   setActiveAdminNav(nextSectionKey);
 
   knownViews.forEach((viewKey) => {
@@ -571,7 +643,7 @@ function activateAdminView(sectionKey, { updateHash = true, replaceHash = false 
   setAdminSectionCollapsed(nextSectionKey, false, { persist: false });
 
   if (updateHash) {
-    const nextHash = `#${nextSectionKey}`;
+    const nextHash = nextSectionKey === 'config' ? `#config/${activeConfigCategory}` : `#${nextSectionKey}`;
     if (window.location.hash !== nextHash) {
       if (replaceHash) {
         history.replaceState(null, '', nextHash);
@@ -584,23 +656,23 @@ function activateAdminView(sectionKey, { updateHash = true, replaceHash = false 
   window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
 }
 
-window.openUserFromStatus = async function (userId) {
-  const numericUserId = Number(userId);
-  if (!Number.isFinite(numericUserId)) return;
+async function openEntityFromStatus(kind, entityId) {
+  const numericId = Number(entityId);
+  if (!Number.isFinite(numericId)) return;
 
-  activateAdminView('users');
+  activateAdminView(kind);
 
-  let listItem = document.querySelector(`#user-list [data-entity-id="${numericUserId}"]`);
+  let listItem = document.querySelector(`#${kind === 'users' ? 'user' : 'feed'}-list [data-entity-id="${numericId}"]`);
   if (!listItem) {
-    await refreshAdminLists({ users: true });
-    listItem = document.querySelector(`#user-list [data-entity-id="${numericUserId}"]`);
+    await refreshAdminLists({ [kind]: true });
+    listItem = document.querySelector(`#${kind === 'users' ? 'user' : 'feed'}-list [data-entity-id="${numericId}"]`);
   }
   if (!listItem) return;
 
   try {
-    await selectAdminEntity('users', numericUserId);
+    await selectAdminEntity(kind, numericId);
   } catch (err) {
-    showMessage('❌ Failed to load user details', 'error', 'user');
+    showMessage('❌ Failed to load details', 'error', kind === 'users' ? 'user' : 'feed');
     console.error(err);
     return;
   }
@@ -613,7 +685,72 @@ window.openUserFromStatus = async function (userId) {
       }, 1400);
     });
   });
-};
+}
+window.openUserFromStatus = id => openEntityFromStatus('users', id);
+window.openFeedFromStatus = id => openEntityFromStatus('feeds', id);
+
+async function openBridgeFromStatus(bridgeId) {
+  try { await refreshAdminLists({ users: true, feeds: true }); }
+  catch (error) { showMessage('Failed to load Bridge endpoints', 'error'); return; }
+  const ports = ['users', 'feeds'].flatMap(kind => getEntityMasterDetailItems(kind)
+    .filter(item => item.bridge_enabled && String(item.bridge_device) === bridgeId)
+    .map(item => ({ kind, id: item.id, name: item.name })));
+  if (ports.length === 1) return openEntityFromStatus(ports[0].kind, ports[0].id);
+  document.getElementById('bridge-status-dialog')?.remove();
+  const dialog = document.createElement('dialog');
+  dialog.id = 'bridge-status-dialog'; dialog.className = 'bridge-status-dialog';
+  dialog.setAttribute('aria-labelledby', 'bridge-status-title');
+  const bridge = latestAdminStatus?.bridges?.find(item => item.id === bridgeId);
+  dialog.innerHTML = `<div class="bridge-status-header"><h2 id="bridge-status-title">${escapeHtml(bridge?.name || 'Bridge')}</h2><button type="button" data-close aria-label="Close">×</button></div>
+    <p>${escapeHtml(bridge?.remoteAddress || 'Address unavailable')}</p>
+    <div class="bridge-status-ports">${ports.length ? ports.map((port, index) => `<button type="button" data-port-index="${index}"><span>${escapeHtml(port.name)}</span><span class="badge">${port.kind === 'users' ? 'User' : 'Feed'}</span></button>`).join('') : '<p>No endpoints are assigned to this Bridge.</p>'}</div>`;
+  dialog.addEventListener('click', event => {
+    if (event.target.closest('[data-close]')) { dialog.close(); return; }
+    const button = event.target.closest('[data-port-index]');
+    const port = button && ports[Number(button.dataset.portIndex)];
+    if (port) { dialog.close(); void openEntityFromStatus(port.kind, port.id); }
+  });
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.appendChild(dialog); dialog.showModal();
+}
+document.addEventListener('click', event => {
+  const link = event.target.closest('[data-status-bridge-id]');
+  if (link) void openBridgeFromStatus(link.dataset.statusBridgeId);
+});
+
+function activateConfigCategory(category, { updateHash = false, focus = false } = {}) {
+  const selected = configTabs.find(tab => tab.dataset.configTab === category) || configTabs[0];
+  if (!selected) return;
+  activeConfigCategory = selected.dataset.configTab;
+  configTabs.forEach(tab => {
+    const active = tab === selected;
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    const panel = document.getElementById(tab.getAttribute('aria-controls'));
+    if (panel) panel.hidden = !active;
+  });
+  if (updateHash) {
+    const hash = `#config/${activeConfigCategory}`;
+    if (window.location.hash !== hash) history.pushState(null, '', hash);
+  }
+  if (focus) selected.focus();
+}
+
+function setupConfigNavigation() {
+  configTabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => activateConfigCategory(tab.dataset.configTab, { updateHash: true }));
+    tab.addEventListener('keydown', event => {
+      let next;
+      if (event.key === 'ArrowRight') next = (index + 1) % configTabs.length;
+      if (event.key === 'ArrowLeft') next = (index + configTabs.length - 1) % configTabs.length;
+      if (event.key === 'Home') next = 0;
+      if (event.key === 'End') next = configTabs.length - 1;
+      if (next === undefined) return;
+      event.preventDefault();
+      activateConfigCategory(configTabs[next].dataset.configTab, { updateHash: true, focus: true });
+    });
+  });
+}
 
 function setupAdminNavigation() {
   activateAdminView(getAdminViewFromHash() || adminNavLinks[0]?.dataset.adminNav || 'status', {
@@ -644,6 +781,7 @@ function setupAdminNavigation() {
   });
 }
 
+setupConfigNavigation();
 setupAdminNavigation();
 
 function escapeHtml(value) {
@@ -688,48 +826,38 @@ function validateOptionalBridgeDeviceChannel(device, leftChannel, label) {
 }
 
 function readBridgeTriggerConfig(userId, validate = true) {
-  const mode = document.getElementById(`bridge-trigger-mode-${userId}`)?.value === 'audio-level'
-    ? 'audio-level'
-    : 'external';
-  const targetValue = mode === 'audio-level'
-    ? document.getElementById(`bridge-trigger-target-${userId}`)?.value || ''
-    : '';
-  const thresholdValue = document.getElementById(`bridge-trigger-threshold-${userId}`)?.value;
-  const payload = {
-    triggerMode: mode,
-    triggerTargetType: '',
-    triggerTargetId: null,
-    triggerThresholdDb: Number(thresholdValue || -45),
-  };
-
-  if (targetValue) {
-    const [targetType, rawTargetId] = targetValue.split(':');
-    payload.triggerTargetType = targetType === 'user' || targetType === 'conference' ? targetType : '';
-    payload.triggerTargetId = Number(rawTargetId);
+  const mode = bridgeTalkTrigger.mode(document.getElementById(`bridge-trigger-mode-${userId}`)?.value);
+  const list = document.getElementById(`bridge-trigger-target-${userId}`);
+  const targets = globalThis.TalktomeTargetPicker.read(list).map(value => {
+    const [type, id] = value.split(':');
+    return { type, id: Number(id) };
+  });
+  const threshold = Number(document.getElementById(`bridge-trigger-threshold-${userId}`)?.value ?? -45);
+  if (validate && mode !== 'external' && !targets.length) {
+    throw new Error('Select at least one talk target');
   }
-
-  if (validate && mode === 'audio-level') {
-    if (!payload.triggerTargetType || !Number.isInteger(payload.triggerTargetId) || payload.triggerTargetId < 1) {
-      throw new Error('Audio level trigger requires a selected user or conference target');
-    }
-    if (!Number.isFinite(payload.triggerThresholdDb)) {
-      throw new Error('Audio level trigger threshold is invalid');
-    }
+  if (validate && mode === 'audio-level' && !Number.isFinite(threshold)) {
+    throw new Error('Audio level trigger threshold is invalid');
   }
-
-  return payload;
+  return { triggerMode: mode, triggerTargets: targets, triggerThresholdDb: threshold };
 }
 
 function syncBridgeTriggerControls(userId) {
-  const modeSelect = document.getElementById(`bridge-trigger-mode-${userId}`);
-  const details = document.getElementById(`bridge-trigger-details-${userId}`);
-  const isLevelTrigger = modeSelect?.value === 'audio-level';
-  if (details) {
-    details.hidden = !isLevelTrigger;
-    details.querySelectorAll('select, input').forEach((field) => {
-      field.disabled = !isLevelTrigger;
-    });
+  const mode = document.getElementById(`bridge-trigger-mode-${userId}`)?.value;
+  const threshold = document.getElementById(`bridge-trigger-threshold-${userId}`);
+  if (threshold) {
+    threshold.parentElement.hidden = mode !== 'audio-level';
+    threshold.disabled = mode !== 'audio-level';
+    threshold.closest('.bridge-trigger-row')?.classList.toggle('bridge-trigger-row--simple', mode !== 'audio-level');
   }
+  const details = document.getElementById(`bridge-trigger-details-${userId}`);
+  if (details) details.hidden = mode === 'external';
+  const hint = document.getElementById(`bridge-trigger-hint-${userId}`);
+  if (hint) hint.title = (mode === 'always-on'
+    ? 'Sends continuously to all selected targets. Resumes after reconnects. Change mode to stop.'
+    : mode === 'audio-level' ? 'Sends to all selected targets when the input exceeds the threshold.'
+      : 'Targets are supplied by API / Companion commands.')
+    + ' Targets are global. Selected conferences also open return audio; mute or adjust it in the Panel.';
 }
 
 function getBridgeById(bridgeId) {
@@ -813,23 +941,29 @@ function setBridgeSelectOptions(select, options, selectedValue, fallbackLabel) {
   select.value = selectedValue || '';
 }
 
+function setBridgeAudioDeviceOptions(select, options, selectedValue, fallbackLabel) {
+  setBridgeSelectOptions(select, [{ value: 'bridge:none', label: 'None' }, ...options], selectedValue || 'bridge:none', fallbackLabel);
+  select.querySelector('option[value=""]')?.remove();
+}
+
 function updateBridgeEndpointDeviceOptions(formKey) {
   const bridgeSelect = document.getElementById(`bridge-device-${formKey}`);
   const inputDeviceSelect = document.getElementById(`bridge-input-device-${formKey}`);
   const outputDeviceSelect = document.getElementById(`bridge-output-device-${formKey}`);
+  const videoSelect = document.getElementById(`bridge-video-source-${formKey}`);
   if (!bridgeSelect || !inputDeviceSelect) return;
 
   const bridge = getBridgeById(bridgeSelect.value);
   const inputSavedValue = inputDeviceSelect.dataset.savedValue || '';
   const outputSavedValue = outputDeviceSelect?.dataset.savedValue || '';
   const inputDevices = (bridge?.inventory?.devices || [])
-    .filter((device) => device.direction === 'input')
+    .filter((device) => device.direction === 'input' && device.id !== 'bridge:none')
     .map((device) => ({
       value: device.id,
       label: `${device.name}${device.is_default ? ' (default)' : ''}`,
     }));
 
-  setBridgeSelectOptions(
+  setBridgeAudioDeviceOptions(
     inputDeviceSelect,
     inputDevices,
     inputSavedValue && (!inputDeviceSelect.value || inputDeviceSelect.value === inputSavedValue) ? inputSavedValue : inputDeviceSelect.value,
@@ -837,15 +971,23 @@ function updateBridgeEndpointDeviceOptions(formKey) {
   );
   inputDeviceSelect.disabled = !bridge;
   updateBridgeEndpointPairOptions(formKey, 'input');
+  if (videoSelect) {
+    const selected = videoSelect.value || videoSelect.dataset.savedValue || '';
+    setBridgeSelectOptions(videoSelect, (bridge?.inventory?.videoSources || [])
+      .map(source => ({ value: source.id, label: source.name })), selected, 'Off');
+    videoSelect.disabled = !bridge;
+    videoSelect.onchange = () => { videoSelect.dataset.savedValue = videoSelect.value; };
+  }
+
 
   if (outputDeviceSelect) {
     const outputDevices = (bridge?.inventory?.devices || [])
-      .filter((device) => device.direction === 'output')
+      .filter((device) => device.direction === 'output' && device.id !== 'bridge:none')
       .map((device) => ({
         value: device.id,
         label: `${device.name}${device.is_default ? ' (default)' : ''}`,
       }));
-    setBridgeSelectOptions(
+    setBridgeAudioDeviceOptions(
       outputDeviceSelect,
       outputDevices,
       outputSavedValue && (!outputDeviceSelect.value || outputDeviceSelect.value === outputSavedValue) ? outputSavedValue : outputDeviceSelect.value,
@@ -861,9 +1003,14 @@ function updateBridgeEndpointPairOptions(formKey, direction) {
   const deviceSelect = document.getElementById(`bridge-${direction}-device-${formKey}`);
   const pairSelect = document.getElementById(`bridge-${direction}-pair-${formKey}`);
   if (!bridgeSelect || !deviceSelect || !pairSelect) return;
+  if (deviceSelect.value === 'bridge:none') {
+    pairSelect.innerHTML = '<option value="1:2">—</option>';
+    pairSelect.value = '1:2'; pairSelect.disabled = true;
+    return;
+  }
 
   const bridge = getBridgeById(bridgeSelect.value);
-  const device = getBridgeDeviceById(bridge, deviceSelect.value, direction);
+  const device = deviceSelect.value === 'bridge:none' ? { max_channels: 2 } : getBridgeDeviceById(bridge, deviceSelect.value, direction);
   const savedLeft = pairSelect.dataset.savedLeft || '';
   const savedRight = pairSelect.dataset.savedRight || '';
   const savedPair = savedLeft && savedRight ? `${savedLeft}:${savedRight}` : '';
@@ -892,41 +1039,27 @@ function syncBridgeEndpointFormsWithRegistry() {
 }
 
 function updateBridgeTriggerTargetOptions(userId, targets = [], { includeUnavailable = true } = {}) {
-  const select = document.getElementById(`bridge-trigger-target-${userId}`);
-  if (!select) return;
-
-  const savedValue = select.dataset.savedValue || '';
-  const preferredValue = select.value || savedValue;
-  const triggerTargets = targets
-    .filter((target) => (
-      (target.targetType || target.type) === 'user'
-      || ((target.targetType || target.type) === 'conference' && target.canTalk !== false)
-    ))
-    .map((target) => ({
-      value: `${target.targetType || target.type}:${target.targetId ?? target.id}`,
-      label: `${target.name} (${target.targetType || target.type})`,
-    }));
-
-  select.innerHTML = '<option value="">Select target</option>';
-  for (const target of triggerTargets) {
-    const option = document.createElement('option');
-    option.value = target.value;
-    option.textContent = target.label;
-    select.appendChild(option);
+  const list = document.getElementById(`bridge-trigger-target-${userId}`);
+  if (!list) return;
+  const selected = list.dataset.initialized === 'true'
+    ? globalThis.TalktomeTargetPicker.read(list)
+    : bridgeTalkTrigger.targets(list.dataset.savedTargets).map(target => `${target.type}:${target.id}`);
+  const options = new Map(targets
+    .filter(target => (target.targetType || target.type) === 'user'
+      || ((target.targetType || target.type) === 'conference' && target.canTalk !== false))
+    .map(target => [`${target.targetType || target.type}:${target.targetId ?? target.id}`, {
+      type: target.targetType || target.type, label: target.name,
+    }]));
+  if (includeUnavailable) for (const key of selected) {
+    if (!options.has(key)) options.set(key, { type: key.split(':')[0], label: key, unavailable: true });
   }
-
-  if (includeUnavailable && preferredValue && !triggerTargets.some((target) => target.value === preferredValue)) {
-    const option = document.createElement('option');
-    option.value = preferredValue;
-    option.textContent = `${preferredValue} (saved, unavailable)`;
-    select.appendChild(option);
-  }
-  select.value = [...select.options].some((option) => option.value === preferredValue) ? preferredValue : '';
+  globalThis.TalktomeTargetPicker.mount(list, [...options].map(([value, option]) => ({value, ...option})), selected, () => list.dispatchEvent(new Event('change', { bubbles: true })));
+  list.dataset.initialized = 'true';
 }
 
 async function loadBridgeTriggerTargets(userId, { includeUnavailable = true } = {}) {
   const payload = await fetchJSON(`/admin/users/${userId}/audio-settings`);
-  updateBridgeTriggerTargetOptions(userId, payload.targets || [], { includeUnavailable });
+  updateBridgeTriggerTargetOptions(userId, payload.bridgeTargets || payload.targets || [], { includeUnavailable });
 }
 
 function updateBridgeRegistryFromStatus(snapshot = {}) {
@@ -936,6 +1069,102 @@ function updateBridgeRegistryFromStatus(snapshot = {}) {
 
   currentBridgeRegistry = snapshot.bridges;
   syncBridgeEndpointFormsWithRegistry();
+}
+
+const adminFormAutoSavers = new Map();
+function renderAutoSaveFeedback(id, text, retry) {
+  const status = document.getElementById(id);
+  if (!status) return;
+  status.replaceChildren(document.createTextNode(text));
+  status.classList.toggle('is-error', Boolean(retry));
+  if (retry) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.textContent = 'Retry'; button.onclick = retry;
+    status.appendChild(button);
+  }
+}
+async function saveAdminJson(path, body) {
+  const response = await authedFetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Saving failed');
+  return result;
+}
+function readBridgeEndpointForm(form, kind, id) {
+  const key = kind === 'user' ? String(id) : `feed-${id}`;
+  const value = name => form.querySelector(`#bridge-${name}-${key}`)?.value || '';
+  const pair = direction => {
+    const selected = value(`${direction}-pair`);
+    if (!selected) return { left: null, right: null };
+    const [left, right] = selected.split(':').map(Number);
+    validateBridgeChannelPair(left, right, direction);
+    return { left, right };
+  };
+  const input = pair('input');
+  const enabled = Boolean(form.querySelector(`#bridge-enabled-${key}`)?.checked);
+  const payload = { enabled, bridgeDevice: value('device'), inputDevice: value('input-device'), inputLeftChannel: input.left, inputRightChannel: input.right };
+  if (kind === 'user') {
+    const output = pair('output');
+    Object.assign(payload, { outputDevice: value('output-device'), outputLeftChannel: output.left, outputRightChannel: output.right }, readBridgeTriggerConfig(id, enabled));
+    if (enabled) validateOptionalBridgeDeviceChannel(payload.outputDevice, payload.outputLeftChannel, 'Output');
+  } else payload.videoSource = value('video-source');
+  if (enabled) {
+    if (!payload.bridgeDevice) throw new Error('Choose a Bridge device');
+    validateOptionalBridgeDeviceChannel(payload.inputDevice, payload.inputLeftChannel, 'Input');
+  }
+  return payload;
+}
+function bindBridgeAutoSave(form) {
+  const kind = form.dataset.bridgeConfigUserId ? 'user' : 'feed';
+  const id = Number(form.dataset.bridgeConfigUserId || form.dataset.bridgeConfigKey.replace(/^feed-/, ''));
+  const identity = `${kind}-${id}`, formKey = kind === 'user' ? String(id) : `feed-${id}`;
+  let saver = adminFormAutoSavers.get(identity);
+  if (!saver) {
+    saver = globalThis.TalktomeAdminAutoSave.create({
+      render: (text, retry) => renderAutoSaveFeedback(`bridge-auto-save-${identity}`, text, retry),
+      save: (key, value) => saveAdminJson(key === 'route'
+        ? `/${kind === 'user' ? 'users' : 'feeds'}/${id}/bridge-endpoint`
+        : `/admin/bridge/ports/${kind}/${id}/${key}`, value),
+      onSaved(key, value) {
+        if (key !== 'route') return;
+        const item = currentAdminCatalog[kind === 'user' ? 'users' : 'feeds'].find(item => Number(item.id) === id);
+        if (item) {
+          Object.assign(item, { bridge_enabled: value.enabled, bridge_device: value.bridgeDevice,
+            bridge_input_device: value.inputDevice, bridge_input_left_channel: value.inputLeftChannel, bridge_input_right_channel: value.inputRightChannel,
+            bridge_output_device: value.outputDevice, bridge_output_left_channel: value.outputLeftChannel, bridge_output_right_channel: value.outputRightChannel,
+            bridge_video_source: value.videoSource, bridge_trigger_mode: value.triggerMode, bridge_trigger_targets: value.triggerTargets, bridge_trigger_threshold_db: value.triggerThresholdDb });
+        }
+        const current = document.getElementById(`bridge-config-${formKey}`);
+        for (const direction of ['input', 'output']) {
+          const prefix = direction === 'input' ? 'input' : 'output';
+          const device = current?.querySelector(`#bridge-${prefix}-device-${formKey}`);
+          const pair = current?.querySelector(`#bridge-${prefix}-pair-${formKey}`);
+          if (device) device.dataset.savedValue = value[`${direction}Device`] || '';
+          if (pair) { pair.dataset.savedLeft = value[`${direction}LeftChannel`] ?? ''; pair.dataset.savedRight = value[`${direction}RightChannel`] ?? ''; }
+        }
+        // The endpoint may have just been enabled. Retry audio edits that had
+        // previously failed because the routing was not configured yet.
+        saver.retry();
+      },
+    });
+    adminFormAutoSavers.set(identity, saver);
+  }
+  const change = target => {
+    const row = target?.closest('[data-direction]');
+    const tone = target?.matches('[data-test-tone]');
+    const key = row ? `levels/${row.dataset.direction}` : tone ? 'tone' : 'route';
+    saver.request(key, () => {
+      if (row) {
+        const gain = row.querySelector('[data-gain]');
+        if (!gain.value.trim() || !gain.checkValidity()) throw new Error('Gain must be between −40 and +40 dB');
+        return { gainDb: Number(gain.value), muted: row.querySelector('[data-muted]').checked,
+          ...(row.dataset.direction === 'input' ? { noiseSuppression: row.querySelector('[data-noise-suppression]').checked } : {}) };
+      }
+      if (tone) return { frequency: Number(target.value) };
+      return readBridgeEndpointForm(form, kind, id);
+    });
+  };
+  form.addEventListener('change', event => change(event.target));
+  form.addEventListener('submit', event => { event.preventDefault(); change(document.activeElement); });
 }
 
 function initializeBridgeEndpointForms() {
@@ -950,6 +1179,8 @@ function initializeBridgeEndpointForms() {
 
     enabledToggle?.addEventListener('change', () => {
       if (options) options.hidden = !enabledToggle.checked;
+      const footer = form.closest('[data-bridge-audio-port]')?.querySelector('.bridge-audio-footer');
+      if (footer) footer.hidden = !enabledToggle.checked;
     });
 
     bridgeSelect.addEventListener('change', () => {
@@ -998,6 +1229,7 @@ function initializeBridgeEndpointForms() {
     syncBridgeTriggerControls(formKey);
     bridgeSelect.dataset.bridgeReady = 'true';
     updateBridgeEndpointDeviceOptions(formKey);
+    bindBridgeAutoSave(form);
   });
 }
 
@@ -1057,6 +1289,7 @@ async function authedFetch(url, options) {
     adminState.mustChangePassword = false;
     adminState.userId = null;
     adminState.name = '';
+    showLogin('Session expired. Please sign in again.');
     throw new Error('Unauthorized');
   }
   return res;
@@ -1124,8 +1357,7 @@ function closeAdminImageLightbox() {
   document.body.style.removeProperty('overflow');
 }
 
-function buildMediaNetworkQrFilename(extension = 'png') {
-  const rawUrl = currentMediaNetworkQrState?.qrUrl || '';
+function buildMediaNetworkQrFilename(rawUrl, extension = 'png') {
   try {
     const host = new URL(rawUrl).hostname || 'talktome';
     const safeHost = host.replace(/[^a-z0-9.-]+/gi, '-').replace(/-+/g, '-');
@@ -1163,18 +1395,6 @@ async function rasterizeQrDataUrlToPngBlob(dataUrl) {
   return blob;
 }
 
-async function downloadMediaNetworkQrImage() {
-  const dataUrl = currentMediaNetworkQrState?.renderedQrDataUrl || '';
-  if (!dataUrl) return;
-  try {
-    const blob = await rasterizeQrDataUrlToPngBlob(dataUrl);
-    triggerDownload(blob, buildMediaNetworkQrFilename('png'));
-  } catch (error) {
-    console.error('Failed to download media network QR image:', error);
-    showMessage('❌ Failed to download QR image', 'error', 'config');
-  }
-}
-
 async function downloadAdminImageLightboxImage() {
   const state = currentAdminImageLightboxState;
   if (!state?.dataUrl) return;
@@ -1201,81 +1421,45 @@ function openAdminImageLightbox({ dataUrl, title, alt, filename, messageSection 
   document.body.style.overflow = 'hidden';
 }
 
-function openMediaNetworkQrLightbox() {
-  if (!currentMediaNetworkQrState?.renderedQrDataUrl) return;
-  openAdminImageLightbox({
-    dataUrl: currentMediaNetworkQrState.renderedQrDataUrl,
-    title: 'Connection QR Code',
-    alt: 'Large connection QR code',
-    filename: buildMediaNetworkQrFilename('png'),
-    messageSection: 'config',
-  });
-}
-
 function renderMediaNetworkQr(payload = null) {
-  const qrUrl = payload?.qrUrl || '';
-  const mdnsUrl = payload?.mdnsUrl || '';
-  const qrCodeDataUrl = payload?.qrCodeDataUrl || '';
-  const activeMdnsHost = typeof payload?.activeMdnsHost === 'string' ? payload.activeMdnsHost.trim() : '';
-  const mdnsHostLabel = activeMdnsHost && activeMdnsHost !== 'off'
-    ? activeMdnsHost
-    : '';
-  const renderedQrDataUrl = buildRenderedQrImageDataUrl({
-    qrCodeDataUrl,
-    qrUrl,
-    mdnsHostLabel,
-  });
-
-  currentMediaNetworkQrState = renderedQrDataUrl
-    ? {
-        qrUrl,
-        mdnsUrl,
-        renderedQrDataUrl,
-      }
-    : null;
-
-  if (!mediaNetworkQrContainer || !mediaNetworkQrButton || !mediaNetworkQrImage) return;
-
-  if (!renderedQrDataUrl || !qrUrl) {
-    mediaNetworkQrContainer.classList.add('is-hidden');
-    mediaNetworkQrButton.disabled = true;
-    if (mediaNetworkQrDownloadButton) mediaNetworkQrDownloadButton.disabled = true;
-    mediaNetworkQrButton.removeAttribute('aria-expanded');
-    mediaNetworkQrButton.style.height = '';
-    mediaNetworkQrImage.removeAttribute('src');
-    mediaNetworkQrImage.alt = 'Connection QR code unavailable';
-    mediaNetworkQrImage.style.height = '';
-    mediaNetworkQrImage.style.width = '';
-    closeAdminImageLightbox();
-    return;
+  if (!mediaNetworkQrContainer) return;
+  const entries = Array.isArray(payload?.qrCodes) ? payload.qrCodes : [payload];
+  const activeMdnsHost = payload?.activeMdnsHost || '';
+  const mdnsHostLabel = activeMdnsHost !== 'off' ? activeMdnsHost : '';
+  mediaNetworkQrContainer.replaceChildren();
+  for (const entry of entries) {
+    const qrUrl = entry?.qrUrl || '';
+    const renderedQrDataUrl = buildRenderedQrImageDataUrl({
+      qrCodeDataUrl: entry?.qrCodeDataUrl, qrUrl, mdnsHostLabel,
+    });
+    if (!renderedQrDataUrl) continue;
+    const card = document.createElement('div');
+    card.className = 'media-network-qr-item';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'media-network-qr-button';
+    button.setAttribute('aria-label', `Open large connection QR code for ${qrUrl}`);
+    const image = document.createElement('img');
+    image.className = 'media-network-qr-image';
+    image.src = renderedQrDataUrl;
+    image.alt = `Connection QR code for ${qrUrl}`;
+    button.append(image);
+    button.addEventListener('click', () => openAdminImageLightbox({
+      dataUrl: renderedQrDataUrl,
+      title: `Connection QR Code · ${entry.address || new URL(qrUrl).hostname}`,
+      alt: `Large connection QR code for ${qrUrl}`,
+      filename: buildMediaNetworkQrFilename(qrUrl),
+      messageSection: 'config',
+    }));
+    const caption = document.createElement('span');
+    caption.className = 'media-network-qr-caption';
+    caption.textContent = entry.address || new URL(qrUrl).hostname;
+    card.append(button, caption);
+    mediaNetworkQrContainer.append(card);
   }
-
-  mediaNetworkQrContainer.classList.remove('is-hidden');
-  mediaNetworkQrButton.disabled = false;
-  if (mediaNetworkQrDownloadButton) mediaNetworkQrDownloadButton.disabled = false;
-  mediaNetworkQrImage.src = renderedQrDataUrl;
-  mediaNetworkQrImage.alt = `Connection QR code for ${qrUrl}`;
-  mediaNetworkQrButton.setAttribute('aria-label', `Open large connection QR code for ${qrUrl}`);
-  syncMediaNetworkQrPreviewSize();
-}
-
-function syncMediaNetworkQrPreviewSize() {
-  if (!mediaNetworkQrContainer || !mediaNetworkQrButton || !mediaNetworkQrImage) return;
-
-  if (window.matchMedia('(max-width: 768px)').matches) {
-    mediaNetworkQrButton.style.height = '';
-    mediaNetworkQrImage.style.height = '';
-    mediaNetworkQrImage.style.width = '';
-    return;
-  }
-
-  const metaHeight = mediaNetworkMeta?.getBoundingClientRect?.().height || 0;
-  if (!metaHeight) return;
-
-  const nextHeight = Math.max(144, Math.round(metaHeight + 24));
-  mediaNetworkQrButton.style.height = `${nextHeight}px`;
-  mediaNetworkQrImage.style.height = `${Math.max(nextHeight - 6, 128)}px`;
-  mediaNetworkQrImage.style.width = '100%';
+  const isEmpty = !mediaNetworkQrContainer.children.length;
+  mediaNetworkQrContainer.classList.toggle('is-hidden', isEmpty);
+  if (isEmpty) closeAdminImageLightbox();
 }
 
 async function logoutAdmin(message) {
@@ -1393,16 +1577,39 @@ function statusTimeHtml(value, { suffix = true, empty = 'Never' } = {}) {
 
 const STATUS_TALKING_PULSE_MS = 1350;
 
-function statusIndicatorHtml({ online, talking = false, talkingLabel = 'Talking', warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning' }) {
-  const label = talking ? talkingLabel : warning ? warningLabel : online ? onlineLabel : offlineLabel;
-  const stateClass = talking ? 'is-talking' : warning ? 'is-warning' : online ? 'is-online' : '';
-  const animationPhase = talking
+function bridgePortProblems(status) {
+  const normalize = message => message.trim().replace(/\s+/g, ' ').toLowerCase();
+  const messages = [status?.error, ...(status?.issues || [])]
+    .filter(message => typeof message === 'string' && message.trim());
+  const unique = messages.filter((message, index) => messages.findIndex(other => normalize(other) === normalize(message)) === index);
+  return unique.filter(message => !/^(input|output) device missing$/.test(normalize(message))
+    || !unique.some(other => normalize(other).startsWith(`${normalize(message)}:`)));
+}
+
+function statusIndicatorHtml({ online, talking = false, talkingLabel = 'Talking', warning = false, onlineLabel = 'Online', offlineLabel = 'Offline', warningLabel = 'Warning', mediaStatus = null, bridgePortStatus = null }) {
+  const mediaIssue = online && ['failed', 'interrupted', 'connecting', 'warning'].includes(mediaStatus?.state);
+  const portProblem = bridgePortStatus?.bridgeOnline && (bridgePortStatus.error || bridgePortStatus.issues?.length);
+  const label = portProblem ? (bridgePortStatus.issues?.length ? 'Device missing' : bridgePortStatus.error) : mediaIssue ? mediaStatus.label : talking ? talkingLabel : warning ? warningLabel : online ? onlineLabel : offlineLabel;
+  const stateClass = portProblem ? 'is-warning' : mediaIssue ? mediaStatus.state === 'failed' ? 'is-failed' : 'is-warning'
+    : talking ? 'is-talking' : warning ? 'is-warning' : online ? 'is-online' : '';
+  const title = portProblem ? bridgePortProblems(bridgePortStatus).join('\n') : online && mediaStatus ? [
+    'Signaling: online',
+    mediaStatus.label,
+    `Send media: ${mediaStatus.send?.state || 'unknown'}`,
+    `Receive media: ${mediaStatus.receive?.state || 'unknown'}`,
+    mediaStatus.send?.iceGatheringState ? `Send ICE: ${mediaStatus.send.iceGatheringState}` : null,
+    mediaStatus.receive?.iceGatheringState ? `Receive ICE: ${mediaStatus.receive.iceGatheringState}` : null,
+    mediaStatus.send?.iceError ? `Send ICE error: ${mediaStatus.send.iceError}` : null,
+    mediaStatus.receive?.iceError ? `Receive ICE error: ${mediaStatus.receive.iceError}` : null,
+    talking ? talkingLabel : null,
+  ].filter(Boolean).join('\n') : label;
+  const animationPhase = talking && !mediaIssue
     ? ` style="--status-talking-animation-delay: -${Date.now() % STATUS_TALKING_PULSE_MS}ms"`
     : '';
   return `
-    <span class="status-indicator">
+    <span class="status-indicator" title="${escapeHtml(title)}">
       <span class="status-indicator__dot ${stateClass}"${animationPhase} aria-hidden="true"></span>
-      <span title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+      <span>${escapeHtml(label)}</span>
     </span>
   `;
 }
@@ -1502,6 +1709,7 @@ function statusSortValue(row, key) {
     case 'Address': return row.remoteAddress || '';
     case 'RTT': return Number(row.networkStats?.roundTripMs) || 0;
     case 'Loss': return Number(row.networkStats?.packetLossPercent) || 0;
+    case 'Connected':
     case 'Connected since': return Date.parse(row.connectedAt) || 0;
     case 'Last seen': return row.online ? Number.MAX_SAFE_INTEGER : Date.parse(row.lastOnlineAt || row.lastSeenAt) || 0;
     default: return '';
@@ -1522,7 +1730,7 @@ function sortStatusRows(rows, body, fallback) {
     header.dataset.sortKey = key;
     header.setAttribute('aria-sort', preference?.key === key
       ? preference.direction === 1 ? 'ascending' : 'descending' : 'none');
-    if (header.querySelector('button')) return;
+    if (header.querySelector('.status-sort-button')) return;
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'status-sort-button';
@@ -1537,8 +1745,98 @@ function sortStatusRows(rows, body, fallback) {
       }
       renderAdminStatus(latestAdminStatus);
     });
-    header.replaceChildren(button);
+    const label = header.querySelector('[data-status-sort-label]');
+    if (label) label.replaceWith(button);
+    else header.replaceChildren(button);
   });
+}
+
+function filterStatusUsers(users, { productionId = '' } = {}) {
+  return users.filter((user) => (
+    !productionId || (user.productionIds || []).some((id) => String(id) === String(productionId))
+  ));
+}
+
+function setStatusUserFilterOpen(open, { restoreFocus = false } = {}) {
+  if (!statusUserFilterPanel || !statusUserFilterToggle) return;
+  statusUserFilterPanel.hidden = !open;
+  statusUserFilterToggle.setAttribute('aria-expanded', String(open));
+  if (open) {
+    statusUserFilterPanel.style.maxHeight = '';
+    const rect = statusUserFilterToggle.getBoundingClientRect();
+    const panel = statusUserFilterPanel.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - 14;
+    const above = rect.top - 14;
+    const upward = panel.height > below && above > below;
+    const height = Math.min(panel.height, Math.max(80, upward ? above : below));
+    statusUserFilterPanel.style.maxHeight = `${Math.max(80, upward ? above : below)}px`;
+    statusUserFilterPanel.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - panel.width - 8))}px`;
+    statusUserFilterPanel.style.top = `${upward ? Math.max(8, rect.top - height - 6) : rect.bottom + 6}px`;
+    statusUserFilterPanel.querySelector('[aria-checked="true"]')?.focus();
+  }
+  else if (restoreFocus) statusUserFilterToggle.focus();
+}
+
+function syncStatusUserFilters(payload) {
+  const filterAnchor = document.getElementById(window.matchMedia('(max-width: 768px)').matches
+    ? 'status-user-filter-mobile-anchor' : 'status-user-filter-header-anchor');
+  if (filterAnchor && statusUserControls && statusUserControls.parentElement !== filterAnchor) {
+    setStatusUserFilterOpen(false);
+    filterAnchor.append(statusUserControls);
+  }
+  const enabled = payload.multipleProductionsEnabled === true;
+  const productions = enabled && Array.isArray(payload.productions) ? payload.productions : [];
+  const selected = productions.find((production) => String(production.id) === statusUserFilters.productionId);
+  if (!selected) statusUserFilters.productionId = '';
+  const optionsKey = JSON.stringify([productions, statusUserFilters.productionId]);
+  if (statusUserFilterPanel && optionsKey !== statusUserProductionOptionsKey) {
+    statusUserFilterPanel.innerHTML = [{ id: '', name: 'All productions' }, ...productions].map((production) => {
+      const checked = String(production.id) === statusUserFilters.productionId;
+      return `<button type="button" role="menuitemradio" aria-checked="${checked}" tabindex="${checked ? 0 : -1}"
+        data-status-production-id="${escapeHtml(production.id)}" title="${escapeHtml(production.name)}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+        <span>${escapeHtml(production.name)}</span></button>`;
+    }).join('');
+    statusUserProductionOptionsKey = optionsKey;
+  }
+  if (statusUserFilterToggle) {
+    statusUserFilterToggle.hidden = !enabled;
+    statusUserFilterToggle.dataset.active = String(Boolean(selected));
+    const label = selected ? `Filter users by production: ${selected.name}` : 'Filter users by production';
+    statusUserFilterToggle.setAttribute('aria-label', label);
+    statusUserFilterToggle.title = label;
+  }
+  if (!enabled) setStatusUserFilterOpen(false);
+}
+
+function formatStatusClientVersion(client) {
+  const version = client.clientVersion ? `v${client.clientVersion}` : '-';
+  const build = client.clientBuild ? ` (${client.clientBuild})` : '';
+  return version + build;
+}
+
+function formatStatusAudioOutput(status) {
+  const output = status?.audioOutput;
+  if (!output?.label) return '-';
+  const kind = { speaker: 'Speaker', receiver: 'Earpiece', bluetooth: 'Bluetooth', wired: 'Headset', usb: 'USB' }[output.kind];
+  return kind && !output.label.toLowerCase().includes(kind.toLowerCase()) ? `${kind} · ${output.label}` : output.label;
+}
+
+function formatStatusNetwork(status) {
+  return { wifi: 'Wi-Fi', cellular: 'Cellular', ethernet: 'Ethernet', vpn: 'VPN', bluetooth: 'Bluetooth', none: 'Offline', other: 'Other', local: 'Local' }[status?.networkType] || '-';
+}
+
+function statusBatteryHtml(status) {
+  const percent = status?.batteryPercent;
+  const known = typeof percent === 'number' && Number.isFinite(percent) && percent >= 0 && percent <= 100;
+  if (!known && status?.charging == null) return '-';
+  const charging = status?.charging === true;
+  const warning = known && !charging ? percent <= 10 ? ' is-critical' : percent <= 20 ? ' is-low' : '' : '';
+  const label = known ? `${Math.round(percent)}%` : '-';
+  const title = `${label}${charging ? ' · Charging' : status?.charging === false ? ' · Not charging' : ''}`;
+  const fill = known ? `<rect x="3" y="4" width="${14 * percent / 100}" height="6" rx="1" fill="currentColor"/>` : '';
+  const bolt = '<path d="M12 1 7 7h4l-1 6 6-7h-4l1-5Z" fill="currentColor"/>';
+  return `<span class="status-battery${warning}" title="${title}" aria-label="Battery ${title}"><svg viewBox="0 0 24 14" aria-hidden="true"><rect x="1" y="2" width="18" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M21 5v4" stroke="currentColor" stroke-width="2"/>${charging ? bolt : fill}</svg><span>${label}</span></span>`;
 }
 
 function renderAdminStatus(payload = {}) {
@@ -1546,7 +1844,9 @@ function renderAdminStatus(payload = {}) {
   const showProductionColumn = payload.multipleProductionsEnabled === true;
   containerRestartPanel?.classList.toggle('is-hidden', !canRestartServer);
   latestAdminStatus = payload;
-  const users = Array.isArray(payload.users) ? [...payload.users] : [];
+  syncStatusUserFilters(payload);
+  const allStatusUsers = Array.isArray(payload.users) ? payload.users : [];
+  const users = filterStatusUsers(allStatusUsers, statusUserFilters);
   const feeds = Array.isArray(payload.feeds) ? [...payload.feeds] : [];
   const bridges = Array.isArray(payload.bridges) ? [...payload.bridges] : [];
   const companions = Array.isArray(payload.companions) ? [...payload.companions] : [];
@@ -1560,7 +1860,7 @@ function renderAdminStatus(payload = {}) {
   sortStatusRows(feeds, statusFeedsBody, sortByOnlineAndName);
   sortStatusRows(bridges, statusBridgesBody, sortByOnlineAndName);
   sortStatusRows(companions, statusCompanionsBody, sortByOnlineAndName);
-  syncStopTransmissionButtons(users);
+  syncStopTransmissionButtons(allStatusUsers);
 
   setStatusText('status-summary-users', `${summary.usersOnline || 0} / ${summary.usersTotal || 0}`);
   setStatusText('status-summary-bridges', `${summary.bridgesOnline || 0} / ${summary.bridgesTotal || 0}`);
@@ -1568,6 +1868,7 @@ function renderAdminStatus(payload = {}) {
   setStatusText('status-summary-feeds', String(summary.feedsOnline || 0));
   setStatusText('status-summary-guests', String(summary.guestsOnline || 0));
   setStatusText('status-summary-uptime', formatStatusUptime(payload.serverStartedAt));
+  const userFilterActive = Boolean(statusUserFilters.productionId);
   setStatusText('status-users-count', `${summary.usersOnline || 0} online of ${summary.usersTotal || 0}`);
   setStatusText('status-feeds-count', `${summary.feedsOnline || 0} online of ${summary.feedsTotal || 0}`);
   setStatusText('status-bridges-count', `${summary.bridgesOnline || 0} online of ${summary.bridgesTotal || 0}`);
@@ -1600,19 +1901,23 @@ function renderAdminStatus(payload = {}) {
               <td><span class="status-with-stop">${statusIndicatorHtml({
                 ...user,
                 talkingLabel: formatStatusTalkTargetLabel(user),
-              })}${user.talkLocked ? '<svg class="status-talk-lock-icon" viewBox="0 0 24 24" role="img" aria-label="Talk locked" title="Talk locked"><path d="M7 10V7a5 5 0 0 1 10 0v3"/><rect x="5" y="10" width="14" height="11" rx="2"/></svg>' : ''}${user.online && user.talking && Number.isFinite(userId) ? `<button type="button" class="status-stop-mic" data-stop-transmission-user-id="${userId}" onclick="stopUserTransmission(${userId}, this)" title="Stop transmission" aria-label="Stop transmission for ${escapeHtml(user.name)}"><img src="/images/mute_mic.png" alt="" /></button>` : ''}</span></td>
+              })}${user.talkLocked ? '<svg class="status-talk-lock-icon" viewBox="0 0 24 24" role="img" aria-label="Talk locked" title="Talk locked"><path d="M7 10V7a5 5 0 0 1 10 0v3"/><rect x="5" y="10" width="14" height="11" rx="2"/></svg>' : ''}${Number.isFinite(userId) ? `<a class="status-panel-button user-panel-link" href="/panel?userId=${encodeURIComponent(userId)}" target="_blank" rel="noopener" title="Open panel" aria-label="Open panel for ${escapeHtml(user.name)}">${PANEL_ICON}</a>` : ''}${user.online && user.talking && Number.isFinite(userId) ? `<button type="button" class="status-stop-mic" data-stop-transmission-user-id="${userId}" onclick="stopUserTransmission(${userId}, this)" title="Stop transmission" aria-label="Stop transmission for ${escapeHtml(user.name)}"><img src="/images/mute_mic.png" alt="" /></button>` : ''}</span></td>
               <td>${userNameHtml}</td>
               ${showProductionColumn ? `<td title="${escapeHtml(productionLabel)}">${escapeHtml(productionLabel)}</td>` : ''}
-              <td>${escapeHtml(clientLabel)}</td>
-              <td>${escapeHtml(user.remoteAddress || '-')}</td>
-              <td title="${user.connectionType === 'bridge' ? 'Bridge API request round-trip time' : 'WebRTC round-trip time from this browser'}">${formatStatusLatency(user.networkStats)}</td>
-              <td title="${user.connectionType === 'bridge' ? 'Input RTP packet loss from Bridge to server' : 'WebRTC audio packet loss reported by this browser'}">${formatStatusPacketLoss(user.networkStats)}</td>
+              <td class="status-client" title="${escapeHtml(clientLabel)}">${escapeHtml(clientLabel)}</td>
+              <td class="status-client-version" title="${escapeHtml(formatStatusClientVersion(user))}">${escapeHtml(formatStatusClientVersion(user))}</td>
+              <td class="status-device" title="${escapeHtml(formatStatusAudioOutput(user.deviceStatus))}">${escapeHtml(formatStatusAudioOutput(user.deviceStatus))}</td>
+              <td class="status-device status-battery-cell">${statusBatteryHtml(user.deviceStatus)}</td>
+              <td class="status-device">${escapeHtml(formatStatusNetwork(user.deviceStatus))}</td>
+              <td title="${escapeHtml(user.remoteAddress || '-')}">${escapeHtml(user.remoteAddress || '-')}</td>
+              <td title="${user.connectionType === 'bridge' ? 'Bridge API request round-trip time' : 'WebRTC round-trip time reported by this client'}">${formatStatusLatency(user.networkStats)}</td>
+              <td title="${user.connectionType === 'bridge' ? (user.networkStats?.packetLossScope === 'bridge' ? 'RTP packet loss across this Bridge instance; this port has no current packet measurement' : 'RTP packet loss for this Bridge port') : 'WebRTC audio packet loss reported by this client'}">${formatStatusPacketLoss(user.networkStats)}</td>
               <td>${user.online ? statusTimeHtml(user.connectedAt, { suffix: false, empty: '-' }) : '-'}</td>
               <td>${user.online ? 'Now' : statusTimeHtml(user.lastOnlineAt)}</td>
             </tr>
           `;
         }).join('')
-      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No users configured.</td></tr>`;
+      : `<tr><td colspan="${showProductionColumn ? 13 : 12}" class="status-empty">${userFilterActive ? 'No users match your filters.' : 'No users configured.'}</td></tr>`;
   }
 
   if (statusFeedsBody) {
@@ -1626,18 +1931,22 @@ function renderAdminStatus(payload = {}) {
           return `
             <tr>
               <td>${statusIndicatorHtml(feed)}</td>
-              <td><span class="status-primary">${escapeHtml(feed.name)}</span></td>
+              <td><button type="button" class="status-primary status-user-link" onclick="openFeedFromStatus(${Number(feed.id)})" title="Open settings for ${escapeHtml(feed.name)}">${escapeHtml(feed.name)}</button></td>
               ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
-              <td>${escapeHtml(clientLabel)}</td>
-              <td>${escapeHtml(feed.remoteAddress || '-')}</td>
-              <td title="${feed.connectionType === 'bridge' ? 'Bridge API request round-trip time' : 'WebRTC round-trip time from this browser'}">${formatStatusLatency(feed.networkStats)}</td>
-              <td title="${feed.connectionType === 'bridge' ? 'Input RTP packet loss from Bridge to server' : 'WebRTC audio packet loss reported by this browser'}">${formatStatusPacketLoss(feed.networkStats)}</td>
+              <td class="status-client" title="${escapeHtml(clientLabel)}">${escapeHtml(clientLabel)}</td>
+              <td class="status-client-version" title="${escapeHtml(formatStatusClientVersion(feed))}">${escapeHtml(formatStatusClientVersion(feed))}</td>
+              <td class="status-device" title="${escapeHtml(formatStatusAudioOutput(feed.deviceStatus))}">${escapeHtml(formatStatusAudioOutput(feed.deviceStatus))}</td>
+              <td class="status-device status-battery-cell">${statusBatteryHtml(feed.deviceStatus)}</td>
+              <td class="status-device">${escapeHtml(formatStatusNetwork(feed.deviceStatus))}</td>
+              <td title="${escapeHtml(feed.remoteAddress || '-')}">${escapeHtml(feed.remoteAddress || '-')}</td>
+              <td title="${feed.connectionType === 'bridge' ? 'Bridge API request round-trip time' : 'WebRTC round-trip time reported by this client'}">${formatStatusLatency(feed.networkStats)}</td>
+              <td title="${feed.connectionType === 'bridge' ? (feed.networkStats?.packetLossScope === 'bridge' ? 'RTP packet loss across this Bridge instance; this port has no current packet measurement' : 'RTP packet loss for this Bridge port') : 'WebRTC audio packet loss reported by this client'}">${formatStatusPacketLoss(feed.networkStats)}</td>
               <td>${feed.online ? statusTimeHtml(feed.connectedAt, { suffix: false, empty: '-' }) : '-'}</td>
               <td>${feed.online ? 'Now' : statusTimeHtml(feed.lastSeenAt, { empty: 'Never' })}</td>
             </tr>
           `;
         }).join('')
-      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No feeds configured.</td></tr>`;
+      : `<tr><td colspan="${showProductionColumn ? 13 : 12}" class="status-empty">No feeds configured.</td></tr>`;
   }
 
   if (statusBridgesBody) {
@@ -1651,17 +1960,21 @@ function renderAdminStatus(payload = {}) {
                 offlineLabel: 'Offline',
                 warningLabel: 'Device missing',
               })}</td>
-              <td><span class="status-primary">${escapeHtml(bridge.name)}</span></td>
+              <td><button type="button" class="status-primary status-user-link" data-status-bridge-id="${escapeHtml(bridge.id)}" title="Open endpoints for ${escapeHtml(bridge.name)}">${escapeHtml(bridge.name)}</button></td>
               ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
-              <td>${escapeHtml(bridge.client || 'Bridge')}</td>
-              <td>${escapeHtml(bridge.remoteAddress || '-')}</td>
+              <td class="status-client" title="${escapeHtml(bridge.client || 'Bridge')}">${escapeHtml(bridge.client || 'Bridge')}</td>
+              <td class="status-client-version" title="${escapeHtml(formatStatusClientVersion(bridge))}">${escapeHtml(formatStatusClientVersion(bridge))}</td>
+              <td class="status-device" title="${escapeHtml(formatStatusAudioOutput(bridge.deviceStatus))}">${escapeHtml(formatStatusAudioOutput(bridge.deviceStatus))}</td>
+              <td class="status-device status-battery-cell">${statusBatteryHtml(bridge.deviceStatus)}</td>
+              <td class="status-device">${escapeHtml(formatStatusNetwork(bridge.deviceStatus))}</td>
+              <td title="${escapeHtml(bridge.remoteAddress || '-')}">${escapeHtml(bridge.remoteAddress || '-')}</td>
               <td title="Average Bridge API request round-trip time across active ports">${formatStatusLatency(bridge.networkStats)}</td>
-              <td title="Input RTP packet loss from Bridge to server across active ports">${formatStatusPacketLoss(bridge.networkStats)}</td>
+              <td title="RTP packet loss across active Bridge ports">${formatStatusPacketLoss(bridge.networkStats)}</td>
               <td>${bridge.online ? statusTimeHtml(bridge.connectedAt, { suffix: false, empty: '-' }) : '-'}</td>
               <td>${bridge.online ? 'Now' : statusTimeHtml(bridge.lastSeenAt)}</td>
             </tr>
           `).join('')
-      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No bridge announced.</td></tr>`;
+      : `<tr><td colspan="${showProductionColumn ? 13 : 12}" class="status-empty">No bridge announced.</td></tr>`;
   }
 
   if (statusCompanionsBody) {
@@ -1678,8 +1991,12 @@ function renderAdminStatus(payload = {}) {
               <td>${statusIndicatorHtml({ online: companion.online, onlineLabel: 'Online', offlineLabel: 'Stale' })}</td>
               <td><span class="status-primary">${escapeHtml(companion.name)}</span></td>
               ${showProductionColumn ? '<td class="status-production-spacer" aria-hidden="true"></td>' : ''}
-              <td>${escapeHtml(companion.client || '-')}</td>
-              <td>${escapeHtml(companion.remoteAddress || '-')}</td>
+              <td class="status-client" title="${escapeHtml(companion.client || '-')}">${escapeHtml(companion.client || '-')}</td>
+              <td class="status-client-version">-</td>
+              <td class="status-device">-</td>
+              <td class="status-device status-battery-cell">-</td>
+              <td class="status-device">-</td>
+              <td title="${escapeHtml(companion.remoteAddress || '-')}">${escapeHtml(companion.remoteAddress || '-')}</td>
               <td>-</td>
               <td>-</td>
               <td>${connectedSince}</td>
@@ -1687,7 +2004,7 @@ function renderAdminStatus(payload = {}) {
             </tr>
           `;
         }).join('')
-      : `<tr><td colspan="${showProductionColumn ? 9 : 8}" class="status-empty">No Companion instance connected.</td></tr>`;
+      : `<tr><td colspan="${showProductionColumn ? 13 : 12}" class="status-empty">No Companion instance connected.</td></tr>`;
   }
 
   setStatusText('status-version', `Server version ${payload.appVersion || 'unknown'}`);
@@ -1697,7 +2014,7 @@ async function loadAdminStatus({ silent = false } = {}) {
   if (statusLoadPromise) return statusLoadPromise;
   statusLoadPromise = (async () => {
     try {
-      const payload = await fetchJSON('/admin/status');
+      const payload = await fetchJSON('/admin/status', { cache: 'no-store' });
       setServerReachability(true);
       updateBridgeRegistryFromStatus(payload);
       renderAdminStatus(payload);
@@ -1941,11 +2258,66 @@ function clearEntitySearch(input) {
   input.dispatchEvent(new Event('input'));
 }
 
+statusUserFilterToggle?.addEventListener('click', () => {
+  setStatusUserFilterOpen(statusUserFilterPanel?.hidden === true);
+});
+statusUserFilterPanel?.addEventListener('click', (event) => {
+  const option = event.target.closest('[data-status-production-id]');
+  if (!option || !statusUserFilterPanel.contains(option)) return;
+  statusUserFilters.productionId = option.dataset.statusProductionId;
+  if (latestAdminStatus) renderAdminStatus(latestAdminStatus);
+  setStatusUserFilterOpen(false, { restoreFocus: true });
+});
+statusUserControls?.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && statusUserFilterPanel?.hidden === false) {
+    event.preventDefault();
+    setStatusUserFilterOpen(false, { restoreFocus: true });
+    return;
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  const wasClosed = statusUserFilterPanel?.hidden !== false;
+  if (wasClosed && event.target !== statusUserFilterToggle) return;
+  event.preventDefault();
+  setStatusUserFilterOpen(true);
+  const options = [...statusUserFilterPanel.querySelectorAll('[role="menuitemradio"]')];
+  const current = options.indexOf(event.target);
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+    : wasClosed ? event.key === 'ArrowUp' ? options.length - 1 : 0
+      : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+  options.forEach((option, optionIndex) => { option.tabIndex = optionIndex === index ? 0 : -1; });
+  options[index]?.focus();
+});
+statusUserControls?.addEventListener('focusout', (event) => {
+  if (event.relatedTarget && !statusUserControls.contains(event.relatedTarget)) setStatusUserFilterOpen(false);
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!statusUserControls?.contains(event.target)) setStatusUserFilterOpen(false);
+});
+document.addEventListener('scroll', (event) => {
+  if (!statusUserFilterPanel?.contains(event.target)) setStatusUserFilterOpen(false);
+}, true);
+window.addEventListener('resize', () => {
+  setStatusUserFilterOpen(false);
+  if (latestAdminStatus) syncStatusUserFilters(latestAdminStatus);
+});
+
 for (const kind of ['users', 'conferences', 'feeds']) {
   const config = getEntityMasterDetailConfig(kind);
-  config?.picker?.addEventListener('click', (event) => {
+  config?.picker?.addEventListener('click', async (event) => {
     const button = event.target.closest(`[data-entity-kind="${kind}"][data-entity-select]`);
-    if (button) selectAdminEntity(kind, button.dataset.entitySelect);
+    if (!button) return;
+    const selectedId = Number(button.dataset.entitySelect);
+    await selectAdminEntity(kind, selectedId);
+    if (kind === 'users') {
+      window.requestAnimationFrame(() => {
+        if (entityMasterDetailState[kind].selectedId !== selectedId) return;
+        const details = config.detailList?.querySelector('[data-entity-id]:not([hidden])');
+        details?.scrollIntoView({
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+          block: 'start',
+        });
+      });
+    }
   });
   bindEntitySearch(config?.search, config?.clear, (query) => {
     entityMasterDetailState[kind].query = query;
@@ -1997,6 +2369,35 @@ function setProductionDetailVisible(view = 'empty') {
 
 function productionTargetKey(targetType, targetId) {
   return `${targetType}:${targetId}`;
+}
+
+function isBridgeManagedMatrixTarget(user, targetType, targetId) {
+  return Boolean(user?.bridge_enabled && ['audio-level', 'always-on'].includes(user.bridge_trigger_mode)
+    && bridgeTalkTrigger.targets(user.bridge_trigger_targets,
+    user.bridge_trigger_target_type && user.bridge_trigger_target_id
+      ? { type: user.bridge_trigger_target_type, id: user.bridge_trigger_target_id } : null)
+    .some(target => target.type === targetType && Number(target.id) === Number(targetId)));
+}
+
+function bridgeManagedMatrixHint(label) {
+  return `${label} — Configured by Bridge. Click to open Bridge configuration.`;
+}
+
+async function openMatrixBridgeConfiguration(toggle, forcedEnabled = null) {
+  if (toggle.dataset.bridgeManaged !== 'true') return false;
+  // Painting across managed cells must neither edit them nor navigate away.
+  if (forcedEnabled !== null) return true;
+  if (!adminState.isGlobalAdmin) {
+    showMessage('This connection is configured by Bridge. Ask a global administrator to change it.', 'info', 'matrix');
+    return true;
+  }
+  await window.openUserFromStatus(Number(toggle.dataset.userId));
+  window.requestAnimationFrame(() => {
+    const form = document.getElementById(`bridge-config-${toggle.dataset.userId}`);
+    form?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    document.getElementById(`bridge-trigger-mode-${toggle.dataset.userId}`)?.focus({ preventScroll: true });
+  });
+  return true;
 }
 
 function getProductionTargetState(targetType, target = null) {
@@ -2052,14 +2453,78 @@ function renderProductionMembers(payload) {
         </li>
       `;
     }).join('') || '<li class="section-note">None available.</li>';
-    return `<li class="production-entity-heading">${escapeHtml(label)}</li>${rows}`;
+    return `<section><h4 class="production-entity-heading">${escapeHtml(label)}</h4><ul class="production-check-list">${rows}</ul></section>`;
   };
 
-  productionMembersList.innerHTML = [
-    renderRows('user', 'Users', payload.catalog.users, payload.members),
-    renderRows('conference', 'Conferences', payload.catalog.conferences, payload.conferences),
-    renderRows('feed', 'Feeds', payload.catalog.feeds, payload.feeds),
-  ].join('');
+  productionMembersList.innerHTML = `
+    ${renderRows('user', 'Users', payload.catalog.users, payload.members)}
+    <div class="production-contents-secondary">
+      ${renderRows('conference', 'Conferences', payload.catalog.conferences, payload.conferences)}
+      ${renderRows('feed', 'Feeds', payload.catalog.feeds, payload.feeds)}
+    </div>
+  `;
+}
+
+function matrixConnectButton(user = null) {
+  const hint = user ? `Connect all targets for ${user.name}` : 'Connect all users to all targets in this matrix';
+  return `<button type="button" class="matrix-connect${user ? '' : ' matrix-connect--all'}"
+    data-matrix-connect="${user ? user.id : 'all'}" data-user-name="${escapeHtml(user?.name || '')}"
+    title="${escapeHtml(hint)}" aria-label="${escapeHtml(hint)}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M10 13a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7M14 11a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7" />
+    </svg></button>`;
+}
+
+function matrixUserHeading(user) {
+  return `<th class="target-matrix__user-name" scope="row"><div class="target-matrix__user-label"><span title="${escapeHtml(user.name)}">${escapeHtml(user.name)}</span>${matrixConnectButton(user)}</div></th>`;
+}
+
+let matrixConnectBusy = false;
+async function handleMatrixConnectAll(container, button) {
+  if (matrixConnectBusy || button.disabled) return;
+  const production = container === productionTargetMatrixContainer;
+  const productionId = production ? selectedProductionId : null;
+  const userId = button.dataset.matrixConnect === 'all' ? null : Number(button.dataset.matrixConnect);
+  const scope = production ? selectedProductionPayload?.production?.name || 'this production' : 'this matrix';
+  const subject = userId === null ? `all users in ${scope}` : button.dataset.userName;
+  matrixConnectBusy = true;
+  const disabled = [];
+  try {
+    const action = await adminConfirm(
+      `Connect all available targets for ${subject}? Conferences will be set to talk and listen. Existing connections are kept when connecting. Disconnect all removes the connections in this scope. Bridge-managed points are kept.`,
+      { title: 'Connect all targets', confirmLabel: 'Connect all', alternativeLabel: 'Disconnect all' }
+    );
+    if (!action) return;
+    const disconnect = action === 'alternative';
+    const operation = disconnect ? 'disconnect-all' : 'connect-all';
+    if (production && selectedProductionId !== productionId) return;
+    for (const node of container.querySelectorAll('button:not(:disabled)')) {
+      node.disabled = true;
+      disabled.push(node);
+    }
+    const response = await productionRequest(production
+      ? `/admin/productions/${productionId}/targets/${operation}`
+      : `/admin/matrix/${operation}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }),
+    });
+    const result = await response.json();
+    if (production) {
+      if (selectedProductionId === productionId) await loadProductionDetail(productionId, { preferredOrderUserId: productionOrderUser?.value });
+    } else {
+      for (const id of result.userIds) {
+        cacheUserTargetAssignments(id, await fetchJSON(`/users/${id}/targets`));
+        scheduleUserTargetEditorRefresh(id);
+      }
+      renderTargetMatrix(currentAdminCatalog.users, currentAdminCatalog.conferences, currentAdminCatalog.feeds);
+      for (const id of result.conferenceIds) for (const uid of result.userIds) scheduleConferenceMembershipEditorRefresh(id, uid);
+    }
+    showMessage(`${result.connections} target connection${result.connections === 1 ? '' : 's'} ${disconnect ? 'removed' : 'added'}.`, 'success', 'matrix');
+  } catch (error) {
+    showMessage(error.message || 'Failed to update target connections', 'error', 'matrix');
+  } finally {
+    for (const node of disabled) node.disabled = false;
+    matrixConnectBusy = false;
+  }
 }
 
 function renderProductionTargetMatrix(payload) {
@@ -2098,6 +2563,7 @@ function renderProductionTargetMatrix(payload) {
       const label = `${column.name} as target for ${user.name}`;
       const assignment = assignments.get(productionTargetKey(column.targetType, column.id));
       const state = getProductionTargetState(column.targetType, assignment);
+      const managed = assignment?.bridgeManaged === true;
       const conferenceTitle = state === 'talk'
         ? `${label} (talk and listen)`
         : state === 'listen-only'
@@ -2108,20 +2574,20 @@ function renderProductionTargetMatrix(payload) {
           <button type="button" class="target-matrix-toggle production-target-toggle"
             data-user-id="${user.id}" data-target-type="${escapeHtml(column.targetType)}" data-target-id="${column.id}"
             data-label="${escapeHtml(label)}"
-            data-state="${state}" ${column.targetType === 'conference' ? 'data-matrix-multistate="true"' : ''}
-            aria-label="${escapeHtml(column.targetType === 'conference' ? conferenceTitle : label)}"
-            title="${escapeHtml(column.targetType === 'conference' ? conferenceTitle : label)}"
+            data-bridge-managed="${managed}" data-state="${state}" ${column.targetType === 'conference' ? 'data-matrix-multistate="true"' : ''}
+            aria-label="${escapeHtml(managed ? bridgeManagedMatrixHint(label) : column.targetType === 'conference' ? conferenceTitle : label)}"
+            title="${escapeHtml(managed ? bridgeManagedMatrixHint(label) : column.targetType === 'conference' ? conferenceTitle : label)}"
             aria-pressed="${state === 'talk' ? 'true' : state === 'listen-only' ? 'mixed' : 'false'}"></button>
         </td>
       `;
     }).join('');
-    return `<tr><th class="target-matrix__user-name" scope="row">${escapeHtml(user.name)}</th>${cells}</tr>`;
+    return `<tr>${matrixUserHeading(user)}${cells}</tr>`;
   }).join('');
   const matrixTableWidth = 7.5 + (columns.length * 1.9);
   productionTargetMatrixContainer.innerHTML = `
     <table class="target-matrix" style="--matrix-table-width: ${matrixTableWidth}rem">
       <colgroup><col class="target-matrix__profile-column" />${columns.map(() => '<col class="target-matrix__target-col" />').join('')}</colgroup>
-      <thead><tr><th class="target-matrix__corner" rowspan="2" scope="col"><span class="target-matrix__corner-label target-matrix__corner-label--users">Users</span><span class="target-matrix__corner-label target-matrix__corner-label--targets">Targets</span></th>${groupHeaders}</tr><tr>${columnHeaders}</tr></thead>
+      <thead><tr><th class="target-matrix__corner" rowspan="2" scope="col"><span class="target-matrix__corner-label target-matrix__corner-label--users">Users</span><span class="target-matrix__corner-label target-matrix__corner-label--targets">Targets</span>${matrixConnectButton()}</th>${groupHeaders}</tr><tr>${columnHeaders}</tr></thead>
       <tbody>${bodyRows}</tbody>
     </table>
   `;
@@ -2149,9 +2615,13 @@ function renderProductionOrder(payload, preferredUserId = null) {
 function initProductionTargetOrdering(userId, list) {
   const items = [...list.querySelectorAll('.draggable-target')];
   items.forEach((item) => {
-    item.addEventListener('dragstart', () => item.classList.add('dragging'));
+    item.addEventListener('dragstart', () => {
+      item.classList.add('dragging');
+      showTargetDropIndicator(list, item);
+    });
     item.addEventListener('dragend', () => {
       item.classList.remove('dragging');
+      clearTargetDropIndicator(list);
       saveProductionTargetOrder(userId, list);
     });
   });
@@ -2163,6 +2633,7 @@ function initProductionTargetOrdering(userId, list) {
     const afterElement = getDragAfterElement(list, event.clientY);
     if (!afterElement) list.appendChild(dragging);
     else if (afterElement !== dragging) list.insertBefore(dragging, afterElement);
+    showTargetDropIndicator(list, dragging);
   };
   if (list._productionDragOverHandler) {
     list.removeEventListener('dragover', list._productionDragOverHandler);
@@ -2170,7 +2641,10 @@ function initProductionTargetOrdering(userId, list) {
   list._productionDragOverHandler = onDragOver;
   list.addEventListener('dragover', onDragOver);
   if (!list._productionDropReady) {
-    list.addEventListener('drop', (event) => event.preventDefault());
+    list.addEventListener('drop', (event) => {
+      event.preventDefault();
+      clearTargetDropIndicator(list);
+    });
     list._productionDropReady = true;
   }
   initTouchTargetOrdering(list, () => saveProductionTargetOrder(userId, list));
@@ -2297,6 +2771,7 @@ async function loadData() {
     loadDefaultClientSettings(),
     loadAutomaticBackupSettings(),
     loadMdnsSettings(),
+    loadWebAccessSettings(),
     loadMediaNetworkSettings(),
     loadRtcPortSettings(),
     loadApiKeyField(),
@@ -2341,7 +2816,7 @@ function cacheUserTargetAssignments(userId, targets) {
     .querySelectorAll(`.target-matrix-toggle[data-user-id="${key}"]`)
     .forEach((toggle) => {
       if (toggle.disabled) return;
-      toggle.setAttribute('aria-pressed', String(assignments.has(
+      toggle.setAttribute('aria-pressed', String(toggle.dataset.bridgeManaged === 'true' || assignments.has(
         targetAssignmentKey(toggle.dataset.targetType, toggle.dataset.targetId)
       )));
     });
@@ -2387,7 +2862,7 @@ function cacheConferenceMemberships(conferenceId, users) {
     setCachedTargetAssignment(user.id, 'conference', conferenceId, enabled);
     targetMatrixContainer
       ?.querySelector(`.target-matrix-toggle[data-user-id="${userKey}"][data-target-type="conference"][data-target-id="${conferenceKey}"]`)
-      ?.setAttribute('aria-pressed', String(enabled));
+      ?.setAttribute('aria-pressed', String(enabled || isBridgeManagedMatrixTarget(user, 'conference', conferenceId)));
   });
 }
 
@@ -2463,7 +2938,8 @@ function renderTargetMatrix(users, conferences, feeds) {
       if (isSelfTarget) {
         return `<td class="target-matrix__unavailable target-matrix__target-column target-matrix__column--user" data-matrix-column="${columnIndex}" aria-label="A user cannot target itself">&mdash;</td>`;
       }
-      const checked = assignments.has(targetAssignmentKey(column.targetType, column.id));
+      const managed = isBridgeManagedMatrixTarget(user, column.targetType, column.id);
+      const checked = managed || assignments.has(targetAssignmentKey(column.targetType, column.id));
       const label = `${column.name} as target for ${user.name}`;
       return `
         <td class="target-matrix__coupling target-matrix__target-column target-matrix__column--${escapeHtml(column.targetType)}" data-matrix-column="${columnIndex}">
@@ -2473,16 +2949,17 @@ function renderTargetMatrix(users, conferences, feeds) {
             data-user-id="${user.id}"
             data-target-type="${escapeHtml(column.targetType)}"
             data-target-id="${column.id}"
-            aria-label="${escapeHtml(label)}"
+            data-bridge-managed="${managed}"
+            aria-label="${escapeHtml(managed ? bridgeManagedMatrixHint(label) : label)}"
             aria-pressed="${checked ? 'true' : 'false'}"
-            title="${escapeHtml(column.targetType === 'conference' ? `${label} (also controls conference membership)` : label)}"
+            title="${escapeHtml(managed ? bridgeManagedMatrixHint(label) : column.targetType === 'conference' ? `${label} (also controls conference membership)` : label)}"
           ></button>
         </td>
       `;
     }).join('');
     return `
       <tr>
-        <th class="target-matrix__user-name" scope="row">${escapeHtml(user.name)}</th>
+        ${matrixUserHeading(user)}
         ${cells}
       </tr>
     `;
@@ -2503,6 +2980,7 @@ function renderTargetMatrix(users, conferences, feeds) {
           <th class="target-matrix__corner" rowspan="2" scope="col" aria-label="Users by targets">
             <span class="target-matrix__corner-label target-matrix__corner-label--users">Users</span>
             <span class="target-matrix__corner-label target-matrix__corner-label--targets">Targets</span>
+            ${matrixConnectButton()}
           </th>
           ${groupHeaders}
         </tr>
@@ -2528,6 +3006,7 @@ function highlightMatrixColumn(container, columnIndex = null) {
 }
 
 async function handleTargetMatrixToggle(toggle, forcedEnabled = null) {
+  if (await openMatrixBridgeConfiguration(toggle, forcedEnabled)) return;
   const userId = Number(toggle.dataset.userId);
   const targetType = toggle.dataset.targetType;
   const targetId = Number(toggle.dataset.targetId);
@@ -2626,6 +3105,48 @@ async function refreshAdminLists({ users: refreshUsers = false, conferences: ref
   }
 }
 
+async function saveUserTargetRearrange(userId, toggle) {
+  const allowed = toggle.checked;
+  toggle.disabled = true;
+  try {
+    const response = await authedFetch(`/admin/users/${userId}/target-rearrange`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allowTargetRearrange: allowed }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Failed to save target rearrange permission');
+    toggle.checked = payload.allowTargetRearrange;
+    showMessage('✅ Target rearrange permission saved', 'success', 'users');
+  } catch (error) {
+    toggle.checked = !allowed;
+    showMessage(`❌ ${error.message}`, 'error', 'users');
+  } finally {
+    toggle.disabled = false;
+  }
+}
+
+async function saveUserTargetAddRemove(userId, toggle) {
+  const allowed = toggle.checked;
+  toggle.disabled = true;
+  try {
+    const response = await authedFetch(`/admin/users/${userId}/target-add-remove`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allowTargetAddRemove: allowed }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Failed to save target add/remove permission');
+    toggle.checked = payload.allowTargetAddRemove;
+    showMessage('✅ Target add/remove permission saved', 'success', 'users');
+  } catch (error) {
+    toggle.checked = !allowed;
+    showMessage(`❌ ${error.message}`, 'error', 'users');
+  } finally {
+    toggle.disabled = false;
+  }
+}
+
 async function renderUserList(users, conferences, feeds, bridges = currentBridgeRegistry) {
   currentBridgeRegistry = Array.isArray(bridges) ? bridges : [];
   targetAssignmentsByUser.clear();
@@ -2672,6 +3193,9 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
     const deleteButton = isSuperadmin
       ? ''
       : `<button type="button" class="small danger" onclick="deleteUser(${user.id})" ${deleteAttrs}>Delete</button>`;
+    const panelButton = !isSuperadmin && !isGuestProfile
+      ? `<a class="small user-settings-button user-panel-link" href="/panel?userId=${encodeURIComponent(user.id)}" target="_blank" rel="noopener" aria-label="Open panel for ${safeName}" title="Remote control panel"><span>Panel</span>${PANEL_ICON}</a>`
+      : '';
     const audioSettingsButton = !isSuperadmin && !isGuestProfile
       ? `<button type="button" class="small user-settings-button" onclick='openUserAudioSettings(${user.id}, ${JSON.stringify(user.name)})' aria-label="Audio settings for ${safeName}" title="Audio settings">
           <span>Audio</span>
@@ -2685,8 +3209,8 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
 
     const bridgeControls = !isSuperadmin && !isGuestProfile
       ? `
-        <div class="nested-block">
-          <form class="bridge-config-form" id="bridge-config-${user.id}" data-bridge-config-user-id="${user.id}" onsubmit="saveBridgeEndpoint(event, ${user.id})">
+        <div class="nested-block user-bridge-controls" data-bridge-audio-port="user:${user.id}">
+          <form class="bridge-config-form" id="bridge-config-${user.id}" data-bridge-config-user-id="${user.id}">
             <label class="admin-switch bridge-input-switch" for="bridge-enabled-${user.id}">
               <input type="checkbox" id="bridge-enabled-${user.id}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
               <span class="admin-switch__track" aria-hidden="true"></span>
@@ -2711,6 +3235,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
                   <select id="bridge-input-pair-${user.id}" data-saved-left="${escapeHtml(valueOrEmpty(user.bridge_input_left_channel))}" data-saved-right="${escapeHtml(valueOrEmpty(user.bridge_input_right_channel))}"></select>
                 </div>
               </div>
+              ${renderAdminBridgeAudio("user", user.id, "input")}
               <div class="bridge-channel-row">
                 <div class="field-group">
                   <label for="bridge-output-device-${user.id}">Output device</label>
@@ -2721,36 +3246,52 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
                   <select id="bridge-output-pair-${user.id}" data-saved-left="${escapeHtml(valueOrEmpty(user.bridge_output_left_channel))}" data-saved-right="${escapeHtml(valueOrEmpty(user.bridge_output_right_channel))}"></select>
                 </div>
               </div>
-              <div class="bridge-trigger-row">
+              ${renderAdminBridgeAudio("user", user.id, "output")}
+              <div class="bridge-trigger-row ${user.bridge_trigger_mode !== 'audio-level' ? 'bridge-trigger-row--simple' : ''}">
                 <div class="field-group">
                   <label for="bridge-trigger-mode-${user.id}">Talk trigger</label>
                   <select id="bridge-trigger-mode-${user.id}">
-                    <option value="external" ${user.bridge_trigger_mode === 'audio-level' ? '' : 'selected'}>External trigger</option>
+                    <option value="external" ${bridgeTalkTrigger.mode(user.bridge_trigger_mode) === 'external' ? 'selected' : ''}>External API / Companion</option>
                     <option value="audio-level" ${user.bridge_trigger_mode === 'audio-level' ? 'selected' : ''}>Audio level</option>
+                    <option value="always-on" ${user.bridge_trigger_mode === 'always-on' ? 'selected' : ''}>Always on</option>
                   </select>
                 </div>
-                <div class="bridge-trigger-details" id="bridge-trigger-details-${user.id}" ${user.bridge_trigger_mode === 'audio-level' ? '' : 'hidden'}>
+                <div class="field-group" ${user.bridge_trigger_mode === 'audio-level' ? '' : 'hidden'}>
+                  <label for="bridge-trigger-threshold-${user.id}">Threshold dBFS</label>
+                  <input id="bridge-trigger-threshold-${user.id}" type="number" min="-120" max="-10" step="1" value="${escapeHtml(valueOrEmpty(user.bridge_trigger_threshold_db ?? -45))}">
+                </div>
+                <div class="bridge-trigger-details" id="bridge-trigger-details-${user.id}" ${bridgeTalkTrigger.mode(user.bridge_trigger_mode) === 'external' ? 'hidden' : ''}>
                   <div class="field-group">
-                    <label for="bridge-trigger-target-${user.id}">Trigger target</label>
-                    <select id="bridge-trigger-target-${user.id}" data-saved-value="${escapeHtml(user.bridge_trigger_target_type && user.bridge_trigger_target_id ? `${user.bridge_trigger_target_type}:${user.bridge_trigger_target_id}` : '')}"></select>
-                  </div>
-                  <div class="field-group">
-                    <label for="bridge-trigger-threshold-${user.id}">Threshold dBFS</label>
-                    <input id="bridge-trigger-threshold-${user.id}" type="number" min="-120" max="-10" step="1" value="${escapeHtml(valueOrEmpty(user.bridge_trigger_threshold_db ?? -45))}">
+                    <span class="bridge-target-label" id="bridge-trigger-hint-${user.id}"><span id="bridge-trigger-target-label-${user.id}">Talk targets</span> <span class="bridge-target-info" aria-hidden="true">ⓘ</span></span>
+                    <div class="bridge-talk-targets" role="group" aria-labelledby="bridge-trigger-target-label-${user.id}" id="bridge-trigger-target-${user.id}" data-saved-targets="${escapeHtml(JSON.stringify(bridgeTalkTrigger.targets(user.bridge_trigger_targets, user.bridge_trigger_target_type && user.bridge_trigger_target_id ? { type: user.bridge_trigger_target_type, id: user.bridge_trigger_target_id } : null)))}"></div>
                   </div>
                 </div>
               </div>
             </div>
-            <button type="submit" class="small">Save</button>
           </form>
+          <div class="bridge-audio-footer" ${user.bridge_enabled ? '' : 'hidden'}><span data-port-state role="status">Loading port audio…</span></div>
+          <div class="bridge-config-actions"><span id="bridge-auto-save-user-${user.id}" class="auto-save-feedback" role="status" aria-live="polite"></span></div>
         </div>
       `
       : '';
-    const targetControls = isSuperadmin || multipleProductionsEnabled
+    const targetControls = isSuperadmin
       ? ''
       : `
-        <div class="nested-block">
+        <div class="nested-block user-target-controls">
           <strong>Target Buttons</strong>
+          <div class="inline-controls">
+            <label class="admin-switch" title="Allow this user to change the order of their target buttons">
+              <input type="checkbox" role="switch" onchange="saveUserTargetRearrange(${user.id}, this)" ${user.allowTargetRearrange ? 'checked' : ''} ${isGuestProfile ? 'disabled' : ''}>
+              <span class="admin-switch__track" aria-hidden="true"></span>
+              <span>Allow target rearrange</span>
+            </label>
+            <label class="admin-switch" title="Allow this user to add or remove targets in their production">
+              <input type="checkbox" role="switch" onchange="saveUserTargetAddRemove(${user.id}, this)" ${user.allowTargetAddRemove ? 'checked' : ''} ${isGuestProfile ? 'disabled' : ''}>
+              <span class="admin-switch__track" aria-hidden="true"></span>
+              <span>Allow target add/remove</span>
+            </label>
+          </div>
+          ${multipleProductionsEnabled ? '' : `
           <div class="inline-controls">
             <select id="add-target-type-${user.id}">
               <option value="user">User</option>
@@ -2761,6 +3302,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
             <button type="button" id="add-target-btn-${user.id}" class="small" onclick="addTarget(${user.id})">Add target</button>
           </div>
           <ul id="user-targets-${user.id}"></ul>
+          `}
         </div>
       `;
     const detailControls = targetControls || bridgeControls
@@ -2785,6 +3327,7 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
           ${loginQrButton}
           <button type="button" class="small warning" onclick='editUser(${user.id}, ${JSON.stringify(user.name)})'>Rename</button>
           <button type="button" class="small warning" onclick='resetPassword(${user.id}, ${JSON.stringify(user.name)})' ${passwordAttrs}>Reset Password</button>
+          ${panelButton}
           ${audioSettingsButton}
           ${adminToggle}
           ${deleteButton}
@@ -2813,6 +3356,25 @@ async function renderUserList(users, conferences, feeds, bridges = currentBridge
   initializeBridgeEndpointForms();
   await syncEntityMasterDetail('users', visibleUsers);
   syncStopTransmissionButtons();
+}
+
+async function saveFeedVideoPermission(feedId, allowed, control) {
+  if (control) control.disabled = true;
+  try {
+    const response = await authedFetch(`/admin/feeds/${feedId}/feed-video`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allowFeedVideo: allowed }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Failed to save feed video permission');
+    await refreshAdminLists({ feeds: true });
+    showMessage('Feed video permission saved', 'success', 'feed');
+  } catch (error) {
+    if (control?.type === 'checkbox') control.checked = !allowed;
+    showMessage(error.message, 'error', 'feed');
+  } finally {
+    if (control) control.disabled = false;
+  }
 }
 
 async function renderFeedList(feeds) {
@@ -2844,8 +3406,15 @@ async function renderFeedList(feeds) {
         </div>
       </div>
       <div class="nested" id="feed-nested-${feed.id}" onclick="event.stopPropagation()">
-        <div class="nested-block">
-          <form class="bridge-config-form" id="bridge-config-${formKey}" data-bridge-config-key="${formKey}" onsubmit="saveFeedBridgeEndpoint(event, ${feed.id})">
+        <div class="nested-block feed-video-permission">
+          <label class="admin-switch" title="Allow this feed to transmit video. Audio is unaffected.">
+            <input type="checkbox" role="switch" onchange="saveFeedVideoPermission(${feed.id}, this.checked, this)" ${feed.allowFeedVideo ? 'checked' : ''}>
+            <span class="admin-switch__track" aria-hidden="true"></span>
+            <span>Allow Feed-Video</span>
+          </label>
+        </div>
+        <div class="nested-block feed-bridge-controls" data-bridge-audio-port="feed:${feed.id}">
+          <form class="bridge-config-form" id="bridge-config-${formKey}" data-bridge-config-key="${formKey}">
             <label class="admin-switch bridge-input-switch" for="bridge-enabled-${formKey}">
               <input type="checkbox" id="bridge-enabled-${formKey}" role="switch" ${isBridgeEndpoint ? 'checked' : ''}>
               <span class="admin-switch__track" aria-hidden="true"></span>
@@ -2870,9 +3439,15 @@ async function renderFeedList(feeds) {
                   <select id="bridge-input-pair-${formKey}" data-saved-left="${escapeHtml(valueOrEmpty(feed.bridge_input_left_channel))}" data-saved-right="${escapeHtml(valueOrEmpty(feed.bridge_input_right_channel))}"></select>
                 </div>
               </div>
+              ${renderAdminBridgeAudio("feed", feed.id, "input")}
+              <div class="field-group">
+                <label for="bridge-video-source-${formKey}">Video source (optional)</label>
+                <select id="bridge-video-source-${formKey}" data-saved-value="${escapeHtml(feed.bridge_video_source || '')}"></select>
+              </div>
             </div>
-            <button type="submit" class="small">Save</button>
           </form>
+          <div class="bridge-audio-footer" ${feed.bridge_enabled ? '' : 'hidden'}><span data-port-state role="status">Loading port audio…</span></div>
+          <div class="bridge-config-actions"><span id="bridge-auto-save-feed-${feed.id}" class="auto-save-feedback" role="status" aria-live="polite"></span></div>
         </div>
       </div>
     `;
@@ -2925,10 +3500,38 @@ async function renderConferenceList(conferences, users) {
   await syncEntityMasterDetail('conferences', conferences);
 }
 
+const webAccessFields = { tlsMode: 'web-access-mode', httpsPort: 'web-access-port', publicUrl: 'web-access-public-url', trustedProxies: 'web-access-trusted-proxies' };
+
+function syncWebAccessProxyFields() {
+  const isProxy = document.getElementById('web-access-mode').value === 'proxy';
+  document.querySelectorAll('[data-web-access-proxy-field]').forEach(group => {
+    group.classList.toggle('is-hidden', !isProxy);
+  });
+}
+
+document.getElementById('web-access-mode').addEventListener('change', syncWebAccessProxyFields);
+
+async function loadWebAccessSettings() {
+  const payload = await fetchJSON('/admin/settings/web-access');
+  const overrides = payload.environmentOverrides || [];
+  for (const [key, id] of Object.entries(webAccessFields)) {
+    const field = document.getElementById(id);
+    field.disabled = overrides.includes(key);
+    field.value = field.disabled ? payload.active[key] : payload.saved[key];
+  }
+  syncWebAccessProxyFields();
+  document.getElementById('web-access-active').textContent = `${payload.active.tlsMode === 'proxy' ? 'HTTP behind HTTPS reverse proxy' : 'Built-in HTTPS'} · port ${payload.active.httpsPort}`;
+  document.getElementById('web-access-restart-hint').textContent = payload.restartRequired
+    ? 'Saved. Restart the server to apply the web access settings.'
+    : 'Changes require a server restart to take effect.';
+  const hint = document.getElementById('web-access-override-hint');
+  hint.classList.toggle('is-hidden', overrides.length === 0);
+  hint.textContent = `Environment overrides are active for: ${overrides.join(', ')}. These fields are managed by the deployment configuration.`;
+}
+
 async function loadMdnsSettings() {
   const payload = await fetchJSON('/admin/settings/mdns');
   const activeHostEl = document.getElementById('mdns-active-host');
-  const savedHostEl = document.getElementById('mdns-saved-host');
   const inputEl = document.getElementById('mdns-host');
   const restartHintEl = document.getElementById('mdns-restart-hint');
   const containerHintEl = document.getElementById('mdns-container-hint');
@@ -2938,7 +3541,6 @@ async function loadMdnsSettings() {
   const runningInContainer = Boolean(payload?.runningInContainer);
 
   if (activeHostEl) activeHostEl.textContent = activeHost;
-  if (savedHostEl) savedHostEl.textContent = savedHost;
   if (inputEl) inputEl.value = savedHost === 'off' ? 'off' : savedHost;
   if (restartHintEl) {
     restartHintEl.textContent = payload?.restartRequired
@@ -2948,16 +3550,6 @@ async function loadMdnsSettings() {
   if (containerHintEl) {
     containerHintEl.classList.toggle('is-hidden', !runningInContainer);
   }
-}
-
-function describeMediaNetworkMode(mode, detail = '') {
-  if (mode === 'interface') {
-    return detail ? `Preferred adapter (${detail})` : 'Preferred adapter';
-  }
-  if (mode === 'manual') {
-    return detail ? `Manual (${detail})` : 'Manual';
-  }
-  return detail ? `Automatic (${detail})` : 'Automatic (all adapters)';
 }
 
 function updateMediaNetworkFormVisibility() {
@@ -2974,11 +3566,42 @@ function updateMediaNetworkFormVisibility() {
   }
 }
 
+function renderMediaInterfaceOptions(container, interfaces, selectedName) {
+  const selected = new Set(String(selectedName || '').split(',').map(name => name.trim()).filter(Boolean));
+  const entries = new Map();
+  for (const entry of interfaces || []) {
+    if (!entry?.name) continue;
+    const previous = entries.get(entry.name);
+    entries.set(entry.name, previous ? `${previous}, ${entry.address}` : (entry.label || `${entry.name} - ${entry.address}`));
+  }
+  for (const name of selected) {
+    if (!entries.has(name)) entries.set(name, `${name} (saved, unavailable)`);
+  }
+  container.replaceChildren();
+  for (const [name, description] of entries) {
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.setAttribute('role', 'switch');
+    checkbox.value = name;
+    checkbox.checked = selected.has(name);
+    const text = document.createElement('span');
+    text.textContent = description;
+    const control = document.createElement('span');
+    control.className = 'admin-switch';
+    const track = document.createElement('span');
+    track.className = 'admin-switch__track';
+    track.setAttribute('aria-hidden', 'true');
+    control.append(checkbox, track);
+    label.append(text, control);
+    container.append(label);
+  }
+  if (!entries.size) container.textContent = 'No network adapters available';
+}
+
 async function loadMediaNetworkSettings() {
   const payload = await fetchJSON('/admin/settings/media-network');
-  const activeModeEl = document.getElementById('media-network-active-mode');
   const activeAddressEl = document.getElementById('media-network-active-address');
-  const savedModeEl = document.getElementById('media-network-saved-mode');
   const modeEl = document.getElementById('media-network-mode');
   const interfaceEl = document.getElementById('media-interface-name');
   const addressEl = document.getElementById('media-announced-address');
@@ -2986,8 +3609,6 @@ async function loadMediaNetworkSettings() {
   const overrideHintEl = document.getElementById('media-network-override-hint');
   const warningEl = document.getElementById('media-network-warning');
 
-  const activeMode = payload?.activeMediaNetworkMode || 'auto';
-  const activeInterfaceName = payload?.activeMediaInterfaceName || '';
   const activeAddress = payload?.activeAnnouncedAddress || 'Unavailable';
   const activeRtcAddresses = Array.isArray(payload?.activeRtcAddresses)
     ? payload.activeRtcAddresses.filter(Boolean)
@@ -2996,37 +3617,15 @@ async function loadMediaNetworkSettings() {
   const savedInterfaceName = payload?.mediaInterfaceName || '';
   const savedAddress = payload?.mediaAnnouncedAddress || '';
   const availableInterfaces = Array.isArray(payload?.availableInterfaces) ? payload.availableInterfaces : [];
-  const activeDetail = activeMode === 'auto'
-    ? `${activeRtcAddresses.length} RTC address${activeRtcAddresses.length === 1 ? '' : 'es'}`
-    : activeMode === 'interface'
-    ? activeInterfaceName
-    : activeMode === 'manual'
-      ? activeAddress
-      : activeInterfaceName || activeAddress;
-  const savedDetail = savedMode === 'interface'
-    ? savedInterfaceName
-    : savedMode === 'manual'
-      ? savedAddress
-      : '';
-
-  if (activeModeEl) activeModeEl.textContent = describeMediaNetworkMode(activeMode, activeDetail);
   if (activeAddressEl) {
     activeAddressEl.textContent = payload?.activeResolutionError || activeRtcAddresses.join(', ') || activeAddress;
   }
-  if (savedModeEl) savedModeEl.textContent = describeMediaNetworkMode(savedMode, savedDetail);
 
   if (modeEl) {
     modeEl.value = savedMode;
   }
   if (interfaceEl) {
-    interfaceEl.innerHTML = '<option value="">Select adapter</option>';
-    availableInterfaces.forEach((entry) => {
-      const option = document.createElement('option');
-      option.value = entry.name;
-      option.textContent = entry.label || `${entry.name} - ${entry.address}`;
-      interfaceEl.appendChild(option);
-    });
-    interfaceEl.value = savedInterfaceName || '';
+    renderMediaInterfaceOptions(interfaceEl, availableInterfaces, savedInterfaceName);
   }
   if (addressEl) {
     addressEl.value = savedAddress;
@@ -3066,7 +3665,6 @@ function formatRtcPortRange(start, end) {
 async function loadRtcPortSettings() {
   const payload = await fetchJSON('/admin/settings/rtc-ports');
   const activeRangeEl = document.getElementById('rtc-ports-active-range');
-  const savedRangeEl = document.getElementById('rtc-ports-saved-range');
   const startInput = document.getElementById('rtc-port-start');
   const countInput = document.getElementById('rtc-port-count');
   const restartHintEl = document.getElementById('rtc-ports-restart-hint');
@@ -3074,9 +3672,6 @@ async function loadRtcPortSettings() {
 
   if (activeRangeEl) {
     activeRangeEl.textContent = formatRtcPortRange(payload?.activeRtcPortStart, payload?.activeRtcPortEnd);
-  }
-  if (savedRangeEl) {
-    savedRangeEl.textContent = formatRtcPortRange(payload?.rtcPortStart, payload?.rtcPortEnd);
   }
   if (startInput) {
     startInput.value = payload?.rtcPortStart ?? '';
@@ -3124,12 +3719,21 @@ async function loadDefaultClientSettings() {
   if (defaultClientDimIncoming) defaultClientDimIncoming.checked = settings.dimWhenAddressed === true;
   if (defaultClientAudioProcessing) defaultClientAudioProcessing.checked = settings.audioAutoProcessing === true;
   if (defaultClientConnectionSounds) defaultClientConnectionSounds.checked = settings.playConnectionSounds !== false;
+  if (defaultClientIncomingLevels) defaultClientIncomingLevels.checked = settings.showIncomingLevels === true;
   if (defaultClientLeftHand) defaultClientLeftHand.checked = settings.leftHandMode === true;
+  if (defaultClientBigMainButton) defaultClientBigMainButton.checked = settings.bigMainButton === true;
   if (defaultClientLockMultiple) defaultClientLockMultiple.checked = settings.lockMultipleTargets === true;
+  const tapToLock = document.getElementById('default-client-tap-to-lock');
+  if (tapToLock) tapToLock.checked = settings.tapToLock !== false;
+  if (defaultClientAllowTargetRearrange) defaultClientAllowTargetRearrange.checked = settings.allowTargetRearrange !== false;
+  if (defaultClientAllowTargetAddRemove) defaultClientAllowTargetAddRemove.checked = settings.allowTargetAddRemove === true;
+  if (defaultClientAllowFeedVideo) defaultClientAllowFeedVideo.checked = settings.allowFeedVideo === true;
+  defaultClientSettingsForm?.dispatchEvent(new Event('defaults-loaded'));
   return payload;
 }
 
 function renderAutomaticBackupSettings(settings = {}) {
+  savedAutomaticBackupSettings = settings;
   if (automaticBackupEnabled) automaticBackupEnabled.checked = settings.enabled === true;
   if (automaticBackupInterval) automaticBackupInterval.value = String(settings.intervalDays ?? 7);
   const directory = document.getElementById('config-auto-backup-directory');
@@ -3146,6 +3750,7 @@ function renderAutomaticBackupSettings(settings = {}) {
     next.textContent = !settings.enabled
       ? 'Disabled'
       : settings.nextBackupAt ? formatTime(settings.nextBackupAt) : 'Pending';
+    next.dataset.savedValue = next.textContent;
   }
   if (error) {
     error.textContent = settings.lastError ? `Last error: ${settings.lastError}` : '';
@@ -3158,6 +3763,14 @@ function syncAutomaticBackupVisibility() {
   if (!automaticBackupForm) return;
   const enabled = automaticBackupEnabled?.checked === true;
   automaticBackupForm.classList.toggle('is-collapsed', !enabled);
+  const next = document.getElementById('config-auto-backup-next');
+  if (next && savedAutomaticBackupSettings) {
+    const changed = enabled !== Boolean(savedAutomaticBackupSettings.enabled)
+      || Number(automaticBackupInterval?.value || 7) !== Number(savedAutomaticBackupSettings.intervalDays ?? 7);
+    next.textContent = enabled && changed ? 'Updating…' : next.dataset.savedValue || 'Disabled';
+  }
+  const details = document.getElementById('config-auto-backup-details');
+  if (details) details.hidden = !enabled;
   const intervalField = document.getElementById('config-auto-backup-interval-field');
   const status = document.getElementById('config-auto-backup-status');
   const error = document.getElementById('config-auto-backup-error');
@@ -3275,19 +3888,29 @@ async function updateConferenceParticipantOptions(confId, allUsers, previousInde
   selectNextByIndex(select, previousIndex);
 }
 
+function createAssignmentChip(label, onRemove) {
+  const chip = document.createElement('li');
+  chip.className = 'list-chip';
+  const name = document.createElement('span');
+  name.className = 'chip-label';
+  name.textContent = String(label ?? '');
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'small danger';
+  remove.textContent = 'Remove';
+  remove.addEventListener('click', onRemove);
+  chip.append(name, remove);
+  return chip;
+}
+
 async function renderUserConferenceList(userId) {
   const confUl = document.getElementById(`user-confs-${userId}`);
   if (!confUl) return;
 
   const confs = await fetchJSON(`/users/${userId}/conferences`);
-  confUl.innerHTML = confs.length
-    ? confs.map(c => `
-        <li class="list-chip">
-          <span class="chip-label">${escapeHtml(c.name)}</span>
-          <button type="button" class="small danger" onclick="confirmUnassign(${userId}, ${c.id})">Remove</button>
-        </li>
-      `).join('')
-    : '';
+  confUl.replaceChildren(...confs.map(c => (
+    createAssignmentChip(c.name, () => confirmUnassign(userId, c.id))
+  )));
 }
 
 async function renderConferenceParticipantList(confId) {
@@ -3296,14 +3919,9 @@ async function renderConferenceParticipantList(confId) {
 
   const users = await fetchJSON(`/conferences/${confId}/users`);
   cacheConferenceMemberships(confId, users);
-  usersUl.innerHTML = users.length
-    ? users.map(u => `
-        <li class="list-chip">
-          <span class="chip-label">${escapeHtml(u.name)}</span>
-          <button type="button" class="small danger" onclick="confirmUnassign(${u.id},${confId})">Remove</button>
-        </li>
-      `).join('')
-    : '';
+  usersUl.replaceChildren(...users.map(u => (
+    createAssignmentChip(u.name, () => confirmUnassign(u.id, confId))
+  )));
 }
 
 // Fetch and render targets + rebuild the “type → id” dropdown
@@ -3319,21 +3937,39 @@ async function loadUserTargets(userId, allUsers, allConfs, allFeeds = []) {
     return acc;
   }, {});
   const ul = document.getElementById(`user-targets-${userId}`);
-  updateBridgeTriggerTargetOptions(userId, targets);
+  updateBridgeTriggerTargetOptions(userId, [
+    ...allUsers.filter(user => !user.is_superadmin && !user.is_guest_profile && Number(user.id) !== Number(userId))
+      .map(user => ({ type: 'user', id: user.id, name: user.name })),
+    ...allConfs.map(conference => ({ type: 'conference', id: conference.id, name: conference.name })),
+  ]);
   if (!ul) return;
-  ul.innerHTML = targets.map(t => {
+  ul.replaceChildren(...targets.map(t => {
     const isConference = t.targetType === 'conference';
-    return `
-      <li class="list-chip draggable-target" draggable="true"
-          data-type="${escapeHtml(t.targetType)}" data-id="${escapeHtml(t.targetId)}">
-        <span class="drag-handle" title="Drag to reorder">☰</span>
-        <span class="chip-label">${escapeHtml(t.name)}</span>
-        <span class="badge">${escapeHtml(t.targetType)}</span>
-        ${isConference ? '<span class="badge" title="Conference membership">membership</span>' : ''}
-        <button type="button" class="small danger" onclick="removeTarget(${userId}, '${t.targetType}', '${t.targetId}')">Remove</button>
-      </li>
-    `;
-  }).join('');
+    const targetType = String(t.targetType ?? '');
+    const targetId = String(t.targetId ?? '');
+    const chip = createAssignmentChip(t.name, () => removeTarget(userId, targetType, targetId));
+    chip.classList.add('draggable-target');
+    chip.draggable = true;
+    chip.dataset.type = targetType;
+    chip.dataset.id = targetId;
+    const handle = document.createElement('span');
+    handle.className = 'drag-handle';
+    handle.title = 'Drag to reorder';
+    handle.textContent = '☰';
+    chip.prepend(handle);
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = targetType;
+    chip.insertBefore(badge, chip.lastElementChild);
+    if (isConference) {
+      const membership = document.createElement('span');
+      membership.className = 'badge';
+      membership.title = 'Conference membership';
+      membership.textContent = 'membership';
+      chip.insertBefore(membership, chip.lastElementChild);
+    }
+    return chip;
+  }));
   initTargetOrdering(userId, ul);
 
   const selType = document.getElementById(`add-target-type-${userId}`);
@@ -3382,9 +4018,13 @@ async function loadUserTargets(userId, allUsers, allConfs, allFeeds = []) {
 function initTargetOrdering(userId, ul) {
   const items = [...ul.querySelectorAll('.draggable-target')];
   items.forEach(item => {
-    item.addEventListener('dragstart', () => item.classList.add('dragging'));
+    item.addEventListener('dragstart', () => {
+      item.classList.add('dragging');
+      showTargetDropIndicator(ul, item);
+    });
     item.addEventListener('dragend', () => {
       item.classList.remove('dragging');
+      clearTargetDropIndicator(ul);
       saveTargetOrder(userId, ul);
     });
   });
@@ -3399,13 +4039,30 @@ function initTargetOrdering(userId, ul) {
     } else if (afterElement !== dragging) {
       ul.insertBefore(dragging, afterElement);
     }
+    showTargetDropIndicator(ul, dragging);
   };
 
   if (ul._dragOverHandler) ul.removeEventListener('dragover', ul._dragOverHandler);
   ul._dragOverHandler = onDragOver;
   ul.addEventListener('dragover', onDragOver);
-  ul.addEventListener('drop', e => e.preventDefault());
+  ul.addEventListener('drop', e => {
+    e.preventDefault();
+    clearTargetDropIndicator(ul);
+  });
   initTouchTargetOrdering(ul, () => saveTargetOrder(userId, ul));
+}
+
+function showTargetDropIndicator(list, item) {
+  list.classList.add('is-target-reordering');
+  const listBox = list.getBoundingClientRect();
+  const itemBox = item.getBoundingClientRect();
+  const top = itemBox.top - listBox.top + list.scrollTop - list.clientTop;
+  list.style.setProperty('--target-drop-y', `${top}px`);
+}
+
+function clearTargetDropIndicator(list) {
+  list.classList.remove('is-target-reordering');
+  list.style.removeProperty('--target-drop-y');
 }
 
 function getDragAfterElement(container, y) {
@@ -3431,6 +4088,7 @@ function initTouchTargetOrdering(list, onCommit) {
     session = null;
     item.classList.remove('dragging');
     list.classList.remove('is-touch-reordering');
+    clearTargetDropIndicator(list);
     try {
       handle.releasePointerCapture(event.pointerId);
     } catch {}
@@ -3458,6 +4116,7 @@ function initTouchTargetOrdering(list, onCommit) {
     };
     item.classList.add('dragging');
     list.classList.add('is-touch-reordering');
+    showTargetDropIndicator(list, item);
     try {
       handle.setPointerCapture(event.pointerId);
     } catch {}
@@ -3471,6 +4130,7 @@ function initTouchTargetOrdering(list, onCommit) {
     if (!afterElement) list.appendChild(session.item);
     else if (afterElement !== session.item) list.insertBefore(session.item, afterElement);
     if (session.item.nextSibling !== previousNextSibling) session.moved = true;
+    showTargetDropIndicator(list, session.item);
 
     const edge = 56;
     if (event.clientY < edge) window.scrollBy(0, -12);
@@ -3989,105 +4649,6 @@ window.openEntityLoginQr = async function (kind, entityId, entityName, button) {
   }
 };
 
-window.saveBridgeEndpoint = async function(event, userId) {
-  event.preventDefault();
-
-  const submitButton = event.submitter;
-  if (submitButton) submitButton.disabled = true;
-
-  try {
-    const inputPair = readBridgePairSelect(`bridge-input-pair-${userId}`, 'Input');
-    const outputPair = readBridgePairSelect(`bridge-output-pair-${userId}`, 'Output');
-    validateBridgeChannelPair(inputPair.left, inputPair.right, 'Input');
-    validateBridgeChannelPair(outputPair.left, outputPair.right, 'Output');
-
-    const enabled = Boolean(document.getElementById(`bridge-enabled-${userId}`)?.checked);
-    const payload = {
-      enabled,
-      bridgeDevice: document.getElementById(`bridge-device-${userId}`)?.value || '',
-      inputDevice: document.getElementById(`bridge-input-device-${userId}`)?.value || '',
-      inputLeftChannel: inputPair.left,
-      inputRightChannel: inputPair.right,
-      outputDevice: document.getElementById(`bridge-output-device-${userId}`)?.value || '',
-      outputLeftChannel: outputPair.left,
-      outputRightChannel: outputPair.right,
-      ...readBridgeTriggerConfig(userId, enabled),
-    };
-    if (payload.enabled) {
-      if (!payload.bridgeDevice) {
-        throw new Error('Bridge device is required when bridge endpoint is enabled');
-      }
-      validateOptionalBridgeDeviceChannel(payload.inputDevice, payload.inputLeftChannel, 'Input');
-      validateOptionalBridgeDeviceChannel(payload.outputDevice, payload.outputLeftChannel, 'Output');
-    }
-
-    const res = await authedFetch(`/users/${userId}/bridge-endpoint`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (res.ok) {
-      showMessage('Bridge endpoint saved', 'success', 'user');
-      await refreshAdminLists({ users: true });
-    } else {
-      const response = await res.json().catch(() => ({}));
-      showMessage(response.error || 'Failed to save bridge endpoint', 'error', 'user');
-    }
-  } catch (err) {
-    showMessage(err.message || 'Failed to save bridge endpoint', 'error', 'user');
-    console.error(err);
-  } finally {
-    if (submitButton) submitButton.disabled = false;
-  }
-};
-
-window.saveFeedBridgeEndpoint = async function(event, feedId) {
-  event.preventDefault();
-  const formKey = `feed-${feedId}`;
-
-  const submitButton = event.submitter;
-  if (submitButton) submitButton.disabled = true;
-
-  try {
-    const inputPair = readBridgePairSelect(`bridge-input-pair-${formKey}`, 'Input');
-    validateBridgeChannelPair(inputPair.left, inputPair.right, 'Input');
-
-    const payload = {
-      enabled: Boolean(document.getElementById(`bridge-enabled-${formKey}`)?.checked),
-      bridgeDevice: document.getElementById(`bridge-device-${formKey}`)?.value || '',
-      inputDevice: document.getElementById(`bridge-input-device-${formKey}`)?.value || '',
-      inputLeftChannel: inputPair.left,
-      inputRightChannel: inputPair.right,
-    };
-    if (payload.enabled) {
-      if (!payload.bridgeDevice) {
-        throw new Error('Bridge device is required when bridge endpoint is enabled');
-      }
-      validateOptionalBridgeDeviceChannel(payload.inputDevice, payload.inputLeftChannel, 'Input');
-    }
-
-    const res = await authedFetch(`/feeds/${feedId}/bridge-endpoint`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (res.ok) {
-      showMessage('Bridge feed endpoint saved', 'success', 'feed');
-      await refreshAdminLists({ feeds: true });
-    } else {
-      const response = await res.json().catch(() => ({}));
-      showMessage(response.error || 'Failed to save bridge feed endpoint', 'error', 'feed');
-    }
-  } catch (err) {
-    showMessage(err.message || 'Failed to save bridge feed endpoint', 'error', 'feed');
-    console.error(err);
-  } finally {
-    if (submitButton) submitButton.disabled = false;
-  }
-};
-
 window.deleteConference = async function (confId) {
   if (!await adminConfirm('Are you sure you want to delete this conference?', {
     title: 'Delete conference',
@@ -4205,6 +4766,22 @@ document.getElementById('feed-form').addEventListener('submit', async (e) => {
   }
 });
 
+document.getElementById('web-access-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const settings = Object.fromEntries(Object.entries(webAccessFields).map(([key, id]) => [key, document.getElementById(id).value]));
+  try {
+    const response = await authedFetch('/admin/settings/web-access', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings)
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Failed to save web access settings');
+    await loadWebAccessSettings();
+    showMessage(payload.restartRequired ? 'Web access settings saved. Restart the server to apply them.' : 'Web access settings saved.', 'success', 'config');
+  } catch (error) {
+    showMessage(error.message || 'Failed to save web access settings', 'error', 'config');
+  }
+});
+
 document.getElementById('mdns-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = document.getElementById('mdns-host');
@@ -4245,7 +4822,7 @@ document.getElementById('media-network-mode')?.addEventListener('change', () => 
 document.getElementById('media-network-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const mode = document.getElementById('media-network-mode')?.value || 'auto';
-  const mediaInterfaceName = document.getElementById('media-interface-name')?.value || '';
+  const mediaInterfaceName = Array.from(document.querySelectorAll('#media-interface-name input:checked'), input => input.value).join(',');
   const mediaAnnouncedAddress = document.getElementById('media-announced-address')?.value?.trim() || '';
 
   try {
@@ -4357,39 +4934,63 @@ if (guestLoginEnabledInput) {
   });
 }
 
+function readDefaultClientSettings() {
+  return {
+    audioProfile: defaultClientAudioProfile?.value || 'ultra-low', dimAmountDb: Number(defaultClientDimAmount?.value ?? -15),
+    dimFeedsWhileSpeaking: Boolean(defaultClientDimSelf?.checked), dimWhenAddressed: Boolean(defaultClientDimIncoming?.checked),
+    audioAutoProcessing: Boolean(defaultClientAudioProcessing?.checked), playConnectionSounds: Boolean(defaultClientConnectionSounds?.checked),
+    showIncomingLevels: Boolean(defaultClientIncomingLevels?.checked), leftHandMode: Boolean(defaultClientLeftHand?.checked),
+    bigMainButton: Boolean(defaultClientBigMainButton?.checked), lockMultipleTargets: Boolean(defaultClientLockMultiple?.checked),
+    tapToLock: document.getElementById('default-client-tap-to-lock')?.checked !== false,
+    allowTargetRearrange: Boolean(defaultClientAllowTargetRearrange?.checked), allowTargetAddRemove: Boolean(defaultClientAllowTargetAddRemove?.checked),
+    allowFeedVideo: Boolean(defaultClientAllowFeedVideo?.checked),
+  };
+}
 if (defaultClientSettingsForm) {
-  defaultClientSettingsForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const submitButton = defaultClientSettingsForm.querySelector('button[type="submit"]');
-    const settings = {
-      audioProfile: defaultClientAudioProfile?.value || 'ultra-low',
-      dimAmountDb: Number(defaultClientDimAmount?.value ?? -15),
-      dimFeedsWhileSpeaking: Boolean(defaultClientDimSelf?.checked),
-      dimWhenAddressed: Boolean(defaultClientDimIncoming?.checked),
-      audioAutoProcessing: Boolean(defaultClientAudioProcessing?.checked),
-      playConnectionSounds: Boolean(defaultClientConnectionSounds?.checked),
-      leftHandMode: Boolean(defaultClientLeftHand?.checked),
-      lockMultipleTargets: Boolean(defaultClientLockMultiple?.checked),
-    };
-
-    if (submitButton) submitButton.disabled = true;
-    try {
-      const res = await authedFetch('/admin/settings/default-client', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload.error || 'Failed to save default client settings');
-      await loadDefaultClientSettings();
-      showMessage('✅ Default client settings saved', 'success', 'config');
-    } catch (error) {
-      console.error('Failed to save default client settings:', error);
-      showMessage(`❌ ${error.message || 'Failed to save default client settings'}`, 'error', 'config');
-    } finally {
-      if (submitButton) submitButton.disabled = false;
-    }
+  const keys = ['dimFeedsWhileSpeaking', 'dimWhenAddressed', 'audioAutoProcessing', 'playConnectionSounds', 'showIncomingLevels', 'leftHandMode', 'bigMainButton', 'lockMultipleTargets', 'tapToLock', 'allowTargetRearrange', 'allowTargetAddRemove', 'allowFeedVideo'];
+  const applyButtons = new Map();
+  const saver = globalThis.TalktomeAdminAutoSave.create({
+    render: (text, retry) => renderAutoSaveFeedback('defaults-auto-save-status', text, retry),
+    async save(key, value) {
+      if (key === 'settings') return saveAdminJson('/admin/settings/default-client', { ...value, applyToAll: [] });
+      const entry = applyButtons.get(value.key);
+      try {
+        return await saveAdminJson('/admin/settings/default-client', { ...readDefaultClientSettings(), [value.key]: value.value, applyToAll: [value.key] });
+      } finally { if (entry) { entry.input.disabled = false; entry.button.disabled = false; } }
+    },
+    async onSaved(key, value) {
+      if (key === 'settings') return;
+      const entry = applyButtons.get(value.key);
+      if (entry) { entry.original = entry.input.checked; entry.button.hidden = true; }
+      saver.request('settings', readDefaultClientSettings);
+      await refreshAdminLists({ users: true, feeds: true });
+    },
   });
+  defaultClientSettingsForm.querySelectorAll('.default-client-setting-toggle').forEach((row, index) => {
+    const input = row.querySelector('input[role="switch"]'), text = row.querySelector('span:first-child');
+    text.id = `${input.id}-label`; input.setAttribute('aria-labelledby', text.id);
+    const controls = document.createElement('span'); controls.className = 'default-client-setting-controls';
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'default-client-apply-all'; button.textContent = 'Apply to all'; button.hidden = true;
+    const switchLabel = document.createElement('label'); switchLabel.className = 'admin-switch';
+    const oldSwitch = row.querySelector('.admin-switch'); switchLabel.append(...oldSwitch.childNodes); oldSwitch.remove();
+    controls.append(button, switchLabel); row.append(controls);
+    const entry = { key: keys[index], button, input, original: input.checked }; applyButtons.set(entry.key, entry);
+    input.addEventListener('change', () => { button.hidden = input.checked === entry.original; });
+    button.addEventListener('click', () => {
+      input.disabled = true; button.disabled = true;
+      saver.request(`apply:${entry.key}`, () => ({ key: entry.key, value: input.checked }));
+    });
+    row.addEventListener('click', event => {
+      if ((event.target === row || event.target === text) && !input.disabled) {
+        input.checked = !input.checked; input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  });
+  defaultClientSettingsForm.addEventListener('defaults-loaded', () => {
+    for (const entry of applyButtons.values()) { entry.original = entry.input.checked; entry.button.hidden = true; }
+  });
+  defaultClientSettingsForm.addEventListener('change', () => saver.request('settings', readDefaultClientSettings));
+  defaultClientSettingsForm.addEventListener('submit', event => { event.preventDefault(); saver.request('settings', readDefaultClientSettings); });
 }
 
 if (configExportBtn) {
@@ -4416,37 +5017,16 @@ if (configExportBtn) {
 }
 
 if (automaticBackupForm) {
-  automaticBackupEnabled?.addEventListener('change', syncAutomaticBackupVisibility);
-  automaticBackupForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const submitButton = automaticBackupForm.querySelector('button[type="submit"]');
-    if (submitButton) submitButton.disabled = true;
-    try {
-      const res = await authedFetch('/admin/settings/automatic-backup', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          enabled: Boolean(automaticBackupEnabled?.checked),
-          intervalDays: Number(automaticBackupInterval?.value || 7),
-        }),
-      });
-      const settings = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(settings.error || 'Failed to save automatic backup settings');
-      renderAutomaticBackupSettings(settings);
-      showMessage(
-        settings.lastError
-          ? `⚠️ Automatic backup is enabled, but the backup failed: ${settings.lastError}`
-          : '✅ Automatic backup settings saved',
-        settings.lastError ? 'warning' : 'success',
-        'config'
-      );
-    } catch (error) {
-      console.error('Failed to save automatic backup settings:', error);
-      showMessage(`❌ ${error.message || 'Failed to save automatic backup settings'}`, 'error', 'config');
-    } finally {
-      if (submitButton) submitButton.disabled = false;
-    }
+  const saver = globalThis.TalktomeAdminAutoSave.create({
+    render: (text, retry) => renderAutoSaveFeedback('backup-auto-save-status', text, retry),
+    save: (_key, value) => saveAdminJson('/admin/settings/automatic-backup', value),
+    onSaved: (_key, _value, result) => renderAutomaticBackupSettings(result),
   });
+  const read = () => ({ enabled: Boolean(automaticBackupEnabled?.checked), intervalDays: Number(automaticBackupInterval?.value || 7) });
+  automaticBackupEnabled?.addEventListener('change', syncAutomaticBackupVisibility);
+  automaticBackupInterval?.addEventListener('change', syncAutomaticBackupVisibility);
+  automaticBackupForm.addEventListener('change', () => saver.request('backup', read));
+  automaticBackupForm.addEventListener('submit', event => { event.preventDefault(); saver.request('backup', read); });
 }
 
 if (apiKeyCopyBtn) {
@@ -4555,6 +5135,16 @@ if (containerRestartBtn) {
   });
 }
 
+function syncConfigImportSelection() {
+  const file = configImportFile?.files?.[0];
+  const filename = document.getElementById('config-import-filename');
+  if (filename) filename.textContent = file?.name || 'No file selected';
+  if (configImportBtn) configImportBtn.disabled = !file;
+}
+
+configImportFile?.addEventListener('change', syncConfigImportSelection);
+syncConfigImportSelection();
+
 if (configImportBtn) {
   configImportBtn.addEventListener('click', async () => {
     const file = configImportFile?.files?.[0];
@@ -4595,6 +5185,7 @@ if (configImportBtn) {
       await loadData();
       if (configImportFile) {
         configImportFile.value = '';
+        syncConfigImportSelection();
       }
 
       showMessage(
@@ -4608,7 +5199,7 @@ if (configImportBtn) {
       console.error('Failed to import configuration:', err);
       showMessage('❌ Failed to import configuration', 'error', 'config');
     } finally {
-      configImportBtn.disabled = false;
+      syncConfigImportSelection();
     }
   });
 }
@@ -4719,6 +5310,7 @@ window.resetPassword = async function(userId, userName) {
 };
 
 async function handleProductionTargetToggle(toggle, forcedEnabled = null) {
+  if (await openMatrixBridgeConfiguration(toggle, forcedEnabled)) return;
   if (!selectedProductionPayload || !selectedProductionId) return;
   const userId = Number(toggle.dataset.userId);
   const targetType = toggle.dataset.targetType;
@@ -4809,6 +5401,7 @@ multipleProductionsInput?.addEventListener('change', async () => {
         currentBridgeRegistry
       ),
       renderConferenceList(currentAdminCatalog.conferences, currentAdminCatalog.users),
+      loadAdminStatus({ silent: true }),
     ]);
     showMessage(`Multiple Productions ${enabled ? 'enabled' : 'disabled'}.`, 'success', 'matrix');
   } catch (error) {
@@ -5021,6 +5614,7 @@ if (adminLogoutBtn) {
 }
 
 document.addEventListener('visibilitychange', () => {
+  void checkAdminRelease();
   if (!document.hidden && adminState.isAuthenticated && latestAdminStatus && serverReachable !== false) {
     renderAdminStatus(latestAdminStatus);
   }
@@ -5038,12 +5632,17 @@ function setupMatrixInteractions(container, toggleSelector, toggleHandler) {
   };
 
   const paintToggle = (toggle) => {
-    if (!paintSession || !toggle || paintSession.visited.has(toggle)) return;
+    if (!paintSession || !toggle || toggle.dataset.bridgeManaged === 'true' || paintSession.visited.has(toggle)) return;
     paintSession.visited.add(toggle);
     toggleHandler(toggle, paintSession.value);
   };
 
   container.addEventListener('click', (event) => {
+    const connect = event.target.closest('[data-matrix-connect]');
+    if (connect) {
+      handleMatrixConnectAll(container, connect);
+      return;
+    }
     const toggle = event.target.closest(toggleSelector);
     if (!toggle) return;
     if (suppressPointerClick) {
@@ -5059,7 +5658,7 @@ function setupMatrixInteractions(container, toggleSelector, toggleHandler) {
   container.addEventListener('pointerdown', (event) => {
     if (event.pointerType === 'touch' || event.button !== 0) return;
     const toggle = event.target.closest(toggleSelector);
-    if (!toggle || toggle.disabled) return;
+    if (!toggle || toggle.disabled || toggle.dataset.bridgeManaged === 'true') return;
 
     event.preventDefault();
     suppressPointerClick = true;
@@ -5126,14 +5725,6 @@ function setupMatrixInteractions(container, toggleSelector, toggleHandler) {
 setupMatrixInteractions(targetMatrixContainer, '.target-matrix-toggle', handleTargetMatrixToggle);
 setupMatrixInteractions(productionTargetMatrixContainer, '.production-target-toggle', handleProductionTargetToggle);
 
-if (mediaNetworkQrButton) {
-  mediaNetworkQrButton.addEventListener('click', () => openMediaNetworkQrLightbox());
-}
-
-if (mediaNetworkQrDownloadButton) {
-  mediaNetworkQrDownloadButton.addEventListener('click', () => downloadMediaNetworkQrImage());
-}
-
 if (adminImageLightboxClose) {
   adminImageLightboxClose.addEventListener('click', () => closeAdminImageLightbox());
 }
@@ -5149,12 +5740,6 @@ if (adminImageLightbox) {
     }
   });
 }
-
-window.addEventListener('resize', () => {
-  if (mediaNetworkQrContainer && !mediaNetworkQrContainer.classList.contains('is-hidden')) {
-    syncMediaNetworkQrPreviewSize();
-  }
-});
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && userAudioSettingsDialog && !userAudioSettingsDialog.classList.contains('is-hidden')) {
@@ -5174,6 +5759,67 @@ const userAudioSettingsNotice = document.getElementById('user-audio-settings-not
 const userAudioSettingsError = document.getElementById('user-audio-settings-error');
 const userAudioSettingsSave = document.getElementById('user-audio-settings-save');
 let editingAudioSettingsUserId = null;
+let systemVolumeTimer = null;
+let systemVolumeBusy = false;
+
+function renderSystemVolume(value) {
+  const container = document.getElementById('admin-system-volume-controls');
+  if (!container || systemVolumeBusy || container.querySelector('input:active')) return;
+  const slider = document.getElementById('admin-system-volume');
+  const mute = document.getElementById('admin-system-mute');
+  if (value && slider && Boolean(mute) === Boolean(value.muteSupported)) {
+    slider.value = String(Math.round(value.volume * 100));
+    document.getElementById('admin-system-volume-value').textContent = `${slider.value}%`;
+    if (mute) mute.checked = value.muted;
+    return;
+  }
+  container.innerHTML = value ? `
+    <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-system-volume"><span>Device main volume</span><output id="admin-system-volume-value">${Math.round(value.volume * 100)}%</output></label><input id="admin-system-volume" type="range" min="0" max="100" step="1" value="${Math.round(value.volume * 100)}"></div>
+    ${value.muteSupported ? `<label class="user-audio-settings-switch"><span>Mute device output</span><span class="admin-switch"><input id="admin-system-mute" type="checkbox" role="switch" ${value.muted ? 'checked' : ''}><span class="admin-switch__track" aria-hidden="true"></span></span></label>` : ''}
+    <div class="setting-meta">Controls the device output, including other applications. Changes apply immediately.</div>
+  ` : '';
+  document.getElementById('admin-system-volume')?.addEventListener('input', event => {
+    document.getElementById('admin-system-volume-value').textContent = `${event.target.value}%`;
+  });
+  document.getElementById('admin-system-volume')?.addEventListener('change', event => {
+    void changeSystemVolume({ volume: Number(event.target.value) / 100 });
+  });
+  document.getElementById('admin-system-mute')?.addEventListener('change', event => {
+    void changeSystemVolume({ muted: event.target.checked });
+  });
+}
+
+async function refreshSystemVolume(userId) {
+  try {
+    const response = await authedFetch(`/admin/users/${userId}/system-volume`);
+    const payload = await response.json();
+    if (response.ok && editingAudioSettingsUserId === userId) renderSystemVolume(payload.systemVolume);
+  } catch { /* Keep the current control on a transient network failure. */ }
+}
+
+async function changeSystemVolume(command) {
+  const userId = editingAudioSettingsUserId;
+  if (!userId || systemVolumeBusy) return;
+  systemVolumeBusy = true;
+  const controls = document.getElementById('admin-system-volume-controls');
+  controls?.querySelectorAll('input').forEach(input => { input.disabled = true; });
+  try {
+    const response = await authedFetch(`/admin/users/${userId}/system-volume`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Unable to change device volume');
+  } catch (error) {
+    if (editingAudioSettingsUserId === userId) {
+      userAudioSettingsError.textContent = error.message;
+      userAudioSettingsError.classList.remove('is-hidden');
+    }
+  } finally {
+    systemVolumeBusy = false;
+    controls?.querySelectorAll('input').forEach(input => { input.disabled = false; });
+    if (editingAudioSettingsUserId === userId) void refreshSystemVolume(userId);
+  }
+}
 
 function renderUserAudioSettingsFields(settings, targets = []) {
   const settingsApi = window.TalktomeUserAudioSettings;
@@ -5187,15 +5833,18 @@ function renderUserAudioSettingsFields(settings, targets = []) {
     return `<option value="${escapeHtml(identity)}" ${identity === settings.voiceTriggerTarget ? 'selected' : ''}>${escapeHtml(target.name)} (${typeLabel})</option>`;
   }).join('');
   userAudioSettingsFields.innerHTML = `
+    <div id="admin-system-volume-controls"></div>
     <div class="user-audio-settings-row"><label for="admin-audio-profile">Audio profile</label><select id="admin-audio-profile">${options(settingsApi.AUDIO_PROFILES, settings.audioProfile, (value) => ({ 'ultra-low': 'Ultra low (5 ms frame)', low: 'Low (10 ms frame)', standard: 'Standard (20 ms frame)' }[value]))}</select></div>
     <div class="user-audio-settings-row"><label for="admin-dim-amount">Dim amount</label><select id="admin-dim-amount">${options(settingsApi.DIM_AMOUNT_DB_OPTIONS, settings.dimAmountDb, (value) => `${value} dB`)}</select></div>
     <label class="user-audio-settings-switch"><span>Dim feeds while speaking</span><span class="admin-switch"><input id="admin-dim-speaking" type="checkbox" role="switch" ${checked('dimFeedsWhileSpeaking')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
-    <label class="user-audio-settings-switch"><span>Dim when addressed</span><span class="admin-switch"><input id="admin-dim-addressed" type="checkbox" role="switch" ${checked('dimWhenAddressed')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Dim feeds when addressed</span><span class="admin-switch"><input id="admin-dim-addressed" type="checkbox" role="switch" ${checked('dimWhenAddressed')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Audio auto processing</span><span class="admin-switch"><input id="admin-auto-processing" type="checkbox" role="switch" ${checked('audioAutoProcessing')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Play connection sounds</span><span class="admin-switch"><input id="admin-connection-sounds" type="checkbox" role="switch" ${checked('playConnectionSounds')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <label class="user-audio-settings-switch"><span>Incoming level meters</span><span class="admin-switch"><input id="admin-incoming-levels" type="checkbox" role="switch" ${checked('showIncomingLevels')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Left-hand mode</span><span class="admin-switch"><input id="admin-left-hand" type="checkbox" role="switch" ${checked('leftHandMode')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <label class="user-audio-settings-switch"><span>Lock multiple targets</span><span class="admin-switch"><input id="admin-lock-multiple" type="checkbox" role="switch" ${checked('lockMultipleTargets')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
-    <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-mic-gain"><span>Manual mic gain</span><output id="admin-mic-gain-value">${Number(settings.userInputGainDb).toFixed(1)} dB</output></label><input id="admin-mic-gain" type="range" min="-30" max="40" step="0.5" value="${settings.userInputGainDb}"></div>
+    <label class="user-audio-settings-switch"><span>Tap to lock</span><span class="admin-switch"><input id="admin-tap-to-lock" type="checkbox" role="switch" ${checked('tapToLock')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
+    <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-mic-gain"><span>Manual mic gain</span><output id="admin-mic-gain-value">${Number(settings.userInputGainDb).toFixed(1)} dB</output></label><input id="admin-mic-gain" type="range" min="-40" max="40" step="0.5" value="${settings.userInputGainDb}"></div>
     <label class="user-audio-settings-switch"><span>Level trigger</span><span class="admin-switch"><input id="admin-level-trigger" type="checkbox" role="switch" ${checked('voiceTriggerEnabled')}><span class="admin-switch__track" aria-hidden="true"></span></span></label>
     <div class="user-audio-settings-row"><label for="admin-level-target">Target</label><select id="admin-level-target"><option value="">Select target</option>${targetOptions}</select></div>
     <div class="user-audio-settings-range"><label class="user-audio-settings-range__label" for="admin-level-threshold"><span>Threshold</span><output id="admin-level-threshold-value">${Number(settings.voiceTriggerThresholdDb).toFixed(1)} dB</output></label><input id="admin-level-threshold" type="range" min="-60" max="-6" step="1" value="${settings.voiceTriggerThresholdDb}"></div>
@@ -5209,6 +5858,7 @@ function renderUserAudioSettingsFields(settings, targets = []) {
 }
 
 async function openUserAudioSettings(userId, userName) {
+  clearInterval(systemVolumeTimer);
   editingAudioSettingsUserId = Number(userId);
   userAudioSettingsTitle.textContent = `Audio settings · ${userName}`;
   userAudioSettingsFields.innerHTML = '<div class="setting-meta">Loading…</div>';
@@ -5223,6 +5873,10 @@ async function openUserAudioSettings(userId, userName) {
     if (editingAudioSettingsUserId !== Number(userId)) return;
     userAudioSettingsNotice?.classList.toggle('is-hidden', !payload.configuredAsBridge);
     renderUserAudioSettingsFields(payload.settings, payload.targets);
+    renderSystemVolume(payload.systemVolume);
+    systemVolumeTimer = setInterval(() => {
+      if (!systemVolumeBusy) void refreshSystemVolume(Number(userId));
+    }, 2000);
     userAudioSettingsSave.disabled = false;
   } catch (error) {
     userAudioSettingsFields.innerHTML = '';
@@ -5232,6 +5886,8 @@ async function openUserAudioSettings(userId, userName) {
 }
 
 function closeUserAudioSettings() {
+  clearInterval(systemVolumeTimer);
+  systemVolumeTimer = null;
   editingAudioSettingsUserId = null;
   userAudioSettingsDialog.classList.add('is-hidden');
 }
@@ -5239,20 +5895,23 @@ function closeUserAudioSettings() {
 userAudioSettingsForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!editingAudioSettingsUserId) return;
-  const settings = window.TalktomeUserAudioSettings.normalize({
+  const tapToLock = document.getElementById('admin-tap-to-lock');
+  const settings = window.TalktomeUserAudioSettings.normalizeForSave({
     audioProfile: document.getElementById('admin-audio-profile').value,
     dimAmountDb: Number(document.getElementById('admin-dim-amount').value),
     dimFeedsWhileSpeaking: document.getElementById('admin-dim-speaking').checked,
     dimWhenAddressed: document.getElementById('admin-dim-addressed').checked,
     audioAutoProcessing: document.getElementById('admin-auto-processing').checked,
     playConnectionSounds: document.getElementById('admin-connection-sounds').checked,
+    showIncomingLevels: document.getElementById('admin-incoming-levels').checked,
     leftHandMode: document.getElementById('admin-left-hand').checked,
     lockMultipleTargets: document.getElementById('admin-lock-multiple').checked,
+    ...(tapToLock.checked !== tapToLock.defaultChecked ? { tapToLock: tapToLock.checked } : {}),
     userInputGainDb: Number(document.getElementById('admin-mic-gain').value),
     voiceTriggerEnabled: document.getElementById('admin-level-trigger').checked,
     voiceTriggerTarget: document.getElementById('admin-level-target').value,
     voiceTriggerThresholdDb: Number(document.getElementById('admin-level-threshold').value),
-  }, { strict: true });
+  });
   userAudioSettingsSave.disabled = true;
   try {
     const response = await authedFetch(`/admin/users/${editingAudioSettingsUserId}/audio-settings`, {
@@ -5276,3 +5935,58 @@ userAudioSettingsDialog?.addEventListener('click', (event) => {
 });
 
 ensureAdminSession();
+
+
+function renderAdminBridgeAudio(kind, id, direction) {
+  const input = direction === 'input';
+  const gainId = `bridge-audio-gain-${kind}-${id}-${direction}`;
+  return `<div class="bridge-audio-row" data-direction="${direction}" aria-label="${input ? 'Input audio' : 'Output audio'}">
+    <div class="bridge-audio-inline">
+      <label class="admin-switch"><input type="checkbox" data-muted role="switch"><span class="admin-switch__track" aria-hidden="true"></span><span>Mute</span></label>
+      ${input ? '<label class="admin-switch"><input type="checkbox" data-noise-suppression role="switch"><span class="admin-switch__track" aria-hidden="true"></span><span>Noise suppression</span></label>' : ''}
+      <div class="bridge-audio-meter"><meter data-meter min="-96" max="0" value="-96" aria-label="${direction} RMS level in dBFS"></meter><span data-meter-label>−∞ dBFS</span></div>
+    </div>
+    <div class="field-group">
+      <label for="${gainId}" title="Audio changes are saved and applied immediately">${input ? 'Input' : 'Output'} gain (dB)</label>
+      <input id="${gainId}" aria-label="${direction} gain in dB" data-gain required type="number" min="-40" max="40" step="0.5" value="0" title="Saved and applied immediately">
+    </div>
+  </div>
+  ${input ? '<div class="bridge-audio-tone"><label>Input test tone <select data-test-tone aria-label="Input test tone" title="Replaces input at −20 dBFS RMS; applies immediately"><option value="0">Off</option><option value="400">400 Hz</option><option value="1000">1 kHz</option></select></label></div>' : ''}`;
+}
+let adminBridgeAudioPolling = false;
+async function pollAdminBridgeAudio() {
+  if (document.hidden || adminBridgeAudioPolling) return;
+  adminBridgeAudioPolling = true;
+  try {
+    for (const control of document.querySelectorAll('[data-bridge-audio-port]')) {
+      if (!control.getClientRects().length) continue;
+      const key = control.dataset.bridgeAudioPort;
+      const saver = adminFormAutoSavers.get(key.replace(':', '-'));
+      if (saver?.busy) continue;
+      if (!control.querySelector('input[id^="bridge-enabled-"]')?.checked) continue;
+      const [kind, id] = key.split(':');
+      try {
+        const response = await authedFetch(`/admin/bridge/ports/${kind}/${id}`);
+        if (!response.ok) throw new Error('Port audio unavailable; save the Bridge assignment first');
+        const data = await response.json();
+        if (!control.isConnected || saver?.busy) continue;
+        for (const row of control.querySelectorAll('[data-direction]')) {
+          const direction = row.dataset.direction;
+          const gain = row.querySelector('[data-gain]'); const mute = row.querySelector('[data-muted]');
+          const preserve = saver?.hasError(`levels/${direction}`);
+          if (!preserve && gain !== document.activeElement) gain.value = data.audioLevels[direction].gainDb;
+          if (!preserve && mute !== document.activeElement) mute.checked = data.audioLevels[direction].muted;
+          const noise = row.querySelector('[data-noise-suppression]');
+          if (!preserve && noise && noise !== document.activeElement) noise.checked = Boolean(data.audioLevels[direction].noiseSuppression);
+          const db = data.status?.bridgeOnline ? data.status?.[direction]?.rmsDb ?? -120 : -120;
+          row.querySelector('[data-meter]').value = Math.max(-96, Math.min(0, db));
+          row.querySelector('[data-meter-label]').textContent = db <= -96 ? '−∞ dBFS' : `${db.toFixed(1)} dBFS`;
+        }
+        const tone = control.querySelector('[data-test-tone]');
+        if (!saver?.hasError('tone') && tone !== document.activeElement) tone.value = String(data.status?.testToneHz || 0);
+        control.querySelector('[data-port-state]').textContent = [data.status?.state, ...bridgePortProblems(data.status)].filter(Boolean).join(' · ');
+      } catch (error) { control.querySelector('[data-port-state]').textContent = error.message; }
+    }
+  } finally { adminBridgeAudioPolling = false; }
+}
+setInterval(pollAdminBridgeAudio, 500);

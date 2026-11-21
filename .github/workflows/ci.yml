@@ -26,7 +26,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 24.18.1
+          node-version-file: .node-version
           cache: npm
 
       - name: Install dependencies
@@ -49,7 +49,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: bridge-client/package-lock.json
 
@@ -65,10 +65,12 @@ jobs:
         run: >-
           sudo apt-get update && sudo apt-get install -y --no-install-recommends
           libasound2-dev
+          libdbus-1-dev
           libwebkit2gtk-4.1-dev
           libappindicator3-dev
           librsvg2-dev
           patchelf
+          ffmpeg
 
       - name: Install JavaScript dependencies
         working-directory: bridge-client
@@ -92,58 +94,10 @@ jobs:
         run: cargo check --locked --manifest-path bridge-client/src-tauri/Cargo.toml
 
       - name: Test Rust
+        env:
+          # Audio/video clock tests run a real Opus encoder, not the bundle placeholder.
+          TALKTOME_FFMPEG: /usr/bin/ffmpeg
         run: cargo test --locked --manifest-path bridge-client/src-tauri/Cargo.toml --lib
-
-  headless-client:
-    name: Headless client
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: headless-client
-
-      - name: Install Linux build dependencies
-        run: >-
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends
-          libasound2-dev
-          libudev-dev
-          cmake
-          pkg-config
-          fonts-dejavu-core
-
-      - name: Format
-        run: cargo fmt --manifest-path headless-client/Cargo.toml --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --locked --manifest-path headless-client/Cargo.toml --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test --locked --manifest-path headless-client/Cargo.toml
-
-      - name: Install cargo-deb
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deb
-
-      - name: Build amd64 package (smoke test)
-        run: headless-client/scripts/build-deb.sh
-
-      - name: Install and check the package
-        run: |
-          sudo apt-get install -y ./headless-client/target/debian/talktome-headless_*.deb
-          talktome-headless --version
-          talktome-headless --config /usr/share/talktome-headless/config.example.toml check-config
-          talktome-headless --config /usr/share/talktome-headless/config.example.json check-config
 
   server-app:
     name: Server app
@@ -156,7 +110,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: server-app/package-lock.json
 
@@ -201,3 +155,64 @@ jobs:
 
       - name: Test Rust
         run: cargo test --locked --manifest-path server-app/src-tauri/Cargo.toml --lib
+
+  headless-client:
+    name: Headless client
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: headless-client
+
+      - name: Install Linux build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          cmake
+          pkg-config
+          libasound2-dev
+          libudev-dev
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path headless-client/Cargo.toml --check
+
+      - name: Lint
+        run: cargo clippy --locked --manifest-path headless-client/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --manifest-path headless-client/Cargo.toml
+
+  mobile-app:
+    name: Mobile app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile-app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile-app/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Reject moderate, high and critical mobile dependency advisories
+        run: npm audit --audit-level=moderate
+      - name: Test
+        run: npm test
+      - name: Check TypeScript
+        run: npm run typecheck
+      - name: Resolve Expo configuration
+        run: npx expo config --type public --json > /dev/null

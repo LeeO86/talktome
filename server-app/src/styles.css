@@ -376,3 +376,29 @@ pre {
     grid-column: auto;
   }
 }
+
+#interface-row {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.media-adapter-options {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border, #374151);
+  border-radius: 8px;
+}
+
+.server-grid .media-adapter-options label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.media-adapter-options input {
+  margin: 0;
+  flex: 0 0 auto;
+}

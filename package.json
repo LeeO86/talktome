@@ -4,46 +4,41 @@
   "version": "0.0.0",
   "main": "server.js",
   "scripts": {
-    "test": "node --test *.test.js",
+    "test": "node --test tests/*.test.js",
+    "web:guidance": "node scripts/web-guidance.mjs",
     "start": "node server.js",
+    "release:macos": "python3 scripts/release-macos-local.py",
     "build:mediasoup-client": "node scripts/build-mediasoup-client.js",
-    "radio:ptt": "node gateway/radioGateway.js ptt",
-    "radio:play": "node gateway/radioGateway.js play",
-    "radio:monitor": "node gateway/radioGateway.js monitor-rx",
-    "radio:record": "node gateway/radioGateway.js record-rx",
-    "radio:calibrate": "node gateway/radioGateway.js calibrate-rx",
-    "radio:stream": "node gateway/radioGateway.js stream",
-    "radio:stream-rx": "node gateway/radioGateway.js stream-rx",
-    "gateway:sync": "scripts/sync-gateway-to-pi.sh",
     "prebuild:pkg": "node scripts/verify-build-node.js && node scripts/resolve-build-version.js --version-json build-version.json && node scripts/stage-better-sqlite3-binding.js",
-    "build:win64": "npm run prebuild:pkg && npx --no-install pkg package.json --targets node24-win-x64 --output talktome_win64 && node scripts/copy-runtime-deps.js win64",
-    "build:mac_arm64": "npm run prebuild:pkg && npx --no-install pkg package.json --targets node24-macos-arm64 --output talktome_arm64 && node scripts/copy-runtime-deps.js mac_arm64"
+    "build:win64": "npm run prebuild:pkg && npx --no-install pkg package.json --sea --targets node24.22.3-win-x64 --output talktome_win64 && node scripts/copy-runtime-deps.js win64",
+    "build:mac_arm64": "npm run prebuild:pkg && npx --no-install pkg package.json --sea --targets node24.22.3-macos-arm64 --output talktome_arm64 && node scripts/copy-runtime-deps.js mac_arm64"
   },
   "keywords": [],
   "author": "",
   "license": "Apache-2.0",
   "description": "",
   "engines": {
-    "node": ">=24.0.0 <25"
+    "node": ">=24.22.1 <25"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "13.0.3",
     "express": "^4.18.2",
+    "express-rate-limit": "^8.7.3",
     "mediasoup": "^3.26.0",
     "mediasoup-client": "^3.22.0",
-    "proxy-addr": "^2.0.7",
+    "proxy-addr": "^2.0.8",
     "qrcode": "^1.5.4",
-    "selfsigned": "^2.4.1",
+    "selfsigned": "^5.5.0",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
-    "pkg": "npm:@yao-pkg/pkg@^6.22.0"
+    "pkg": "npm:@yao-pkg/pkg@^6.23.0"
   },
   "overrides": {
-    "qs": "6.16.0"
+    "qs": "6.16.1"
   },
   "pkg": {
     "assets": [
@@ -57,6 +52,6 @@
   "allowScripts": {
     "better-sqlite3@13.0.3": true,
     "esbuild@0.28.2": true,
-    "mediasoup@3.26.0": true
+    "mediasoup@3.29.0": true
   }
 }

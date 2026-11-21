@@ -13,13 +13,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use elgato_streamdeck::asynchronous::AsyncStreamDeck;
-use elgato_streamdeck::images::convert_image_with_format;
-use elgato_streamdeck::info::Kind;
+use elgato_streamdeck::images::{convert_image_with_format, ImageRect};
+use elgato_streamdeck::info::{ImageFormat, ImageMirroring, ImageMode, ImageRotation, Kind};
 use elgato_streamdeck::DeviceStateUpdate;
 use image::{DynamicImage, RgbImage};
 use tokio::sync::watch;
 
-use crate::audio::mixer::step_volume_db;
 use crate::config::{StreamDeckConfig, StreamDeckDeviceConfig, TalkConfig};
 use crate::state::{
     Bus, Command, ConferenceMemberInfo, DeckDialView, DeckInput, DeckKeyView, DeckStatus,
@@ -27,11 +26,11 @@ use crate::state::{
 };
 use crate::talk::TargetKey;
 use layout::{
-    conference_members, encoder_bindings, encoder_page_count, page_count, palette,
+    conference_members, encoder_bindings, encoder_page_count, menu_item_count, page_count, palette,
     volume_toggle_defers_to_release, Appearance, DeckState, EncoderBinding, Geometry, KeySpec,
-    LayoutOptions, Role,
+    LayoutOptions, MenuPage, Role, LISTEN_ONLY_NOTICE,
 };
-use render::{Renderer, StripSegment};
+use render::{draw_strip_arrows, Renderer, StripArrows, StripSegment};
 use tokio::sync::mpsc;
 
 pub const MOCK_ENV: &str = "TALKTOME_MOCK_STREAMDECK";
@@ -42,6 +41,10 @@ pub const DEMO_TARGETS_ENV: &str = "TALKTOME_DEMO_TARGETS";
 pub const DEMO_REPLY_ENV: &str = "TALKTOME_DEMO_REPLY";
 const STATUS_HOLD: Duration = Duration::from_millis(2000);
 const MUTE_HOLD: Duration = Duration::from_millis(600);
+/// How often the local IP is looked up again while the connection is lost.
+const OFFLINE_IP_REFRESH: Duration = Duration::from_secs(5);
+/// Holding a conference dial this long opens its members while still held.
+const MEMBER_HOLD: Duration = Duration::from_millis(1000);
 const BLINK_PERIOD: Duration = Duration::from_millis(500);
 const READ_POLL_HZ: f32 = 50.0;
 
@@ -116,16 +119,35 @@ impl Device {
 
     async fn set_key(&self, key: u8, image: RgbImage) -> Result<()> {
         match self {
-            Device::Real(deck) => deck
-                .set_button_image(key, DynamicImage::ImageRgb8(image))
-                .await
-                .map_err(|e| anyhow!("{e}")),
+            Device::Real(deck) => {
+                let data = convert_image_with_format(
+                    key_image_format(deck.kind()),
+                    DynamicImage::ImageRgb8(image),
+                )
+                .map_err(|e| anyhow!("{e}"))?;
+                deck.write_image(key, &data)
+                    .await
+                    .map_err(|e| anyhow!("{e}"))
+            }
             Device::Mock(mock) => mock.write_key(key, &image),
         }
     }
 
     async fn set_lcd(&self, image: RgbImage) -> Result<()> {
         match self {
+            Device::Real(deck) if matches!(deck.kind(), Kind::PlusXl) => {
+                // elgato-streamdeck 0.13 sends the rotated 100×1200 size in the
+                // header; the + XL wants the logical 1200×100 region with the
+                // JPEG rotated 90° counter-clockwise (Elgato HID docs).
+                let (w, h) = image.dimensions();
+                let mut rect = ImageRect::from_image(DynamicImage::ImageRgb8(image).rotate270())
+                    .map_err(|e| anyhow!("{e}"))?;
+                rect.w = w as u16;
+                rect.h = h as u16;
+                deck.write_lcd(0, 0, &rect)
+                    .await
+                    .map_err(|e| anyhow!("{e}"))
+            }
             Device::Real(deck) => {
                 let Some(format) = deck.kind().lcd_image_format() else {
                     return Ok(());
@@ -456,6 +478,9 @@ pub fn list() -> Result<()> {
 struct PressedKey {
     role: Role,
     since: Instant,
+    /// Mini volume / member layer: the press was on the already selected
+    /// target or member, so a short tap closes the layer.
+    reselect: bool,
 }
 
 fn publish_disconnected(bus: &Bus, id: usize, error: Option<String>) {
@@ -490,18 +515,69 @@ fn role_label(role: Role) -> String {
         Role::VolumeUp => "volume-up".into(),
         Role::VolumeDown => "volume-down".into(),
         Role::MuteSelected => "mute-selected".into(),
+        Role::Production(index) => format!("production:{index}"),
+        Role::ClearLocks => "clear-locks".into(),
+        Role::Restart => "restart".into(),
+        Role::AudioSetToggle => "audio-set-toggle".into(),
+        Role::Menu(page) => format!("menu:{}", menu_label(page)),
+        Role::Info(index) => format!("info:{index}"),
+        Role::SystemVolume => "system-volume".into(),
         Role::Empty => "empty".into(),
     }
 }
 
-fn key_item_count(snapshot: &Snapshot, state: &DeckState) -> usize {
-    if state.member_layer {
+/// Local address the OS uses to reach the server: a connected UDP socket
+/// picks the route without sending anything. Falls back to the default route.
+async fn local_ip_towards(server_url: &str) -> Option<String> {
+    let server = url::Url::parse(server_url).ok().and_then(|url| {
+        Some(format!(
+            "{}:{}",
+            url.host_str()?,
+            url.port_or_known_default()?
+        ))
+    });
+    let lookup = async {
+        for target in server.into_iter().chain(["1.1.1.1:53".to_string()]) {
+            for bind in ["0.0.0.0:0", "[::]:0"] {
+                let Ok(socket) = tokio::net::UdpSocket::bind(bind).await else {
+                    continue;
+                };
+                if socket.connect(&target).await.is_err() {
+                    continue;
+                }
+                if let Ok(addr) = socket.local_addr() {
+                    if !addr.ip().is_unspecified() {
+                        return Some(addr.ip().to_string());
+                    }
+                }
+            }
+        }
+        None
+    };
+    tokio::time::timeout(Duration::from_secs(2), lookup)
+        .await
+        .ok()
+        .flatten()
+}
+
+fn menu_label(page: MenuPage) -> &'static str {
+    match page {
+        MenuPage::Root => "menu",
+        MenuPage::Productions => "productions",
+        MenuPage::Info => "info",
+    }
+}
+
+fn key_item_count(geometry: &Geometry, snapshot: &Snapshot, state: &DeckState) -> usize {
+    if let Some(menu) = state.menu {
+        menu_item_count(geometry, snapshot, menu)
+    } else if state.member_layer {
         state
             .member_conference
             .map(|key| conference_members(snapshot, key).len())
             .unwrap_or(0)
     } else {
-        snapshot.targets.len()
+        snapshot.targets.len() + usize::from(state.volume_layer && snapshot.system_volume.is_some())
     }
 }
 
@@ -514,14 +590,86 @@ fn cycle_page(page: &mut usize, pages: usize, forward: bool) {
     };
 }
 
+fn restart_hold_confirmed(
+    held: Duration,
+    menu: Option<MenuPage>,
+    current_role: Option<Role>,
+) -> bool {
+    held >= Duration::from_secs(2)
+        && menu == Some(MenuPage::Root)
+        && current_role == Some(Role::Restart)
+}
+
+fn restart_hold_deadline(
+    pressed: &HashMap<u8, PressedKey>,
+    menu: Option<MenuPage>,
+    keys: &[KeySpec],
+) -> Option<Instant> {
+    pressed
+        .iter()
+        .filter(|(key, press)| {
+            press.role == Role::Restart
+                && restart_hold_confirmed(
+                    Duration::from_secs(2),
+                    menu,
+                    keys.get(**key as usize).map(|spec| spec.role),
+                )
+        })
+        .map(|(_, press)| press.since + Duration::from_secs(2))
+        .min()
+}
+
+fn take_due_restart(
+    pressed: &mut HashMap<u8, PressedKey>,
+    menu: Option<MenuPage>,
+    keys: &[KeySpec],
+    now: Instant,
+) -> bool {
+    let due: Vec<u8> = pressed
+        .iter()
+        .filter(|(key, press)| {
+            press.role == Role::Restart
+                && restart_hold_confirmed(
+                    now.saturating_duration_since(press.since),
+                    menu,
+                    keys.get(**key as usize).map(|spec| spec.role),
+                )
+        })
+        .map(|(key, _)| *key)
+        .collect();
+    for key in &due {
+        pressed.remove(key);
+    }
+    !due.is_empty()
+}
+
 #[derive(Clone, Copy)]
 enum BoundEncoder {
+    SystemVolume,
     Target(TargetKey),
-    Member {
-        conference: TargetKey,
-        user_id: i64,
-        volume: f32,
-    },
+    Member { conference: TargetKey, user_id: i64 },
+}
+
+/// What a dial held past `MEMBER_HOLD` does.
+#[derive(Debug, PartialEq, Eq)]
+enum DialHold {
+    /// A conference dial opens that conference's member mix.
+    OpenMembers(TargetKey),
+    /// Any dial leaves the member mix again.
+    CloseMembers,
+    Nothing,
+}
+
+fn dial_hold_action(member_layer: bool, binding: Option<BoundEncoder>) -> DialHold {
+    if member_layer {
+        return DialHold::CloseMembers;
+    }
+    match binding {
+        Some(BoundEncoder::Target(target @ TargetKey::Conference(_))) => {
+            DialHold::OpenMembers(target)
+        }
+        _ => DialHold::Nothing,
+    }
 }
 
 fn bound_encoder(
@@ -535,11 +683,11 @@ fn bound_encoder(
         .copied()
         .flatten()
     {
+        Some(EncoderBinding::SystemVolume(_)) => Some(BoundEncoder::SystemVolume),
         Some(EncoderBinding::Target(target)) => Some(BoundEncoder::Target(target.key)),
         Some(EncoderBinding::Member { conference, member }) => Some(BoundEncoder::Member {
             conference,
             user_id: member.user_id,
-            volume: member.volume,
         }),
         None => None,
     }
@@ -591,9 +739,7 @@ async fn run_device(
     let serial = device.serial().await;
     let is_mock = device.is_mock();
     let key_size = effective_key_size(kind);
-    let lcd_size = kind
-        .lcd_image_format()
-        .map(|f| (f.size.0 as u32, f.size.1 as u32));
+    let lcd_size = lcd_logical_size(kind);
     let options = layout_options(device_config);
     let reader = match &device {
         Device::Real(deck) => Some(deck.get_reader()),
@@ -607,9 +753,10 @@ async fn run_device(
     let mut snapshot: Arc<Snapshot> = with_demo_targets(snapshots.borrow().clone(), is_mock);
     let mut rendered: HashMap<u8, (Appearance, bool)> = HashMap::new();
     let mut images: HashMap<u8, (u64, Arc<Vec<u8>>)> = HashMap::new();
-    let mut lcd_rendered: Option<Vec<StripSegment>> = None;
+    let mut lcd_rendered: Option<(Vec<StripSegment>, StripArrows)> = None;
     let mut pressed: HashMap<u8, PressedKey> = HashMap::new();
     let mut pressed_encoders: HashMap<u8, Instant> = HashMap::new();
+    let mut ip_checked: Option<Instant> = None;
     let mut keys: Vec<KeySpec> = layout::layout(&geometry, &snapshot, &state, &options);
     let mut blink = tokio::time::interval(BLINK_PERIOD);
     let volume_timeout = Duration::from_secs(config.volume_layer_timeout_s.max(1));
@@ -649,7 +796,63 @@ async fn run_device(
     loop {
         let mut relayout = false;
         let mut pending_updates: Vec<DeviceStateUpdate> = Vec::new();
+        // Wake for every held dial whose hold does something (open or leave
+        // the member mix), decided the same way as the action below.
+        let member_hold_at = pressed_encoders
+            .iter()
+            .filter(|(encoder, _)| {
+                dial_hold_action(
+                    state.member_layer,
+                    bound_encoder(&geometry, &state, &snapshot, **encoder),
+                ) != DialHold::Nothing
+            })
+            .map(|(_, since)| *since + MEMBER_HOLD)
+            .min();
+        let restart_at = restart_hold_deadline(&pressed, state.menu, &keys);
         tokio::select! {
+            _ = async {
+                match restart_at {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Consume the hold now: a later ButtonUp cannot trigger it again.
+                if take_due_restart(&mut pressed, state.menu, &keys, Instant::now()) {
+                    if let Some(restart) = &bus.restart {
+                        tracing::warn!(event = "streamdeck-restart");
+                        restart.request();
+                    }
+                }
+            }
+            _ = async {
+                match member_hold_at {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let now = Instant::now();
+                let due: Vec<u8> = pressed_encoders
+                    .iter()
+                    .filter(|(_, since)| now.duration_since(**since) >= MEMBER_HOLD)
+                    .map(|(encoder, _)| *encoder)
+                    .collect();
+                for encoder in due {
+                    let binding = bound_encoder(&geometry, &state, &snapshot, encoder);
+                    match dial_hold_action(state.member_layer, binding) {
+                        DialHold::OpenMembers(target) => {
+                            // Handled: the release that follows does nothing.
+                            pressed_encoders.remove(&encoder);
+                            relayout |= state.open_member_layer(&snapshot, Some(target));
+                        }
+                        DialHold::CloseMembers => {
+                            pressed_encoders.remove(&encoder);
+                            state.close_member_layer();
+                            relayout = true;
+                        }
+                        DialHold::Nothing => {}
+                    }
+                }
+            }
             changed = snapshots.changed() => {
                 if changed.is_err() { return Ok(()); }
                 snapshot = with_demo_targets(snapshots.borrow().clone(), is_mock);
@@ -657,10 +860,25 @@ async fn run_device(
             }
             _ = blink.tick() => {
                 state.blink_phase = !state.blink_phase;
+                if state.menu == Some(MenuPage::Root) && pressed.iter().any(|(key, press)| press.role == Role::Restart && keys.get(*key as usize).is_some_and(|spec| spec.role == Role::Restart)) {
+                    state.touch_layer();
+                }
                 if state.expire_volume_layer(volume_timeout)
                     || state.expire_member_layer(volume_timeout)
+                    || state.expire_menu(volume_timeout)
+                    || state.expire_listen_only(LISTEN_ONLY_NOTICE)
                 {
                     relayout = true;
+                }
+                if layout::connection_lost(&snapshot)
+                    && ip_checked.is_none_or(|at| at.elapsed() >= OFFLINE_IP_REFRESH)
+                {
+                    ip_checked = Some(Instant::now());
+                    let ip = local_ip_towards(&snapshot.server_url).await;
+                    if ip != state.local_ip {
+                        state.local_ip = ip;
+                        relayout = true;
+                    }
                 }
             }
             injected = deck_input.recv() => {
@@ -697,7 +915,29 @@ async fn run_device(
                         continue;
                     };
                     let role = spec.role;
-                    pressed.insert(key, PressedKey { role, since: now });
+                    let reselect = layout::volume_in_menu(&geometry)
+                        && match role {
+                            Role::SystemVolume => {
+                                state.volume_layer && state.system_volume_selected
+                            }
+                            Role::Target(target) => {
+                                state.volume_layer
+                                    && !state.system_volume_selected
+                                    && state.selected == Some(target)
+                            }
+                            Role::Member { user_id, .. } => {
+                                state.member_layer && state.member_selected == Some(user_id)
+                            }
+                            _ => false,
+                        };
+                    pressed.insert(
+                        key,
+                        PressedKey {
+                            role,
+                            since: now,
+                            reselect,
+                        },
+                    );
                     match role {
                         Role::Status => {}
                         Role::Reply => {
@@ -711,10 +951,17 @@ async fn run_device(
                         }
                         Role::Target(target) => {
                             if state.volume_layer {
+                                state.system_volume_selected = false;
                                 state.selected = Some(target);
                                 state.touch_volume_layer();
                                 relayout = true;
-                            } else if target.can_talk() {
+                            } else if target.can_talk()
+                                && snapshot
+                                    .targets
+                                    .iter()
+                                    .find(|t| t.key == target)
+                                    .is_none_or(|t| t.can_talk)
+                            {
                                 if matches!(target, TargetKey::User(_))
                                     && snapshot
                                         .targets
@@ -733,6 +980,10 @@ async fn run_device(
                                         })
                                         .await;
                                 }
+                            } else if matches!(target, TargetKey::Conference(_)) {
+                                // Listen-only conference: say so instead of muting it.
+                                state.show_listen_only(target);
+                                relayout = true;
                             } else {
                                 let _ = bus.commands.send(Command::MuteToggle(target)).await;
                             }
@@ -743,18 +994,17 @@ async fn run_device(
                             relayout = true;
                         }
                         Role::NextPage => {
-                            let pages = page_count(&geometry, key_item_count(&snapshot, &state));
-                            if state.member_layer {
-                                cycle_page(&mut state.member_page, pages, true);
-                                state.touch_member_layer();
-                            } else {
-                                cycle_page(&mut state.page, pages, true);
-                            }
+                            let pages =
+                                page_count(&geometry, key_item_count(&geometry, &snapshot, &state));
+                            cycle_page(state.key_page_mut(), pages, true);
+                            state.touch_layer();
                             relayout = true;
                         }
                         Role::NextEncoderPage => {
-                            let pages =
-                                encoder_page_count(&geometry, key_item_count(&snapshot, &state));
+                            let pages = encoder_page_count(
+                                &geometry,
+                                key_item_count(&geometry, &snapshot, &state),
+                            );
                             cycle_page(&mut state.encoder_page, pages, true);
                             if state.member_layer {
                                 state.touch_member_layer();
@@ -772,44 +1022,38 @@ async fn run_device(
                         }
                         Role::VolumeUp | Role::VolumeDown => {
                             let delta = if role == Role::VolumeUp {
-                                config.volume_step_db()
+                                config.volume_step_linear()
                             } else {
-                                -config.volume_step_db()
+                                -config.volume_step_linear()
                             };
                             if state.member_layer {
                                 state.touch_member_layer();
                                 if let (Some(conference), Some(user_id)) =
                                     (state.member_conference, state.member_selected)
                                 {
-                                    let current = conference_members(&snapshot, conference)
-                                        .iter()
-                                        .find(|member| member.user_id == user_id)
-                                        .map(|member| member.volume)
-                                        .unwrap_or(1.0);
                                     let _ = bus
                                         .commands
-                                        .send(Command::MemberVolumeSet {
+                                        .send(Command::MemberVolumeStep {
                                             conference,
                                             user_id,
-                                            volume: step_volume_db(current, delta),
+                                            delta,
                                         })
                                         .await;
                                 }
+                            } else if state.system_volume_selected && state.volume_layer {
+                                state.touch_volume_layer();
+                                let _ = bus
+                                    .commands
+                                    .send(Command::SystemVolume(
+                                        crate::audio::system_volume::Action::Step(delta),
+                                    ))
+                                    .await;
                             } else {
                                 state.touch_volume_layer();
                                 if let Some(target) = state.selected {
-                                    let current = snapshot
-                                        .targets
-                                        .iter()
-                                        .find(|t| t.key == target)
-                                        .map(|t| t.volume)
-                                        .unwrap_or(1.0);
                                     let _ = bus
                                         .commands
-                                        .send(Command::VolumeSet {
-                                            target,
-                                            volume: step_volume_db(current, delta),
-                                        })
+                                        .send(Command::VolumeStep { target, delta })
                                         .await;
                                 }
                             }
@@ -828,12 +1072,61 @@ async fn run_device(
                                         })
                                         .await;
                                 }
+                            } else if state.system_volume_selected && state.volume_layer {
+                                state.touch_volume_layer();
+                                if snapshot
+                                    .system_volume
+                                    .as_ref()
+                                    .is_some_and(|v| v.mute_supported)
+                                {
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::SystemVolume(
+                                            crate::audio::system_volume::Action::ToggleMute,
+                                        ))
+                                        .await;
+                                }
                             } else {
                                 state.touch_volume_layer();
                                 if let Some(target) = state.selected {
                                     let _ = bus.commands.send(Command::MuteToggle(target)).await;
                                 }
                             }
+                        }
+                        Role::Production(index) => {
+                            if let Some(production) = snapshot.productions.get(index) {
+                                if !snapshot.is_current_production(production) {
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::SetProduction(production.id.clone()))
+                                        .await;
+                                    state.page = 0;
+                                }
+                            }
+                            state.close_menu();
+                            relayout = true;
+                        }
+                        Role::ClearLocks => {
+                            let _ = bus.commands.send(Command::ClearLocks).await;
+                            state.touch_layer();
+                        }
+                        Role::Restart => state.touch_layer(),
+                        Role::AudioSetToggle => {
+                            let _ = bus.commands.send(Command::ToggleAudioDeviceSet).await;
+                            state.touch_layer();
+                        }
+                        Role::Menu(page) => {
+                            if page == MenuPage::Info {
+                                state.local_ip = local_ip_towards(&snapshot.server_url).await;
+                            }
+                            state.open_menu(page);
+                            relayout = true;
+                        }
+                        Role::Info(_) => state.touch_layer(),
+                        Role::SystemVolume => {
+                            state.system_volume_selected = true;
+                            state.touch_volume_layer();
+                            relayout = true;
                         }
                         Role::Empty => {}
                     }
@@ -844,20 +1137,36 @@ async fn run_device(
                     };
                     let held = now.duration_since(press.since);
                     match press.role {
+                        Role::Restart => {
+                            // Fallback if ButtonUp and the deadline become
+                            // ready in the same poll. The timer consumes an
+                            // already-fired hold, so it cannot run twice.
+                            if restart_hold_confirmed(
+                                held,
+                                state.menu,
+                                keys.get(key as usize).map(|spec| spec.role),
+                            ) {
+                                if let Some(restart) = &bus.restart {
+                                    tracing::warn!(event = "streamdeck-restart");
+                                    restart.request();
+                                }
+                            }
+                            state.touch_layer();
+                        }
                         Role::Status => {
                             if held >= STATUS_HOLD {
-                                let pages =
-                                    page_count(&geometry, key_item_count(&snapshot, &state));
-                                if state.member_layer {
-                                    cycle_page(&mut state.member_page, pages, true);
-                                    state.touch_member_layer();
-                                } else {
-                                    cycle_page(&mut state.page, pages, true);
-                                }
-                                relayout = true;
+                                let pages = page_count(
+                                    &geometry,
+                                    key_item_count(&geometry, &snapshot, &state),
+                                );
+                                cycle_page(state.key_page_mut(), pages, true);
+                                state.touch_layer();
+                            } else if state.menu.is_some() {
+                                state.menu_back();
                             } else {
-                                let _ = bus.commands.send(Command::ClearLocks).await;
+                                state.open_menu(MenuPage::Root);
                             }
+                            relayout = true;
                         }
                         Role::Reply => {
                             let _ = bus
@@ -872,6 +1181,9 @@ async fn run_device(
                             if state.volume_layer {
                                 if held >= MUTE_HOLD {
                                     let _ = bus.commands.send(Command::MuteToggle(target)).await;
+                                } else if press.reselect {
+                                    state.close_volume_layer();
+                                    relayout = true;
                                 }
                             } else if target.can_talk() {
                                 let _ = bus
@@ -896,6 +1208,28 @@ async fn run_device(
                                     })
                                     .await;
                                 state.touch_member_layer();
+                            } else if press.reselect {
+                                state.close_member_layer();
+                                relayout = true;
+                            }
+                        }
+                        Role::SystemVolume if state.volume_layer => {
+                            if held >= MUTE_HOLD
+                                && snapshot
+                                    .system_volume
+                                    .as_ref()
+                                    .is_some_and(|v| v.mute_supported)
+                            {
+                                let _ = bus
+                                    .commands
+                                    .send(Command::SystemVolume(
+                                        crate::audio::system_volume::Action::ToggleMute,
+                                    ))
+                                    .await;
+                                state.touch_volume_layer();
+                            } else if held < MUTE_HOLD && press.reselect {
+                                state.close_volume_layer();
+                                relayout = true;
                             }
                         }
                         Role::VolumeToggle if volume_toggle_defers_to_release(&geometry) => {
@@ -910,37 +1244,37 @@ async fn run_device(
                     }
                 }
                 DeviceStateUpdate::EncoderTwist(encoder, ticks) => {
-                    let delta = config.volume_step_db() * ticks as f32;
+                    let delta = config.volume_step_linear() * ticks as f32;
                     match bound_encoder(&geometry, &state, &snapshot, encoder) {
-                        Some(BoundEncoder::Target(target)) => {
-                            let current = snapshot
-                                .targets
-                                .iter()
-                                .find(|t| t.key == target)
-                                .map(|t| t.volume)
-                                .unwrap_or(1.0);
+                        Some(BoundEncoder::SystemVolume) => {
+                            state.touch_volume_layer();
                             let _ = bus
                                 .commands
-                                .send(Command::VolumeSet {
-                                    target,
-                                    volume: step_volume_db(current, delta),
-                                })
+                                .send(Command::SystemVolume(
+                                    crate::audio::system_volume::Action::Step(delta),
+                                ))
+                                .await;
+                        }
+                        Some(BoundEncoder::Target(target)) => {
+                            let _ = bus
+                                .commands
+                                .send(Command::VolumeStep { target, delta })
                                 .await;
                         }
                         Some(BoundEncoder::Member {
                             conference,
                             user_id,
-                            volume,
+                            ..
                         }) => {
                             if state.member_layer {
                                 state.touch_member_layer();
                             }
                             let _ = bus
                                 .commands
-                                .send(Command::MemberVolumeSet {
+                                .send(Command::MemberVolumeStep {
                                     conference,
                                     user_id,
-                                    volume: step_volume_db(volume, delta),
+                                    delta,
                                 })
                                 .await;
                         }
@@ -956,24 +1290,45 @@ async fn run_device(
                     };
                     let held = now.duration_since(since);
                     match bound_encoder(&geometry, &state, &snapshot, encoder) {
+                        Some(BoundEncoder::SystemVolume) => {
+                            state.touch_volume_layer();
+                            if snapshot
+                                .system_volume
+                                .as_ref()
+                                .is_some_and(|v| v.mute_supported)
+                            {
+                                let _ = bus
+                                    .commands
+                                    .send(Command::SystemVolume(
+                                        crate::audio::system_volume::Action::ToggleMute,
+                                    ))
+                                    .await;
+                            }
+                        }
                         Some(BoundEncoder::Member {
                             conference,
                             user_id,
                             ..
                         }) => {
-                            let _ = bus
-                                .commands
-                                .send(Command::MemberMuteToggle {
-                                    conference,
-                                    user_id,
-                                })
-                                .await;
+                            // Like a conference dial: a release just short of
+                            // the hold that leaves the mix does not mute.
+                            if held < MUTE_HOLD {
+                                let _ = bus
+                                    .commands
+                                    .send(Command::MemberMuteToggle {
+                                        conference,
+                                        user_id,
+                                    })
+                                    .await;
+                            }
                             state.touch_member_layer();
                         }
                         Some(BoundEncoder::Target(target)) => {
-                            if held >= MUTE_HOLD && matches!(target, TargetKey::Conference(_)) {
-                                relayout = state.open_member_layer(&snapshot, Some(target));
-                            } else {
+                            // Held past MEMBER_HOLD, a conference already
+                            // opened its members; let go just short of it,
+                            // nothing happens rather than a surprise mute.
+                            let conference = matches!(target, TargetKey::Conference(_));
+                            if !conference || held < MUTE_HOLD {
                                 let _ = bus.commands.send(Command::MuteToggle(target)).await;
                             }
                         }
@@ -981,13 +1336,10 @@ async fn run_device(
                     }
                 }
                 DeviceStateUpdate::TouchPointDown(point) => {
-                    let pages = page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
-                    if state.member_layer {
-                        cycle_page(&mut state.member_page, pages, point != 0);
-                        state.touch_member_layer();
-                    } else {
-                        cycle_page(&mut state.page, pages, point != 0);
-                    }
+                    let pages =
+                        page_count(&geometry, key_item_count(&geometry, &snapshot, &state)).max(1);
+                    cycle_page(state.key_page_mut(), pages, point != 0);
+                    state.touch_layer();
                     relayout = true;
                 }
                 DeviceStateUpdate::TouchPointUp(_) => {}
@@ -998,18 +1350,22 @@ async fn run_device(
                         y1 < y0
                     };
                     if geometry.encoders_follow_bottom_row()
-                        || encoder_page_count(&geometry, key_item_count(&snapshot, &state)) <= 1
+                        || encoder_page_count(
+                            &geometry,
+                            key_item_count(&geometry, &snapshot, &state),
+                        ) <= 1
                     {
-                        let pages = page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
-                        if state.member_layer {
-                            cycle_page(&mut state.member_page, pages, forward);
-                            state.touch_member_layer();
-                        } else {
-                            cycle_page(&mut state.page, pages, forward);
-                        }
-                    } else {
                         let pages =
-                            encoder_page_count(&geometry, key_item_count(&snapshot, &state)).max(1);
+                            page_count(&geometry, key_item_count(&geometry, &snapshot, &state))
+                                .max(1);
+                        cycle_page(state.key_page_mut(), pages, forward);
+                        state.touch_layer();
+                    } else {
+                        let pages = encoder_page_count(
+                            &geometry,
+                            key_item_count(&geometry, &snapshot, &state),
+                        )
+                        .max(1);
                         cycle_page(&mut state.encoder_page, pages, forward);
                         if state.member_layer {
                             state.touch_member_layer();
@@ -1027,6 +1383,21 @@ async fn run_device(
                             y as u32 * encoders / h.max(1)
                         };
                         match bound_encoder(&geometry, &state, &snapshot, index as u8) {
+                            Some(BoundEncoder::SystemVolume) => {
+                                if snapshot
+                                    .system_volume
+                                    .as_ref()
+                                    .is_some_and(|v| v.mute_supported)
+                                {
+                                    let _ = bus
+                                        .commands
+                                        .send(Command::SystemVolume(
+                                            crate::audio::system_volume::Action::ToggleMute,
+                                        ))
+                                        .await;
+                                }
+                                state.touch_volume_layer();
+                            }
                             Some(BoundEncoder::Target(target)) => {
                                 let _ = bus.commands.send(Command::MuteToggle(target)).await;
                             }
@@ -1067,6 +1438,13 @@ async fn run_device(
             }
             state.clamp_pages(&geometry, &snapshot);
             keys = layout::layout(&geometry, &snapshot, &state, &options);
+            pressed.retain(|key, press| {
+                press.role != Role::Restart
+                    || (state.menu == Some(MenuPage::Root)
+                        && keys
+                            .get(*key as usize)
+                            .is_some_and(|spec| spec.role == Role::Restart))
+            });
         }
         let keys_changed = render_all(
             &device,
@@ -1101,8 +1479,34 @@ async fn run_device(
     }
 }
 
+/// Key image format. elgato-streamdeck 0.13 gives the Stream Deck + XL
+/// 120×120 keys; Elgato's HID docs specify 112×112 JPEG, rotated 90°
+/// counter-clockwise, and a larger image comes out cropped and shifted.
+fn key_image_format(kind: Kind) -> ImageFormat {
+    match kind {
+        Kind::PlusXl => ImageFormat {
+            mode: ImageMode::JPEG,
+            size: (112, 112),
+            rotation: ImageRotation::Rot270,
+            mirror: ImageMirroring::None,
+        },
+        _ => kind.key_image_format(),
+    }
+}
+
+/// Size the touch strip / LCD is drawn at, before any upload rotation. The
+/// library reports the + XL strip already rotated (100×1200); it is 1200×100.
+fn lcd_logical_size(kind: Kind) -> Option<(u32, u32)> {
+    match kind {
+        Kind::PlusXl => Some((1200, 100)),
+        _ => kind
+            .lcd_image_format()
+            .map(|format| (format.size.0 as u32, format.size.1 as u32)),
+    }
+}
+
 fn effective_key_size(kind: Kind) -> (u32, u32) {
-    let (w, h) = kind.key_image_format().size;
+    let (w, h) = key_image_format(kind).size;
     if w == 0 || h == 0 {
         (96, 96)
     } else {
@@ -1254,6 +1658,12 @@ fn dial_views(geometry: &Geometry, state: &DeckState, snapshot: &Snapshot) -> Ve
         .into_iter()
         .enumerate()
         .map(|(index, binding)| match binding {
+            Some(EncoderBinding::SystemVolume(volume)) => DeckDialView {
+                index: index as u8,
+                role: "system-volume".into(),
+                title: "MAIN".into(),
+                subtitle: format!("{}%", (volume.volume * 100.0).round()),
+            },
             Some(EncoderBinding::Target(target)) => DeckDialView {
                 index: index as u8,
                 role: target.key.to_string(),
@@ -1355,16 +1765,13 @@ fn publish_deck_view(
         encoders: geometry.encoders,
         touchpoints: geometry.touchpoints,
         key_size: key_size.0,
-        page: if state.member_layer {
-            state.member_page
-        } else {
-            state.page
-        },
-        pages: page_count(geometry, key_item_count(snapshot, state)),
+        page: state.key_page(),
+        pages: page_count(geometry, key_item_count(geometry, snapshot, state)),
         encoder_page: state.encoder_page,
-        encoder_pages: encoder_page_count(geometry, key_item_count(snapshot, state)),
+        encoder_pages: encoder_page_count(geometry, key_item_count(geometry, snapshot, state)),
         volume_layer: state.volume_layer,
         member_layer: state.member_layer,
+        menu: state.menu.map(|page| menu_label(page).to_string()),
         keys: keys
             .iter()
             .enumerate()
@@ -1388,6 +1795,40 @@ fn publish_deck_view(
     }
 }
 
+/// What a touch-strip segment shows, for [`strip_background`].
+#[derive(Clone, Copy, Default)]
+struct StripState {
+    /// The server connection is gone: every segment greys out.
+    offline: bool,
+    /// This user / member is not online (same as the greyed-out key).
+    away: bool,
+    talking: bool,
+    locked: bool,
+    listening: bool,
+    muted: bool,
+}
+
+/// Segment colour on the Stream Deck + touch strip. A muted target or member
+/// stays grey like the rest even while audio arrives: the red bar and MUTED
+/// already say it is muted, and green would claim it can be heard. Talking
+/// and a lock are our own action and still show, also on someone who is not
+/// online, like their key.
+fn strip_background(state: StripState) -> layout::Rgb {
+    if state.offline {
+        palette::OFFLINE
+    } else if state.talking {
+        palette::TALKING
+    } else if state.locked {
+        palette::LOCKED
+    } else if state.away {
+        palette::OFFLINE
+    } else if state.listening && !state.muted {
+        palette::INCOMING
+    } else {
+        palette::IDLE
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn render_lcd(
     device: &Device,
@@ -1397,49 +1838,65 @@ async fn render_lcd(
     geometry: &Geometry,
     state: &DeckState,
     snapshot: &Snapshot,
-    rendered: &mut Option<Vec<StripSegment>>,
+    rendered: &mut Option<(Vec<StripSegment>, StripArrows)>,
 ) -> Result<()> {
+    let offline = layout::connection_lost(snapshot);
     let segments: Vec<StripSegment> = if geometry.encoders > 0 {
         encoder_bindings(geometry, state, snapshot)
             .into_iter()
             .map(|binding| match binding {
+                Some(EncoderBinding::SystemVolume(volume)) => StripSegment {
+                    percent: true,
+                    title: "MAIN".into(),
+                    volume: volume.volume,
+                    muted: volume.muted,
+                    background: if volume.muted {
+                        palette::MUTED
+                    } else {
+                        palette::CONTROL
+                    },
+                },
                 Some(EncoderBinding::Target(target)) => StripSegment {
+                    percent: false,
                     title: target.name.clone(),
                     volume: target.volume,
                     muted: target.muted,
-                    background: if target.held {
-                        palette::TALKING
-                    } else if target.locked {
-                        palette::LOCKED
-                    } else if target.incoming || target.receiving {
-                        palette::INCOMING
-                    } else {
-                        palette::VOLUME
-                    },
+                    background: strip_background(StripState {
+                        offline,
+                        away: !target.online,
+                        talking: target.held,
+                        locked: target.locked,
+                        listening: target.incoming || target.receiving,
+                        muted: target.muted,
+                    }),
                 },
                 Some(EncoderBinding::Member { member, .. }) => StripSegment {
-                    title: member.name.clone(),
+                    percent: false,
                     volume: member.volume,
+                    title: member.name.clone(),
                     muted: member.muted,
-                    background: if member.receiving {
-                        palette::RECEIVING
-                    } else if member.muted {
-                        palette::MUTED
-                    } else {
-                        palette::MEMBERS
-                    },
+                    background: strip_background(StripState {
+                        offline,
+                        away: !member.online,
+                        talking: false,
+                        locked: false,
+                        listening: member.receiving,
+                        muted: member.muted,
+                    }),
                 },
                 None => StripSegment {
+                    percent: false,
                     title: String::new(),
                     volume: 0.0,
                     muted: false,
-                    background: palette::OFFLINE,
+                    background: palette::GROUND,
                 },
             })
             .collect()
     } else {
         // Neo: a single status segment.
         vec![StripSegment {
+            percent: false,
             title: format!(
                 "{} · {}",
                 snapshot.user_name,
@@ -1458,19 +1915,311 @@ async fn render_lcd(
             },
         }]
     };
-    if rendered.as_ref() == Some(&segments) {
+    let arrows = strip_arrows(geometry, state, snapshot);
+    if rendered.as_ref() == Some(&(segments.clone(), arrows)) {
         return Ok(());
     }
     let _ = kind;
-    let image = renderer.strip(size, &segments);
+    let mut image = renderer.strip(size, &segments);
+    draw_strip_arrows(&mut image, arrows);
     device.set_lcd(image).await.context("writing LCD")?;
-    *rendered = Some(segments);
+    *rendered = Some((segments, arrows));
     Ok(())
+}
+
+/// Which way a swipe on the strip can still go, matching the swipe handler:
+/// the key pages on a Stream Deck + (dials under the keys), the dial pages
+/// on a + XL once there is more than one.
+fn strip_arrows(geometry: &Geometry, state: &DeckState, snapshot: &Snapshot) -> StripArrows {
+    if geometry.encoders == 0 {
+        return StripArrows::default();
+    }
+    let items = key_item_count(geometry, snapshot, state);
+    let dial_pages = encoder_page_count(geometry, items);
+    let (page, pages) = if geometry.encoders_follow_bottom_row() || dial_pages <= 1 {
+        (state.key_page(), page_count(geometry, items))
+    } else {
+        (state.encoder_page, dial_pages)
+    };
+    let page = page.min(pages.saturating_sub(1));
+    StripArrows {
+        prev: pages > 1 && page > 0,
+        next: pages > 1 && page + 1 < pages,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::kind_from_name;
+    #[test]
+    fn restart_fires_at_the_deadline_without_release_and_only_once() {
+        use super::{
+            restart_hold_deadline, take_due_restart, Appearance, KeySpec, MenuPage, PressedKey,
+            Role,
+        };
+        use std::{
+            collections::HashMap,
+            time::{Duration, Instant},
+        };
+        let now = Instant::now();
+        let keys = vec![KeySpec {
+            role: Role::Restart,
+            appearance: Appearance::blank(),
+        }];
+        let mut pressed = HashMap::from([(
+            0,
+            PressedKey {
+                role: Role::Restart,
+                since: now,
+                reselect: false,
+            },
+        )]);
+        assert_eq!(
+            restart_hold_deadline(&pressed, Some(MenuPage::Root), &keys),
+            Some(now + Duration::from_secs(2))
+        );
+        assert!(!take_due_restart(
+            &mut pressed,
+            Some(MenuPage::Root),
+            &keys,
+            now + Duration::from_millis(1999)
+        ));
+        assert!(take_due_restart(
+            &mut pressed,
+            Some(MenuPage::Root),
+            &keys,
+            now + Duration::from_secs(2)
+        ));
+        assert!(
+            pressed.is_empty(),
+            "release after restart must have no remaining action"
+        );
+        assert!(!take_due_restart(
+            &mut pressed,
+            Some(MenuPage::Root),
+            &keys,
+            now + Duration::from_secs(3)
+        ));
+    }
+
+    #[test]
+    fn releasing_restart_early_cancels_its_deadline() {
+        use super::{
+            restart_hold_deadline, take_due_restart, Appearance, KeySpec, MenuPage, PressedKey,
+            Role,
+        };
+        use std::{
+            collections::HashMap,
+            time::{Duration, Instant},
+        };
+        let now = Instant::now();
+        let keys = vec![KeySpec {
+            role: Role::Restart,
+            appearance: Appearance::blank(),
+        }];
+        let mut pressed = HashMap::from([(
+            0,
+            PressedKey {
+                role: Role::Restart,
+                since: now,
+                reselect: false,
+            },
+        )]);
+        pressed.remove(&0); // ButtonUp before the timeout.
+        assert_eq!(
+            restart_hold_deadline(&pressed, Some(MenuPage::Root), &keys),
+            None
+        );
+        assert!(!take_due_restart(
+            &mut pressed,
+            Some(MenuPage::Root),
+            &keys,
+            now + Duration::from_secs(3)
+        ));
+    }
+
+    #[test]
+    fn restart_requires_two_seconds_and_the_same_visible_menu_key() {
+        use super::{restart_hold_confirmed, MenuPage, Role};
+        use std::time::Duration;
+        assert!(!restart_hold_confirmed(
+            Duration::from_millis(1999),
+            Some(MenuPage::Root),
+            Some(Role::Restart)
+        ));
+        assert!(restart_hold_confirmed(
+            Duration::from_secs(2),
+            Some(MenuPage::Root),
+            Some(Role::Restart)
+        ));
+        assert!(!restart_hold_confirmed(
+            Duration::from_secs(3),
+            None,
+            Some(Role::Restart)
+        ));
+        assert!(!restart_hold_confirmed(
+            Duration::from_secs(3),
+            Some(MenuPage::Root),
+            Some(Role::Empty)
+        ));
+        assert!(!restart_hold_confirmed(
+            Duration::from_secs(3),
+            Some(MenuPage::Info),
+            Some(Role::Restart)
+        ));
+    }
+
+    use super::{
+        dial_hold_action, effective_key_size, geometry_for, kind_from_name, lcd_logical_size,
+        local_ip_towards, palette, strip_arrows, strip_background, BoundEncoder, DeckState,
+        DialHold, Kind, Snapshot, StripArrows, StripState,
+    };
+    use crate::state::TargetInfo;
+
+    fn with_targets(count: usize) -> Snapshot {
+        let mut snapshot = Snapshot::initial("cam1", "Cam 1");
+        snapshot.targets = (0..count)
+            .map(|i| TargetInfo {
+                key: TargetKey::User(i as i64),
+                name: format!("T{i}"),
+                can_talk: true,
+                online: true,
+                held: false,
+                locked: false,
+                incoming: false,
+                receiving: false,
+                volume: 0.9,
+                muted: false,
+                members: Vec::new(),
+            })
+            .collect();
+        snapshot
+    }
+
+    #[test]
+    fn strip_arrows_point_to_the_pages_a_swipe_reaches() {
+        let both = StripArrows {
+            prev: true,
+            next: true,
+        };
+        let next = StripArrows {
+            prev: false,
+            next: true,
+        };
+        let prev = StripArrows {
+            prev: true,
+            next: false,
+        };
+        // Stream Deck +: four keys per page, the swipe pages the keys.
+        let plus = geometry_for(Kind::Plus);
+        let snapshot = with_targets(10);
+        let mut state = DeckState::default();
+        assert_eq!(strip_arrows(&plus, &state, &snapshot), next);
+        state.page = 1;
+        assert_eq!(strip_arrows(&plus, &state, &snapshot), both);
+        state.page = 2;
+        assert_eq!(strip_arrows(&plus, &state, &snapshot), prev);
+        // Everything on one page: no arrow.
+        let one = with_targets(3);
+        assert_eq!(
+            strip_arrows(&plus, &DeckState::default(), &one),
+            StripArrows::default()
+        );
+        // Stream Deck + XL: six dials, the swipe pages the dials.
+        let plus_xl = geometry_for(Kind::PlusXl);
+        let mut state = DeckState::default();
+        assert_eq!(strip_arrows(&plus_xl, &state, &snapshot), next);
+        state.encoder_page = 1;
+        assert_eq!(strip_arrows(&plus_xl, &state, &snapshot), prev);
+        // Decks without a strip never get arrows.
+        let mk2 = geometry_for(Kind::Mk2);
+        assert_eq!(
+            strip_arrows(&mk2, &DeckState::default(), &snapshot),
+            StripArrows::default()
+        );
+    }
+    use crate::talk::TargetKey;
+
+    #[test]
+    fn a_muted_strip_segment_is_grey_not_green() {
+        let listening = StripState {
+            listening: true,
+            ..StripState::default()
+        };
+        assert_eq!(strip_background(listening), palette::INCOMING);
+        // A muted PGM feed (or member) that still receives audio: grey.
+        let muted = StripState {
+            muted: true,
+            ..listening
+        };
+        assert_eq!(strip_background(muted), palette::IDLE);
+        assert_eq!(strip_background(StripState::default()), palette::IDLE);
+        // Our own talk and locks still show on a muted target.
+        let talking = StripState {
+            talking: true,
+            ..muted
+        };
+        assert_eq!(strip_background(talking), palette::TALKING);
+        let offline = StripState {
+            offline: true,
+            ..talking
+        };
+        assert_eq!(strip_background(offline), palette::OFFLINE);
+    }
+
+    #[test]
+    fn an_offline_user_greys_out_on_the_strip_like_the_key() {
+        let away = StripState {
+            away: true,
+            listening: true,
+            ..StripState::default()
+        };
+        assert_eq!(strip_background(away), palette::OFFLINE);
+        // Holding talk to someone who is offline still shows, as on the key.
+        let talking = StripState {
+            talking: true,
+            ..away
+        };
+        assert_eq!(strip_background(talking), palette::TALKING);
+    }
+
+    #[test]
+    fn holding_a_dial_opens_and_leaves_the_member_mix() {
+        let conference = TargetKey::Conference(2);
+        assert_eq!(
+            dial_hold_action(false, Some(BoundEncoder::Target(conference))),
+            DialHold::OpenMembers(conference)
+        );
+        assert_eq!(
+            dial_hold_action(false, Some(BoundEncoder::Target(TargetKey::User(3)))),
+            DialHold::Nothing
+        );
+        assert_eq!(dial_hold_action(false, None), DialHold::Nothing);
+        // In the member mix any dial, bound to a member or not, leaves it.
+        let member = BoundEncoder::Member {
+            conference,
+            user_id: 7,
+        };
+        assert_eq!(dial_hold_action(true, Some(member)), DialHold::CloseMembers);
+        assert_eq!(dial_hold_action(true, None), DialHold::CloseMembers);
+    }
+
+    #[tokio::test]
+    async fn local_ip_uses_the_route_to_the_server() {
+        assert_eq!(
+            local_ip_towards("https://127.0.0.1:8443").await.as_deref(),
+            Some("127.0.0.1")
+        );
+    }
+
+    #[test]
+    fn plus_xl_uses_elgato_sizes_not_the_library_ones() {
+        assert_eq!(effective_key_size(Kind::PlusXl), (112, 112));
+        assert_eq!(lcd_logical_size(Kind::PlusXl), Some((1200, 100)));
+        // Other models keep the library values.
+        assert_eq!(effective_key_size(Kind::Plus), (120, 120));
+        assert_eq!(lcd_logical_size(Kind::Plus), Some((800, 100)));
+        assert_eq!(lcd_logical_size(Kind::Mk2), None);
+    }
 
     #[test]
     fn kind_from_name_accepts_config_models() {

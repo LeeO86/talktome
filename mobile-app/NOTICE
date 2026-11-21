@@ -1,0 +1,19 @@
+TalkToMe Mobile
+Copyright 2026 TalkToMe Mobile contributors
+
+This product includes protocol models and client behaviour derived from:
+
+  TalkToMe
+  https://github.com/thepoison606/talktome
+  Copyright Daniel Jocher
+
+  TalkToMe Apple prototype (thepoison606/talktome-apple @ 004d6e76)
+  Copyright Daniel Jocher
+  Reused with written permission.
+
+Ported TypeScript files under mobile-app/src/protocol, mobile-app/src/auth,
+mobile-app/src/servers, mobile-app/src/signaling, mobile-app/src/ble, and
+mobile-app/src/audio name the Swift type and commit in a file header. The BLE
+GATT map and short-press lock policy come from BluetoothButtonController.swift
+@ 004d6e76. AVAudioSession profiles and background receive keepalive come from
+AudioController.swift @ 004d6e76.

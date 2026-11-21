@@ -4,30 +4,39 @@ version = "0.0.0"
 description = "Native Talktome bridge client"
 authors = ["Talktome"]
 edition = "2021"
+rust-version = "1.91"
 
 [lib]
 name = "talktome_bridge_client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2", features = [] }
+tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
 cpal = "0.18.1"
 futures-util = "0.3"
 libloading = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+openh264 = "=0.9.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2.11.2", features = ["macos-private-api", "tray-icon"] }
+sonora = "0.2"
+# Capabilities are static; the small local UI does not need Brotli assets.
+# Keep the existing desktop backends and native window/tray integrations.
+tauri = { version = "2.12.4", default-features = false, features = ["wry", "common-controls-v6", "x11", "dbus", "macos-private-api", "tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["time"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSButton", "NSControl", "NSView", "NSWindow"] }
 window-vibrancy = "=0.6.0"
-
-[patch.crates-io]
-tray-icon = { path = "../../vendor/tray-icon" }

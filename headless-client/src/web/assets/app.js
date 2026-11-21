@@ -17,10 +17,6 @@
     fileDoc: null,
     audioDevices: { inputs: [], outputs: [] },
     rawMode: false,
-    pressed: new Set(),
-    locks: new Set(),
-    memberModalKey: null,
-    volumeTimers: new Map(),
     restarting: false,
   };
 
@@ -88,6 +84,12 @@
     if (snap.preview) wrap.append(badge('PREVIEW', 'preview'));
     if (!snap.on_air && !snap.preview) wrap.append(badge('off'));
     return wrap;
+  }
+
+  // Short state for a line that could not be requested; the card message and
+  // the cell tooltip carry the full text.
+  function gpioErrorLabel(error) {
+    return /already used/.test(error) ? 'in use' : 'error';
   }
 
   function gpioLedClass(output) {
@@ -168,6 +170,7 @@
   }
 
   function connectionAlert(snap) {
+    if (snap.server_not_responding) return { text: 'Server unavailable', kind: 'bad' };
     switch (snap.media_status) {
       case 'Server not responding':
       case 'Media interrupted':
@@ -216,6 +219,7 @@
   function showLogin() {
     state.authenticated = false;
     stopPolling();
+    $('#remote-panel')?.contentWindow?.postMessage({ type: 'headless-panel-hidden' }, location.origin);
     $('#login-overlay').classList.remove('is-hidden');
     $('#topbar').classList.add('is-hidden');
     $('#app').classList.add('is-hidden');
@@ -238,7 +242,6 @@
       $('#topbar-instance').textContent = `Talktome Headless · ${session.instance || ''}`;
       if (session.authenticated) {
         showApp();
-        if (session.must_change_password) openPasswordDialog(true);
       } else {
         showLogin();
       }
@@ -254,13 +257,12 @@
     const message = $('#login-message');
     message.textContent = '';
     try {
-      const result = await api('POST', '/api/login', {
+      await api('POST', '/api/login', {
         username: form.username.value,
         password: form.password.value,
       });
       form.password.value = '';
       showApp();
-      if (result.must_change_password) openPasswordDialog(true);
     } catch (error) {
       message.textContent = error.message;
     }
@@ -279,13 +281,8 @@
   // Password dialog
   // ---------------------------------------------------------------------
 
-  function openPasswordDialog(forced) {
+  function openPasswordDialog() {
     const dialog = $('#password-dialog');
-    dialog.dataset.forced = forced ? '1' : '';
-    $('#password-intro').textContent = forced
-      ? 'The default password is in use. Choose a new one before continuing.'
-      : 'Choose a new password for the admin login.';
-    $('#password-cancel').classList.toggle('is-hidden', Boolean(forced));
     $('#password-message').textContent = '';
     $('#password-form').reset();
     dialog.classList.remove('is-hidden');
@@ -293,7 +290,7 @@
   }
 
   $('#password-cancel').addEventListener('click', () => $('#password-dialog').classList.add('is-hidden'));
-  $('#change-password-button').addEventListener('click', () => openPasswordDialog(false));
+  $('#change-password-button').addEventListener('click', openPasswordDialog);
 
   $('#password-form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -396,6 +393,8 @@
       if (link.dataset.view === view) link.setAttribute('aria-current', 'location');
       else link.removeAttribute('aria-current');
     }
+    $('#remote-panel')?.contentWindow?.postMessage({ type: 'headless-panel-visibility', visible: view === 'remote' }, location.origin);
+    if (view === 'remote' && state.status) renderRemote(state.status.snapshot);
     if (view === 'settings' && !state.config) loadConfig();
     if (view === 'deck') refreshDeck();
   }
@@ -464,15 +463,18 @@
     $('#badge-preview').classList.toggle('is-hidden', !snap.preview);
     setBadge(
       $('#conn-state'),
-      alert ? alert.text : snap.connection + (snap.detail ? ` · ${snap.detail}` : ''),
+      alert ? alert.text : snap.connection,
       alert ? alert.kind : connectionKind(snap.connection)
     );
+
+    $('#conn-error').textContent = snap.detail || '';
+    $('#conn-error').classList.toggle('is-hidden', !snap.detail);
 
     const media = snap.media || {};
     kv($('#conn-details'), [
       ['Server', code(snap.server_url)],
       ['User', `${snap.user_name}${snap.user_id != null ? ` (id ${snap.user_id})` : ''}`],
-      ['Production', snap.production || 'Default'],
+      ['Production', productionLabel(snap)],
       ['Registered for', snap.registered_since_unix ? formatDuration(status.now_unix - snap.registered_since_unix) : '–'],
       ['Reconnects', snap.reconnects],
       ['Server heartbeat', snap.heartbeat || '–'],
@@ -484,7 +486,7 @@
       ['ICE (server)', media.ice_servers_announced && media.ice_servers_announced.length ? media.ice_servers_announced.join(', ') : (media.ice_servers && media.ice_servers.length ? media.ice_servers.join(', ') : 'none (direct only)')],
       ['ICE (webrtc)', iceEffectiveLabel(media)],
       ['ICE policy', media.ice_transport_policy || '–'],
-      ['RTT', media.rtt_ms != null ? `${media.rtt_ms} ms` : '–'],
+      ['RTT', media.rtt_ms != null ? `${media.rtt_ms} ms${media.rtt_source ? ` (${media.rtt_source})` : ''}` : '–'],
       ['Packet loss', media.packet_loss_pct != null ? `${media.packet_loss_pct}%${media.packets_lost != null ? ` (${media.packets_lost} lost / ${media.packets_received || 0} recv)` : ''}` : '–'],
       ['Receive concealment', media.recv_conceal_pct != null ? `${media.recv_conceal_pct}%` : '–'],
       ['Camera tally', tallyBadges(snap)],
@@ -524,7 +526,7 @@
         el('tr', {}, [
           el('td', { text: output.name }),
           el('td', {}, code(`${output.line}${output.active_low ? ' (active low)' : ''}`)),
-          el('td', {}, [el('span', { class: `led ${ledClass}` }), ' ', output.error ? `error: ${output.error}` : output.active === null ? 'not driven' : output.active ? 'active' : 'inactive']),
+          el('td', output.error ? { title: output.error } : {}, [el('span', { class: `led ${ledClass}` }), ' ', output.error ? gpioErrorLabel(output.error) : output.active === null ? 'not driven' : output.active ? 'active' : 'inactive']),
         ])
       );
     }
@@ -539,7 +541,9 @@
           el('td', {}, code(input.line)),
           el('td', { text: input.action.replace('_', ' ') }),
           el('td', { text: input.target || '–' }),
-          el('td', {}, [el('span', { class: `led ${input.pressed ? 'led-on' : ''}` }), ' ', input.pressed ? 'pressed' : 'released']),
+          el('td', input.error ? { title: input.error } : {}, input.error
+            ? [el('span', { class: 'led led-amber' }), ' ', gpioErrorLabel(input.error)]
+            : [el('span', { class: `led ${input.pressed ? 'led-on' : ''}` }), ' ', input.pressed ? 'pressed' : 'released']),
           el('td', { text: input.events }),
         ])
       );
@@ -581,7 +585,7 @@
           decks.length > 1 ? `Layout ${index + 1}` : 'Layout',
           `${deck.rows}×${deck.cols} keys${deck.encoders ? `, ${deck.encoders} dials` : ''}${deck.touchpoints ? `, ${deck.touchpoints} touch points` : ''}`,
         ]);
-        const pages = `keys ${deck.page + 1}/${deck.pages}${deck.encoder_pages > 1 ? ` · dials ${deck.encoder_page + 1}/${deck.encoder_pages}` : ''}${deck.member_layer ? ' · members layer' : ''}${deck.volume_layer ? ' · volume layer' : ''}`;
+        const pages = `keys ${deck.page + 1}/${deck.pages}${deck.encoder_pages > 1 ? ` · dials ${deck.encoder_page + 1}/${deck.encoder_pages}` : ''}${deck.member_layer ? ' · members layer' : ''}${deck.menu ? ` · ${deck.menu === 'menu' ? 'menu' : `${deck.menu} page`}` : ''}${deck.volume_layer ? ' · volume layer' : ''}`;
         deckRows.push([decks.length > 1 ? `Page ${index + 1}` : 'Page', pages]);
         if (deck.dials && deck.dials.some((dial) => dial.title)) {
           deckRows.push([
@@ -616,387 +620,15 @@
     return `${bridged.join(', ')} — local UDP façade for TURNS/TURN-TCP, not a second TURN hop`;
   }
 
-  function iconSrc(name) {
-    return el('img', { class: 'btn-icon', src: UI_ICONS[name], alt: '', 'aria-hidden': 'true' });
-  }
-
-  function postTalk(action, target) {
-    return api('POST', '/api/talk', { action, target }).catch((error) => {
-      const connection = state.status && state.status.snapshot && state.status.snapshot.connection;
-      const offline = !connection || !['ready', 'registered'].includes(connection);
-      if (offline && /session not running|user is offline|no target/i.test(error.message)) return;
-      flash(error.message, 'error');
-    });
-  }
-
-  function postAudio(body) {
-    return api('POST', '/api/audio', body).catch((error) => {
-      const connection = state.status && state.status.snapshot && state.status.snapshot.connection;
-      const offline = !connection || !['ready', 'registered'].includes(connection);
-      if (offline && /session not running/i.test(error.message)) return;
-      flash(error.message, 'error');
-    });
-  }
-
-  function toggleLock(target) {
-    if (state.locks.has(target)) state.locks.delete(target);
-    else state.locks.add(target);
-    postTalk('lock', target);
-    if (state.status && state.status.snapshot) renderRemote(state.status.snapshot);
-  }
-
-  function bindHoldTalk(element, getTarget, options = {}) {
-    const ignore = options.ignoreSelector || '';
-    let active = false;
-    let startX = 0;
-    let lockedBySlide = false;
-    const rowOf = () => options.row || element;
-    const isReply = element.id === 'reply';
-    const paintPress = (on) => {
-      const row = rowOf();
-      row.classList.toggle('ptt-pressing', on);
-      if (isReply) {
-        element.classList.toggle('active', on || (options.isLocked && options.isLocked()));
-        return;
-      }
-      if (on || row.classList.contains('talk-locked')) row.classList.add('talking-to');
-      else row.classList.remove('talking-to');
-    };
-    const begin = (event) => {
-      if (ignore && event.target.closest(ignore)) return;
-      if (element.disabled) return;
-      const target = getTarget();
-      if (!target) return;
-      event.preventDefault();
-      if (options.isLocked && options.isLocked()) {
-        toggleLock(target);
-        return;
-      }
-      if (active) return;
-      active = true;
-      lockedBySlide = false;
-      startX = event.clientX;
-      state.pressed.add(target);
-      paintPress(true);
-      try {
-        element.setPointerCapture(event.pointerId);
-      } catch {
-        /* ignore */
-      }
-      postTalk('press', target);
-    };
-    const move = (event) => {
-      if (!active || lockedBySlide) return;
-      if (event.clientX - startX <= -SLIDE_LOCK_PX) {
-        lockedBySlide = true;
-        const target = getTarget();
-        if (target) {
-          state.locks.add(target);
-          rowOf().classList.add('talk-locked', 'talking-to');
-          postTalk('lock', target);
-        }
-      }
-    };
-    const end = (event) => {
-      if (!active) return;
-      active = false;
-      const target = getTarget();
-      if (target) state.pressed.delete(target);
-      paintPress(false);
-      if (!lockedBySlide && target) postTalk('release', target);
-      try {
-        element.releasePointerCapture(event.pointerId);
-      } catch {
-        /* ignore */
-      }
-    };
-    element.addEventListener('pointerdown', begin);
-    element.addEventListener('pointermove', move);
-    element.addEventListener('pointerup', end);
-    element.addEventListener('pointercancel', end);
-    element.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) return;
-      begin(event);
-    });
-    element.addEventListener('mousemove', move);
-    element.addEventListener('mouseup', end);
-    element.addEventListener('contextmenu', (event) => event.preventDefault());
-  }
-
   function renderRemote(snap) {
-    const online = ['ready', 'registered'].includes(snap.connection);
-    if (online) {
-      state.locks = new Set(snap.targets.filter((target) => target.locked).map((target) => targetKey(target.key)));
-      const replyKey = snap.reply_target ? targetKey(snap.reply_target) : null;
-      if (replyKey && state.locks.has(replyKey)) state.locks.add('reply');
-    }
-    renderTargets(snap);
-    updateReply(snap);
-    if (state.memberModalKey) {
-      const open = snap.targets.find((target) => targetKey(target.key) === state.memberModalKey);
-      if (open) renderMembersModal(open);
-      else closeMembersModal();
+    if (state.view !== 'remote') return;
+    const frame = $('#remote-panel');
+    const userId = snap.user_id ?? 0;
+    if (userId != null && frame.dataset.userId !== String(userId)) {
+      frame.dataset.userId = String(userId);
+      frame.src = `/panel?userId=${encodeURIComponent(userId)}`;
     }
   }
-
-  function renderTargets(snap) {
-    const container = $('#targets-list');
-    const empty = $('#targets-empty');
-    const existing = new Map($$('li.target-item', container).map((node) => [node.dataset.key, node]));
-    const seen = new Set();
-    for (const target of snap.targets) {
-      const key = targetKey(target.key);
-      seen.add(key);
-      let node = existing.get(key);
-      if (!node) {
-        node = buildTargetRow(key, target);
-        container.append(node);
-      }
-      updateTargetRow(node, target);
-    }
-    for (const [key, node] of existing) {
-      if (!seen.has(key)) node.remove();
-    }
-    empty.classList.toggle('is-hidden', snap.targets.length > 0);
-  }
-
-  function buildTargetRow(key, target) {
-    const kind = targetKind(key);
-    const canTalk = target.can_talk && kind !== 'feed';
-    const row = el('li', {
-      class: `target-item ${kind === 'conference' ? 'conf-target' : kind === 'feed' ? 'feed-target' : 'user-target'}${canTalk ? '' : kind === 'feed' ? '' : ' monitor-only-target'}`,
-      dataset: { key, type: kind },
-    });
-
-    const iconClass = kind === 'conference' ? 'conf-icon' : kind === 'feed' ? 'feed-icon' : 'user-icon';
-    const icon = el('div', { class: iconClass });
-    if (kind === 'conference') {
-      icon.setAttribute('role', 'button');
-      icon.tabIndex = 0;
-      icon.title = 'Choose who you hear';
-      icon.addEventListener('pointerdown', (event) => event.stopPropagation());
-      icon.addEventListener('click', (event) => {
-        event.stopPropagation();
-        openMembersModal(key);
-      });
-      icon.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        openMembersModal(key);
-      });
-    }
-
-    const label = el('span', { class: 'target-label' });
-    const status = el('div', { class: 'target-status target-status-inline' });
-    const labelRow = el('div', { class: 'target-label-row' }, [label, status]);
-    const slider = el('input', { type: 'range', class: 'volume-slider', min: '0', max: '1', step: '0.01', title: 'Volume' });
-    slider.addEventListener('pointerdown', (event) => event.stopPropagation());
-    slider.addEventListener('input', () => {
-      clearTimeout(state.volumeTimers.get(key));
-      state.volumeTimers.set(
-        key,
-        setTimeout(() => postAudio({ action: 'volume-set', target: key, value: Number(slider.value) }), 150)
-      );
-    });
-    const info = el('div', { class: 'target-info' }, [labelRow, slider]);
-
-    const muteButton = el('button', { type: 'button', class: 'mute-btn', title: 'Mute' }, [iconSrc('speakerOn')]);
-    muteButton.addEventListener('pointerdown', (event) => event.stopPropagation());
-    muteButton.addEventListener('click', (event) => {
-      event.stopPropagation();
-      postAudio({ action: 'mute-toggle', target: key });
-    });
-
-    const actions = el('div', { class: 'target-actions ptt-actions' }, [muteButton]);
-    let talkButton = null;
-    if (canTalk) {
-      talkButton = el('button', { type: 'button', class: 'talk-btn', title: 'Hold to talk' }, [iconSrc('talk')]);
-      talkButton.setAttribute('aria-pressed', 'false');
-      bindHoldTalk(talkButton, () => key, {
-        row,
-        isLocked: () => row.classList.contains('talk-locked'),
-      });
-      talkButton.addEventListener('pointerdown', (event) => event.stopPropagation());
-      actions.append(talkButton);
-      const hint = el('div', { class: 'slide-to-lock-hint', text: '← Slide to lock', 'aria-hidden': 'true' });
-      bindHoldTalk(row, () => key, {
-        row,
-        ignoreSelector: '.talk-btn, .mute-btn, .volume-slider, .conf-icon',
-        isLocked: () => row.classList.contains('talk-locked'),
-      });
-      row.append(icon, info, actions, hint);
-    } else {
-      row.append(icon, info, actions);
-    }
-
-    row._parts = { icon, label, status, slider, muteButton, talkButton };
-    return row;
-  }
-
-  function updateTargetRow(node, target) {
-    const parts = node._parts;
-    const key = targetKey(target.key);
-    const kind = targetKind(key);
-    const userOffline = kind === 'user' && !target.online;
-    const locked = target.locked || state.locks.has(key);
-    const talking = target.held || locked || state.pressed.has(key);
-    const speaking = target.incoming || target.receiving;
-    parts.label.textContent = target.name;
-    if (kind === 'user') {
-      parts.icon.textContent = target.name ? target.name.charAt(0).toUpperCase() : '?';
-    } else if (kind === 'conference') {
-      parts.icon.textContent = '📡';
-      parts.icon.setAttribute('aria-label', `Choose who you hear in ${target.name}`);
-    } else {
-      parts.icon.textContent = '🎧';
-    }
-    node.classList.toggle('is-offline', userOffline);
-    node.classList.toggle('talking-to', talking);
-    node.classList.toggle('speaking', speaking);
-    node.classList.toggle('talk-locked', locked);
-    node.classList.toggle('muted', target.muted);
-    if (parts.talkButton) {
-      parts.talkButton.disabled = userOffline;
-      parts.talkButton.title = userOffline ? 'Offline' : locked ? 'Locked — tap to unlock' : 'Hold to talk';
-      parts.talkButton.setAttribute('aria-pressed', talking ? 'true' : 'false');
-      parts.talkButton.setAttribute('aria-label', userOffline ? `${target.name} is offline` : `Hold to talk to ${target.name}`);
-    }
-    const muteIcon = $('img', parts.muteButton);
-    if (muteIcon) muteIcon.src = target.muted ? UI_ICONS.speakerMuted : UI_ICONS.speakerOn;
-    parts.muteButton.title = target.muted ? 'Unmute' : 'Mute';
-    if (document.activeElement !== parts.slider) {
-      parts.slider.disabled = userOffline;
-      parts.slider.value = String(Math.max(0, Math.min(1, Number(target.volume) || 0)));
-    }
-    const speakers = (target.members || []).filter((member) => member.receiving).map((member) => member.name).filter(Boolean);
-    parts.status.replaceChildren();
-    if (kind === 'conference' && speaking) {
-      parts.status.append(el('img', { class: 'speaker-status-icon', src: UI_ICONS.talk, alt: '', 'aria-hidden': 'true' }));
-    }
-    if (speakers.length) parts.status.append(document.createTextNode(speakers.join(', ')));
-    else if (target.incoming) parts.status.append(document.createTextNode('calling'));
-  }
-
-  function updateReply(snap) {
-    const button = $('#reply');
-    const replyKey = snap.reply_target ? targetKey(snap.reply_target) : null;
-    const replyTarget = replyKey ? snap.targets.find((target) => targetKey(target.key) === replyKey) : null;
-    const active = Boolean(
-      state.pressed.has('reply') ||
-        state.locks.has('reply') ||
-        (replyTarget && (replyTarget.held || replyTarget.locked || (replyKey && state.locks.has(replyKey))))
-    );
-    const pinned = Boolean(snap.main_target);
-    const unavailable = Boolean(snap.main_unavailable);
-    const userOffline = Boolean(replyTarget && targetKind(replyKey) === 'user' && !replyTarget.online);
-    button.disabled = unavailable || !snap.reply_target || userOffline;
-    button.classList.toggle('active', active);
-    if (unavailable) {
-      button.dataset.label = 'Unavailable target';
-      button.setAttribute('aria-label', 'Unavailable target');
-    } else if (pinned) {
-      const name = snap.reply_name || (replyTarget && replyTarget.name) || '';
-      button.dataset.label = name || 'Unavailable target';
-      button.setAttribute('aria-label', name ? `Talk to ${name}` : 'Unavailable target');
-    } else {
-      button.dataset.label = snap.reply_name ? `🔊 ${snap.reply_name}` : '🔊 REPLY';
-      button.setAttribute('aria-label', snap.reply_name ? `Reply ${snap.reply_name}` : 'Reply');
-    }
-  }
-
-  function bindReply() {
-    const button = $('#reply');
-    bindHoldTalk(button, () => 'reply', {
-      isLocked: () => {
-        const snap = state.status && state.status.snapshot;
-        if (!snap || !snap.reply_target) return false;
-        const key = targetKey(snap.reply_target);
-        const target = snap.targets.find((item) => targetKey(item.key) === key);
-        return Boolean((target && target.locked) || state.locks.has(key) || state.locks.has('reply'));
-      },
-    });
-  }
-
-  function openMembersModal(key) {
-    const snap = state.status && state.status.snapshot;
-    const target = snap && snap.targets.find((item) => targetKey(item.key) === key);
-    if (!target) return;
-    state.memberModalKey = key;
-    renderMembersModal(target);
-    $('#conference-members-modal').hidden = false;
-  }
-
-  function closeMembersModal() {
-    state.memberModalKey = null;
-    $('#conference-members-modal').hidden = true;
-  }
-
-  function renderMembersModal(target) {
-    const conferenceKey = targetKey(target.key);
-    $('#conference-members-modal-description').textContent = `Choose who you hear in ${target.name}.`;
-    const list = $('#conference-members-modal-list');
-    const members = target.members || [];
-    if (!members.length) {
-      list.replaceChildren(el('span', { class: 'conference-members-empty', text: 'No other members' }));
-      return;
-    }
-    const existing = new Map($$('.conference-member-listen', list).map((node) => [node.dataset.userId, node]));
-    const seen = new Set();
-    for (const member of members) {
-      const id = String(member.user_id);
-      seen.add(id);
-      let row = existing.get(id);
-      if (!row) {
-        row = el('div', { class: 'conference-member-listen', dataset: { userId: id } });
-        const checkbox = el('input', { type: 'checkbox', class: 'conference-member-listen-checkbox' });
-        const name = el('span', { class: 'conference-member-name' });
-        const online = el('span', { class: 'conference-member-online-state' });
-        const toggle = el('label', { class: 'conference-member-listen__toggle' }, [checkbox, name, online]);
-        const slider = el('input', { type: 'range', class: 'conference-member-level__slider', min: '0', max: '1', step: '0.01' });
-        const value = el('output', { class: 'conference-member-level__value' });
-        const level = el('div', { class: 'conference-member-level' }, [slider, value]);
-        checkbox.addEventListener('change', () => {
-          postAudio({ action: 'member-mute-toggle', target: conferenceKey, member: `user:${id}` });
-        });
-        slider.addEventListener('input', () => {
-          value.textContent = formatDb(Number(slider.value));
-          const timerKey = `${conferenceKey}/${id}`;
-          clearTimeout(state.volumeTimers.get(timerKey));
-          state.volumeTimers.set(
-            timerKey,
-            setTimeout(() => postAudio({ action: 'member-volume-set', target: conferenceKey, member: `user:${id}`, value: Number(slider.value) }), 150)
-          );
-        });
-        row.append(toggle, level);
-        row._parts = { checkbox, name, online, slider, value };
-        list.append(row);
-      }
-      row.classList.toggle('is-offline', !member.online);
-      row.classList.toggle('is-muted', member.muted);
-      row.classList.toggle('is-speaking', member.receiving);
-      row._parts.name.textContent = member.name || `User ${id}`;
-      row._parts.online.textContent = member.online ? 'Online' : 'Offline';
-      row._parts.checkbox.checked = !member.muted;
-      row._parts.checkbox.setAttribute('aria-label', `Hear ${member.name || `user ${id}`}`);
-      if (document.activeElement !== row._parts.slider) {
-        row._parts.slider.value = String(Math.max(0, Math.min(1, Number(member.volume) || 0)));
-        row._parts.value.textContent = formatDb(member.volume);
-      }
-    }
-    for (const [id, row] of existing) {
-      if (!seen.has(id)) row.remove();
-    }
-  }
-
-  bindReply();
-  $('#conference-members-modal-done').addEventListener('click', closeMembersModal);
-  $('#conference-members-modal').addEventListener('click', (event) => {
-    if (event.target === event.currentTarget) closeMembersModal();
-  });
-
-  // ---------------------------------------------------------------------
-  // Stream Deck view
-  // ---------------------------------------------------------------------
 
   async function refreshDeck() {
     if (!state.authenticated || state.restarting) return;
@@ -1063,6 +695,7 @@
       pageBits.push(`keys ${deck.page + 1}/${deck.pages}`);
       if (deck.encoder_pages > 1) pageBits.push(`dials ${deck.encoder_page + 1}/${deck.encoder_pages}`);
       if (deck.member_layer) pageBits.push('members layer');
+      if (deck.menu) pageBits.push(deck.menu === 'menu' ? 'menu' : `${deck.menu} page`);
       if (deck.volume_layer) pageBits.push('volume layer');
     }
     pageLabel.textContent = pageBits.join(' · ');
@@ -1289,7 +922,7 @@
 
   const ACTIONS = ['talk', 'reply', 'lock_toggle', 'clear_locks', 'mute_toggle', 'volume_up', 'volume_down'];
   const DECK_MODELS = [['', 'Real hardware'], ['mk2', 'Stream Deck MK.2 (15 keys)'], ['mini', 'Stream Deck Mini'], ['minimk2', 'Stream Deck Mini MK.2'], ['original', 'Stream Deck Original'], ['originalv2', 'Stream Deck Original V2'], ['xl', 'Stream Deck XL'], ['xlv2', 'Stream Deck XL V2'], ['plus', 'Stream Deck +'], ['plusxl', 'Stream Deck + XL'], ['neo', 'Stream Deck Neo'], ['pedal', 'Stream Deck Pedal']];
-  const OUTPUT_NAMES = ['tally', 'tally_preview', 'talking', 'incoming', 'connected', 'locked'];
+  const OUTPUT_NAMES = ['tally', 'tally_preview', 'talking', 'incoming', 'connected', 'locked', 'status'];
   const OUTPUT_LABELS = {
     tally: 'tally (PGM / on air)',
     tally_preview: 'tally_preview (PRV)',
@@ -1297,6 +930,7 @@
     incoming: 'incoming',
     connected: 'connected',
     locked: 'locked',
+    status: 'status light (flash = running, blink = error, on = ok)',
   };
 
   const DIM_AMOUNT_DB_OPTIONS = [-6, -12, -15, -18, -24];
@@ -1330,7 +964,7 @@
       fields: [
         { path: 'user.name', label: 'User name', type: 'text' },
         { path: 'user.password', label: 'Password', type: 'password', help: 'Leave the placeholder to keep the stored password' },
-        { path: 'user.production', label: 'Production (id or name)', type: 'text', nullable: true, help: 'Empty: Default production' },
+        { path: 'user.production', label: 'Production', type: 'production', nullable: true, help: 'Productions this user is assigned to on the server. Restart to apply.' },
         { path: 'registration.conflict', label: 'If the account is already in use', type: 'select', options: [['takeover', 'Take over the session'], ['wait', 'Wait until it is free']] },
         { path: 'registration.takeover_delay_ms', label: 'Takeover delay (ms)', type: 'number' },
         { path: 'registration.retry_ms', label: 'Retry interval (ms)', type: 'number' },
@@ -1342,20 +976,23 @@
       title: 'Audio',
       desc: 'devices, codec profile, dimming, jitter buffer',
       fields: [
-        { path: 'audio.input_device', label: 'Input device', type: 'device', direction: 'inputs', nullable: true, help: 'Use tone or tone:440 on a VM with no microphone' },
-        { path: 'audio.output_device', label: 'Output device', type: 'device', direction: 'outputs', nullable: true, help: 'wav:/tmp/out.wav records the mix when there is no speaker' },
+        { type: 'audio-device-sets' },
+        { path: 'audio.speaker_level_db', label: 'Speaker output level (dB)', type: 'output-level', step: 1, min: -120, max: 24, help: 'Default: 0 dB. Fixed analog level, when supported by the selected sound card. Main controls Playback separately. Restart to apply.' },
+        { path: 'audio.headphone_level_db', label: 'Headphone output level (dB)', type: 'output-level', step: 1, min: -120, max: 24, help: 'Default: 0 dB. Applied only to a separate Headphone control with dB support. Restart to apply.' },
         { path: 'audio.profile', label: 'Codec profile', type: 'select', options: [['ultra-low', 'Ultra low (5 ms)'], ['low', 'Low (10 ms)'], ['standard', 'Standard (20 ms, FEC)']], help: 'Default matches the web client (5 ms, no FEC). If audio crackles or the log says audio-stream-error, use Low or Standard. Restart to apply.' },
         { path: 'audio.device_period_ms', label: 'Device period (ms)', type: 'number', min: 0, max: 40, help: '0 uses the sound-card default, often 20–85 ms. 10 ms is stable on a NanoPi NEO; try 5 ms for less delay. The card buffer is two periods. Restart to apply.' },
         { path: 'audio.auto_processing', label: 'Echo cancel, noise suppress, auto gain', type: 'bool', help: 'Same as the browser Audio auto processing toggle. Admin can override it per user after register. Manual input gain is ignored while this is on.' },
         { path: 'audio.input_gain_db', label: 'Input gain (dB)', type: 'number', step: 0.5, min: -30, max: 40, help: 'Ignored while auto processing is on (AGC runs instead).' },
         { path: 'audio.stream_delay_ms', label: 'AEC stream delay (ms)', type: 'number', min: 0, max: 500, nullable: true, help: 'Empty: estimate from capture + playback period. Set if echo remains.' },
-        { path: 'audio.default_volume_db', label: 'Default target volume (dB)', type: 'number', step: 0.5, min: -60, max: 0, nullable: true, help: '0 dB is unity. Overrides the legacy 0–1 default_volume value.' },
+        { path: 'audio.default_volume_db', label: 'Default target volume (dB)', type: 'number', step: 0.5, min: -60, max: 0, nullable: true, help: 'Default: 90% (about -0.9 dB). 0 dB is unity. Overrides the legacy 0–1 default_volume value.' },
         { path: 'audio.dim_db', label: 'Dim amount (dB)', type: 'select', numeric: true, options: DIM_AMOUNT_DB_OPTIONS.map((db) => [String(db), `${db} dB`]), help: 'Same list as the web client. Stored −14 dB is migrated to −15 dB.' },
         { path: 'audio.dim_feeds_while_speaking', label: 'Dim feeds while speaking', type: 'bool' },
         { path: 'audio.dim_when_addressed', label: 'Dim feeds when addressed', type: 'bool' },
-        { path: 'audio.play_connection_sounds', label: 'Play connection sounds', type: 'bool', help: 'Disconnect and reconnect tones. Same as the web client. Admin can turn them off for this user after register. Restart to apply a change made here.' },
-        { path: 'audio.jitter_min_ms', label: 'Jitter buffer minimum (ms)', type: 'number', help: 'Playout starts here. The buffer grows toward the maximum only after an underrun, then eases back after a few seconds of clean audio. Restart to apply.' },
-        { path: 'audio.jitter_max_ms', label: 'Jitter buffer maximum (ms)', type: 'number', help: 'Ceiling for that adaptive target. Restart to apply.' },
+        { path: 'audio.play_connection_sounds', label: 'Play connection sounds', type: 'bool', help: 'Disconnect and reconnect tones. Save + Restart applies changes made here. A local mute stays off after login. Live changes from Admin apply immediately and are saved.' },
+        { path: 'audio.network', label: 'Network', type: 'select', options: [['lan', 'LAN / good Wi-Fi'], ['mobile', 'Mobile network']], help: 'Fills in the jitter buffer and codec profile for this client\u2019s link: LAN 20/20/400 ms and Ultra low; Mobile starts at 150 ms (60\u2013600 ms) and sends Standard (20 ms, FEC). The fields stay editable. Restart to apply.' },
+        { path: 'audio.jitter_start_ms', label: 'Jitter buffer start (ms)', type: 'number', help: 'Depth every new stream starts at. It only drops toward the minimum after 10 s of calm arrivals. Raise it when this client is on a bad link. Restart to apply.' },
+        { path: 'audio.jitter_min_ms', label: 'Jitter buffer minimum (ms)', type: 'number', help: 'Lowest playout depth. The buffer follows the spread of packet delays over the last 10 s and never goes below this. Restart to apply.' },
+        { path: 'audio.jitter_max_ms', label: 'Jitter buffer maximum (ms)', type: 'number', help: 'Ceiling for that adaptive depth. Mobile callers with bursty links need 300-400 ms. Restart to apply.' },
         { path: 'audio.reopen_ms', label: 'Device reopen interval (ms)', type: 'number' },
       ],
     },
@@ -1383,7 +1020,7 @@
         { path: 'streamdeck.serial', label: 'Serial number', type: 'text', nullable: true, help: 'Empty: first unused deck found. Used when the device list below is empty.' },
         { path: 'streamdeck.brightness', label: 'Brightness (%)', type: 'number', min: 0, max: 100 },
         { path: 'streamdeck.font_path', label: 'Font file', type: 'text' },
-        { path: 'streamdeck.volume_step_db', label: 'Volume step per key/dial tick (dB)', type: 'number', step: 0.5, min: 0.25, max: 12, nullable: true, help: 'Legacy volume_step values between 0 and 1 become 3 dB.' },
+        { path: 'streamdeck.volume_step_percent', label: 'Volume step per key/dial tick (%)', type: 'number', step: 1, min: 1, max: 100, nullable: true, help: 'Default: 4 percentage points per tick. Targets below -20 dB use 1 dB per default tick down to -60 dB, then silence. Main stays in percentage points.' },
         { path: 'streamdeck.volume_layer_timeout_s', label: 'Volume layer timeout (s)', type: 'number' },
         { path: 'streamdeck.pedal_left', label: 'Pedal left switch target', type: 'target', nullable: true, help: 'Reply is always the right pedal. Equivalent to layout JSON key "0".' },
         { path: 'streamdeck.pedal_target', label: 'Pedal middle switch target', type: 'target', nullable: true, help: 'Equivalent to layout JSON key "1".' },
@@ -1458,12 +1095,21 @@
     return value != null && typeof value === 'object' && !Array.isArray(value);
   }
 
-  function mergeFileOverRunning(running, file) {
+  // Same rule as config::merge_file_over_running: these maps come from the
+  // file as a whole, so a cleared GPIO output does not reappear from the
+  // running configuration before the restart.
+  const FILE_OWNED_MAPS = { gpio: ['outputs'], streamdeck: ['layout'] };
+
+  function mergeFileOverRunning(running, file, section = null) {
     if (file == null) return running;
     if (!isPlainObject(running) || !isPlainObject(file)) return file;
+    const owned = (section && FILE_OWNED_MAPS[section]) || [];
     const out = { ...running };
     for (const [key, value] of Object.entries(file)) {
-      out[key] = isPlainObject(value) && isPlainObject(out[key]) ? mergeFileOverRunning(out[key], value) : value;
+      out[key] = !owned.includes(key) && isPlainObject(value) && isPlainObject(out[key]) ? mergeFileOverRunning(out[key], value, section || key) : value;
+    }
+    for (const key of owned) {
+      if (!(key in file)) out[key] = {};
     }
     return out;
   }
@@ -1546,6 +1192,12 @@
     }
   }
 
+  // Values the Network switch fills in (keep in step with NetworkPreset in config.rs).
+  const NETWORK_PRESETS = {
+    lan: { 'audio.jitter_start_ms': 20, 'audio.jitter_min_ms': 20, 'audio.jitter_max_ms': 400, 'audio.profile': 'ultra-low' },
+    mobile: { 'audio.jitter_start_ms': 150, 'audio.jitter_min_ms': 60, 'audio.jitter_max_ms': 600, 'audio.profile': 'standard' },
+  };
+
   function renderSettingsForm() {
     const form = $('#settings-form');
     form.replaceChildren();
@@ -1560,20 +1212,40 @@
       details.append(fields);
       form.append(details);
     }
+    const audioEditor = form.querySelector('[data-editor="audio-device-sets"]');
+    const updateOutputLevels = () => {
+      const output = $('[data-field="output_device"]', audioEditor);
+      for (const input of form.querySelectorAll('[data-output-level]')) {
+        input.disabled = output.value !== (state.config?.active_output_device || '') || !(state.config?.output_levels?.[input.dataset.outputLevel]?.length);
+      }
+    };
+    audioEditor.addEventListener('change', updateOutputLevels);
+    updateOutputLevels();
+    const network = form.querySelector('select[data-path="audio.network"]');
+    if (network) {
+      network.addEventListener('change', () => {
+        for (const [path, value] of Object.entries(NETWORK_PRESETS[network.value] || {})) {
+          const input = form.querySelector(`[data-path="${path}"]:is(input, select)`);
+          if (input) input.value = String(value);
+        }
+      });
+    }
   }
 
   function renderField(field, doc) {
+    if (field.type === 'audio-device-sets') return renderAudioDeviceSets(doc.audio || {});
     if (field.type === 'gpio-outputs') return renderGpioOutputs(doc);
     if (field.type === 'gpio-target-outputs') return renderGpioTargetOutputs(doc);
     if (field.type === 'gpio-inputs') return renderGpioInputs(doc);
     if (field.type === 'streamdeck-devices') return renderStreamdeckDevices(doc);
     let value = getPath(doc, field.path);
+    if (['audio.speaker_level_db', 'audio.headphone_level_db'].includes(field.path) && value == null) value = 0;
     if (field.path === 'audio.default_volume_db' && (value == null || value === '')) {
       value = Math.round(linearToDb(getPath(doc, 'audio.default_volume') ?? 0.9) * 10) / 10;
     }
-    if (field.path === 'streamdeck.volume_step_db' && (value == null || value === '')) {
+    if (field.path === 'streamdeck.volume_step_percent' && (value == null || value === '')) {
       const legacy = Number(getPath(doc, 'streamdeck.volume_step'));
-      value = Number.isFinite(legacy) && legacy > 1 ? legacy : 3;
+      value = Number.isFinite(legacy) && legacy > 0 && legacy <= 1 ? legacy * 100 : 4;
     }
     if (field.path === 'audio.dim_db' && Number(value) === -14) value = -15;
     const wrapper = el('label', { class: `field${field.wide ? ' wide' : ''}`, dataset: { path: field.path } });
@@ -1586,7 +1258,25 @@
     }
     wrapper.append(el('span', { text: field.label }));
     let input;
-    if (field.type === 'select' || field.type === 'target') {
+    if (field.type === 'output-level') {
+      const control = field.path === 'audio.speaker_level_db' ? 'Speaker' : 'Headphone';
+      const values = state.config?.output_levels?.[control] || [];
+      input = el('select', { dataset: { path: field.path, type: 'select', numeric: '1', outputLevel: control }, autocomplete: 'off' });
+      for (const db of values) input.append(el('option', { value: String(db), text: `${db} dB` }));
+      if (!values.length) {
+        input.append(el('option', { value: '0', text: 'Not available on this output' }));
+        input.disabled = true;
+      } else if (!values.includes(Number(value))) {
+        const placeholder = el('option', { value: '', text: 'Choose a supported level' });
+        placeholder.disabled = true;
+        input.prepend(placeholder);
+        input.required = true;
+      }
+      input.value = values.includes(Number(value)) ? String(value) : values.length ? '' : '0';
+    } else if (field.type === 'production') {
+      input = el('select', { dataset: { path: field.path, type: 'select', nullable: '1', production: '1' }, autocomplete: 'off' });
+      fillProductionSelect(input, value == null ? '' : String(value));
+    } else if (field.type === 'select' || field.type === 'target') {
       const kinds = (field.kinds || []).join(',');
       input = el('select', {
         dataset: {
@@ -1611,18 +1301,6 @@
         input.append(el('option', { value: optionValue, text: label }));
       }
       input.value = current;
-    } else if (field.type === 'device') {
-      const listId = `devices-${field.path.replace(/\W/g, '-')}`;
-      input = el('input', { type: 'text', list: listId, placeholder: 'default device', dataset: { path: field.path, type: 'text', nullable: '1' }, autocomplete: 'off' });
-      input.value = value == null ? '' : value;
-      const list = el('datalist', { id: listId });
-      for (const device of state.audioDevices[field.direction] || []) {
-        list.append(el('option', { value: device.id, text: device.label }));
-      }
-      for (const special of field.direction === 'inputs' ? ['none', 'tone', 'tone:440', 'tone:1000'] : ['none', 'wav:/tmp/talktome-out.wav']) {
-        list.append(el('option', { value: special }));
-      }
-      wrapper.append(list);
     } else if (field.type === 'json') {
       input = el('textarea', { rows: 3, dataset: { path: field.path, type: 'json', nullable: field.nullable ? '1' : '' } });
       input.value = value == null ? '' : JSON.stringify(value, null, 1);
@@ -1644,6 +1322,77 @@
     wrapper.append(input);
     if (field.help) wrapper.append(el('span', { class: 'help', text: field.help }));
     return wrapper;
+  }
+
+  function audioDeviceSelect(key, value, paired) {
+    const capture = key === 'input_device';
+    const input = el('select', { dataset: { field: key }, autocomplete: 'off' });
+    const current = value == null ? '' : String(value);
+    const devices = state.audioDevices[capture ? 'inputs' : 'outputs'] || [];
+    const testing = paired ? [] : capture
+      ? [['tone', 'Test tone'], ['tone:440', '440 Hz test tone'], ['tone:1000', '1000 Hz test tone']]
+      : [['wav:/tmp/talktome-out.wav', 'Record to file']];
+    const known = new Set(['', 'none', ...devices.map((device) => device.id), ...testing.map(([id]) => id)]);
+    const option = (id, label) => el('option', { value: id, text: label && label !== id ? `${id} — ${label}` : id });
+    input.append(el('option', { value: '', text: 'System default' }));
+    if (!known.has(current)) input.append(option(current, 'not listed'));
+    const groups = [
+      ['Configured devices (asound.conf)', devices.filter((device) => !device.card)],
+      ['Sound cards', devices.filter((device) => device.card)],
+    ];
+    for (const [label, list] of groups) {
+      if (list.length) input.append(el('optgroup', { label }, list.map((device) => option(device.id, device.label))));
+    }
+    input.append(el('option', { value: 'none', text: capture ? 'No capture' : 'No playback' }));
+    if (testing.length) input.append(el('optgroup', { label: 'Testing' }, testing.map(([id, label]) => option(id, label))));
+    input.value = current;
+    return input;
+  }
+
+  function readAudioDeviceSets(editor) {
+    return Array.from(editor.querySelectorAll('fieldset'), (row) => ({
+      name: $('[data-field="name"]', row)?.value.trim() || '',
+      input_device: $('[data-field="input_device"]', row).value || null,
+      output_device: $('[data-field="output_device"]', row).value || null,
+    }));
+  }
+
+  function renderAudioDeviceSets(audio) {
+    const editor = el('div', { class: 'list-editor', dataset: { editor: 'audio-device-sets' } });
+    const draw = (sets) => {
+      const paired = sets.length === 2;
+      const add = el('button', { type: 'button', class: 'btn btn-small', text: '+ Add second audio set', onclick: () => {
+        const [first] = readAudioDeviceSets(editor);
+        draw([first, { ...first }]);
+        $('[data-field="name"]', editor).focus();
+      } });
+      editor.replaceChildren(...sets.map((set, index) => {
+        const field = (label, key, input) => {
+          const id = `audio-set-${index}-${key}`;
+          input.id = id;
+          input.name = id;
+          return el('label', { class: 'field', for: id }, [el('span', { text: label }), input]);
+        };
+        const row = el('fieldset', { class: 'list-row audio-device-set' }, [
+          el('legend', { text: paired ? `Audio set ${index + 1}` : 'Audio devices' }),
+          paired ? field('Name', 'name', el('input', { type: 'text', value: set.name, required: '', dataset: { field: 'name' } })) : null,
+          field('Input device', 'input_device', audioDeviceSelect('input_device', set.input_device, paired)),
+          field('Output device', 'output_device', audioDeviceSelect('output_device', set.output_device, paired)),
+        ]);
+        return row;
+      }));
+      if (paired) {
+        editor.append(el('div', {}, el('button', { type: 'button', class: 'btn btn-small', text: 'Remove second audio set', onclick: () => {
+          draw(readAudioDeviceSets(editor).slice(0, 1));
+          $('button', editor).focus();
+        } })));
+      } else {
+        editor.append(el('div', {}, add));
+      }
+      editor.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    draw(audio.device_sets?.length === 2 ? audio.device_sets : [audio]);
+    return editor;
   }
 
   function targetSelectOptions(current, { allowEmpty = true, kinds = null, emptyLabel = '—' } = {}) {
@@ -1670,7 +1419,46 @@
     select.value = value;
   }
 
+  function productionLabel(snap) {
+    const wanted = String(snap.production || '').trim();
+    if (!wanted) return 'Default';
+    const match = (snap.productions || []).find((production) => production.id === wanted)
+      || (snap.productions || []).find((production) => production.name.toLowerCase() === wanted.toLowerCase());
+    return match ? match.name : wanted;
+  }
+
+  function snapshotProductions() {
+    return (state.status && state.status.snapshot && state.status.snapshot.productions) || [];
+  }
+
+  // Stored as the production id; a name typed in by hand selects its id.
+  function productionSelectOptions(current) {
+    const productions = snapshotProductions();
+    const options = [['', 'Server default (no production set)']];
+    for (const production of productions) options.push([production.id, production.name]);
+    const wanted = String(current || '').trim();
+    if (!wanted) return { options, value: '' };
+    const match = productions.find((production) => production.id === wanted)
+      || productions.find((production) => production.name.toLowerCase() === wanted.toLowerCase());
+    if (match) return { options, value: match.id };
+    const note = productions.length ? 'not assigned to this user' : 'offline, list unavailable';
+    options.push([wanted, `${wanted} (${note})`]);
+    return { options, value: wanted };
+  }
+
+  function fillProductionSelect(select, current) {
+    const { options, value } = productionSelectOptions(current);
+    select.replaceChildren();
+    for (const [optionValue, label] of options) {
+      select.append(el('option', { value: optionValue, text: label }));
+    }
+    select.value = value;
+  }
+
   function refreshSettingsTargetSelects() {
+    for (const select of $$('#settings-form select[data-production="1"]')) {
+      fillProductionSelect(select, select.value);
+    }
     for (const select of $$('#settings-form select[data-path]')) {
       const path = select.dataset.path;
       if (path !== 'vox.target' && path !== 'talk.main_target' && path !== 'streamdeck.pedal_left' && path !== 'streamdeck.pedal_target') continue;
@@ -1691,7 +1479,7 @@
       const current = outputs[name] || {};
       editor.append(
         el('div', { class: 'list-row', dataset: { output: name } }, [
-          el('label', { class: 'field' }, [el('span', { text: `${OUTPUT_LABELS[name] || name} line` }), el('input', { type: 'text', placeholder: 'GPIO17', dataset: { field: 'line' }, value: current.line || '' })]),
+          el('label', { class: 'field' }, [el('span', { text: `${OUTPUT_LABELS[name] || name} line` }), el('input', { type: 'text', placeholder: 'unassigned', title: 'Line name such as GPIO17; leave empty to leave this output unassigned', dataset: { field: 'line' }, value: current.line || '' })]),
           el('label', { class: 'field-check' }, [el('input', { type: 'checkbox', dataset: { field: 'active_low' }, ...(current.active_low ? { checked: '' } : {}) }), el('span', { text: 'active low' })]),
         ])
       );
@@ -1722,7 +1510,7 @@
     const target = el('select', { dataset: { field: 'target' } });
     fillTargetSelect(target, output.target || '');
     row.append(
-      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'GPIO18', dataset: { field: 'line' }, value: output.line || '' })]),
+      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'e.g. GPIO18', dataset: { field: 'line' }, value: output.line || '' })]),
       el('label', { class: 'field' }, [el('span', { text: 'Target' }), target]),
       el('label', { class: 'field' }, [el('span', { text: 'When' }), when]),
       el('label', { class: 'field-check' }, [el('input', { type: 'checkbox', dataset: { field: 'active_low' }, ...(output.active_low ? { checked: '' } : {}) }), el('span', { text: 'active low' })]),
@@ -1749,7 +1537,7 @@
     const target = el('select', { dataset: { field: 'target' } });
     fillTargetSelect(target, input.target || '');
     row.append(
-      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'GPIO22', dataset: { field: 'line' }, value: input.line || '' })]),
+      el('label', { class: 'field' }, [el('span', { text: 'Line' }), el('input', { type: 'text', placeholder: 'e.g. GPIO22', dataset: { field: 'line' }, value: input.line || '' })]),
       el('label', { class: 'field' }, [el('span', { text: 'Action' }), action]),
       el('label', { class: 'field' }, [el('span', { text: 'Target' }), target]),
       el('label', { class: 'field' }, [el('span', { text: 'Debounce (ms)' }), el('input', { type: 'number', min: 0, dataset: { field: 'debounce_ms' }, value: input.debounce_ms != null ? input.debounce_ms : 20 })]),
@@ -1801,6 +1589,8 @@
     const doc = JSON.parse(JSON.stringify(fileDoc || state.configDoc));
     for (const input of $$('#settings-form [data-path]', document)) {
       if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement || input instanceof HTMLTextAreaElement)) continue;
+      if (input.dataset.outputLevel && input.disabled) continue;
+      if (input.dataset.outputLevel && !input.value) throw new Error('Choose a supported output level');
       const path = input.dataset.path;
       const type = input.dataset.type;
       const nullable = input.dataset.nullable === '1';
@@ -1837,6 +1627,19 @@
         continue;
       }
       setPath(doc, path, value);
+    }
+    const audioSets = readAudioDeviceSets($('[data-editor="audio-device-sets"]'));
+    const paired = audioSets.length === 2;
+    if (paired && audioSets.some((set) => !set.name)) throw new Error('Enter a name for both audio sets.');
+    if (paired || hasPath(fileDoc || doc, 'audio.device_sets') || hasPath(runningDoc, 'audio.device_sets')) {
+      setPath(doc, 'audio.device_sets', paired ? audioSets : []);
+    }
+    for (const key of ['input_device', 'output_device']) {
+      const path = `audio.${key}`;
+      const value = audioSets[0][key];
+      if (!fileDoc || hasPath(fileDoc, path) || value !== (getPath(runningDoc, path) ?? null)) {
+        setPath(doc, path, value);
+      }
     }
     const outputs = {};
     for (const row of $$('[data-editor="gpio-outputs"] [data-output]')) {
@@ -1955,6 +1758,11 @@
     $('#settings-form').classList.toggle('is-hidden', state.rawMode);
     $('#toggle-raw').textContent = state.rawMode ? 'Form editor' : 'Raw editor';
   });
+
+  const topbar = $('#topbar');
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--topbar-height', `${topbar.getBoundingClientRect().height}px`);
+  }).observe(topbar);
 
   bindDeckKeys();
   bindDeckEncoders();

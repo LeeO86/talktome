@@ -89,7 +89,15 @@ pub async fn get_config(State(state): State<Shared>) -> Response {
         .and_then(|p| config::read_document(p).ok())
         .map(|raw| config::file_differs_from_running(&raw, &state.ctx.config))
         .unwrap_or(false);
+    let snapshot = state.ctx.bus.snapshots.borrow();
+    let (_, active_output) = state
+        .ctx
+        .config
+        .audio
+        .devices_for_set(snapshot.audio_device_set);
     Json(json!({
+        "output_levels": snapshot.output_levels,
+        "active_output_device": active_output,
         "document": document,
         "file_document": file_document,
         "editor_document": editor_document,
@@ -121,6 +129,48 @@ pub async fn put_config(State(state): State<Shared>, Json(body): Json<PutConfigB
         Err(error) => return client_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
     let stored = config::read_document(&path).ok();
+    let audio = &state.ctx.config.audio;
+    let level = |key: &str, fallback: f32| {
+        body.document
+            .pointer(&format!("/audio/{key}"))
+            .and_then(Value::as_f64)
+            .map(|value| value as f32)
+            .unwrap_or(fallback)
+    };
+    let speaker = level("speaker_level_db", audio.speaker_level_db);
+    let headphone = level("headphone_level_db", audio.headphone_level_db);
+    let selected = if let Some(first) = body.document.pointer("/audio/device_sets/0") {
+        first.get("output_device").and_then(Value::as_str)
+    } else if let Some(device) = body.document.pointer("/audio/output_device") {
+        device.as_str()
+    } else {
+        audio.devices_for_set(0).1.as_deref()
+    };
+    let snapshot = state.ctx.bus.snapshots.borrow();
+    let active_output = audio
+        .devices_for_set(snapshot.audio_device_set)
+        .1
+        .as_deref();
+    let changed_device = selected != active_output;
+    let validation = if changed_device
+        && (speaker != audio.speaker_level_db || headphone != audio.headphone_level_db)
+    {
+        Err(anyhow!(
+            "Save and restart with the selected output device before changing its analog levels"
+        ))
+    } else if !changed_device {
+        crate::audio::system_volume::validate_output_levels(
+            &snapshot.output_levels,
+            speaker,
+            headphone,
+        )
+    } else {
+        Ok(())
+    };
+    if let Err(error) = validation {
+        return client_error(StatusCode::BAD_REQUEST, error.to_string());
+    }
+
     match save_document(&path, body.document, stored.as_ref(), &running) {
         Ok(()) => {
             tracing::info!(event = "config-saved", path = %path.display());
@@ -236,25 +286,13 @@ pub fn update_web_password(path: &Path, password: &str) -> Result<()> {
 
 pub async fn audio_devices() -> Response {
     let devices = tokio::task::spawn_blocking(|| {
-        use cpal::traits::HostTrait;
-        let host = cpal::default_host();
-        let inputs: Vec<Value> = host
-            .input_devices()
-            .map(|devices| {
-                devices
-                    .map(|d| json!({ "id": crate::audio::device_pcm_id(&d), "label": crate::audio::device_label(&d) }))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let outputs: Vec<Value> = host
-            .output_devices()
-            .map(|devices| {
-                devices
-                    .map(|d| json!({ "id": crate::audio::device_pcm_id(&d), "label": crate::audio::device_label(&d) }))
-                    .collect()
-            })
-            .unwrap_or_default();
-        json!({ "inputs": inputs, "outputs": outputs })
+        let list = |input| -> Vec<Value> {
+            crate::audio::alsa_pcm_devices(input)
+                .into_iter()
+                .map(|d| json!({ "id": d.id, "label": d.label, "card": d.card }))
+                .collect()
+        };
+        json!({ "inputs": list(true), "outputs": list(false) })
     })
     .await;
     match devices {

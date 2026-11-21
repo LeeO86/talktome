@@ -11,7 +11,6 @@ fernet.key
 .env
 .env.*
 config.json
-gateway/radio-config.json
 
 # Dependency directories
 node_modules/
@@ -47,6 +46,7 @@ pnpm-lock.yaml
 package-lock.json
 !bridge-client/package-lock.json
 !server-app/package-lock.json
+!mobile-app/package-lock.json
 
 # IDE / editor metadata
 .idea/

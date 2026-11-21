@@ -1,6 +1,7 @@
 //! Shared runtime state published to surfaces and the commands they send back.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
@@ -93,6 +94,8 @@ pub struct IncomingInfo {
 pub struct MediaInfo {
     pub send_state: String,
     pub recv_state: String,
+    pub send_ice_state: String,
+    pub recv_ice_state: String,
     pub consumers: usize,
     pub producer_id: Option<String>,
     pub ice_servers: Vec<String>,
@@ -100,10 +103,15 @@ pub struct MediaInfo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ice_servers_announced: Vec<String>,
     pub ice_transport_policy: String,
-    /// ICE round-trip time in milliseconds, when a nominated pair reports it.
+    /// Round-trip time in milliseconds (see `rtt_source`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<u32>,
-    /// Sender-reported packet loss (RTCP), percent.
+    /// `media` (RTCP on the send transport, while talking) or `signalling`
+    /// (the `connection-health` heartbeat to the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_source: Option<String>,
+    /// Packet loss over both directions, percent: what mediasoup reports for
+    /// our producer plus sequence gaps on the consumers we receive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packet_loss_pct: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +123,13 @@ pub struct MediaInfo {
     pub recv_conceal_pct: Option<f32>,
 }
 
+/// A production this user is assigned to, for the Settings dropdown.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProductionInfo {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Snapshot {
     pub instance: String,
@@ -122,6 +137,9 @@ pub struct Snapshot {
     pub user_id: Option<i64>,
     pub server_url: String,
     pub production: Option<String>,
+    /// Productions the user is assigned to (from login, kept current).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub productions: Vec<ProductionInfo>,
     pub connection: ConnectionState,
     pub detail: String,
     pub talking: bool,
@@ -134,6 +152,12 @@ pub struct Snapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_version: Option<String>,
     pub audio_ok: bool,
+    pub system_volume: Option<crate::audio::system_volume::SystemVolume>,
+    pub output_levels: crate::audio::system_volume::OutputLevels,
+    #[serde(skip)]
+    pub audio_device_set: usize,
+    #[serde(skip)]
+    pub audio_device_set_names: Option<[String; 2]>,
     pub targets: Vec<TargetInfo>,
     /// Effective Reply / Main destination (pin when assigned, else last incoming).
     pub reply_target: Option<TargetKey>,
@@ -145,6 +169,9 @@ pub struct Snapshot {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub main_unavailable: bool,
     pub incoming: Vec<IncomingInfo>,
+    /// Who addressed us most recently; kept after they stop talking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_caller: Option<String>,
     /// Peak input level in dBFS for meters / VOX display.
     pub input_level_db: f32,
     pub media: Option<MediaInfo>,
@@ -170,6 +197,7 @@ impl Snapshot {
             user_id: None,
             server_url: String::new(),
             production: None,
+            productions: Vec::new(),
             connection: ConnectionState::Disconnected,
             detail: String::new(),
             talking: false,
@@ -178,12 +206,17 @@ impl Snapshot {
             preview: false,
             server_version: None,
             audio_ok: false,
+            system_volume: None,
+            output_levels: Default::default(),
+            audio_device_set: 0,
+            audio_device_set_names: None,
             targets: Vec::new(),
             reply_target: None,
             reply_name: None,
             main_target: None,
             main_unavailable: false,
             incoming: Vec::new(),
+            last_caller: None,
             input_level_db: -100.0,
             media: None,
             registered_since_unix: None,
@@ -192,6 +225,44 @@ impl Snapshot {
             heartbeat: "–".into(),
             media_status: None,
         }
+    }
+
+    /// The configured production: `user.production` may be an id or a
+    /// name, matched against this user's productions.
+    pub fn current_production(&self) -> Option<&ProductionInfo> {
+        let wanted = self
+            .production
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())?;
+        self.productions
+            .iter()
+            .find(|p| p.id == wanted)
+            .or_else(|| {
+                self.productions
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case(wanted))
+            })
+    }
+
+    pub fn is_current_production(&self, production: &ProductionInfo) -> bool {
+        self.current_production()
+            .is_some_and(|current| current.id == production.id)
+    }
+
+    /// Display name of the configured production, or the raw value when it
+    /// is not in the list.
+    pub fn production_name(&self) -> Option<String> {
+        let wanted = self
+            .production
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())?;
+        Some(
+            self.current_production()
+                .map_or(wanted, |p| p.name.as_str())
+                .to_string(),
+        )
     }
 
     pub fn target(&self, key: TargetKey) -> Option<&TargetInfo> {
@@ -213,7 +284,19 @@ impl Snapshot {
     /// never the caller’s display name. Matches the web client’s reply button.
     /// A Main pin that is missing from the destination list is "Unavailable target"
     /// and does not fall back to last incoming.
+    /// Incoming calls that concern Reply: a call into a listen-only
+    /// conference cannot be answered there, so it is left out.
+    pub fn reply_incoming(&self) -> impl Iterator<Item = &IncomingInfo> {
+        self.incoming.iter().filter(|incoming| {
+            !incoming.target.is_some_and(|key| {
+                matches!(key, TargetKey::Conference(_))
+                    && self.target(key).is_some_and(|target| !target.can_talk)
+            })
+        })
+    }
+
     pub fn reply_label(&self) -> Option<String> {
+        let incoming: Vec<&IncomingInfo> = self.reply_incoming().collect();
         let name_of = |key: TargetKey| self.target(key).map(|target| target.name.clone());
         if self.main_unavailable {
             return Some("Unavailable target".to_string());
@@ -236,8 +319,7 @@ impl Snapshot {
                 return Some(name);
             }
         }
-        if let Some(name) = self
-            .incoming
+        if let Some(name) = incoming
             .iter()
             .find_map(|incoming| incoming.target.and_then(conference_name))
         {
@@ -249,12 +331,10 @@ impl Snapshot {
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            let is_caller = self
-                .incoming
+            let is_caller = incoming
                 .iter()
                 .any(|incoming| incoming.from_name.eq_ignore_ascii_case(name));
-            let has_conference = self
-                .incoming
+            let has_conference = incoming
                 .iter()
                 .any(|incoming| matches!(incoming.target, Some(TargetKey::Conference(_))));
             if !(is_caller && has_conference) {
@@ -266,7 +346,7 @@ impl Snapshot {
                 return Some(name);
             }
         }
-        self.incoming
+        incoming
             .iter()
             .find_map(|incoming| incoming.target.and_then(name_of))
     }
@@ -352,8 +432,32 @@ pub enum InputSource {
     Companion(String),
 }
 
+#[derive(Debug)]
+pub struct PanelRequest {
+    pub command: serde_json::Value,
+    pub reply: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<serde_json::Value>>>,
+}
+
+impl PanelRequest {
+    pub fn is_pending(&self) -> bool {
+        self.reply
+            .lock()
+            .ok()
+            .is_some_and(|reply| reply.as_ref().is_some_and(|r| !r.is_closed()))
+    }
+
+    pub fn respond(&self, value: serde_json::Value) {
+        if let Some(reply) = self.reply.lock().ok().and_then(|mut r| r.take()) {
+            let _ = reply.send(value);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
+    LocalPanel(Arc<PanelRequest>),
+    ToggleAudioDeviceSet,
+    SystemVolume(crate::audio::system_volume::Action),
     TalkPress {
         source: InputSource,
         target: TargetRef,
@@ -371,6 +475,11 @@ pub enum Command {
         target: TargetKey,
         delta: f32,
     },
+    MemberVolumeStep {
+        conference: TargetKey,
+        user_id: i64,
+        delta: f32,
+    },
     VolumeSet {
         target: TargetKey,
         volume: f32,
@@ -384,6 +493,8 @@ pub enum Command {
         conference: TargetKey,
         user_id: i64,
     },
+    /// Switch to another assigned production (Stream Deck production page).
+    SetProduction(String),
     /// Request a fresh snapshot broadcast (e.g. after a deck reconnects).
     Refresh,
     Shutdown,
@@ -409,6 +520,8 @@ pub struct GpioInputView {
     pub active_low: bool,
     pub pressed: bool,
     pub events: u64,
+    /// Why the line could not be requested (e.g. used by another instance).
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
@@ -468,6 +581,8 @@ pub struct DeckStatus {
     pub encoder_pages: usize,
     pub volume_layer: bool,
     pub member_layer: bool,
+    /// Open menu page (`menu`, `productions`, `info`), if any.
+    pub menu: Option<String>,
     pub keys: Vec<DeckKeyView>,
     pub dials: Vec<DeckDialView>,
     pub error: Option<String>,
@@ -519,9 +634,31 @@ pub enum DeckInput {
 /// surfaces, the web UI and audio.
 #[derive(Clone)]
 pub struct Bus {
+    pub restart: Option<RestartRequest>,
     pub commands: mpsc::Sender<Command>,
     pub snapshots: watch::Receiver<Arc<Snapshot>>,
     pub hardware: Arc<RwLock<Hardware>>,
+}
+
+/// The same graceful shutdown/re-exec path used by the local web interface.
+/// A surface can request it even while the signaling connection is pending.
+#[derive(Clone)]
+pub struct RestartRequest {
+    requested: Arc<AtomicBool>,
+    shutdown: Arc<watch::Sender<bool>>,
+}
+
+impl RestartRequest {
+    pub fn new(requested: Arc<AtomicBool>, shutdown: Arc<watch::Sender<bool>>) -> Self {
+        Self {
+            requested,
+            shutdown,
+        }
+    }
+    pub fn request(&self) {
+        self.requested.store(true, Ordering::Relaxed);
+        let _ = self.shutdown.send(true);
+    }
 }
 
 pub struct Channels {
@@ -534,6 +671,7 @@ pub fn channels(initial: Snapshot) -> Channels {
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let (snap_tx, snap_rx) = watch::channel(Arc::new(initial));
     let bus = Bus {
+        restart: None,
         commands: cmd_tx,
         snapshots: snap_rx,
         hardware: Arc::new(RwLock::new(Hardware::default())),
@@ -542,5 +680,19 @@ pub fn channels(initial: Snapshot) -> Channels {
         commands: cmd_rx,
         snapshots: snap_tx,
         bus,
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+    #[test]
+    fn restart_requests_a_graceful_exit_and_reexec_without_waiting_for_signaling() {
+        let requested = Arc::new(AtomicBool::new(false));
+        let (shutdown, receive) = watch::channel(false);
+        let restart = RestartRequest::new(requested.clone(), Arc::new(shutdown));
+        restart.request();
+        assert!(requested.load(Ordering::Relaxed));
+        assert!(*receive.borrow());
     }
 }

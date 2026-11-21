@@ -1,0 +1,81 @@
+name: Mobile Google Play EAS Release
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Existing v* tag to build; empty uses the selected Git ref'
+        required: false
+        type: string
+      submit:
+        description: 'Submit to Google Play internal draft'
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: mobile-play-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Build Android App Bundle with EAS Cloud
+    # Enable only after the publisher has configured EAS and Google Play credentials.
+    if: vars.MOBILE_PLAY_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: mobile-app
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_NO_TELEMETRY: '1'
+      TALKTOME_EXPO_OWNER: ${{ vars.TALKTOME_EXPO_OWNER }}
+      TALKTOME_ANDROID_PACKAGE: ${{ vars.TALKTOME_ANDROID_PACKAGE }}
+      TALKTOME_PLAY_SUBMIT: ${{ github.event_name == 'release' || inputs.submit }}
+      TALKTOME_EAS_PROJECT_ID: ${{ vars.TALKTOME_EAS_PROJECT_ID }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.release_version || github.ref }}
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile-app/package-lock.json
+      - name: Resolve version from Git tags
+        id: version
+        working-directory: .
+        run: node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"
+      - name: Set mobile version
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: |
+          echo "TALKTOME_MOBILE_VERSION=${APP_VERSION%%[-+]*}" >> "$GITHUB_ENV"
+          echo "TALKTOME_MOBILE_BUILD_NUMBER=$((29 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+      - name: Require Expo credentials
+        run: |
+          test -n "$EXPO_TOKEN" || { echo 'Set repository secret EXPO_TOKEN'; exit 1; }
+      - name: Install dependencies
+        run: npm ci
+      - name: Prepare publisher identity and cloud build metadata
+        run: node scripts/prepare-eas-release.cjs android
+      - name: Build and optionally upload a Google Play draft
+        run: |
+          set -euo pipefail
+          if [ "$TALKTOME_PLAY_SUBMIT" = 'true' ]; then
+            npx eas-cli build --platform android --profile production --non-interactive --wait --auto-submit
+          else
+            npx eas-cli build --platform android --profile production --non-interactive --wait
+          fi

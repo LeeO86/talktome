@@ -1,17 +1,29 @@
 # Talktome
 
-Local WebRTC intercom app built with Node.js, mediasoup and Socket.IO.
+WebRTC intercom app built with Node.js, mediasoup and Socket.IO.
 
 <img src="public/images/iphone_ipad.png" alt="Talktome mobile UI" width="800">
+
+## Community
+
+<a href="https://discord.gg/x5Q27F7HK"><img src="public/images/Discord-Logo-Blurple.svg" alt="Join the Talktome Discord community" width="150"></a>
+
+Join our [Discord server](https://discord.gg/x5Q27F7HK) for discussions, questions,
+feedback and sharing how you use Talktome.
+
+If talktome helps you, you can support its development with a coffee.
+
+<a href="https://buymeacoffee.com/talktome_intercom"><img src="public/images/buy-me-a-coffee.png" alt="Buy Talktome a coffee" width="100"></a>
 
 ## Features
 
 - Browser-based intercom with direct targets, conferences, reply and talk lock.
-- Admin UI for users, feeds, conferences, target order, network config, RTC port range, backups and Guest login.
-- Program-audio feeds with volume and mute controls.
+- Native mobile apps for [iOS](https://apps.apple.com/app/id6827440765) and [Android APK](https://github.com/thepoison606/talktome/releases/download/v1.6.0/talktome-1.6.0-83-android.apk) (Play Store coming soon).
+- Admin UI for users, feeds, conferences, target order, network config, RTC port range, backups, Guest login and panel remote control.
+- Program feeds audio/video (NDI, OMT, Webcam)
 - Camera tally and remote control through Bitfocus Companion, HTTP API, module and keyboard shortcuts.
 - Bridge Desktop Application to integrate NDI, OMT, hardware intercom systems, audio interfaces and mixing consoles.
-- Headless client for Raspberry Pi: a WebRTC intercom panel driven by a Stream Deck and GPIO, with camera tally output and a mobile-friendly web interface, shipped as Debian packages.
+- Headless client that turns a Raspberry Pi (or any small Linux board) into an intercom panel with Elgato Stream Deck keys and dials, GPIO tally and PTT, and a web admin UI.
 - Optional multiple-production matrices with scoped users, conferences, feeds and production admins.
 
 ## Quick Start
@@ -36,6 +48,17 @@ optional Talktome Bridge app.
 5. Change the admin password when prompted.
 6. In Admin, create users, feeds and conferences, then assign targets to the users who should talk to each other.
 7. Operators log in at `/` with their user credentials and allow microphone access.
+
+Login names are case-insensitive: `David`, `david`, and `DAVID` identify the same
+account. Display names keep their original spelling; passwords remain
+case-sensitive. User and feed login names share one namespace. Creating or
+renaming either must use a name that is unique after Unicode NFC normalization
+and lowercasing.
+
+Existing databases are not renamed or merged. If old users/feeds have conflicting
+login names, password login for that name is rejected for every spelling. Rename
+the conflicting entries in Admin to distinct names; ID-based login links remain
+usable. Configuration imports reject such collisions before replacing any data.
 
 If clients can open the page but audio does not connect, check Admin `Config`,
 the announced media address and the RTC port range/firewall rules.
@@ -71,33 +94,62 @@ docker run -d --restart unless-stopped --name talktome \
 ```
 
 Open `https://<HOST-IP>:8443/`. Allow the HTTPS port and the configured RTC port range in your firewall.
+The web port defaults to 8443 in containers (443 outside containers). It can be
+changed in Admin → Config → Network → Web Access; restart the server and update
+Docker port publishing to match. An explicit `PORT` or `HTTPS_PORT` environment
+variable overrides the saved port and locks the Admin field.
+If the external port differs from the backend port (for example `55443:8443`),
+set **Public HTTPS URL** in Web Access to `https://<HOST-IP>:55443` and restart
+the server. This URL is used for shared login links and Media Network QR codes
+with both built-in HTTPS and reverse-proxy HTTPS. It does not change the backend
+port or Docker mapping. Without a public URL, Media Network QR codes use each
+active media address and the backend port; login links prefer a usable browser
+request address before falling back to a media address.
 The Admin `Config` page can restart the server. Docker deployments use their
 configured restart policy (as in the examples above).
 
-### macOS Test Builds
-
-Unsigned macOS test builds downloaded from GitHub may be blocked by Gatekeeper.
-To remove the quarantine flag once after installing or extracting:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Talktome Server.app"
-xattr -dr com.apple.quarantine "/Applications/Talktome Bridge.app"
-```
-
-Use the first command for the Talktome server app and the second command for the
-native Bridge app.
-
 ### Versioning and releases
 
-Git release tags are the single source of truth for every Server, Bridge and
-Docker build. Create a tag such as `v1.2.5` to produce version `1.2.5`; commits
+Git release tags are the single source of truth for every Server, Bridge,
+headless client and Docker build. Create a tag such as `v1.2.5` to produce version `1.2.5`; commits
 after the latest tag receive a development version such as `1.2.5-dev.3`.
-If no `v*` tag is reachable (a fork that has not fetched release tags, for
-example), the resolver falls back to `0.0.0-dev.<commit count>` so local and
-GitHub builds still produce packages. Package, Cargo and Tauri manifests
-intentionally contain only the neutral `0.0.0` placeholder and must not be
-edited for a release. The shared `scripts/resolve-build-version.js` resolver
-supplies the version to local and GitHub builds.
+Package, Cargo and Tauri manifests intentionally contain only the neutral
+`0.0.0` placeholder and must not be edited for a release. The shared
+`scripts/resolve-build-version.js` resolver supplies the version to local and
+GitHub builds.
+
+The displayed Server version comes from the running Git checkout or the
+version embedded in the executable/Docker image. `TALKTOME_VERSION` is only a
+fallback when neither is available; a stale environment value cannot relabel
+an installed build. Custom Docker builds should pass
+`--build-arg TALKTOME_VERSION=<resolved-version>` to embed their build version.
+
+### Node.js runtime and standalone builds
+
+Use Node.js 24.22.1 or a newer Node 24 release for source development. CI reads
+the version from `.node-version`. The Docker base image and the standalone
+targets in `package.json` are pinned to 24.22.3. Update these together when
+updating the build runtime. `engines.node` defines the supported source-runtime
+minimum separately.
+
+Standalone builds use `pkg`'s SEA mode with the official Node.js binary, so
+Node security updates do not depend on the availability of patched
+`pkg-fetch` binaries. `npm run build:mac_arm64` and `npm run build:win64`
+also stage the native SQLite binding and mediasoup worker. The release smoke
+tests verify the embedded Node version and server startup. Run the executable
+with `--node-version` to inspect its runtime without starting services.
+
+## Repository layout
+
+- `server.js`: stable entry point for `npm start` and packaged server builds.
+- `src/server/`: server startup, application logic and supporting modules.
+- `tests/`: automated JavaScript tests; run with `npm test`.
+- `public/`: browser client, Admin UI and shared browser/server settings models.
+- `scripts/`: build, release, container healthcheck and maintenance tools.
+- `server-app/` and `bridge-client/`: native desktop applications.
+- `headless-client/`: Rust intercom panel for Raspberry Pi and other Linux
+  boards, shipped as Debian packages.
+- `vendor/`: locally maintained third-party patches.
 
 ## Configuration
 
@@ -106,7 +158,7 @@ On first interactive start, Talktome creates `config.json` and asks for:
 - HTTPS port
 - mDNS hostname, or `off`
 - RTC port range: start port and number of ports
-- WebRTC media network mode: automatic (all usable adapters), preferred adapter, or manual announced IP/hostname
+- WebRTC media network mode: automatic (all usable adapters), selected adapters, or manual announced IP/hostname
 
 The same settings can be changed later in Admin `Config`.
 
@@ -114,28 +166,107 @@ In automatic media-network mode, Talktome offers every usable non-internal
 IPv4 adapter as a WebRTC ICE candidate. Clients on different attached networks
 can therefore select the server address they can reach and communicate through
 the same Talktome router. Link-local addresses are only used as a fallback when
-no regular adapter address is available. Preferred-adapter and manual modes
-remain single-address modes for deterministic or NAT-facing deployments.
+no regular adapter address is available. Selected-adapter mode offers only the checked adapters and announces their addresses
+via mDNS. If one selected adapter is unavailable, the remaining selected adapters
+stay usable; other adapters are never added automatically. Manual mode offers one
+announced address for NAT-facing deployments.
 
 Useful environment overrides:
 
-- `PORT` / `HTTPS_PORT`: HTTPS UI port
+- `PORT` / `HTTPS_PORT`: backend UI port (HTTPS by default, HTTP in proxy mode)
+- `TALKTOME_TLS_MODE`: `internal` (default, built-in HTTPS) or `proxy` (HTTP backend behind an HTTPS reverse proxy)
+- `TALKTOME_PUBLIC_URL`: public HTTPS origin for connection links and QR codes
+- `TALKTOME_TRUSTED_PROXIES`: comma-separated proxy IP/CIDR allowlist for forwarded host/protocol and status client-IP headers (falls back to `TALKTOME_SSO_TRUSTED_PROXIES`)
 - `HTTP_PORT`: redirect port, or `off`
 - `PUBLIC_IP`: manual WebRTC announced address
 - `MDNS_HOST`: mDNS hostname, or `off`
-- `TALKTOME_MEDIA_INTERFACE`: preferred network adapter
+- `TALKTOME_MEDIA_INTERFACE`: selected network adapter names, comma-separated (for example `en0,en7`)
 - `TALKTOME_MEDIA_INTERNAL_IP`: optional bindable LAN address advertised in addition to `PUBLIC_IP`
 - `TALKTOME_RTC_PORT_START` and `TALKTOME_RTC_PORT_COUNT`: RTC range override
 - `TALKTOME_ICE_SERVERS_JSON`: browser STUN/TURN servers as standard `RTCIceServer` JSON
 - `TALKTOME_ICE_TRANSPORT_POLICY`: browser ICE policy, `all` (default) or `relay`
 - `TALKTOME_TURN_URLS`, `TALKTOME_TURN_USERNAME` and `TALKTOME_TURN_CREDENTIAL`: simple TURN-only alternative to the JSON setting
 - `TALKTOME_DATA_DIR`: data directory override
+- `TALKTOME_CONFIG_PATH`: explicit config file, taking precedence over the project and data-directory configs
 - `TALKTOME_SSO_ENABLED`: enable trusted reverse-proxy header SSO (`true`, default: disabled)
 - `TALKTOME_SSO_HEADER`: identity header set by the proxy (default: `X-Forwarded-User`)
 - `TALKTOME_SSO_TRUSTED_PROXIES`: required comma-separated proxy IP/CIDR allowlist when SSO is enabled
 - `COMPANION_API_KEY`: fixed Companion/API key
 
 Changing media-network, RTC-port, browser ICE or SSO environment settings requires a server restart. Guest login changes apply immediately.
+
+## HTTPS reverse proxy
+
+Select **Admin → Config → Web access → HTTPS via reverse proxy**, or set
+`TALKTOME_TLS_MODE=proxy`. The backend port remains `PORT` / `HTTPS_PORT`
+(or the saved backend port); in proxy mode it serves HTTP, including Socket.IO,
+and both HTTP-to-HTTPS redirects are disabled. No local TLS certificate is needed.
+The default mode remains built-in HTTPS.
+
+Web access settings are saved in `config.json` as `tlsMode`, `httpsPort`,
+`publicUrl` and `trustedProxies`. Environment variables take precedence and lock
+individual fields in Admin. Changes require a server restart.
+
+Example Docker environment (backend port 8443):
+
+```yaml
+environment:
+  TALKTOME_TLS_MODE: proxy
+  PORT: 8443
+  MDNS_HOST: off
+  TALKTOME_PUBLIC_URL: https://talktome.example.com
+  TALKTOME_TRUSTED_PROXIES: 172.20.0.2
+```
+
+Use the actual reverse-proxy IP or a restricted proxy network CIDR for the
+allowlist. The proxy must overwrite forwarded headers. Without a trusted proxy,
+forwarded host/protocol headers are ignored; the configured public URL still
+provides the correct QR and connection links.
+
+The Status page uses this allowlist to resolve user, feed and Companion client
+IPs from `X-Forwarded-For`. Proxy chains are checked from the server towards the
+client and stop at the first untrusted hop. Headers supplied by an untrusted
+peer are ignored.
+
+Example Nginx location inside your HTTPS virtual host (with a certificate
+configured on Nginx):
+
+```nginx
+location / {
+    proxy_pass http://talktome:8443;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3600s;
+    proxy_buffering off;
+}
+```
+
+Browsers must access the **public HTTPS URL**: microphone access and secure
+session cookies require it. Keep the HTTP backend private. WebRTC media still
+uses the configured RTC ports directly (or TURN); an HTTP reverse proxy does
+not forward those media ports. Configure the media network and firewall as usual.
+
+## HTTP request limits
+
+The server applies per-client-IP HTTP limits before parsing JSON or accessing
+files: 6000 requests/minute overall, 600/minute for Admin and legacy user/feed/
+conference routes (including the Panel), and 2400/minute for `/api` routes.
+Login POSTs share a quota of 30 failed requests per 15 minutes across user,
+feed, token, guest, SSO, Admin and Companion logins. Successful logins do not
+consume that quota. Excess requests return HTTP `429` with `Retry-After`.
+
+Client IPs use the same trusted-proxy allowlist as the Status page; untrusted
+forwarded headers cannot change the quota key. IPv6 addresses are grouped by
+`/56` subnet. Limits are shared by clients behind one NAT address. Configure
+`trustedProxies` correctly behind a reverse proxy so unrelated clients do not
+all share its quota. Counters are held in memory per server process and reset
+on restart. Existing SSE streams and WebRTC audio/video are not interrupted
+when an HTTP quota is reached; Socket.IO messages are outside these HTTP limits.
 
 ## Data
 
@@ -154,7 +285,7 @@ Admin → Config → Backup and restore can also write automatic JSON configurat
 ## Users, Feeds And Guests
 
 - Operators log in at `/` and can talk to assigned users/conferences.
-- Feeds log in at `/`, publish their assigned feed, and cannot talk back.
+- Feeds log in at `/`, publish their assigned feed, and cannot talk back. Browser feeds can optionally publish a webcam; web users open the picture above the feed controls using its camera icon. See [browser video feeds](docs/browser-video-feeds.md).
 - Guests are enabled in Admin `Config`.
 - All Guests share the targets and conference memberships of the generated `Guest` profile.
 - The Guest profile in Admin `Users` provides a shareable login URL and QR code; Guests still choose their own display name when opening it.
@@ -173,7 +304,7 @@ TALKTOME_SSO_HEADER=X-Forwarded-User
 TALKTOME_SSO_TRUSTED_PROXIES=172.18.0.0/16,127.0.0.1
 ```
 
-The proxy-provided identity is matched exactly and case-sensitively against an
+The proxy-provided identity is matched case-insensitively against a unique
 existing Talktome username. Talktome does not provision users automatically.
 Unknown identities, Guest profiles and Super Admins fall back to the normal
 login page. Because the username is the chosen mapping key, renaming it in
@@ -209,14 +340,21 @@ actual membership; users without any Production receive a clear assignment error
 Conference identities remain global and may span Productions. Routing uses each
 connected user's currently loaded Production: speaking to a conference reaches
 all active users whose current Default or Production membership includes that
-conference, even when those users loaded different Productions. A user has only
-one active Talktome session at a time.
+conference, even when those users loaded different Productions. Direct user
+targets likewise reach the user's active session across Productions, and Reply
+can address a caller absent from the recipient's current target list. A user has
+only one active Talktome session at a time.
 
 Production admins may manage the contents, memberships and matrix of their own
 Productions without access to global users, server config, backups or other
 Productions. Only global admins may enable the feature, create, rename or delete
 Productions, or assign Production admins. Bridge endpoints, Bridge feeds and
 personal mute/volume settings remain global and do not select a Production.
+Bridge automatic Talk targets (Audio level / Always on) can select any user or conference on the server. Selected
+conferences also supply return audio. These targets appear as gray, managed
+Matrix crosspoints wherever both endpoints are present; click a gray point to
+open its Bridge configuration. Existing manual assignments survive removal of
+the corresponding Bridge target.
 
 ## Companion and HTTP API
 
@@ -227,6 +365,10 @@ Auth:
 
 - API key via `x-api-key: <KEY>` or `Authorization: Bearer <KEY>`
 - User-scoped token via `POST /api/v1/companion/auth/login`
+
+Authentication uses `Authorization: Bearer <token>` or `X-API-Key` headers.
+API keys in URL query parameters are no longer accepted. Socket.IO clients
+must use the handshake `auth` payload or authentication headers.
 
 Main endpoints:
 
@@ -255,7 +397,7 @@ Guest profiles are intentionally hidden from Companion and cannot be controlled 
 To use SSO, configure the authentication proxy to remove any client-supplied
 copy of the identity header and, after successful authentication, set
 `X-Forwarded-User` (or the header selected with `TALKTOME_SSO_HEADER`) to the
-exact, case-sensitive name of an existing Talktome user. Enable SSO with
+name of an existing Talktome user (case-insensitive). Enable SSO with
 `TALKTOME_SSO_ENABLED=true`, add the proxy IP or network to
 `TALKTOME_SSO_TRUSTED_PROXIES`, and ensure clients cannot reach the Talktome
 backend without passing through that proxy. No user synchronization or
@@ -309,70 +451,15 @@ as outputs. OBS 31 or newer can send and receive them using the official
 requirements are documented in the Bridge client's
 [OMT Audio documentation](bridge-client/README.md#omt-audio).
 
-## Headless Client (Raspberry Pi)
+## Headless Client
 
-`talktome-headless` turns a Raspberry Pi (arm64/armhf) or a Debian/Ubuntu PC
-(amd64) into a Talktome intercom panel: it logs in as a normal Talktome user
-over WebRTC (including the server's TURN configuration), uses an attached
-Elgato Stream Deck as the key panel, mirrors PGM/PRV camera tally and talk state to
-GPIO lines and serves a local web interface for status, remote talk control
-and configuration. Several instances can run on one device.
-
-The `Headless Client Builds` workflow publishes `.deb` packages for arm64,
-armhf and amd64 with every release. Installation, configuration and the
-design are documented in [headless-client/README.md](headless-client/README.md)
-and [headless-client/specification.md](headless-client/specification.md).
-
-## Radio Gateway Prototype
-
-The repository includes a generic hardware gateway helper for bridging Talktome to an external radio or intercom device. It expects a Linux gateway host with ALSA audio I/O, an audio interface connected to the external device, and an optional GPIO-controlled PTT circuit.
-
-The helper can control PTT through `pinctrl`, monitor receive audio level, and stream bidirectional audio between the external device and a Talktome conference.
-
-Commands:
-
-```bash
-npm run radio:ptt -- 2
-npm run radio:play -- test.wav
-npm run radio:monitor
-npm run radio:record
-npm run radio:calibrate
-TALKTOME_SERVER_URL=https://<SERVER-IP>:8443 TALKTOME_GATEWAY_API_KEY=<COMPANION-API-KEY> TALKTOME_GATEWAY_USER_ID=<USER-ID> TALKTOME_GATEWAY_CONFERENCE_ID=<CONFERENCE-ID> npm run radio:stream
-```
-
-Run `npm run radio:calibrate` on the gateway host to measure idle noise, remote PTT without speech, and quiet speech. It writes `gateway/radio-config.json`; environment variables still override that file.
-
-The streaming gateway authenticates with the Companion API key shown in the
-Admin UI. Set it through `TALKTOME_GATEWAY_API_KEY` (or `COMPANION_API_KEY`)
-before starting `radio:stream`.
-
-Defaults can be configured in `gateway/radio-config.json` or overridden with environment variables:
-
-```bash
-TALKTOME_RADIO_CONFIG=gateway/radio-config.json
-TALKTOME_RADIO_GPIO=17
-TALKTOME_RADIO_AUDIO_DEVICE=plughw:CARD=CODEC,DEV=0
-TALKTOME_RADIO_RX_ON_THRESHOLD=0.002
-TALKTOME_RADIO_RX_OFF_THRESHOLD=0.003
-TALKTOME_RADIO_RX_HANG_MS=600
-TALKTOME_RADIO_RX_PRE_ROLL_MS=500
-TALKTOME_RADIO_RX_RESUME_LEAD_MS=150
-TALKTOME_RADIO_RX_WARMUP_MS=500
-TALKTOME_RADIO_RX_GAIN_DB=6
-TALKTOME_RADIO_TX_ENABLED=true
-TALKTOME_RADIO_TX_RTP_IP=<auto-detected-gateway-ip>
-TALKTOME_RADIO_TX_RTP_PORT=5006
-TALKTOME_RADIO_TX_GAIN_DB=0
-TALKTOME_RADIO_RX_SEGMENTS_DIR=gateway/rx-segments
-TALKTOME_SERVER_URL=https://talktome.local:8443
-TALKTOME_GATEWAY_API_KEY=<COMPANION-API-KEY>
-TALKTOME_GATEWAY_USER_ID=1
-TALKTOME_GATEWAY_CONFERENCE_ID=1
-TALKTOME_GATEWAY_NAME=Radio Gateway
-```
-
-Sync gateway changes from a development machine to a gateway host without pushing to GitHub:
-
-```bash
-TALKTOME_GATEWAY_HOST=user@gateway-host.local npm run gateway:sync
-```
+`talktome-headless` logs in as a normal Talktome user and runs without a
+screen: an Elgato Stream Deck (MK.2, XL, Mini, Neo, +, + XL, Pedal) serves as
+the key panel with talk, reply, locks, volume and conference member mix; GPIO
+lines carry PGM/PRV tally, talk and status lights and PTT inputs; a local web
+UI covers status, settings and a remote control. It is built as `.deb`
+packages for arm64, armhf and amd64 by the Headless Client Builds workflow.
+Installation, configuration and the Stream Deck layout are described in
+[headless-client/README.md](headless-client/README.md); protocol and design
+details are in
+[headless-client/specification.md](headless-client/specification.md).

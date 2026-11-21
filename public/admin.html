@@ -9,6 +9,7 @@
     <title>Talktome Admin</title>
     <link rel="icon" type="image/png" href="/images/talktome-icon.png" />
     <link rel="stylesheet" href="/login.css" />
+    <link rel="stylesheet" href="/targetPicker.css" />
     <style>
       :root {
         --bg: #0b1120;
@@ -152,6 +153,8 @@
         color: #fcd34d;
         line-height: 1.4;
       }
+      a.user-panel-link { text-decoration: none; line-height: normal; }
+      a.user-panel-link:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
       .user-settings-button { gap: 0.4rem; }
       .user-settings-button svg { width: 1.05rem; height: 1.05rem; display: block; }
 
@@ -189,6 +192,29 @@
       }
 
       .admin-bar__meta strong {
+        color: var(--text);
+      }
+
+      .admin-bar__session {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        column-gap: 0.65rem;
+        min-width: 0;
+      }
+
+      .admin-bar__release {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        color: var(--muted);
+        font-size: 0.82rem;
+        text-decoration: underline;
+        text-underline-offset: 0.2em;
+      }
+
+      .admin-bar__release:hover,
+      .admin-bar__release:focus-visible {
         color: var(--text);
       }
 
@@ -599,7 +625,8 @@
         box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
       }
 
-      button {
+      button,
+      a.user-panel-link {
         min-height: var(--control-height);
         display: inline-flex;
         align-items: center;
@@ -615,7 +642,8 @@
         box-shadow: none;
       }
 
-      button:hover {
+      button:hover,
+      a.user-panel-link:hover {
         background: var(--primary-dark);
       }
 
@@ -625,7 +653,8 @@
         transform: none;
       }
 
-      button.small {
+      button.small,
+      a.user-panel-link.small {
         min-height: 0;
         padding: 0.4rem 0.75rem;
         font-size: 0.8rem;
@@ -824,6 +853,32 @@
         margin-top: 1.5rem;
       }
 
+      .user-target-controls + .user-bridge-controls,
+      .feed-video-permission + .feed-bridge-controls {
+        margin-top: 0.65rem;
+      }
+
+      .user-target-controls,
+      .user-bridge-controls,
+      .feed-video-permission,
+      .feed-bridge-controls {
+        font-size: 0.9rem;
+      }
+
+      .user-target-controls > strong {
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+
+      .user-target-controls .admin-switch {
+        color: var(--text);
+      }
+
+      .user-bridge-controls .bridge-config-form,
+      .feed-bridge-controls .bridge-config-form {
+        margin-top: 0;
+      }
+
       .bridge-config-form {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -848,8 +903,23 @@
         margin: 0;
         min-height: var(--control-height);
         color: var(--text);
-        font-weight: 600;
+        font-weight: 400;
       }
+
+      .user-target-controls .admin-switch,
+      .user-bridge-controls .field-group > label,
+      #feeds-section .field-group > label,
+      #feeds-section .admin-switch {
+        font-weight: 400;
+      }
+
+      .feed-video-permission { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 0.9rem; }
+      .feed-video-permission .admin-switch {
+        margin: 0;
+        color: var(--text);
+        font-family: inherit;
+      }
+      #feeds-section :is(select, input, .admin-switch, .field-group > label) { font-size: 0.9rem; }
 
       .bridge-config-options {
         display: contents;
@@ -883,18 +953,24 @@
       .bridge-trigger-row {
         display: grid;
         grid-column: 1 / -1;
-        grid-template-columns: minmax(10rem, 16rem) minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr) minmax(8rem, 12rem);
         gap: 0.5rem;
         align-items: end;
       }
 
       .bridge-trigger-details {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(8rem, 11rem);
-        gap: 0.5rem;
-        align-items: end;
+        grid-column: 1 / -1;
+        grid-template-columns: minmax(0, 1fr);
+        margin-top: 0.4rem;
       }
+      .bridge-trigger-row--simple > :first-child { grid-column: 1 / -1; }
+      .bridge-target-label { color: var(--muted); }
+      .bridge-target-info { color: inherit; font-size: 0.85em; cursor: help; }
 
+      .bridge-talk-targets { padding-block: 0.3rem; }
+      .bridge-trigger-row { align-items: start; }
+      .bridge-trigger-details { align-items: start; }
       .bridge-trigger-details[hidden] {
         display: none;
       }
@@ -945,6 +1021,50 @@
       .config-layout {
         display: grid;
         gap: 1rem;
+        width: min(100%, 68rem);
+        margin-inline: auto;
+      }
+
+      @media (min-width: 1024px) {
+        #config-network-panel > .config-layout,
+        #config-access-panel > .config-layout {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        #config-network-panel > .config-layout > .config-panel {
+          grid-column: 1 / -1;
+        }
+
+        #config-network-panel > .config-layout > [aria-labelledby="config-rtc-ports-heading"] {
+          grid-column: 1;
+        }
+
+        #config-network-panel > .config-layout > [aria-labelledby="config-network-heading"] {
+          grid-column: 2;
+        }
+
+        #config-network-panel .rtc-port-form {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+        }
+
+        #config-network-panel .rtc-port-form input,
+        #config-network-panel #mdns-host {
+          min-width: 0;
+        }
+
+        #config-network-panel #mdns-form .field-group {
+          flex-direction: column;
+          gap: 0;
+        }
+
+        #config-network-panel #mdns-form label {
+          align-self: flex-start;
+          margin-bottom: 0.35rem;
+        }
+
+        #config-network-panel #mdns-host {
+          width: 100%;
+        }
       }
 
       .config-panel {
@@ -954,16 +1074,17 @@
         border: 1px solid var(--border);
         border-radius: 10px;
         background: rgba(15, 23, 42, 0.55);
-        padding: 0.95rem 1rem;
+        padding: 0.9rem 1rem;
       }
 
       .config-panel h3 {
-        margin: 0 0 0.75rem;
-        font-size: 1.05rem;
+        margin: 0 0 0.7rem;
+        font-size: 0.95rem;
       }
 
       .config-panel .setting-meta {
         margin-bottom: 0.85rem;
+        font-size: 0.86rem;
       }
 
       .config-panel > h3 + .setting-meta {
@@ -972,6 +1093,11 @@
 
       .default-client-settings-panel {
         grid-column: 1 / -1;
+        width: min(100%, 68rem);
+        margin-inline: auto;
+        padding: 0;
+        border: 0;
+        background: transparent;
       }
 
       .default-client-settings-form {
@@ -988,7 +1114,24 @@
 
       .default-client-setting-field {
         display: grid;
-        gap: 0.35rem;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        min-height: 2.2rem;
+        gap: 1rem;
+        padding: 0.45rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.55);
+        min-width: 0;
+      }
+
+      .default-client-settings-form .default-client-setting-field > select {
+        justify-self: end;
+        width: min(100%, 18rem);
+        min-width: 0;
+        height: 1.5rem;
+        padding: 0 0.5rem;
+        font-size: 0.9rem;
       }
 
       .default-client-setting-field > label,
@@ -1004,22 +1147,40 @@
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 8px;
-        padding: 0.55rem 0.7rem;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.45rem 1rem;
+        background: rgba(15, 23, 42, 0.55);
         cursor: pointer;
       }
 
+      .default-client-setting-controls { display: flex; align-items: center; gap: .75rem; }
+      .default-client-apply-all { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--muted); white-space: nowrap; }
+      /* Reserve the same space before and after revealing Apply to all. */
+      .default-client-apply-all[hidden] { display: inline-flex; visibility: hidden; pointer-events: none; }
+      .default-client-apply-all input[type='checkbox'] {
+        flex: 0 0 1rem;
+        width: 1rem;
+        height: 1rem;
+        padding: 0;
+        margin: 0;
+        box-sizing: border-box;
+        accent-color: var(--primary);
+      }
       .default-client-settings-actions {
         display: flex;
         align-items: center;
         justify-content: flex-end;
-        grid-column: 1 / -1;
+        grid-column: 2;
         min-height: 2.2rem;
       }
 
       .config-panel input:not([type='file']):not([type='checkbox']),
-      .config-panel select {
+      .config-panel select,
+      #users-section select,
+      #feeds-section select,
+      #feeds-section .bridge-config-form input[type='number'],
+      #users-section .bridge-config-form input[type='number'] {
         height: 2.2rem;
         padding-top: 0.3rem;
         padding-bottom: 0.3rem;
@@ -1030,24 +1191,84 @@
         align-items: flex-end;
       }
 
+      #web-access-form {
+        display: flex;
+        flex-wrap: wrap;
+      }
+
+      #web-access-form .field-group {
+        flex: 1 1 14rem;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      #web-access-form label {
+        white-space: normal;
+      }
+
+      #web-access-form input,
+      #web-access-form select {
+        min-width: 0;
+        width: 100%;
+      }
+
+      #web-access-form button {
+        flex: 0 0 auto;
+        margin-left: auto;
+      }
+
       #mdns-form .field-group label {
         align-self: center;
         margin-bottom: 0;
       }
 
       .media-network-meta {
+        display: contents;
+      }
+
+      .media-network-info {
+        grid-column: 1;
+        grid-row: 1;
         display: grid;
-        gap: 0.75rem;
+        gap: 0.6rem;
+        align-self: start;
         min-width: 0;
       }
 
       .media-network-meta h3 {
         margin: 0;
-        font-size: 1.05rem;
+        font-size: 0.95rem;
       }
 
       .media-network-meta .setting-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.65rem 1rem;
         margin-bottom: 0;
+      }
+
+      #media-network-override-hint {
+        flex-basis: 100%;
+      }
+
+      .media-network-stat-label {
+        display: inline;
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: inherit;
+      }
+
+      .media-network-meta .setting-meta strong {
+        display: inline;
+        overflow-wrap: anywhere;
+        font-weight: 600;
+      }
+
+      #media-network-restart-hint,
+      #media-network-override-hint {
+        grid-column: 1 / -1;
+        font-size: inherit;
       }
 
       .media-network-warning {
@@ -1055,36 +1276,37 @@
         border-radius: 8px;
         background: rgba(245, 158, 11, 0.12);
         color: #fbbf24;
-        font-size: 0.8rem;
+        font-size: 0.86rem;
         line-height: 1.4;
         padding: 0.65rem 0.75rem;
       }
 
       .media-network-top {
         display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-rows: auto auto auto;
+        gap: 0.5rem 1rem;
+        align-items: end;
+      }
+
+      .media-network-top:has(.media-network-qr-card.is-hidden) {
         grid-template-columns: minmax(0, 1fr) auto;
-        gap: 1rem;
-        align-items: start;
-        margin-bottom: 1rem;
       }
 
       #media-network-form {
-        display: grid;
-        grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1.25fr) auto;
-        gap: 0.9rem 1rem;
-        align-items: end;
-        margin-top: auto;
+        display: contents;
       }
 
       #media-network-form .field-group {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0;
+        flex-direction: row;
+        align-items: center;
+        gap: 0.75rem;
         min-width: 0;
       }
 
       #media-network-form .field-group label {
-        margin-bottom: 0.35rem;
+        flex: 0 0 8.5rem;
+        margin-bottom: 0;
         white-space: normal;
       }
 
@@ -1094,23 +1316,84 @@
 
       #media-network-mode-group {
         grid-column: 1;
+        grid-row: 2;
       }
 
       #media-interface-group,
       #media-announced-address-group {
-        grid-column: 2;
+        grid-column: 1;
+        grid-row: 3;
       }
 
       #media-network-form .field-group input,
       #media-network-form .field-group select {
+        flex: 1 1 0;
+        min-width: 0;
         width: 100%;
+        max-width: 24rem;
+      }
+
+      .media-interface-label {
+        flex: 0 0 8.5rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .media-adapter-options {
+        flex: 1 1 0;
+        min-width: 0;
+        max-width: 24rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.4rem 0.6rem;
+        background: rgba(15, 23, 42, 0.5);
+      }
+
+      #media-network-form .media-adapter-options label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        padding: 0.2rem 0;
+        cursor: pointer;
+        font-weight: 400;
+      }
+
+      #media-network-form .media-adapter-options .admin-switch input {
+        flex: 0 0 auto;
+        width: 1px;
+        height: 1px;
+        min-height: 0;
+        padding: 0;
+        border: 0;
+        margin: -1px;
       }
 
       #media-network-actions {
         grid-column: 3;
+        grid-row: 3;
         display: flex;
+        gap: 0.5rem;
         align-items: flex-end;
         justify-content: flex-end;
+      }
+
+      .media-network-top:has(.media-network-qr-card.is-hidden) #media-network-actions {
+        grid-column: 2;
+      }
+
+      @media (min-width: 769px) {
+        .media-network-top:has(#media-interface-group.is-hidden):has(#media-announced-address-group.is-hidden) {
+          grid-template-rows: auto auto;
+        }
+
+        .media-network-top:has(#media-interface-group.is-hidden):has(#media-announced-address-group.is-hidden) #media-network-actions {
+          grid-row: 2;
+        }
+
+        .media-network-top:has(#media-interface-group.is-hidden):has(#media-announced-address-group.is-hidden) .media-network-qr-card {
+          grid-row: 1 / span 2;
+        }
       }
 
       #media-network-form button {
@@ -1327,63 +1610,65 @@
         accent-color: var(--primary);
       }
 
-      @media (min-width: 1280px) {
-        .config-layout {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          align-items: stretch;
-        }
+      .config-tabs {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 0.2rem 0.65rem;
+        margin-top: -0.6rem;
+        margin-bottom: 0.8rem;
+      }
 
-        .config-transfer-grid {
-          grid-template-columns: minmax(160px, 190px) minmax(0, 1fr);
-        }
+      .config-tabs button {
+        background: transparent;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        color: var(--muted);
+        padding: 0.34rem 0.7rem;
+        min-height: 2.15rem;
+        font-size: 0.86rem;
+        font-weight: 600;
+        white-space: nowrap;
+      }
 
-        .config-layout > .config-panel:nth-of-type(1) {
-          grid-column: 1;
-          grid-row: 1 / span 2;
-        }
+      .config-tabs button:hover,
+      .config-tabs button:focus-visible {
+        background: transparent;
+        color: var(--text);
+      }
 
-        .config-layout > .config-panel:nth-of-type(2) {
-          grid-column: 2;
-          grid-row: 1;
-        }
+      .config-tabs button[aria-selected='true'] {
+        color: #fff;
+        border-bottom-color: var(--primary);
+      }
 
-        .config-layout > .config-panel:nth-of-type(3) {
-          grid-column: 1;
-          grid-row: 3;
-        }
-
-        .config-layout > .config-panel:nth-of-type(4) {
-          grid-column: 2;
-          grid-row: 2 / span 2;
-        }
-
-        .config-layout > .config-panel:nth-of-type(5) {
-          grid-column: 1;
-          grid-row: 4;
-        }
-
-        .config-layout > .config-panel:nth-of-type(6) {
-          grid-column: 2;
-          grid-row: 4;
-        }
-
-        .config-layout > .default-client-settings-panel {
-          grid-column: 1 / -1;
-          grid-row: auto;
-        }
-
-        #container-restart-panel.is-hidden ~ .config-backup-panel {
-          grid-column: 2;
-          grid-row: 4;
-        }
+      .config-category-panel[hidden] {
+        display: none;
       }
 
       .media-network-qr-card {
+        grid-column: 2;
+        grid-row: 1 / span 3;
         display: flex;
-        align-items: stretch;
-        justify-content: flex-end;
-        gap: var(--media-network-qr-gap);
-        width: var(--media-network-action-width);
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        align-items: end;
+        max-width: 21rem;
+        align-self: end;
+      }
+
+      .media-network-qr-item {
+        width: 6.5rem;
+        display: grid;
+        gap: 0.3rem;
+      }
+
+      .media-network-qr-caption {
+        color: var(--muted);
+        font-size: 0.75rem;
+        text-align: center;
+        overflow-wrap: anywhere;
       }
 
       .media-network-qr-button {
@@ -1397,9 +1682,9 @@
         border-radius: 10px;
         background: rgba(255, 255, 255, 0.96);
         cursor: pointer;
-        flex: 1 1 auto;
         min-width: 0;
-        height: 100%;
+        width: 100%;
+        aspect-ratio: 1;
         transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
       }
 
@@ -1421,27 +1706,6 @@
         height: 100%;
         width: 100%;
         object-fit: contain;
-      }
-
-      .media-network-qr-actions {
-        display: flex;
-        align-items: stretch;
-        justify-content: flex-start;
-        align-self: stretch;
-      }
-
-      .media-network-qr-download {
-        width: var(--media-network-download-width);
-        min-width: var(--media-network-download-width);
-        min-height: 0 !important;
-        height: 100%;
-        padding: 0;
-      }
-
-      .media-network-qr-download svg {
-        width: 1.05rem;
-        height: 1.05rem;
-        display: block;
       }
 
       .icon-button {
@@ -1579,6 +1843,7 @@
 
       .admin-action-dialog__actions {
         display: flex;
+        flex-wrap: wrap;
         justify-content: flex-end;
         gap: 0.65rem;
       }
@@ -1595,50 +1860,174 @@
         overflow: hidden;
       }
 
+      .config-backup-panel {
+        width: min(100%, 68rem);
+        margin-inline: auto;
+        padding: 0;
+        border: 0;
+        background: transparent;
+      }
+
       .config-transfer-grid {
         display: grid;
-        grid-template-columns: minmax(160px, 190px) minmax(0, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 1rem;
-        align-items: start;
+      }
+
+      .config-transfer-card,
+      .config-auto-backup-form {
+        padding: 1.1rem;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.55);
+        min-width: 0;
+      }
+
+      .config-transfer-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+        padding: 0.9rem 1rem;
+      }
+
+      .config-transfer-card h4 {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+
+      .config-transfer-description {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.5;
+      }
+
+      .config-transfer-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: auto;
+      }
+
+      .config-import-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.75rem;
+        margin-top: auto;
+      }
+
+      .config-import-row .config-file-picker {
+        flex: 1 1 0;
+      }
+
+      .config-import-row > button {
+        flex: 0 0 auto;
+      }
+
+      .config-file-picker {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        padding: 0.55rem 0.7rem;
+        border: 1px dashed rgba(148, 163, 184, 0.35);
+        border-radius: 7px;
+        background: rgba(15, 23, 42, 0.3);
+        cursor: pointer;
+        min-width: 0;
+      }
+
+      .config-file-picker:hover,
+      .config-file-picker:focus-within {
+        border-color: var(--primary);
+      }
+
+      .config-file-picker > span:first-child {
+        font-size: 0.86rem;
+        font-weight: 600;
+      }
+
+      #config-import-filename {
+        color: var(--muted);
+        font-size: 0.8rem;
+        overflow-wrap: anywhere;
       }
 
       .config-auto-backup-form {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(10rem, 12rem);
-        gap: 0.75rem 1rem;
-        align-items: end;
-        margin-top: 1.25rem;
-        padding-top: 1rem;
-        border-top: 1px solid var(--border);
+        gap: 1rem;
+        margin-top: 1rem;
       }
 
-      .config-auto-backup-form.is-collapsed {
-        grid-template-columns: minmax(0, 1fr) auto;
+      .config-auto-backup-header {
+        display: flex;
         align-items: center;
+        gap: 1rem;
       }
 
       .config-auto-backup-toggle {
-        min-height: 2.2rem;
         display: flex;
+        flex: 1;
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
-        font-weight: 600;
+        min-width: 0;
+        margin: 0;
         cursor: pointer;
+      }
+
+      .config-auto-backup-title {
+        display: grid;
+        gap: 0.3rem;
+      }
+
+      .config-auto-backup-title strong {
+        font-size: 0.95rem;
+      }
+
+      .config-auto-backup-title > span {
+        color: var(--muted);
+        font-size: 0.82rem;
+        font-weight: 400;
+        line-height: 1.4;
+      }
+
+      .config-auto-backup-details {
+        display: grid;
+        grid-template-columns: minmax(10rem, 12rem) minmax(0, 1fr);
+        gap: 1rem 1.5rem;
+        align-items: center;
       }
 
       .config-auto-backup-interval {
         display: grid;
-        gap: 0.35rem;
+        gap: 0.4rem;
+        margin: 0;
+        font-size: 0.86rem;
         font-weight: 600;
+      }
+
+      .config-auto-backup-footer {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .config-auto-backup-time {
+        display: grid;
+        gap: 0.35rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      .config-auto-backup-time > span {
+        color: var(--text);
+        font-size: 0.86rem;
       }
 
       .config-auto-backup-status {
         grid-column: 1 / -1;
-        display: grid;
-        gap: 0.3rem;
         color: var(--muted);
-        font-size: 0.82rem;
+        font-size: 0.8rem;
+        line-height: 1.5;
       }
 
       .config-auto-backup-status code {
@@ -1646,96 +2035,13 @@
         user-select: text;
       }
 
-      .config-auto-backup-footer {
-        grid-column: 1 / -1;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-        gap: 0.75rem;
-        align-items: center;
-        color: var(--muted);
-        font-size: 0.82rem;
-      }
-
-      .config-auto-backup-form.is-collapsed .config-auto-backup-footer {
-        grid-column: 2;
-        grid-template-columns: auto;
-      }
-
       #config-auto-backup-error {
-        grid-column: 1 / -1;
         color: var(--danger);
         font-size: 0.82rem;
       }
 
       .config-auto-backup-actions {
-        display: flex;
-        justify-content: flex-end;
-      }
-
-      .config-export-group,
-      .config-import-group {
-        display: grid;
-        gap: 0.5rem;
-        grid-template-rows: auto 2.2rem;
-      }
-
-      .config-export-group button {
-        width: auto;
-        justify-self: start;
-      }
-
-      .config-import-actions {
-        display: flex;
-        gap: 0.75rem;
-        align-items: center;
-        min-width: 0;
-        flex-wrap: nowrap;
-      }
-
-      .config-import-actions button {
-        flex: none;
-        margin-left: auto;
-      }
-
-      .config-import-actions input[type='file'] {
-        flex: 1 1 auto;
-        min-width: 0;
-        max-width: 100%;
-        height: 2.2rem;
-        padding: 0;
-        overflow: hidden;
-        border: 0;
-        border-radius: 0;
-        background: transparent;
-        color: var(--muted);
-        font-size: 0.82rem;
-        line-height: 2.2rem;
-      }
-
-      .config-import-actions input[type='file']::file-selector-button {
-        height: 2.2rem;
-        margin: 0 0.65rem 0 0;
-        padding: 0 0.65rem;
-        border: 1px solid rgba(37, 99, 235, 0.35);
-        border-radius: 6px;
-        background: rgba(37, 99, 235, 0.18);
-        color: var(--text);
-        font: inherit;
-        font-weight: 600;
-        cursor: pointer;
-      }
-
-      .config-import-actions input[type='file']::-webkit-file-upload-button {
-        height: 2.2rem;
-        margin: 0 0.65rem 0 0;
-        padding: 0 0.65rem;
-        border: 1px solid rgba(37, 99, 235, 0.35);
-        border-radius: 6px;
-        background: rgba(37, 99, 235, 0.18);
-        color: var(--text);
-        font: inherit;
-        font-weight: 600;
-        cursor: pointer;
+        flex: 0 0 auto;
       }
 
       .drag-handle {
@@ -1754,6 +2060,24 @@
 
       .draggable-target.dragging {
         opacity: 0.6;
+      }
+
+      .is-target-reordering {
+        position: relative;
+      }
+
+      .is-target-reordering::after {
+        content: '';
+        position: absolute;
+        top: var(--target-drop-y);
+        left: 0;
+        right: 0;
+        height: 3px;
+        border-radius: 2px;
+        background: var(--primary);
+        transform: translateY(-50%);
+        pointer-events: none;
+        z-index: 2;
       }
 
       .production-order-list.is-touch-reordering,
@@ -1814,7 +2138,7 @@
       .entity-layout,
       .production-layout {
         display: grid;
-        grid-template-columns: minmax(18rem, 26rem) minmax(0, 1fr);
+        grid-template-columns: minmax(16.2rem, 23.4rem) minmax(0, 1fr);
         align-items: start;
         gap: 1rem;
       }
@@ -2146,22 +2470,34 @@
       }
 
       .production-config-layout {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: flex-start;
+        display: grid;
         gap: 1rem;
         margin: 1rem 0;
       }
 
-      .production-members-panel {
-        flex: 1 1 16rem;
-        min-width: min(100%, 16rem);
-        max-width: 28rem;
+      .production-members-panel,
+      .production-matrix-panel {
+        min-width: 0;
       }
 
-      .production-matrix-panel {
-        flex: 999 1 38rem;
-        min-width: min(100%, 38rem);
+      .production-contents-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: start;
+        gap: 1rem;
+        margin-top: 0.6rem;
+      }
+
+      .production-contents-secondary {
+        display: grid;
+        gap: 1rem;
+        min-width: 0;
+      }
+
+      @media (max-width: 700px) {
+        .production-contents-grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
       }
 
       .production-matrix-panel .matrix-subheading {
@@ -2352,6 +2688,53 @@
           transparent calc(50% + 0.5px)
         );
         pointer-events: none;
+      }
+
+      .target-matrix__user-label {
+        display: flex;
+        align-items: center;
+        gap: 0.2rem;
+      }
+
+      .target-matrix__user-label > span {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .target-matrix .matrix-connect {
+        display: inline-flex;
+        flex: 0 0 1.4rem;
+        align-items: center;
+        justify-content: center;
+        width: 1.4rem;
+        height: 1.4rem;
+        min-height: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 0.25rem;
+        background: transparent;
+        color: var(--muted);
+        box-shadow: none;
+        cursor: pointer;
+      }
+
+      .target-matrix .matrix-connect svg { width: 1rem; height: 1rem; }
+      .target-matrix .matrix-connect:hover { color: #60a5fa; }
+      .target-matrix .matrix-connect:focus-visible { outline: 2px solid #60a5fa; outline-offset: 1px; }
+      .target-matrix .matrix-connect:disabled { opacity: 0.4; cursor: wait; }
+
+      .target-matrix .matrix-connect--all {
+        position: absolute;
+        z-index: 2;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 1.8rem;
+        height: 1.8rem;
+        background: #172033;
       }
 
       .target-matrix__corner-label {
@@ -2559,6 +2942,20 @@
           0 0 0.85rem rgba(234, 88, 12, 0.3);
       }
 
+      .target-matrix-toggle[data-bridge-managed='true'],
+      .target-matrix-toggle[data-bridge-managed='true']:hover {
+        cursor: pointer;
+        background: radial-gradient(circle at center, rgba(148, 163, 184, 0.18), transparent 1.35rem);
+        box-shadow: none;
+      }
+
+      .target-matrix-toggle[data-bridge-managed='true']::before {
+        opacity: 1;
+        transform: scale(1);
+        background: #94a3b8;
+        box-shadow: 0 0 0.3rem rgba(148, 163, 184, 0.35);
+      }
+
       .conference-listen-only-legend {
         display: inline-flex;
         align-items: center;
@@ -2602,14 +2999,14 @@
       .status-summary {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
-        margin-bottom: 1.4rem;
+        margin-bottom: 0.8rem;
         border-top: 1px solid var(--border);
         border-bottom: 1px solid var(--border);
       }
 
       .status-summary__item {
         min-width: 0;
-        padding: 0.8rem 1rem;
+        padding: 0.45rem 1rem;
         border-right: 1px solid var(--border);
       }
 
@@ -2619,7 +3016,7 @@
 
       .status-summary__label {
         display: block;
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.1rem;
         color: var(--muted);
         font-size: 0.72rem;
         font-weight: 700;
@@ -2647,7 +3044,7 @@
         align-items: baseline;
         justify-content: space-between;
         gap: 1rem;
-        margin: 0 0 0.55rem;
+        margin: 0 0 0.2rem;
       }
 
       .status-group__heading h3 {
@@ -2661,6 +3058,124 @@
         font-size: 0.78rem;
       }
 
+      .status-group__heading--users {
+        align-items: center;
+      }
+
+      .status-users-title {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        min-width: 0;
+      }
+
+      .status-users-controls,
+      .status-production-heading {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.15rem;
+        white-space: nowrap;
+      }
+
+      .status-table th { white-space: nowrap; }
+
+      button.status-user-filter-toggle {
+        width: 1.2rem;
+        min-width: 1.2rem;
+        height: 1.2rem;
+        min-height: 0;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
+      }
+
+      .status-user-filter-toggle svg {
+        width: 1rem;
+        height: 1rem;
+      }
+
+      button.status-user-filter-toggle:hover,
+      button.status-user-filter-toggle[aria-expanded='true'],
+      button.status-user-filter-toggle[data-active='true'] {
+        color: #93c5fd;
+        background: rgba(59, 130, 246, 0.16);
+      }
+
+      .status-user-filter-toggle:focus-visible {
+        outline: 2px solid #60a5fa;
+        outline-offset: 2px;
+      }
+
+      .status-user-filter-panel {
+        position: fixed;
+        text-transform: none;
+        white-space: normal;
+        z-index: 20;
+        width: max-content;
+        max-width: min(20rem, calc(100vw - 2rem));
+        max-height: min(20rem, calc(100dvh - 8rem));
+        overflow-y: auto;
+        padding: 0.3rem;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--card-bg);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+      }
+
+      .status-user-filter-panel button {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 0.55rem;
+        width: 100%;
+        min-width: 0;
+        min-height: 2.2rem;
+        padding: 0.45rem 0.65rem;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--text);
+        font-size: 0.82rem;
+        text-align: left;
+      }
+
+      .status-user-filter-panel button:hover,
+      .status-user-filter-panel button:focus-visible {
+        background: rgba(59, 130, 246, 0.16);
+        transform: none;
+      }
+
+      .status-user-filter-panel button:focus-visible {
+        outline: 2px solid #60a5fa;
+        outline-offset: -2px;
+      }
+
+      .status-user-filter-panel button svg {
+        flex: 0 0 1rem;
+        width: 1rem;
+        height: 1rem;
+        color: #93c5fd;
+      }
+
+      .status-user-filter-panel button[aria-checked='false'] svg {
+        visibility: hidden;
+      }
+
+      .status-user-filter-panel button span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #status-section-body,
+      .status-group,
+      .status-table-wrap {
+        min-width: 0;
+      }
+
       .status-table-wrap {
         max-width: 100%;
         overflow-x: auto;
@@ -2668,37 +3183,49 @@
 
       .status-table {
         width: 100%;
-        min-width: 59.5rem;
+        min-width: 0;
         table-layout: fixed;
         border-collapse: collapse;
         font-size: 0.84rem;
       }
 
-      .status-table.status-table--with-production {
-        min-width: 67.5rem;
-      }
+      .status-col--status { width: 15%; }
+      .status-col--name { width: 11.5%; }
+      .status-col--production { width: 8%; }
+      .status-col--client { width: 15%; }
+      .status-col--version { width: 7.5%; }
+      .status-col--output { width: 8.5%; }
+      .status-col--battery { width: 6%; }
+      .status-col--network { width: 5.5%; }
+      .status-col--address { width: 8.5%; }
+      .status-col--rtt { width: 4%; }
+      .status-col--loss { width: 4%; }
+      .status-col--connected { width: 7.5%; }
+      .status-col--last-seen { width: 7%; }
 
-      .status-col--status { width: 20%; }
-      .status-col--name { width: 10%; }
-      .status-col--production { width: 10%; }
-      .status-col--client { width: 16%; }
-      .status-col--address { width: 16%; }
-      .status-col--rtt { width: 7%; }
-      .status-col--loss { width: 7%; }
-      .status-col--connected { width: 12%; }
-      .status-col--last-seen { width: 12%; }
+      .status-table--with-production .status-col--status { width: 14%; }
+      .status-table--with-production .status-col--name { width: 9.5%; }
+      .status-table--with-production .status-col--production { width: 9%; }
+      .status-table--with-production .status-col--client { width: 12%; }
+      .status-table--with-production .status-col--version { width: 7%; }
+      .status-table--with-production .status-col--output { width: 8%; }
+      .status-table--with-production .status-col--battery { width: 6%; }
+      .status-table--with-production .status-col--network { width: 5.5%; }
+      .status-table--with-production .status-col--address { width: 8.5%; }
+      .status-table--with-production .status-col--rtt { width: 4%; }
+      .status-table--with-production .status-col--loss { width: 4%; }
+      .status-table--with-production .status-col--connected { width: 6.5%; }
+      .status-table--with-production .status-col--last-seen { width: 6%; }
 
-      .status-table--with-production .status-col--name { width: 9%; }
-      .status-table--with-production .status-col--client { width: 14%; }
-      .status-table--with-production .status-col--address { width: 14%; }
-      .status-table--with-production .status-col--rtt { width: 6%; }
-      .status-table--with-production .status-col--loss { width: 6%; }
-      .status-table--with-production .status-col--connected { width: 10.5%; }
-      .status-table--with-production .status-col--last-seen { width: 10.5%; }
+      .status-table :is(.status-client, .status-client-version, .status-device) { white-space: nowrap; }
+      .status-battery { display: inline-flex; align-items: center; vertical-align: middle; gap: 0.25rem; line-height: 1; white-space: nowrap; }
+      .status-battery svg { width: 22px; height: 14px; flex: 0 0 auto; }
+      .status-battery.is-low { color: var(--accent); }
+      .status-battery.is-critical { color: var(--danger); }
 
       .status-table th,
       .status-table td {
-        padding: 0.62rem 0.7rem;
+        padding: 0.62rem 0.35rem;
         text-align: left;
         vertical-align: middle;
         border-bottom: 1px solid var(--border);
@@ -2767,7 +3294,8 @@
         box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
       }
 
-      .status-indicator__dot.is-offline {
+      .status-indicator__dot.is-offline,
+      .status-indicator__dot.is-failed {
         background: var(--danger);
         box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14);
       }
@@ -2913,12 +3441,8 @@
           grid-template-columns: 1fr;
         }
 
-        .config-auto-backup-form {
-          grid-template-columns: 1fr;
-        }
-
-        .config-import-group {
-          grid-template-rows: auto auto;
+        .config-auto-backup-details {
+          grid-template-columns: minmax(0, 1fr);
         }
 
         .default-client-settings-selects,
@@ -2927,11 +3451,8 @@
         }
 
         .default-client-settings-actions {
+          grid-column: 1 / -1;
           justify-content: stretch;
-        }
-
-        #media-network-form {
-          grid-template-columns: 1fr;
         }
 
         .rtc-port-form,
@@ -2939,23 +3460,32 @@
           grid-template-columns: 1fr;
         }
 
-        .media-network-top {
-          grid-template-columns: 1fr;
+        .media-network-top,
+        .media-network-top:has(.media-network-qr-card.is-hidden) {
+          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-rows: auto;
         }
 
-        #media-network-mode-group,
+        .media-network-info {
+          grid-column: 1 / -1;
+          grid-row: 1;
+        }
+
+        #media-network-mode-group {
+          grid-column: 1 / -1;
+          grid-row: 2;
+        }
+
         #media-interface-group,
-        #media-announced-address-group,
-        #media-network-actions {
-          grid-column: 1;
+        #media-announced-address-group {
+          grid-column: 1 / -1;
+          grid-row: 3;
         }
 
-        #media-network-actions {
-          justify-content: stretch;
-        }
-
-        #media-network-form button {
-          width: 100%;
+        #media-network-actions,
+        .media-network-top:has(.media-network-qr-card.is-hidden) #media-network-actions {
+          grid-column: 2;
+          grid-row: 4;
         }
 
         .config-panel form button,
@@ -2981,29 +3511,9 @@
         }
 
         .media-network-qr-card {
-          justify-content: center;
-          width: auto;
-          align-items: flex-start;
-        }
-
-        .media-network-qr-button {
-          height: auto;
-        }
-
-        .media-network-qr-actions {
-          align-self: auto;
-        }
-
-        .media-network-qr-download {
-          width: 2.5rem;
-          min-width: 2.5rem;
-          min-height: 2.5rem !important;
-          height: auto;
-        }
-
-        .media-network-qr-image {
-          width: 220px;
-          height: auto;
+          grid-column: 1;
+          grid-row: 4;
+          justify-self: start;
         }
 
         .image-lightbox {
@@ -3085,19 +3595,27 @@
         .status-table td:nth-child(1)::before { content: 'Status'; }
         .status-table td:nth-child(2)::before { content: 'Name'; }
         .status-table td:nth-child(3)::before { content: 'Client'; }
-        .status-table td:nth-child(4)::before { content: 'Address'; }
-        .status-table td:nth-child(5)::before { content: 'RTT'; }
-        .status-table td:nth-child(6)::before { content: 'Loss'; }
-        .status-table td:nth-child(7)::before { content: 'Connected since'; }
-        .status-table td:nth-child(8)::before { content: 'Last seen'; }
+        .status-table td:nth-child(4)::before { content: 'Version'; }
+        .status-table td:nth-child(5)::before { content: 'Audio output'; }
+        .status-table td:nth-child(6)::before { content: 'BATT'; }
+        .status-table td:nth-child(7)::before { content: 'Network'; }
+        .status-table td:nth-child(8)::before { content: 'Address'; }
+        .status-table td:nth-child(9)::before { content: 'RTT'; }
+        .status-table td:nth-child(10)::before { content: 'Loss'; }
+        .status-table td:nth-child(11)::before { content: 'Connected'; }
+        .status-table td:nth-child(12)::before { content: 'Last seen'; }
 
         .status-table--with-production td:nth-child(3)::before { content: 'Production'; }
         .status-table--with-production td:nth-child(4)::before { content: 'Client'; }
-        .status-table--with-production td:nth-child(5)::before { content: 'Address'; }
-        .status-table--with-production td:nth-child(6)::before { content: 'RTT'; }
-        .status-table--with-production td:nth-child(7)::before { content: 'Loss'; }
-        .status-table--with-production td:nth-child(8)::before { content: 'Connected since'; }
-        .status-table--with-production td:nth-child(9)::before { content: 'Last seen'; }
+        .status-table--with-production td:nth-child(5)::before { content: 'Version'; }
+        .status-table--with-production td:nth-child(6)::before { content: 'Audio output'; }
+        .status-table--with-production td:nth-child(7)::before { content: 'BATT'; }
+        .status-table--with-production td:nth-child(8)::before { content: 'Network'; }
+        .status-table--with-production td:nth-child(9)::before { content: 'Address'; }
+        .status-table--with-production td:nth-child(10)::before { content: 'RTT'; }
+        .status-table--with-production td:nth-child(11)::before { content: 'Loss'; }
+        .status-table--with-production td:nth-child(12)::before { content: 'Connected'; }
+        .status-table--with-production td:nth-child(13)::before { content: 'Last seen'; }
 
         .status-table--with-production .status-production-spacer {
           display: none;
@@ -3117,7 +3635,7 @@
         }
 
         .status-summary__item {
-          padding: 0.65rem 0.55rem;
+          padding: 0.45rem 0.55rem;
         }
 
         .status-summary__item:nth-child(3n) {
@@ -3170,7 +3688,8 @@
           max-width: 100%;
         }
 
-        button.small {
+        button.small,
+        a.user-panel-link.small {
           width: fit-content;
         }
 
@@ -3269,7 +3788,7 @@
           padding-bottom: 0;
         }
 
-        .list-item-header > .inline-controls > button {
+        .list-item-header > .inline-controls > :is(button, a.user-panel-link) {
           flex: 1 1 auto;
           width: auto;
           min-width: max-content;
@@ -3349,12 +3868,17 @@
       }
 
       @media (max-width: 480px) {
-        .config-auto-backup-footer {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+        .media-network-qr-item {
+          width: 5.5rem;
         }
 
-        .config-auto-backup-actions {
-          grid-column: 1 / -1;
+        .config-auto-backup-footer {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .config-auto-backup-header,
+        .config-auto-backup-toggle {
+          gap: 0.65rem;
         }
 
         .admin-bar,
@@ -3397,22 +3921,61 @@
           padding: 0.6rem;
         }
 
-        .list-item-header > .inline-controls > button {
+        .list-item-header > .inline-controls > :is(button, a.user-panel-link) {
           flex-basis: calc(50% - 0.25rem);
           min-width: 0;
         }
       }
       .status-with-stop { position: relative; display: flex; align-items: center; gap: 6px; }
-      .status-with-stop:has(.status-stop-mic) { padding-right: 36px; }
-      .status-with-stop .status-indicator { min-width: 0; }
+      .status-with-stop .status-indicator { min-width: 0; flex: 1; }
       .status-talk-lock-icon { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
       .status-table .status-sort-button { display: inline; min-height: 0; background: none; border: 0; padding: 0; border-radius: 0; color: inherit; font: inherit; text-transform: inherit; text-align: left; cursor: pointer; box-shadow: none; }
       .status-table .status-sort-button:hover,
       .status-table .status-stop-mic:hover { background: transparent; transform: none; box-shadow: none; }
       th[aria-sort="ascending"] .status-sort-button::after { content: ' ↑'; }
       th[aria-sort="descending"] .status-sort-button::after { content: ' ↓'; }
-      .status-table .status-stop-mic { position: absolute; right: 0; top: 50%; margin-top: -15px; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; min-height: 0; padding: 5px; background: transparent; border: 0; box-shadow: none; }
+      .status-table .status-panel-button { position: absolute; right: 0; top: 50%; margin-top: -13px; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; min-height: 0; padding: 3px; background: transparent; border: 0; box-shadow: none; }
+      .status-table .status-panel-button svg { width: 20px; height: 20px; }
+      .status-table .status-panel-button:hover { background: transparent; transform: none; box-shadow: none; }
+      .status-table .status-with-stop { padding-right: 26px; }
+      .status-table .status-with-stop:has(.status-stop-mic) { padding-right: 52px; }
+      @media (min-width: 769px) {
+        .status-table td { white-space: nowrap; }
+        .status-table td:first-child { padding-right: 0.25rem; }
+        .status-table :is(th, td):nth-child(2) { padding-left: 0.4rem; }
+        .status-table :is(th.status-battery-cell, td.status-battery-cell) { padding-inline: 0.4rem; }
+      }
+      .status-table .status-stop-mic { position: absolute; right: 26px; top: 50%; margin-top: -13px; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; min-height: 0; padding: 3px; background: transparent; border: 0; box-shadow: none; }
       .status-stop-mic img { width: 18px; height: 18px; object-fit: contain; filter: brightness(0) invert(1); }
+      .bridge-status-dialog { width: min(32rem, calc(100vw - 2rem)); padding: 1.25rem; background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: .75rem; }
+      .bridge-status-dialog::backdrop { background: #0009; }
+      .bridge-status-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+      .bridge-status-header h2 { margin: 0; }
+      .bridge-status-dialog p { color: var(--muted); }
+      .bridge-status-ports { display: grid; gap: .5rem; }
+      .bridge-status-ports > button { display: flex; align-items: center; justify-content: space-between; gap: 1rem; text-align: left; }
+      .auto-save-feedback { display: inline-flex; align-items: center; gap: .6rem; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+      .auto-save-feedback:empty { display: none; }
+      .auto-save-feedback.is-error { color: #fca5a5; }
+      .auto-save-feedback button { padding: .25rem .5rem; font-size: inherit; width: auto; }
+      .bridge-config-actions { display: flex; justify-content: flex-end; margin-top: .6rem; }
+      .bridge-config-actions:has(.auto-save-feedback:empty) { display: none; }
+      .bridge-audio-footer[hidden] { display: none; }
+
+      .bridge-audio-row { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(8rem, 12rem); align-items: end; gap: .5rem; min-width: 0; }
+      .bridge-audio-inline { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem 1rem; min-height: 2.2rem; min-width: 0; font-size: .9rem; }
+      .bridge-audio-row [data-gain] { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
+      .bridge-audio-meter { display: flex; align-items: center; gap: .5rem; min-width: 7rem; flex: 1; }
+      .bridge-audio-meter meter { display: block; width: 100%; min-width: 2rem; height: .5rem; flex: 1; appearance: none; background: #0b1220; border: 0; border-radius: 4px; overflow: hidden; }
+      .bridge-audio-meter meter::-webkit-meter-bar { background: #0b1220; border: 0; border-radius: 4px; }
+      .bridge-audio-meter meter::-webkit-meter-optimum-value { background: #4ade80; border-radius: 4px; }
+      .bridge-audio-meter meter::-moz-meter-bar { background: #4ade80; border-radius: 4px; }
+      .bridge-audio-meter [data-meter-label] { width: 5rem; text-align: right; font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+      @media (max-width: 600px) { .bridge-audio-row { grid-template-columns: minmax(0, 1fr); } .bridge-audio-row > .field-group { grid-row: 1; } }
+      .bridge-audio-tone { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: .5rem 1rem; margin-bottom: .5rem; }
+      .bridge-audio-tone label { display: flex; align-items: center; gap: .75rem; font-size: .85rem; }
+      .bridge-audio-tone select { width: 8rem; padding: .4rem .5rem; }
+      .bridge-audio-footer { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1rem; margin-top: .75rem; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
     </style>
   </head>
   <body>
@@ -3450,7 +4013,10 @@
     <div id="admin-bar" class="admin-bar is-hidden">
       <div class="admin-bar__meta">
         <img class="admin-brand-icon" src="/images/talktome-mark.png" alt="" aria-hidden="true" />
-        <span>Logged in as <strong id="admin-name-label"></strong></span>
+        <div class="admin-bar__session">
+          <span>Logged in as <strong id="admin-name-label"></strong></span>
+          <span id="admin-release-notice" role="status"></span>
+        </div>
       </div>
       <nav class="admin-bar__nav" aria-label="Admin sections">
         <a href="#status" data-admin-nav="status">Status</a>
@@ -3514,8 +4080,11 @@
           </div>
 
           <div class="status-group">
-            <div class="status-group__heading">
-              <h3>Users</h3>
+            <div class="status-group__heading status-group__heading--users">
+              <div class="status-users-title">
+                <h3>Users</h3>
+                <span id="status-user-filter-mobile-anchor"></span>
+              </div>
               <span id="status-users-count" class="status-group__count"></span>
             </div>
             <div class="status-table-wrap">
@@ -3525,6 +4094,10 @@
                   <col class="status-col--name">
                   <col class="status-col--production" data-status-production-column hidden>
                   <col class="status-col--client">
+                  <col class="status-col--version">
+                  <col class="status-col--output">
+                  <col class="status-col--battery">
+                  <col class="status-col--network">
                   <col class="status-col--address">
                   <col class="status-col--rtt">
                   <col class="status-col--loss">
@@ -3535,17 +4108,33 @@
                   <tr>
                     <th>Status</th>
                     <th>Name</th>
-                    <th data-status-production-column hidden>Production</th>
+                    <th data-status-production-column data-sort-key="Production" hidden>
+                      <span class="status-production-heading">
+                        <span data-status-sort-label>Production</span>
+                        <span id="status-user-filter-header-anchor">
+                          <span id="status-users-controls" class="status-users-controls">
+                            <button id="status-user-filter-toggle" type="button" class="status-user-filter-toggle" aria-label="Filter users by production" title="Filter by production" aria-haspopup="menu" aria-expanded="false" aria-controls="status-user-filter-panel" hidden>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 8v7l-4 2v-9Z"/></svg>
+                            </button>
+                            <span id="status-user-filter-panel" class="status-user-filter-panel" role="menu" aria-label="Filter users by production" hidden></span>
+                          </span>
+                        </span>
+                      </span>
+                    </th>
                     <th>Client</th>
+                    <th title="Application version; mobile build number in parentheses">Version</th>
+                    <th>Audio output</th>
+                    <th class="status-battery-cell" title="Battery">BATT</th>
+                    <th>Network</th>
                     <th>Address</th>
                     <th title="Browser: WebRTC round-trip time. Bridge: API request round-trip time.">RTT</th>
                     <th title="Browser: WebRTC audio packet loss. Bridge: input RTP packet loss to the server.">Loss</th>
-                    <th>Connected since</th>
+                    <th>Connected</th>
                     <th>Last seen</th>
                   </tr>
                 </thead>
                 <tbody id="status-users-body">
-                  <tr><td colspan="8" class="status-empty">Loading status...</td></tr>
+                  <tr><td colspan="12" class="status-empty">Loading status...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -3563,6 +4152,10 @@
                   <col class="status-col--name">
                   <col class="status-col--production" data-status-production-column hidden>
                   <col class="status-col--client">
+                  <col class="status-col--version">
+                  <col class="status-col--output">
+                  <col class="status-col--battery">
+                  <col class="status-col--network">
                   <col class="status-col--address">
                   <col class="status-col--rtt">
                   <col class="status-col--loss">
@@ -3575,10 +4168,14 @@
                     <th>Name</th>
                     <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
+                    <th title="Application version; mobile build number in parentheses">Version</th>
+                    <th>Audio output</th>
+                    <th class="status-battery-cell" title="Battery">BATT</th>
+                    <th>Network</th>
                     <th>Address</th>
                     <th title="Browser: WebRTC round-trip time. Bridge: API request round-trip time.">RTT</th>
                     <th title="Browser: WebRTC audio packet loss. Bridge: input RTP packet loss to the server.">Loss</th>
-                    <th>Connected since</th>
+                    <th>Connected</th>
                     <th>Last seen</th>
                   </tr>
                 </thead>
@@ -3601,6 +4198,10 @@
                   <col class="status-col--name">
                   <col class="status-col--production" data-status-production-column hidden>
                   <col class="status-col--client">
+                  <col class="status-col--version">
+                  <col class="status-col--output">
+                  <col class="status-col--battery">
+                  <col class="status-col--network">
                   <col class="status-col--address">
                   <col class="status-col--rtt">
                   <col class="status-col--loss">
@@ -3613,10 +4214,14 @@
                     <th>Name</th>
                     <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
+                    <th title="Application version; mobile build number in parentheses">Version</th>
+                    <th>Audio output</th>
+                    <th class="status-battery-cell" title="Battery">BATT</th>
+                    <th>Network</th>
                     <th>Address</th>
                     <th title="Bridge API request round-trip time across active ports">RTT</th>
                     <th title="Input RTP packet loss from Bridge to server across active ports">Loss</th>
-                    <th>Connected since</th>
+                    <th>Connected</th>
                     <th>Last seen</th>
                   </tr>
                 </thead>
@@ -3639,6 +4244,10 @@
                   <col class="status-col--name">
                   <col class="status-col--production" data-status-production-column hidden>
                   <col class="status-col--client">
+                  <col class="status-col--version">
+                  <col class="status-col--output">
+                  <col class="status-col--battery">
+                  <col class="status-col--network">
                   <col class="status-col--address">
                   <col class="status-col--rtt">
                   <col class="status-col--loss">
@@ -3651,10 +4260,14 @@
                     <th>Name</th>
                     <th data-status-production-column aria-hidden="true" hidden></th>
                     <th>Client</th>
+                    <th title="Application version; mobile build number in parentheses">Version</th>
+                    <th>Audio output</th>
+                    <th class="status-battery-cell" title="Battery">BATT</th>
+                    <th>Network</th>
                     <th>Address</th>
                     <th title="WebRTC round-trip time between this browser and the server">RTT</th>
                     <th title="Audio packet loss, cumulative since the current WebRTC transport connected">Loss</th>
-                    <th>Connected since</th>
+                    <th>Connected</th>
                     <th>Last seen</th>
                   </tr>
                 </thead>
@@ -3862,10 +4475,6 @@
               </div>
 
               <div class="production-config-layout">
-                <section class="production-members-panel">
-                  <h3 class="matrix-subheading">Production contents</h3>
-                  <ul id="production-members" class="production-check-list"></ul>
-                </section>
                 <section class="production-matrix-panel">
                   <h3 class="matrix-subheading">Target buttons</h3>
                   <div
@@ -3874,6 +4483,10 @@
                     aria-label="Conference listen only. Orange conference cells mean that the user remains a member and can hear the conference, but cannot speak to it."
                   ><span class="conference-listen-only-dot" aria-hidden="true"></span><span>= Conference listen only</span></div>
                   <div id="production-target-matrix-container" class="target-matrix-wrap" aria-live="polite"></div>
+                </section>
+                <section class="production-members-panel">
+                  <h3 class="matrix-subheading">Production contents</h3>
+                  <div id="production-members" class="production-contents-grid"></div>
                 </section>
               </div>
 
@@ -3899,52 +4512,43 @@
         </div>
 
         <div id="config-section-body" class="card-section-body">
-          <div class="config-layout">
+          <nav class="config-tabs" role="tablist" aria-label="Configuration categories">
+            <button type="button" id="config-network-tab" role="tab" data-config-tab="network" aria-selected="true" aria-controls="config-network-panel" tabindex="0">Network</button>
+            <button type="button" id="config-access-tab" role="tab" data-config-tab="access" aria-selected="false" aria-controls="config-access-panel" tabindex="-1">Access</button>
+            <button type="button" id="config-backups-tab" role="tab" data-config-tab="backups" aria-selected="false" aria-controls="config-backups-panel" tabindex="-1">Backups</button>
+            <button type="button" id="config-clients-tab" role="tab" data-config-tab="clients" aria-selected="false" aria-controls="config-clients-panel" tabindex="-1">Client defaults</button>
+          </nav>
+          <div id="config-network-panel" class="config-category-panel" role="tabpanel" aria-labelledby="config-network-tab" tabindex="0">
+            <div class="config-layout">
+
+
             <section class="config-panel" aria-labelledby="config-media-network-heading">
+              <h3 id="config-media-network-heading">Media network</h3>
               <div class="media-network-top">
+
                 <div id="media-network-meta" class="media-network-meta">
-                  <h3 id="config-media-network-heading">Media network</h3>
+                  <div class="media-network-info">
                   <div class="setting-meta">
-                    <div>Active media network: <strong id="media-network-active-mode">Loading...</strong></div>
-                    <div>Active RTC addresses: <strong id="media-network-active-address">Loading...</strong></div>
-                    <div>Saved media network: <strong id="media-network-saved-mode">Loading...</strong></div>
+                    <div><span class="media-network-stat-label">RTC addresses:</span> <strong id="media-network-active-address">Loading...</strong></div>
                     <div id="media-network-restart-hint">Changes require a server restart to take effect.</div>
                     <div id="media-network-override-hint" class="is-hidden">An environment override is active. Saved changes will only apply after restart without `PUBLIC_IP` or `TALKTOME_MEDIA_INTERFACE` overrides.</div>
                   </div>
                   <div id="media-network-warning" class="media-network-warning is-hidden" role="status"></div>
-                </div>
-
-                <div id="media-network-qr" class="media-network-qr-card is-hidden">
-                  <button type="button" id="media-network-qr-button" class="media-network-qr-button" aria-label="Open large connection QR code" disabled>
-                    <img id="media-network-qr-image" class="media-network-qr-image" alt="Connection QR code" />
-                  </button>
-                  <div class="media-network-qr-actions">
-                    <button type="button" id="media-network-qr-download" class="small media-network-qr-download" aria-label="Download connection QR code" title="Download QR code">
-                      <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M10 3.5V11.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M6.75 8.5L10 11.75L13.25 8.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M4 14.25H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                      </svg>
-                    </button>
                   </div>
-                </div>
-              </div>
 
               <form id="media-network-form" class="inline-form" autocomplete="off">
                 <div class="field-group field-group--stacked" id="media-network-mode-group">
                   <label for="media-network-mode">Mode</label>
                   <select id="media-network-mode" required>
                     <option value="auto">Automatic (all adapters)</option>
-                    <option value="interface">Preferred network adapter</option>
+                    <option value="interface">Selected network adapters</option>
                     <option value="manual">Manual announced IP / hostname</option>
                   </select>
                 </div>
 
                 <div class="field-group field-group--stacked" id="media-interface-group">
-                  <label for="media-interface-name">Network adapter</label>
-                  <select id="media-interface-name">
-                    <option value="">Select adapter</option>
-                  </select>
+                  <span id="media-interface-label" class="media-interface-label">Network adapters</span>
+                  <div id="media-interface-name" class="media-adapter-options" role="group" aria-labelledby="media-interface-label"></div>
                 </div>
 
                 <div class="field-group field-group--stacked" id="media-announced-address-group">
@@ -3952,10 +4556,16 @@
                   <input type="text" id="media-announced-address" />
                 </div>
 
+                <div id="media-network-qr" class="media-network-qr-card is-hidden" role="group" aria-label="Active media network QR codes"></div>
+
                 <div id="media-network-actions">
                   <button type="submit">Save</button>
                 </div>
               </form>
+                </div>
+
+
+              </div>
             </section>
 
             <section class="config-panel" aria-labelledby="config-rtc-ports-heading">
@@ -3963,7 +4573,6 @@
 
               <div class="setting-meta">
                 <div>Active RTC ports: <strong id="rtc-ports-active-range">Loading...</strong></div>
-                <div>Saved RTC ports: <strong id="rtc-ports-saved-range">Loading...</strong></div>
                 <div id="rtc-ports-restart-hint">Changes require a server restart to take effect.</div>
                 <div id="rtc-ports-override-hint" class="is-hidden">An environment override is active. Saved changes will only apply after restart without `TALKTOME_RTC_PORT_START` or `TALKTOME_RTC_PORT_COUNT` overrides.</div>
               </div>
@@ -3983,6 +4592,66 @@
               </form>
             </section>
 
+            <section class="config-panel" aria-labelledby="config-network-heading">
+              <h3 id="config-network-heading">Network alias</h3>
+
+              <div class="setting-meta">
+                <div>Active mDNS alias: <strong id="mdns-active-host">Loading...</strong></div>
+                <div id="mdns-restart-hint">Changes require a server restart to take effect.</div>
+                <div id="mdns-container-hint" class="is-hidden">Docker/container deployments should usually keep mDNS set to <strong>off</strong>. Use the host LAN IP or DNS name instead.</div>
+              </div>
+
+              <form id="mdns-form" class="inline-form" autocomplete="off">
+                <div class="field-group field-group--stacked">
+                  <label for="mdns-host">mDNS name</label>
+                  <input type="text" id="mdns-host" required />
+                </div>
+                <button type="submit">Save</button>
+              </form>
+            </section>
+
+            <section id="container-restart-panel" class="config-panel is-hidden" aria-labelledby="container-restart-heading">
+              <h3 id="container-restart-heading">Server restart</h3>
+              <div class="setting-meta">
+                <div>Restarts the server. Connected clients will be disconnected briefly.</div>
+                <div>Docker deployments use their configured restart policy.</div>
+              </div>
+              <button type="button" id="container-restart-btn" class="warning">Restart server</button>
+            </section>
+
+            <section class="config-panel" aria-labelledby="config-web-access-heading">
+              <h3 id="config-web-access-heading">Web access</h3>
+              <div class="setting-meta">
+                <div>Active web access: <strong id="web-access-active">Loading...</strong></div>
+                <div id="web-access-restart-hint">Changes require a server restart to take effect.</div>
+                <div>In reverse-proxy mode, open the public HTTPS URL for microphone access. Keep the HTTP backend on a private network.</div>
+                <div id="web-access-override-hint" class="is-hidden"></div>
+              </div>
+              <form id="web-access-form" class="inline-form" autocomplete="off">
+                <div class="field-group field-group--stacked">
+                  <label for="web-access-mode">TLS mode</label>
+                  <select id="web-access-mode"><option value="internal">Built-in HTTPS</option><option value="proxy">HTTPS via reverse proxy</option></select>
+                </div>
+                <div class="field-group field-group--stacked">
+                  <label for="web-access-port">Backend port</label>
+                  <input id="web-access-port" type="number" min="1" max="65535" required />
+                </div>
+                <div class="field-group field-group--stacked">
+                  <label for="web-access-public-url" title="Address clients use to reach this server, including the external port if needed. Used for shared links and QR codes in both TLS modes. Does not change the backend port or Docker port mapping.">Public HTTPS URL (optional)</label>
+                  <input id="web-access-public-url" type="url" placeholder="https://talktome.example.com:55443" aria-describedby="web-access-public-url-hint" />
+                  <div id="web-access-public-url-hint" class="visually-hidden">Address clients use to reach this server, including the external port if needed. Used for shared links and QR codes in both TLS modes. Does not change the backend port or Docker port mapping.</div>
+                </div>
+                <div class="field-group field-group--stacked is-hidden" data-web-access-proxy-field>
+                  <label for="web-access-trusted-proxies">Trusted proxy IPs / CIDRs (comma-separated)</label>
+                  <input id="web-access-trusted-proxies" type="text" placeholder="172.20.0.2" />
+                </div>
+                <button type="submit">Save</button>
+              </form>
+            </section>
+            </div>
+          </div>
+          <div id="config-access-panel" class="config-category-panel" role="tabpanel" aria-labelledby="config-access-tab" tabindex="0" hidden>
+            <div class="config-layout">
             <section class="config-panel" aria-labelledby="config-guest-login-heading">
               <h3 id="config-guest-login-heading">Guest login</h3>
 
@@ -4000,25 +4669,6 @@
                   </label>
                 </form>
               </div>
-            </section>
-
-            <section class="config-panel" aria-labelledby="config-network-heading">
-              <h3 id="config-network-heading">Network alias</h3>
-
-              <div class="setting-meta">
-                <div>Active mDNS alias: <strong id="mdns-active-host">Loading...</strong></div>
-                <div>Saved mDNS alias: <strong id="mdns-saved-host">Loading...</strong></div>
-                <div id="mdns-restart-hint">Changes require a server restart to take effect.</div>
-                <div id="mdns-container-hint" class="is-hidden">Docker/container deployments should usually keep mDNS set to <strong>off</strong>. Use the host LAN IP or DNS name instead.</div>
-              </div>
-
-              <form id="mdns-form" class="inline-form" autocomplete="off">
-                <div class="field-group field-group--stacked">
-                  <label for="mdns-host">mDNS name</label>
-                  <input type="text" id="mdns-host" required />
-                </div>
-                <button type="submit">Save</button>
-              </form>
             </section>
 
             <section class="config-panel" aria-labelledby="config-api-key-heading">
@@ -4045,21 +4695,79 @@
                 </div>
               </div>
             </section>
+            </div>
+          </div>
+          <div id="config-backups-panel" class="config-category-panel" role="tabpanel" aria-labelledby="config-backups-tab" tabindex="0" hidden>
+            <div class="config-layout">
+            <section class="config-panel config-backup-panel" aria-label="Backup settings">
+              <div class="config-transfer-grid">
+                <div class="config-transfer-card">
+                  <h4>Export backup</h4>
+                  <p class="config-transfer-description">Download a copy of the current configuration as a JSON file.</p>
+                  <div class="config-transfer-actions">
+                    <button type="button" id="config-export-btn">Export config</button>
+                  </div>
+                </div>
 
-            <section id="container-restart-panel" class="config-panel is-hidden" aria-labelledby="container-restart-heading">
-              <h3 id="container-restart-heading">Server restart</h3>
-              <div class="setting-meta">
-                <div>Restarts the server. Connected clients will be disconnected briefly.</div>
-                <div>Docker deployments use their configured restart policy.</div>
+                <div class="config-transfer-card">
+                  <h4>Restore from backup</h4>
+                  <p class="config-transfer-description">Choose a previously exported Talktome configuration.</p>
+                  <div class="config-import-row">
+                    <label class="config-file-picker" for="config-import-file">
+                      <span>Choose JSON backup</span>
+                      <span id="config-import-filename" aria-live="polite">No file selected</span>
+                      <input type="file" id="config-import-file" class="visually-hidden" accept=".json,application/json" aria-label="Choose JSON backup" />
+                    </label>
+                    <button type="button" id="config-import-btn" class="warning" disabled>Import config</button>
+                  </div>
+                </div>
               </div>
-              <button type="button" id="container-restart-btn" class="warning">Restart server</button>
+
+              <form id="config-auto-backup-form" class="config-auto-backup-form is-collapsed">
+                <div class="config-auto-backup-header">
+                  <label class="config-auto-backup-toggle">
+                    <span class="config-auto-backup-title">
+                      <strong>Automatic backups</strong>
+                      <span>Keep scheduled copies of your configuration.</span>
+                    </span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="config-auto-backup-enabled" role="switch" aria-label="Automatic backups" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  <div class="config-auto-backup-actions">
+                    <span id="backup-auto-save-status" class="auto-save-feedback" role="status" aria-live="polite"></span>
+                  </div>
+                </div>
+                <div id="config-auto-backup-details" class="config-auto-backup-details" hidden>
+                  <label class="config-auto-backup-interval" id="config-auto-backup-interval-field" for="config-auto-backup-interval" hidden>
+                    <span>Backup interval</span>
+                    <select id="config-auto-backup-interval">
+                      <option value="1">1 day</option>
+                      <option value="3">3 days</option>
+                      <option value="7" selected>7 days</option>
+                      <option value="14">14 days</option>
+                      <option value="30">30 days</option>
+                    </select>
+                  </label>
+                  <div class="config-auto-backup-footer">
+                    <div class="config-auto-backup-time" hidden>Last backup<span id="config-auto-backup-last" aria-live="polite">Never</span></div>
+                    <div class="config-auto-backup-time" hidden>Next backup<span id="config-auto-backup-next" aria-live="polite">Disabled</span></div>
+                  </div>
+                  <div class="config-auto-backup-status" id="config-auto-backup-status" hidden>
+                    <div>Storage location: <code id="config-auto-backup-directory">Loading…</code></div>
+                  </div>
+                </div>
+                <div id="config-auto-backup-error" class="is-hidden" aria-live="polite"></div>
+              </form>
             </section>
-
-            <section class="config-panel default-client-settings-panel" aria-labelledby="config-default-client-heading">
-              <h3 id="config-default-client-heading">Default client settings</h3>
-
+            </div>
+          </div>
+          <div id="config-clients-panel" class="config-category-panel" role="tabpanel" aria-labelledby="config-clients-tab" tabindex="0" hidden>
+            <div class="config-layout">
+            <section class="config-panel default-client-settings-panel" aria-label="Client defaults">
               <div class="setting-meta">
-                <div>These values apply when a client has no personal setting saved yet; existing and future personal client choices continue to take precedence.</div>
+                <div>Defaults apply until a client saves their own preferences.</div>
               </div>
 
               <form id="default-client-settings-form" class="default-client-settings-form" autocomplete="off">
@@ -4085,42 +4793,56 @@
                 </div>
 
                 <div class="default-client-settings-toggles">
-                  <label class="default-client-setting-toggle">
+                  <div class="default-client-setting-toggle">
                     <span>Dim feeds while speaking</span>
                     <span class="admin-switch">
                       <input type="checkbox" id="default-client-dim-self" role="switch" />
                       <span class="admin-switch__track" aria-hidden="true"></span>
                     </span>
-                  </label>
-                  <label class="default-client-setting-toggle">
-                    <span>Dim when addressed</span>
+                  </div>
+                  <div class="default-client-setting-toggle">
+                    <span>Dim feeds when addressed</span>
                     <span class="admin-switch">
                       <input type="checkbox" id="default-client-dim-incoming" role="switch" />
                       <span class="admin-switch__track" aria-hidden="true"></span>
                     </span>
-                  </label>
-                  <label class="default-client-setting-toggle">
+                  </div>
+                  <div class="default-client-setting-toggle">
                     <span>Audio auto processing</span>
                     <span class="admin-switch">
                       <input type="checkbox" id="default-client-audio-processing" role="switch" />
                       <span class="admin-switch__track" aria-hidden="true"></span>
                     </span>
-                  </label>
-                  <label class="default-client-setting-toggle">
+                  </div>
+                  <div class="default-client-setting-toggle">
                     <span>Play connection sounds</span>
                     <span class="admin-switch">
                       <input type="checkbox" id="default-client-connection-sounds" role="switch" />
                       <span class="admin-switch__track" aria-hidden="true"></span>
                     </span>
-                  </label>
-                  <label class="default-client-setting-toggle">
+                  </div>
+                  <div class="default-client-setting-toggle">
+                    <span>Incoming level meters</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-incoming-levels" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="default-client-setting-toggle">
                     <span>Left-hand mode</span>
                     <span class="admin-switch">
                       <input type="checkbox" id="default-client-left-hand" role="switch" />
                       <span class="admin-switch__track" aria-hidden="true"></span>
                     </span>
-                  </label>
-                  <label
+                  </div>
+                  <div class="default-client-setting-toggle" title="Make the main talk button larger until the client saves its own preference.">
+                    <span>Big main button</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-big-main-button" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div
                     class="default-client-setting-toggle"
                     title="Keep locked targets active while temporarily talking to or locking additional targets."
                   >
@@ -4129,68 +4851,42 @@
                       <input type="checkbox" id="default-client-lock-multiple" role="switch" />
                       <span class="admin-switch__track" aria-hidden="true"></span>
                     </span>
-                  </label>
-                  <div class="default-client-settings-actions">
-                    <button type="submit">Save</button>
                   </div>
+                  <div class="default-client-setting-toggle" title="Let users briefly tap a talk button to lock it.">
+                    <span>Tap to lock</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-tap-to-lock" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="default-client-setting-toggle" title="Allow users to change the order of their target buttons. Can be overridden per user.">
+                    <span>Allow target rearrange</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-allow-target-rearrange" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="default-client-setting-toggle" title="Allow users to add or remove targets in their production. Can be overridden per user.">
+                    <span>Allow target add/remove</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-allow-target-add-remove" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="default-client-setting-toggle" title="Allow feeds to transmit video. Can be overridden per feed. Disabled feeds remain audio-only.">
+                    <span>Allow Feed-Video</span>
+                    <span class="admin-switch">
+                      <input type="checkbox" id="default-client-allow-feed-video" role="switch" />
+                      <span class="admin-switch__track" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="default-client-settings-actions"><span id="defaults-auto-save-status" class="auto-save-feedback" role="status" aria-live="polite"></span></div>
                 </div>
               </form>
             </section>
-
-            <section class="config-panel config-backup-panel" aria-labelledby="config-backup-heading">
-              <h3 id="config-backup-heading">Backup and restore</h3>
-
-              <div class="setting-meta">
-                <div>Export and import the full server configuration as a JSON backup.</div>
-              </div>
-
-              <div class="config-transfer-grid">
-                <div class="config-export-group">
-                  <label>Export backup</label>
-                  <button type="button" id="config-export-btn">Export config</button>
-                </div>
-
-                <div class="config-import-group">
-                  <label for="config-import-file">Import config file</label>
-                  <div class="config-import-actions">
-                    <input type="file" id="config-import-file" accept=".json,application/json" />
-                    <button type="button" id="config-import-btn" class="warning">Import config</button>
-                  </div>
-                </div>
-              </div>
-
-              <form id="config-auto-backup-form" class="config-auto-backup-form is-collapsed">
-                <label class="config-auto-backup-toggle">
-                  <span>Automatic backups</span>
-                  <span class="admin-switch">
-                    <input type="checkbox" id="config-auto-backup-enabled" role="switch" />
-                    <span class="admin-switch__track" aria-hidden="true"></span>
-                  </span>
-                </label>
-                <label class="config-auto-backup-interval" id="config-auto-backup-interval-field" for="config-auto-backup-interval" hidden>
-                  <span>Every</span>
-                  <select id="config-auto-backup-interval">
-                    <option value="1">1 day</option>
-                    <option value="3">3 days</option>
-                    <option value="7" selected>7 days</option>
-                    <option value="14">14 days</option>
-                    <option value="30">30 days</option>
-                  </select>
-                </label>
-                <div class="config-auto-backup-status" id="config-auto-backup-status" hidden>
-                  <div>Location: <code id="config-auto-backup-directory">Loading…</code></div>
-                </div>
-                <div class="config-auto-backup-footer">
-                  <div class="config-auto-backup-time" hidden>Last backup: <span id="config-auto-backup-last" aria-live="polite">Never</span></div>
-                  <div class="config-auto-backup-time" hidden>Next backup: <span id="config-auto-backup-next" aria-live="polite">Disabled</span></div>
-                  <div class="config-auto-backup-actions">
-                    <button type="submit">Save</button>
-                  </div>
-                </div>
-                <div id="config-auto-backup-error" class="is-hidden" aria-live="polite"></div>
-              </form>
-            </section>
+            </div>
           </div>
+
         </div>
       </section>
     </main>
@@ -4235,6 +4931,7 @@
         <div id="admin-action-dialog-error" class="admin-action-dialog__error is-hidden" aria-live="polite"></div>
         <div class="admin-action-dialog__actions">
           <button type="button" id="admin-action-dialog-cancel" class="admin-action-dialog__cancel">Cancel</button>
+          <button type="button" id="admin-action-dialog-alternative" class="is-hidden">Disconnect all</button>
           <button type="submit" id="admin-action-dialog-confirm" class="admin-action-dialog__confirm">Confirm</button>
         </div>
       </form>
@@ -4259,6 +4956,9 @@
     </div>
 
     <script src="/userAudioSettings.js"></script>
+    <script src="/bridgeTalkTrigger.js"></script>
+    <script src="/targetPicker.js"></script>
+    <script src="/adminAutoSave.js"></script>
     <script src="admin.js"></script>
   </body>
 </html>

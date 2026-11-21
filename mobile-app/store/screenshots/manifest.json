@@ -1,0 +1,65 @@
+{
+  "sourceCommit": "0f63866",
+  "appVersion": "1.0.0",
+  "buildNumber": "36",
+  "locales": [
+    "en-GB",
+    "de-DE"
+  ],
+  "note": "The app UI is English in both store locales. Real simulator UI with local demo accounts. Device audio I/O was disabled only in the temporary screenshot checkout to avoid Simulator RemoteIO RPC aborts; the shipped device build uses normal audio.",
+  "sets": [
+    {
+      "device": "iphone",
+      "displayType": "APP_IPHONE_67",
+      "pixels": [
+        1320,
+        2868
+      ],
+      "files": [
+        {
+          "file": "iphone/01-operator-build36.png",
+          "sha256": "6cacfe949def8545e02eabb31f61b131f8070fb4ab182ed885cc738c152b04e2"
+        },
+        {
+          "file": "iphone/04-watch-targets.png",
+          "sha256": "0664e3874654d2899b3684dd662e555cb5bb7f9e065aa9cf93701ff0bd9f4f57"
+        }
+      ],
+      "sourceCommit": "0f63866",
+      "buildNumber": "36"
+    },
+    {
+      "device": "ipad",
+      "displayType": "APP_IPAD_PRO_3GEN_129",
+      "pixels": [
+        2752,
+        2064
+      ],
+      "files": [
+        {
+          "file": "ipad/01-operator.png",
+          "sha256": "6c84c4659a17f9b8987c25c05d1234d5ee22b2c1c63c8b6c2a42b079c1ea31c7"
+        }
+      ],
+      "sourceCommit": "bd919d4",
+      "buildNumber": "34"
+    },
+    {
+      "device": "watch",
+      "displayType": "APP_WATCH_SERIES_10",
+      "pixels": [
+        416,
+        496
+      ],
+      "files": [
+        {
+          "file": "watch/01-reply-fullscreen.png",
+          "sha256": "34121c31e49ad32cfe12e2fdfcd86c4811262e939fb86d66b10b22c7fa90a821"
+        }
+      ],
+      "sourceCommit": "0f63866",
+      "buildNumber": "36",
+      "note": "Genuine native Watch simulator capture of the single Reply target. The visible idle full-screen layout is unchanged in build 38; PNG encoded as RGB without alpha for App Store delivery."
+    }
+  ]
+}

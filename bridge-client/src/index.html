@@ -28,6 +28,7 @@
               <span class="switch-label">Run at login</span>
             </label>
           </div>
+          <small id="bridge-app-version" class="bridge-app-version" aria-label="Bridge version">-</small>
         </div>
         <div class="server-grid">
           <label>
@@ -43,26 +44,31 @@
             <input id="bridge-name" type="text" autocomplete="off" />
           </label>
         </div>
+        <label class="switch-row local-tls-choice" title="Disables certificate verification only for this local HTTPS server. Leave off for trusted certificates.">
+          <input id="allow-insecure-tls" type="checkbox" role="switch" />
+          <span class="switch-track" aria-hidden="true"></span>
+          <span class="switch-label">Allow untrusted TLS for this local server</span>
+        </label>
         <div class="network-audio-runtime-row" id="ndi-runtime" data-state="checking">
           <span class="network-audio-runtime-dot" aria-hidden="true"></span>
           <div>
-            <strong>NDI Audio</strong>
+            <strong>NDI</strong>
             <small id="ndi-runtime-detail">Checking optional NDI Runtime…</small>
           </div>
           <div class="network-audio-runtime-actions">
             <button id="refresh-ndi" type="button">Refresh</button>
-            <a id="ndi-runtime-link" class="network-audio-runtime-link" href="https://ndi.video/tools/" target="_blank" rel="noreferrer">Download NDI Tools</a>
+            <a id="ndi-runtime-link" class="network-audio-runtime-link" href="https://ndi.video/tools/" target="_blank" rel="noreferrer" title="NDI information and runtime download" aria-label="NDI information and runtime download">Info</a>
           </div>
         </div>
         <div class="network-audio-runtime-row" id="omt-runtime" data-state="checking">
           <span class="network-audio-runtime-dot" aria-hidden="true"></span>
           <div>
-            <strong>OMT Audio</strong>
+            <strong>OMT</strong>
             <small id="omt-runtime-detail">Checking bundled OMT backend…</small>
           </div>
           <div class="network-audio-runtime-actions">
             <button id="refresh-omt" type="button">Refresh</button>
-            <a id="omt-runtime-link" class="network-audio-runtime-link" href="https://www.openmediatransport.org/" target="_blank" rel="noreferrer">OMT information</a>
+            <a id="omt-runtime-link" class="network-audio-runtime-link" href="https://www.openmediatransport.org/" target="_blank" rel="noreferrer" title="OMT information" aria-label="OMT information">Info</a>
           </div>
         </div>
         <div class="audio-scan-status" id="audio-scan-status" role="status"></div>
@@ -75,6 +81,7 @@
           <div>
             <h2>Managed bridge ports</h2>
           </div>
+          <button type="button" id="refresh-devices" hidden>Retry</button>
         </div>
         <div class="managed-port-list" id="bridge-ports"></div>
       </section>

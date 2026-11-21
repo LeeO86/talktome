@@ -67,28 +67,37 @@ function syncMediaNetworkRows() {
   manualAddressRow.hidden = mode !== "manual";
 }
 
-function renderMediaInterfaceOptions(interfaces, selectedName) {
-  const entries = Array.isArray(interfaces) ? interfaces : [];
-  const selected = selectedName || "";
-  const hasSelected = entries.some((entry) => entry?.name === selected);
-
-  mediaInterfaceName.innerHTML = '<option value="">Select adapter</option>';
-  entries.forEach((entry) => {
-    if (!entry?.name) return;
-    const option = document.createElement("option");
-    option.value = entry.name;
-    option.textContent = entry.label || `${entry.name} - ${entry.address || "unknown address"}`;
-    mediaInterfaceName.appendChild(option);
-  });
-
-  if (selected && !hasSelected) {
-    const option = document.createElement("option");
-    option.value = selected;
-    option.textContent = `${selected} (saved, unavailable)`;
-    mediaInterfaceName.appendChild(option);
+function renderMediaInterfaceOptions(container, interfaces, selectedName) {
+  const selected = new Set(String(selectedName || '').split(',').map(name => name.trim()).filter(Boolean));
+  const entries = new Map();
+  for (const entry of interfaces || []) {
+    if (!entry?.name) continue;
+    const previous = entries.get(entry.name);
+    entries.set(entry.name, previous ? `${previous}, ${entry.address}` : (entry.label || `${entry.name} - ${entry.address}`));
   }
-
-  mediaInterfaceName.value = selected;
+  for (const name of selected) {
+    if (!entries.has(name)) entries.set(name, `${name} (saved, unavailable)`);
+  }
+  container.replaceChildren();
+  for (const [name, description] of entries) {
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.setAttribute('role', 'switch');
+    checkbox.value = name;
+    checkbox.checked = selected.has(name);
+    const text = document.createElement('span');
+    text.textContent = description;
+    const control = document.createElement('span');
+    control.className = 'switch-row';
+    const track = document.createElement('span');
+    track.className = 'switch-track';
+    track.setAttribute('aria-hidden', 'true');
+    control.append(checkbox, track);
+    label.append(text, control);
+    container.append(label);
+  }
+  if (!entries.size) container.textContent = 'No network adapters available';
 }
 
 function parsePortInput(input, fallback) {
@@ -105,7 +114,7 @@ function applyConfig(config, configured) {
   rtcPortStart.value = config.rtcPortStart ?? 40000;
   rtcPortCount.value = config.rtcPortCount ?? 10000;
   mediaNetworkMode.value = config.mediaNetworkMode || "auto";
-  renderMediaInterfaceOptions(config.availableMediaInterfaces, config.mediaInterfaceName || "");
+  renderMediaInterfaceOptions(mediaInterfaceName, config.availableMediaInterfaces, config.mediaInterfaceName || "");
   mediaAnnouncedAddress.value = config.mediaAnnouncedAddress || "";
   syncMediaNetworkRows();
 }
@@ -120,7 +129,7 @@ function readConfig() {
     rtcPortCount: parsePortInput(rtcPortCount, 10000),
     mediaNetworkMode: mode,
     mediaInterfaceName:
-      mode === "interface" ? mediaInterfaceName.value.trim() || null : null,
+      mode === "interface" ? Array.from(mediaInterfaceName.querySelectorAll("input:checked"), input => input.value).join(",") || null : null,
     mediaAnnouncedAddress:
       mode === "manual" ? mediaAnnouncedAddress.value.trim() || null : null,
   };

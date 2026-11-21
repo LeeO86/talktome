@@ -5,6 +5,7 @@
 
 mod auth;
 mod config_api;
+mod panel_ui;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,12 +25,13 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::watch;
 
-use crate::config::{Config, WebConfig, WEB_ADMIN_USER};
+use crate::config::{validate_web_password, Config, WebConfig, WEB_ADMIN_USER};
 use crate::state::{Bus, Command, DeckInput, InputSource, TargetRef};
 use crate::talk::TargetKey;
 use auth::{AuthState, SESSION_COOKIE};
 
 const INDEX_HTML: &str = include_str!("assets/index.html");
+const SETUP_HTML: &str = include_str!("assets/setup.html");
 const APP_JS: &str = include_str!("assets/app.js");
 const STYLE_CSS: &str = include_str!("assets/style.css");
 const TALKTOME_ICON_PNG: &[u8] = include_bytes!("assets/talktome-icon.png");
@@ -60,14 +62,52 @@ pub async fn run(
     web: WebConfig,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
+    let listener = tokio::net::TcpListener::bind((web.bind.as_str(), web.port))
+        .await
+        .with_context(|| format!("binding web interface on {}:{}", web.bind, web.port))?;
+    let app = web_router(ctx, web.password);
+    tracing::info!(event = "web-listening", bind = %web.bind, port = web.port);
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            loop {
+                if *shutdown.borrow() {
+                    return;
+                }
+                if shutdown.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+        .await
+        .context("web server")
+}
+
+fn web_router(ctx: WebContext, password: String) -> Router {
+    if let Err(error) = validate_web_password(&password) {
+        tracing::warn!(event = "web-setup-required", %error, "set web.password or TALKTOME_WEB_PASSWORD and restart the service");
+        return Router::new()
+            .route("/", get(setup_notice))
+            .route("/index.html", get(setup_notice))
+            .route("/style.css", get(style_css));
+    }
+
     let password_from_env = std::env::var_os("TALKTOME_WEB_PASSWORD").is_some();
     let state: Shared = Arc::new(AppState {
-        auth: Mutex::new(AuthState::new(web.password.clone(), password_from_env)),
+        auth: Mutex::new(AuthState::load(
+            password,
+            password_from_env,
+            &ctx.config.state_dir(),
+        )),
         ctx,
         started: Instant::now(),
     });
 
     let protected = Router::new()
+        .route("/panel", get(panel_ui::page))
+        .route("/local-panel.js", get(panel_ui::local_transport))
+        .route("/api/local-panel", post(local_panel))
+        .route("/login/options", get(local_login_options))
         .route("/api/status", get(status))
         .route(
             "/api/config",
@@ -88,11 +128,13 @@ pub async fn run(
     let app = Router::new()
         .route("/", get(index))
         .route("/index.html", get(index))
+        .route("/panel-assets/{*path}", get(panel_ui::asset))
         .route("/app.js", get(app_js))
         .route("/style.css", get(style_css))
         .route("/talktome-icon.png", get(talktome_icon))
         .route("/apple-touch-icon.png", get(apple_touch_icon))
         .route("/favicon.ico", get(talktome_icon))
+        .route("/images/{*path}", get(panel_ui::image))
         .route("/images/walkie-talkies-white.png", get(walkie_icon))
         .route("/images/speaker-white.png", get(speaker_on_icon))
         .route("/images/speaker-muted.png", get(speaker_muted_icon))
@@ -102,36 +144,17 @@ pub async fn run(
         .layer(middleware::from_fn(no_store_api))
         .with_state(state.clone());
 
-    let listener = tokio::net::TcpListener::bind((web.bind.as_str(), web.port))
-        .await
-        .with_context(|| format!("binding web interface on {}:{}", web.bind, web.port))?;
-    tracing::info!(event = "web-listening", bind = %web.bind, port = web.port);
-
-    let cleanup_state = state.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         loop {
             tick.tick().await;
-            if let Ok(mut auth) = cleanup_state.auth.lock() {
+            if let Ok(mut auth) = state.auth.lock() {
                 auth.expire_sessions();
             }
         }
     });
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            loop {
-                if *shutdown.borrow() {
-                    return;
-                }
-                if shutdown.changed().await.is_err() {
-                    return;
-                }
-            }
-        })
-        .await
-        .context("web server")?;
-    Ok(())
+    app
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +166,10 @@ async fn index() -> impl IntoResponse {
         [(header::CACHE_CONTROL, "no-cache")],
         Html(INDEX_HTML.replace("__VERSION__", crate::VERSION)),
     )
+}
+
+async fn setup_notice() -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], Html(SETUP_HTML))
 }
 
 async fn app_js() -> impl IntoResponse {
@@ -283,7 +310,6 @@ async fn login(State(state): State<Shared>, Json(body): Json<LoginBody>) -> Resp
             let body = Json(json!({
                 "ok": true,
                 "user": WEB_ADMIN_USER,
-                "must_change_password": auth.must_change_password(),
             }));
             let mut response = body.into_response();
             if let Ok(value) = HeaderValue::from_str(&cookie) {
@@ -314,15 +340,14 @@ async fn logout(State(state): State<Shared>, headers: HeaderMap) -> Response {
 
 async fn session(State(state): State<Shared>, headers: HeaderMap) -> Response {
     let authenticated = is_authenticated(&state, &headers);
-    let (must_change, from_env) = state
+    let from_env = state
         .auth
         .lock()
-        .map(|auth| (auth.must_change_password(), auth.password_from_env()))
-        .unwrap_or((false, false));
+        .map(|auth| auth.password_from_env())
+        .unwrap_or(false);
     Json(json!({
         "authenticated": authenticated,
         "user": WEB_ADMIN_USER,
-        "must_change_password": authenticated && must_change,
         "password_from_env": from_env,
         "instance": state.ctx.config.instance,
         "version": crate::VERSION,
@@ -338,16 +363,13 @@ struct PasswordBody {
 
 async fn change_password(State(state): State<Shared>, Json(body): Json<PasswordBody>) -> Response {
     let new = body.new.trim().to_string();
+    if let Err(error) = validate_web_password(&new) {
+        return client_error(StatusCode::BAD_REQUEST, error.to_string());
+    }
     if new.len() < 6 {
         return client_error(
             StatusCode::BAD_REQUEST,
             "the new password needs at least 6 characters",
-        );
-    }
-    if new == crate::config::WEB_DEFAULT_PASSWORD {
-        return client_error(
-            StatusCode::BAD_REQUEST,
-            "choose a password other than the default",
         );
     }
     {
@@ -371,11 +393,11 @@ async fn change_password(State(state): State<Shared>, Json(body): Json<PasswordB
         },
         None => false,
     };
-    let from_env = if let Ok(mut auth) = state.auth.lock() {
-        auth.set_password(new);
-        auth.password_from_env()
+    let (from_env, token) = if let Ok(mut auth) = state.auth.lock() {
+        auth.set_password(new.clone());
+        (auth.password_from_env(), auth.login(&new))
     } else {
-        false
+        (false, None)
     };
     tracing::info!(event = "web-password-changed", saved_to_file = saved);
     let note = if from_env {
@@ -385,7 +407,18 @@ async fn change_password(State(state): State<Shared>, Json(body): Json<PasswordB
     } else {
         None
     };
-    Json(json!({ "ok": true, "saved_to_file": saved, "note": note })).into_response()
+    let mut response =
+        Json(json!({ "ok": true, "saved_to_file": saved, "note": note })).into_response();
+    if let Some(token) = token {
+        let cookie = format!(
+            "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+            auth::SESSION_TTL.as_secs()
+        );
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().insert(header::SET_COOKIE, value);
+        }
+    }
+    response
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +446,7 @@ async fn status(State(state): State<Shared>) -> Response {
     };
     let deck = decks.first().cloned().unwrap_or_default();
     let config = &state.ctx.config;
+    let (input_device, output_device) = config.audio.devices_for_set(snapshot.audio_device_set);
     Json(json!({
         "now_unix": unix_now(),
         "uptime_s": state.started.elapsed().as_secs(),
@@ -423,8 +457,8 @@ async fn status(State(state): State<Shared>) -> Response {
         "web": { "bind": config.web.bind, "port": config.web.port },
         "health_port": config.health.port,
         "audio_config": {
-            "input_device": config.audio.input_device,
-            "output_device": config.audio.output_device,
+            "input_device": input_device,
+            "output_device": output_device,
             "profile": config.audio.profile,
             "device_period_ms": config.audio.device_period_ms,
             "auto_processing": config.audio.auto_processing,
@@ -565,6 +599,41 @@ async fn streamdeck_input(
 // ---------------------------------------------------------------------------
 // Remote talk / audio control
 // ---------------------------------------------------------------------------
+
+async fn local_login_options(State(state): State<Shared>) -> Json<serde_json::Value> {
+    Json(
+        json!({ "appVersion": state.ctx.bus.snapshots.borrow().server_version,
+        "guestLogin": { "enabled": false }, "sso": { "enabled": false } }),
+    )
+}
+
+async fn local_panel(
+    State(state): State<Shared>,
+    Json(command): Json<serde_json::Value>,
+) -> Response {
+    let (reply, result) = tokio::sync::oneshot::channel();
+    let request = crate::state::PanelRequest {
+        command,
+        reply: Mutex::new(Some(reply)),
+    };
+    if state
+        .ctx
+        .bus
+        .commands
+        .send(Command::LocalPanel(Arc::new(request)))
+        .await
+        .is_err()
+    {
+        return client_error(StatusCode::SERVICE_UNAVAILABLE, "Client is not running");
+    }
+    match tokio::time::timeout(Duration::from_secs(5), result).await {
+        Ok(Ok(result)) => Json(result).into_response(),
+        _ => client_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "Client did not confirm the change",
+        ),
+    }
+}
 
 #[derive(Deserialize)]
 struct TalkBody {
@@ -730,4 +799,59 @@ async fn restart(State(state): State<Shared>) -> Response {
         "mode": if running_under_systemd() { "systemd" } else { "exec" },
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{self, Snapshot};
+
+    #[tokio::test]
+    async fn insecure_password_serves_only_the_setup_notice() {
+        let tls = crate::tls::build_client_config(&Default::default()).unwrap();
+        let client = reqwest::Client::builder()
+            .use_preconfigured_tls((*tls).clone())
+            .no_proxy()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+        for password in ["", " \t", "admin"] {
+            let config = Config::default();
+            let (shutdown, _) = watch::channel(false);
+            let channels = state::channels(Snapshot::initial(&config.instance, &config.user.name));
+            let context = WebContext {
+                config: Arc::new(config),
+                config_path: None,
+                bus: channels.bus,
+                shutdown: Arc::new(shutdown),
+                restart_requested: Arc::new(AtomicBool::new(false)),
+            };
+            let app = web_router(context, password.into());
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+            let response = client.get(&base).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let page = response.text().await.unwrap();
+            assert!(page.contains("web.password"));
+            assert!(page.contains("TALKTOME_WEB_PASSWORD"));
+            assert!(!page.contains("<form"));
+            assert!(!page.contains("<input"));
+
+            for path in ["/api/login", "/api/password"] {
+                let response = client.post(format!("{base}{path}")).send().await.unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+                assert!(!response.headers().contains_key(header::SET_COOKIE));
+            }
+            for path in ["/api/session", "/api/config", "/panel"] {
+                let response = client.get(format!("{base}{path}")).send().await.unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            }
+            server.abort();
+        }
+    }
 }

@@ -96,6 +96,34 @@ pub enum AudioProfile {
     Standard,
 }
 
+/// `audio.network`: defaults for the jitter buffer and the send profile.
+/// Values set explicitly in the file always win over the preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkPreset {
+    /// Wired or good Wi-Fi: lowest delay.
+    #[default]
+    Lan,
+    /// This client sits on a mobile network: a deeper buffer from the first
+    /// packet and 20 ms frames with FEC on the way out.
+    Mobile,
+}
+
+impl NetworkPreset {
+    /// (key, value) pairs the preset fills in when the file leaves them out.
+    fn defaults(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            NetworkPreset::Lan => &[],
+            NetworkPreset::Mobile => &[
+                ("jitter_start_ms", "150"),
+                ("jitter_min_ms", "60"),
+                ("jitter_max_ms", "600"),
+                ("profile", "standard"),
+            ],
+        }
+    }
+}
+
 impl AudioProfile {
     pub fn frame_ms(self) -> u32 {
         match self {
@@ -124,6 +152,12 @@ pub struct AudioConfig {
     pub input_device: Option<String>,
     /// ALSA/cpal device name; `null` = system default. `"none"` disables playback.
     pub output_device: Option<String>,
+    /// Optional named device pairs. The first pair is selected on startup.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub device_sets: Vec<AudioDeviceSet>,
+    /// Fixed analog output levels, applied when the playback device opens.
+    pub speaker_level_db: f32,
+    pub headphone_level_db: f32,
     pub profile: AudioProfile,
     /// ALSA period in milliseconds. `0` keeps the driver default (often
     /// 21–85 ms). The device buffer is two periods. A size the card rejects
@@ -146,9 +180,15 @@ pub struct AudioConfig {
     pub dim_when_addressed: bool,
     /// Play the disconnect and reconnect tones. Same as the web client's
     /// "Play connection sounds" switch. A live `playConnectionSounds` value
-    /// in `user-audio-settings-updated` overrides this until restart.
+    /// in `user-audio-settings-updated` applies immediately and is saved when
+    /// a configuration file is in use. A local mute survives registration.
     #[serde(default = "default_play_connection_sounds")]
     pub play_connection_sounds: bool,
+    /// `lan` (default) or `mobile`; see [`NetworkPreset`].
+    pub network: NetworkPreset,
+    /// Playout depth each new stream starts at. It only drops toward
+    /// `jitter_min_ms` once 10 s of arrivals show the link is calmer.
+    pub jitter_start_ms: u32,
     pub jitter_min_ms: u32,
     pub jitter_max_ms: u32,
     pub reopen_ms: u64,
@@ -158,6 +198,14 @@ pub struct AudioConfig {
     /// Default per-target volume in dB (0 = unity). Overrides `default_volume`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_volume_db: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioDeviceSet {
+    pub name: String,
+    pub input_device: Option<String>,
+    pub output_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,13 +275,16 @@ pub struct StreamDeckConfig {
     pub mock: Option<String>,
     pub brightness: u8,
     pub font_path: PathBuf,
-    /// Legacy linear volume step (0–1). Ignored when `volume_step_db` is set,
-    /// or when this value is ≤ 1 (treated as the old fraction and replaced by
-    /// a 3 dB tick).
+    /// Legacy linear step (0–1), used by the deck when no percent step is
+    /// configured. Old values above 1 remain a GPIO/local-API dB step.
     pub volume_step: f32,
-    /// Volume change per Stream Deck key/dial tick, in dB.
+    /// Legacy/default dB step for GPIO and the local API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume_step_db: Option<f32>,
+    /// Stream Deck key/dial change in percentage points. Legacy dB steps
+    /// remain available to GPIO/local API; the deck uses a linear scale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_step_percent: Option<f32>,
     pub volume_layer_timeout_s: u64,
     /// Target key for the left Stream Deck Pedal switch (`user:4`, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,6 +319,18 @@ pub struct StreamDeckDeviceConfig {
 }
 
 impl StreamDeckConfig {
+    pub fn volume_step_linear(&self) -> f32 {
+        self.volume_step_percent
+            .map(|value| value / 100.0)
+            .unwrap_or_else(|| {
+                if self.volume_step > 0.0 && self.volume_step <= 1.0 {
+                    self.volume_step
+                } else {
+                    0.04
+                }
+            })
+    }
+
     /// Devices this instance should open: the `devices` list, or one device
     /// built from the legacy top-level serial/mock/pedal fields.
     pub fn resolved_devices(&self) -> Vec<StreamDeckDeviceConfig> {
@@ -350,7 +413,8 @@ pub struct GpioConfig {
     /// GPIO chip (`gpiochip0`, `/dev/gpiochip4`); `null` = search by line name.
     pub chip: Option<String>,
     /// Named outputs: `tally` (PGM), `tally_preview` (PRV), `talking`,
-    /// `incoming`, `connected`, `locked`.
+    /// `incoming`, `connected`, `locked`, `status` (status light: short
+    /// flash = running, 1 s blink = registered with an error, on = media ok).
     pub outputs: BTreeMap<String, GpioOutputConfig>,
     /// Extra outputs that follow one target's incoming or receiving audio.
     #[serde(default)]
@@ -426,13 +490,20 @@ pub struct WebConfig {
     pub enabled: bool,
     pub bind: String,
     pub port: u16,
-    /// Password of the fixed `admin` login. The default forces a change on
-    /// first login. Can also come from `TALKTOME_WEB_PASSWORD`.
+    /// Password of the fixed `admin` login. Required to use web administration.
+    /// Can also come from `TALKTOME_WEB_PASSWORD`.
     pub password: String,
 }
 
-pub const WEB_DEFAULT_PASSWORD: &str = "admin";
 pub const WEB_ADMIN_USER: &str = "admin";
+
+pub fn validate_web_password(password: &str) -> Result<()> {
+    let password = password.trim();
+    if password.is_empty() || password == "admin" {
+        bail!("the web interface requires an individual admin password");
+    }
+    Ok(())
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -482,6 +553,9 @@ impl Default for AudioConfig {
         Self {
             input_device: None,
             output_device: None,
+            device_sets: Vec::new(),
+            speaker_level_db: 0.0,
+            headphone_level_db: 0.0,
             profile: AudioProfile::UltraLow,
             device_period_ms: default_device_period_ms(),
             input_gain_db: 0.0,
@@ -491,8 +565,10 @@ impl Default for AudioConfig {
             dim_feeds_while_speaking: false,
             dim_when_addressed: true,
             play_connection_sounds: default_play_connection_sounds(),
+            network: NetworkPreset::Lan,
+            jitter_start_ms: 20,
             jitter_min_ms: 20,
-            jitter_max_ms: 120,
+            jitter_max_ms: 400,
             reopen_ms: 2000,
             default_volume: 0.9,
             default_volume_db: None,
@@ -509,6 +585,13 @@ fn default_device_period_ms() -> u32 {
 }
 
 impl AudioConfig {
+    pub fn devices_for_set(&self, index: usize) -> (&Option<String>, &Option<String>) {
+        match self.device_sets.get(index) {
+            Some(set) => (&set.input_device, &set.output_device),
+            None => (&self.input_device, &self.output_device),
+        }
+    }
+
     pub fn default_volume_linear(&self) -> f32 {
         self.default_volume_db
             .map(crate::audio::mixer::db_to_volume)
@@ -554,6 +637,7 @@ fn json_number_as_f32(value: &Value) -> Option<f32> {
 /// In-place upgrades for older configuration documents (dim −14 → −15,
 /// empty `talk.main_target` → null).
 pub fn migrate_document(doc: &mut Value) {
+    apply_network_preset(doc);
     if let Some(audio) = doc.get_mut("audio") {
         if let Some(dim) = audio.get("dim_db") {
             if json_number_as_f32(dim).is_some_and(|value| (value - LEGACY_DIM_DB).abs() < 1e-3) {
@@ -587,8 +671,9 @@ impl Default for StreamDeckConfig {
             mock: None,
             brightness: 60,
             font_path: PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-            volume_step: 0.05,
+            volume_step: 0.04,
             volume_step_db: None,
+            volume_step_percent: None,
             volume_layer_timeout_s: 8,
             pedal_left: None,
             pedal_target: None,
@@ -714,9 +799,9 @@ impl Default for WebConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            bind: "0.0.0.0".into(),
+            bind: "127.0.0.1".into(),
             port: 8080,
-            password: WEB_DEFAULT_PASSWORD.into(),
+            password: String::new(),
         }
     }
 }
@@ -818,7 +903,12 @@ where
         if !sections.contains(&section) || key.is_empty() {
             continue;
         }
-        let value = parse_env_value(&raw);
+        let value = if section == "web" && key == "password" {
+            // Keep passwords as strings, including an explicitly empty override.
+            Value::String(serde_json::from_str::<String>(&raw).unwrap_or(raw))
+        } else {
+            parse_env_value(&raw)
+        };
         let section_value = doc
             .as_object_mut()
             .expect("document is an object")
@@ -873,6 +963,29 @@ pub fn load_from_env() -> Result<LoadedConfig> {
     Ok(LoadedConfig { config, path: None })
 }
 
+/// Fills the `audio.network` preset's values into keys the file leaves out.
+fn apply_network_preset(doc: &mut Value) {
+    let Some(audio) = doc.get_mut("audio").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let Some(preset) = audio
+        .get("network")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<NetworkPreset>(value).ok())
+    else {
+        return;
+    };
+    for (key, value) in preset.defaults() {
+        if !audio.contains_key(*key) {
+            let value = value
+                .parse::<u64>()
+                .map(Value::from)
+                .unwrap_or_else(|_| Value::from(*value));
+            audio.insert((*key).to_string(), value);
+        }
+    }
+}
+
 pub fn from_document(mut doc: Value) -> Result<Config> {
     migrate_document(&mut doc);
     serde_json::from_value(doc).map_err(|e| anyhow!("invalid configuration: {e}"))
@@ -896,26 +1009,42 @@ pub fn render_document(path: &Path, doc: &Value) -> Result<String> {
     }
 }
 
-/// Overlay a configuration **file** on the running (fully defaulted) document.
-/// File values win; keys only present in `running` remain, so the result is
-/// suitable for a settings form after a save that has not been restarted yet.
+/// Maps of user entries (keyed by output name or deck key). When the file
+/// has the section, its map is the whole truth: an entry removed in the file
+/// must not come back from the running process, which still has it until the
+/// next restart.
+const FILE_OWNED_MAPS: &[(&str, &str)] = &[("gpio", "outputs"), ("streamdeck", "layout")];
+
+/// Editor view: the saved file over the running configuration, so saved but
+/// not yet applied values show, and sections missing from the file show the
+/// running values.
 pub fn merge_file_over_running(running: &Value, file: &Value) -> Value {
-    match (running, file) {
-        (Value::Object(running_map), Value::Object(file_map)) => {
-            let mut out = running_map.clone();
-            for (key, file_val) in file_map {
-                let merged = match running_map.get(key) {
-                    Some(running_val) if running_val.is_object() && file_val.is_object() => {
-                        merge_file_over_running(running_val, file_val)
-                    }
-                    _ => file_val.clone(),
-                };
-                out.insert(key.clone(), merged);
+    merge_over(running, file, None)
+}
+
+fn merge_over(running: &Value, file: &Value, section: Option<&str>) -> Value {
+    let (Value::Object(running_map), Value::Object(file_map)) = (running, file) else {
+        return file.clone();
+    };
+    let mut out = running_map.clone();
+    for (key, file_val) in file_map {
+        let owned = section.is_some_and(|s| FILE_OWNED_MAPS.contains(&(s, key.as_str())));
+        let merged = match running_map.get(key) {
+            Some(running_val) if !owned && running_val.is_object() && file_val.is_object() => {
+                merge_over(running_val, file_val, section.or(Some(key.as_str())))
             }
-            Value::Object(out)
-        }
-        (_, file) => file.clone(),
+            _ => file_val.clone(),
+        };
+        out.insert(key.clone(), merged);
     }
+    if let Some(section) = section {
+        for (owner, key) in FILE_OWNED_MAPS {
+            if *owner == section && !file_map.contains_key(*key) {
+                out.insert((*key).to_string(), Value::Object(Default::default()));
+            }
+        }
+    }
+    Value::Object(out)
 }
 
 /// Whether the on-disk document, once parsed into a full `Config`, differs
@@ -1005,6 +1134,25 @@ pub fn write_document(path: &Path, doc: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Sets `section.key` values in the configuration file, keeping the rest.
+/// A null value removes the key.
+pub fn update_values(path: &Path, values: &[(&str, &str, Value)]) -> Result<()> {
+    let mut document = read_document(path)?;
+    let root = document
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("configuration file is not an object"))?;
+    for (section, key, value) in values {
+        let table = root
+            .entry(section.to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if !table.is_object() {
+            *table = Value::Object(Default::default());
+        }
+        table[*key] = value.clone();
+    }
+    write_document(path, &document)
+}
+
 /// Reads the raw configuration document currently stored in `path` (without
 /// environment overrides).
 pub fn read_document(path: &Path) -> Result<Value> {
@@ -1041,6 +1189,17 @@ impl Config {
                 );
             }
         }
+        for db in [self.audio.speaker_level_db, self.audio.headphone_level_db] {
+            if !db.is_finite() || !(-120.0..=24.0).contains(&db) {
+                bail!("audio speaker/headphone levels must be between -120 and 24 dB");
+            }
+        }
+        match self.audio.device_sets.as_slice() {
+            [] => {}
+            [first, second] if !first.name.trim().is_empty() && !second.name.trim().is_empty() => {}
+            [_, _] => bail!("both audio device sets need a name"),
+            _ => bail!("audio.device_sets must be empty or contain exactly two sets"),
+        }
         if !(-30.0..=40.0).contains(&self.audio.input_gain_db) {
             bail!("audio.input_gain_db must be between -30 and 40");
         }
@@ -1058,6 +1217,13 @@ impl Config {
         }
         if self.audio.jitter_min_ms > self.audio.jitter_max_ms {
             bail!("audio.jitter_min_ms must not exceed audio.jitter_max_ms");
+        }
+        if !(self.audio.jitter_min_ms..=self.audio.jitter_max_ms)
+            .contains(&self.audio.jitter_start_ms)
+        {
+            bail!(
+                "audio.jitter_start_ms must be between audio.jitter_min_ms and audio.jitter_max_ms"
+            );
         }
         if self.audio.device_period_ms != 0 && !(2..=40).contains(&self.audio.device_period_ms) {
             bail!("audio.device_period_ms must be 0 (driver default) or between 2 and 40");
@@ -1085,6 +1251,11 @@ impl Config {
         }
         if self.streamdeck.brightness > 100 {
             bail!("streamdeck.brightness must be between 0 and 100");
+        }
+        if let Some(percent) = self.streamdeck.volume_step_percent {
+            if !(1.0..=100.0).contains(&percent) {
+                bail!("streamdeck.volume_step_percent must be between 1 and 100");
+            }
         }
         if let Some(db) = self.streamdeck.volume_step_db {
             if !(0.25..=12.0).contains(&db) {
@@ -1117,9 +1288,15 @@ impl Config {
         for (name, output) in &self.gpio.outputs {
             if !matches!(
                 name.as_str(),
-                "tally" | "tally_preview" | "talking" | "incoming" | "connected" | "locked"
+                "tally"
+                    | "tally_preview"
+                    | "talking"
+                    | "incoming"
+                    | "connected"
+                    | "locked"
+                    | "status"
             ) {
-                bail!("gpio.outputs.{name} is not a known output (tally, tally_preview, talking, incoming, connected, locked)");
+                bail!("gpio.outputs.{name} is not a known output (tally, tally_preview, talking, incoming, connected, locked, status)");
             }
             if output.line.trim().is_empty() {
                 bail!("gpio.outputs.{name}.line is required");
@@ -1170,9 +1347,6 @@ impl Config {
             }
             if self.web.bind.trim().is_empty() {
                 bail!("web.bind is required when web.enabled is true");
-            }
-            if self.web.password.is_empty() {
-                bail!("web.password must not be empty");
             }
         }
         if let Some(bind) = self.socket.tcp_bind() {
@@ -1228,6 +1402,26 @@ mod tests {
             "server": { "url": "https://talktome.local:8443" },
             "user": { "name": "Cam 1", "password": "secret" }
         })
+    }
+
+    #[test]
+    fn streamdeck_percent_steps_are_linear_and_old_db_config_does_not_change_them() {
+        let mut config = Config::default();
+        config.user.name = "test".into();
+        config.user.password = "test".into();
+        assert_eq!(config.audio.default_volume_linear(), 0.9);
+        assert_eq!(config.audio.speaker_level_db, 0.0);
+        assert_eq!(config.audio.headphone_level_db, 0.0);
+        assert_eq!(config.streamdeck.volume_step_linear(), 0.04);
+        config.streamdeck.volume_step_db = Some(3.0);
+        assert_eq!(config.streamdeck.volume_step_linear(), 0.04);
+        config.streamdeck.volume_step_percent = Some(2.0);
+        assert_eq!(config.streamdeck.volume_step_linear(), 0.02);
+        assert!(config.validate().is_ok());
+        config.streamdeck.volume_step_percent = Some(0.0);
+        assert!(config.validate().is_err());
+        config.streamdeck.volume_step_percent = Some(f32::NAN);
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -1317,6 +1511,31 @@ mod tests {
         );
         let legacy = StreamDeckConfig::default();
         assert_eq!(legacy.volume_step_db(), 3.0);
+    }
+
+    #[test]
+    fn mobile_network_preset_fills_only_missing_values() {
+        let mut doc = minimal_json();
+        doc["audio"] = serde_json::json!({ "network": "mobile", "jitter_max_ms": 800 });
+        let config = from_document(doc).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.audio.network, NetworkPreset::Mobile);
+        assert_eq!(config.audio.jitter_start_ms, 150);
+        assert_eq!(config.audio.jitter_min_ms, 60);
+        assert_eq!(config.audio.jitter_max_ms, 800, "explicit value wins");
+        assert_eq!(config.audio.profile, AudioProfile::Standard);
+
+        let lan = from_document(minimal_json()).unwrap();
+        assert_eq!(lan.audio.network, NetworkPreset::Lan);
+        assert_eq!(lan.audio.jitter_start_ms, 20);
+        assert_eq!(lan.audio.profile, AudioProfile::UltraLow);
+    }
+
+    #[test]
+    fn jitter_start_must_sit_between_min_and_max() {
+        let mut doc = minimal_json();
+        doc["audio"] = serde_json::json!({ "jitter_min_ms": 40, "jitter_start_ms": 20 });
+        assert!(from_document(doc).unwrap().validate().is_err());
     }
 
     #[test]
@@ -1473,13 +1692,45 @@ mod tests {
     fn web_defaults_and_validation() {
         let mut config = from_document(minimal_json()).unwrap();
         assert!(config.web.enabled);
+        assert_eq!(config.web.bind, "127.0.0.1");
         assert_eq!(config.web.port, 8080);
-        assert_eq!(config.web.password, WEB_DEFAULT_PASSWORD);
+        assert!(config.web.password.is_empty());
+        config.validate().unwrap();
+        for password in ["", " \t", "admin", " admin "] {
+            assert!(validate_web_password(password).is_err());
+        }
+        config.web.password = "custom-passphrase".into();
+        validate_web_password(&config.web.password).unwrap();
         assert_eq!(config.redacted().web.password, REDACTED);
-        config.web.password.clear();
+        config.web.port = 0;
         assert!(config.validate().is_err());
         config.web.enabled = false;
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn web_password_override_is_validated_as_the_effective_password() {
+        for (stored, override_value, accepted) in [
+            ("admin", "custom-passphrase", true),
+            ("custom-passphrase", "admin", false),
+            ("custom-passphrase", "", false),
+            ("custom-passphrase", " \t", false),
+            ("admin", "1234567890", true),
+        ] {
+            let mut doc = minimal_json();
+            doc["web"] = serde_json::json!({ "password": stored });
+            apply_env_overrides(
+                &mut doc,
+                [("TALKTOME_WEB_PASSWORD".into(), override_value.into())],
+            );
+            let config = from_document(doc).unwrap();
+            config.validate().unwrap();
+            assert_eq!(config.web.password, override_value);
+            assert_eq!(
+                validate_web_password(&config.web.password).is_ok(),
+                accepted
+            );
+        }
     }
 
     #[test]
@@ -1504,10 +1755,10 @@ mod tests {
     fn file_differs_from_running_ignores_float_json_shape() {
         let running = from_document(minimal_json()).unwrap();
         let mut file = serde_json::to_value(&running).unwrap();
-        file["streamdeck"]["volume_step"] = serde_json::json!(0.05);
+        file["streamdeck"]["volume_step"] = serde_json::json!(0.04);
         assert!(
             !file_differs_from_running(&file, &running),
-            "0.05 in the file must match the running f32 volume_step"
+            "0.04 in the file must match the running f32 volume_step"
         );
         file["user"]["name"] = serde_json::json!("Studio");
         assert!(file_differs_from_running(&file, &running));
@@ -1528,6 +1779,35 @@ mod tests {
         assert_eq!(editor["user"]["name"], "Studio");
         assert_eq!(editor["audio"]["profile"], "standard");
         assert_eq!(editor["audio"]["input_device"], "tone");
+    }
+
+    #[test]
+    fn merge_file_over_running_does_not_revive_removed_gpio_outputs() {
+        let running = serde_json::json!({
+            "gpio": {
+                "enabled": true,
+                "outputs": { "tally": { "line": "GPIO17" }, "talking": { "line": "GPIO27" } }
+            },
+            "streamdeck": { "layout": { "0": "user:4" }, "brightness": 60 }
+        });
+        // Saved with tally cleared; not restarted yet.
+        let file = serde_json::json!({
+            "gpio": { "enabled": true, "outputs": { "talking": { "line": "GPIO27" } } },
+            "streamdeck": { "brightness": 40 }
+        });
+        let editor = merge_file_over_running(&running, &file);
+        assert!(editor["gpio"]["outputs"].get("tally").is_none());
+        assert_eq!(editor["gpio"]["outputs"]["talking"]["line"], "GPIO27");
+        // A map missing from a saved section means "none", not "running".
+        assert_eq!(editor["streamdeck"]["layout"], serde_json::json!({}));
+        assert_eq!(editor["streamdeck"]["brightness"], 40);
+        // All outputs cleared: the TOML writer may drop the empty table.
+        let cleared = serde_json::json!({ "gpio": { "enabled": true } });
+        let editor = merge_file_over_running(&running, &cleared);
+        assert_eq!(editor["gpio"]["outputs"], serde_json::json!({}));
+        // A section the file does not have still shows the running values.
+        let editor = merge_file_over_running(&running, &serde_json::json!({}));
+        assert_eq!(editor["gpio"]["outputs"]["tally"]["line"], "GPIO17");
     }
 
     #[test]

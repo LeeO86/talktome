@@ -5,6 +5,15 @@ env:
 
 on:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Version to build and upload to a draft (for example 1.5.10); empty uses Git version'
+        required: false
+        type: string
+      source_ref:
+        description: 'Optional source tag or commit to build with this workflow revision'
+        required: false
+        type: string
   push:
     branches:
       - "main"
@@ -14,20 +23,24 @@ on:
       - ".github/workflows/release.yml"
       - ".dockerignore"
       - "Dockerfile"
+      - ".node-version"
       - "package.json"
       - "package-lock.json"
       - "*.js"
-      - "gateway/**"
+      - "src/**"
       - "public/**"
       - "scripts/copy-runtime-deps.js"
+      - "scripts/container-healthcheck.js"
       - "scripts/docker-smoke-test.sh"
       - "scripts/native-startup-smoke-test.mjs"
       - "scripts/postbuild-pkg.js"
       - "scripts/create-macos-dmg.sh"
+      - "scripts/notarize-macos.py"
+      - "scripts/ci-notarize-macos.py"
       - "scripts/resolve-build-version.js"
+      - "scripts/verify-build-node.js"
       - "scripts/upload-release-asset.sh"
       - "server-app/**"
-      - "vendor/tray-icon/**"
 
 concurrency:
   group: release-builds-${{ github.workflow }}-${{ github.ref }}
@@ -50,30 +63,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.source_ref || github.ref }}
           fetch-depth: 0
 
       - name: Resolve version from Git tags
         id: release-version
         shell: bash
-        run: |
-          if node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"; then
-            exit 0
-          fi
-          # No v* tag reachable (e.g. a fresh fork): fall back to a development
-          # version so pushes to main still produce packages. Releases always
-          # come from tags and use the shared resolver above.
-          count="$(git rev-list --count HEAD)"
-          sha="$(git rev-parse --short=8 HEAD)"
-          version="0.0.0-dev.${count}"
-          {
-            echo "version=v${version}"
-            echo "app_version=${version}"
-            echo "safe_version=v${version}-${sha}"
-            echo "base_version=0.0.0"
-            echo "is_release=false"
-            echo "git_sha=${sha}"
-          } >> "$GITHUB_OUTPUT"
-          echo "No release tag found; using development version ${version}"
+        env:
+          TALKTOME_BUILD_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || '' }}
+        run: node scripts/resolve-build-version.js --github-output "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.name }}
@@ -97,7 +95,7 @@ jobs:
             artifact_prefix: talktome_server_windows_x64
             artifact_glob: server-app/src-tauri/target/release/bundle/nsis/*.exe
           - name: macOS arm64
-            os: macos-14
+            os: macos-15
             build_script: build:mac_arm64
             server_build_script: build:release:macos
             executable_name: talktome_arm64
@@ -108,12 +106,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.source_ref || github.ref }}
           fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 24.18.1
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -141,7 +140,7 @@ jobs:
       - name: Setup Node for server app
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: server-app/package-lock.json
 
@@ -164,7 +163,7 @@ jobs:
         run: npm run ${{ matrix.server_build_script }}
 
       - name: Locate macOS tray app
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         shell: bash
         run: >-
           echo "TRAY_EXECUTABLE=${GITHUB_WORKSPACE}/server-app/src-tauri/target/release/bundle/macos/Talktome Server.app/Contents/MacOS/talktome-server-app"
@@ -210,6 +209,21 @@ jobs:
           --expected-version "$APP_VERSION"
           --timeout-seconds 120
 
+      - name: Sign and notarize macOS Server
+        if: matrix.os == 'macos-15' && vars.MACOS_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: >-
+          python3 scripts/ci-notarize-macos.py
+          --app "server-app/src-tauri/target/release/bundle/macos/Talktome Server.app"
+          --entitlements server-app/src-tauri/Entitlements.plist
+          --output-dmg "server-app/src-tauri/target/release/bundle/dmg/Talktome Server_aarch64.dmg"
+
       - name: Prepare server app artifact
         shell: bash
         run: |
@@ -240,16 +254,18 @@ jobs:
           path: ${{ env.INSTALLER_PATH }}
 
       - name: Upload installer to draft release
-        if: startsWith(github.ref, 'refs/tags/')
+        # Unsigned macOS artifacts stay in Actions; local signing supplies the release DMGs.
+        if: (matrix.os == 'windows-latest' || vars.MACOS_SIGNING_ENABLED == 'true') && (startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_version != ''))
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.version.outputs.version }}
         run: >-
           bash scripts/upload-release-asset.sh
-          "$GITHUB_REF_NAME"
+          "$RELEASE_TAG"
           "$INSTALLER_PATH"
-          "$GITHUB_REF_NAME - macOS + Windows"
+          "$RELEASE_TAG - macOS + Windows"
 
   docker-smoke:
     name: Verify Docker image startup
@@ -261,6 +277,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
 
       - name: Build Docker image
         shell: bash
@@ -291,6 +309,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
 
       - name: Set image tag
         shell: bash
@@ -331,6 +351,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

@@ -33,6 +33,7 @@ pub fn spawn_all(
     {
         tasks.spawn(gpio::run(
             config.gpio.clone(),
+            config.instance.clone(),
             config.streamdeck.volume_step_db(),
             bus.clone(),
             shutdown.clone(),

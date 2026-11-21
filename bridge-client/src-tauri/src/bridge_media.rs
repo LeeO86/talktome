@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio;
 use crate::network_audio;
+use crate::port_audio_level::{AudioGain, PortAudioLevel};
 
 const OUTPUT_QUEUE_LIMIT_FRAMES: usize = 9_600;
 const DECODER_STARTUP_GRACE_MS: u64 = 10;
@@ -33,7 +34,7 @@ const FFMPEG_ENV_VAR: &str = "TALKTOME_FFMPEG";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-fn ffmpeg_command() -> Command {
+pub(crate) fn ffmpeg_command() -> Command {
     let mut command =
         Command::new(resolve_ffmpeg_path().unwrap_or_else(|| PathBuf::from("ffmpeg")));
     configure_ffmpeg_command(&mut command);
@@ -155,6 +156,10 @@ pub struct StartBridgeInputRequest {
     pub rtp_port: u16,
     pub payload_type: u8,
     pub ssrc: u32,
+    #[serde(default)]
+    pub cname: String,
+    #[serde(default)]
+    pub audio_level: PortAudioLevel,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -162,6 +167,8 @@ pub struct StartBridgeInputRequest {
 pub struct ReserveBridgeOutputRequest {
     pub stream_id: String,
     pub assignment: BridgeChannelAssignment,
+    #[serde(default)]
+    pub audio_level: PortAudioLevel,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,6 +196,14 @@ pub struct SetBridgeOutputLevelRequest {
     pub stream_id: String,
     pub volume: f32,
     pub muted: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetBridgePortAudioLevelRequest {
+    pub port_id: String,
+    pub direction: String,
+    pub level: PortAudioLevel,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -222,6 +237,8 @@ pub struct BridgeMediaStreamError {
 pub struct BridgeMediaInputStats {
     pub stream_id: String,
     pub rms_db: f32,
+    pub peak_db: f32,
+    pub clipped_samples: u64,
     pub captured_frames: u64,
     pub xrun_count: u64,
     pub dropped_chunks: u64,
@@ -234,6 +251,9 @@ pub struct BridgeMediaInputStats {
 #[serde(rename_all = "camelCase")]
 pub struct BridgeMediaOutputStats {
     pub stream_id: String,
+    pub rms_db: f32,
+    pub peak_db: f32,
+    pub clipped_samples: u64,
     pub decoded_frames: u64,
     pub decoded_bytes: u64,
     pub ffmpeg_warning_count: u64,
@@ -278,10 +298,11 @@ struct PendingBridgeOutput {
 }
 
 struct BridgeInputRuntime {
+    rtp_relay: Option<crate::media_timing::AudioRtpRelay>,
     stream: BridgeInputStreamRuntime,
     child: Arc<Mutex<Child>>,
     last_error: Arc<Mutex<Option<String>>>,
-    level_milli_db: Arc<AtomicI32>,
+    audio_gain: Arc<AudioGain>,
     captured_frames: Arc<AtomicU64>,
     xrun_count: Arc<AtomicU64>,
     dropped_chunks: Arc<AtomicU64>,
@@ -295,6 +316,7 @@ struct BridgeInputRuntime {
 
 struct BridgeOutputRuntime {
     mixer_key: OutputMixerKey,
+    audio_gain: Arc<AudioGain>,
     child: Arc<Mutex<Child>>,
     last_error: Arc<Mutex<Option<String>>>,
     decoded_frames: Arc<AtomicU64>,
@@ -341,6 +363,7 @@ pub(crate) struct StereoFrame {
 
 #[allow(dead_code)]
 enum BridgeInputStreamRuntime {
+    Virtual(crate::virtual_input::VirtualInput),
     Native(Stream),
     Network(network_audio::NetworkAudioInputRuntime),
 }
@@ -358,6 +381,7 @@ impl BridgeMediaManager {
     ) -> Result<BridgeMediaStatus, String> {
         validate_stream_id(&request.stream_id)?;
         validate_assignment(&request.assignment, "input")?;
+        request.audio_level.validate()?;
         if request.rtp_ip.trim().is_empty() || request.rtp_port == 0 {
             return Err("RTP destination is required".to_string());
         }
@@ -385,6 +409,7 @@ impl BridgeMediaManager {
     ) -> Result<ReservedBridgeOutput, String> {
         validate_stream_id(&request.stream_id)?;
         validate_assignment(&request.assignment, "output")?;
+        request.audio_level.validate()?;
         let socket = UdpSocket::bind("0.0.0.0:0")
             .map_err(|err| format!("failed to reserve RTP receive port: {err}"))?;
         let port = socket
@@ -462,12 +487,13 @@ impl BridgeMediaManager {
             .get(&mixer_key)
             .ok_or_else(|| "bridge output mixer was not created".to_string())?;
         let output_sample_rate = mixer.sample_rate;
-        let source_queue = mixer.add_source(stream_id.clone(), &pending.request.assignment)?;
+        let (source_queue, source_level) = mixer.add_source(stream_id.clone(), &pending.request.assignment)?;
         let runtime = match BridgeOutputRuntime::start(
             pending,
             &request,
             mixer_key.clone(),
             source_queue,
+            source_level,
             output_sample_rate,
         ) {
             Ok(runtime) => runtime,
@@ -504,6 +530,27 @@ impl BridgeMediaManager {
             .get_mut(&mixer_key)
             .ok_or_else(|| "Bridge output mixer is not active".to_string())?;
         mixer.set_source_level(stream_id, request.volume, request.muted)?;
+        Ok(status_from(&state))
+    }
+
+    pub fn set_port_audio_level(&self, request: SetBridgePortAudioLevelRequest) -> Result<BridgeMediaStatus, String> {
+        validate_stream_id(&request.port_id)?;
+        if !["input", "output"].contains(&request.direction.as_str()) { return Err("Invalid audio direction".to_string()); }
+        let level = request.level.validate()?;
+        let mut state = self.lock()?;
+        if request.direction == "input" {
+            if let Some(runtime) = state.inputs.get(&format!("{}:input", request.port_id)) {
+                runtime.audio_gain.set(level);
+            }
+        } else {
+            let prefix = format!("{}:consumer:", request.port_id);
+            for (id, runtime) in &state.outputs {
+                if id.starts_with(&prefix) { runtime.audio_gain.set(level); }
+            }
+            for (id, pending) in &mut state.pending_outputs {
+                if id.starts_with(&prefix) { pending.request.audio_level = level; }
+            }
+        }
         Ok(status_from(&state))
     }
 
@@ -581,17 +628,28 @@ impl BridgeMediaManager {
 
 impl BridgeInputRuntime {
     fn start(request: &StartBridgeInputRequest) -> Result<Self, String> {
+        let timing = crate::omt::is_input_device(&request.assignment.device_id).then(|| {
+            Arc::new(Mutex::new(crate::media_timing::AudioTimeline::new(
+                &request.assignment.device_id,
+            )))
+        });
+        let rtp_relay = timing.as_ref().map(|timing| {
+            crate::media_timing::AudioRtpRelay::start(
+                request.rtp_ip.trim(), request.rtp_port, request.ssrc,
+                request.cname.clone(), Arc::clone(timing),
+            )
+        }).transpose()?;
         let destination = format!(
             "rtp://{}:{}?pkt_size=1200",
-            request.rtp_ip.trim(),
-            request.rtp_port
+            if rtp_relay.is_some() { "127.0.0.1" } else { request.rtp_ip.trim() },
+            rtp_relay.as_ref().map(|relay| relay.port()).unwrap_or(request.rtp_port),
         );
         let (sender, receiver) = sync_channel::<Vec<u8>>(8);
         let callback_sender = sender.clone();
         let last_error = Arc::new(Mutex::new(None));
         let stream_error = Arc::clone(&last_error);
-        let level_milli_db = Arc::new(AtomicI32::new(-120_000));
-        let callback_level = Arc::clone(&level_milli_db);
+        let callback_level = Arc::new(AtomicI32::new(-120_000));
+        let audio_gain = Arc::new(AudioGain::new(request.audio_level));
         let captured_frames = Arc::new(AtomicU64::new(0));
         let callback_captured_frames = Arc::clone(&captured_frames);
         let xrun_count = Arc::new(AtomicU64::new(0));
@@ -601,8 +659,14 @@ impl BridgeInputRuntime {
         let dropped_frames = Arc::new(AtomicU64::new(0));
         let callback_dropped_frames = Arc::clone(&dropped_frames);
         let (stream, input_sample_rate) =
-            if network_audio::is_input_device(&request.assignment.device_id) {
+            if request.assignment.device_id.starts_with("bridge:") {
+                let runtime = crate::virtual_input::VirtualInput::start(
+                    &request.assignment.device_id, callback_sender, callback_level, callback_captured_frames,
+                )?;
+                (BridgeInputStreamRuntime::Virtual(runtime), "48000".to_string())
+            } else if network_audio::is_input_device(&request.assignment.device_id) {
                 let runtime = network_audio::start_input(network_audio::InputStartRequest {
+                    timing,
                     device_id: request.assignment.device_id.clone(),
                     left_channel: request.assignment.left_channel,
                     right_channel: request.assignment.right_channel,
@@ -693,6 +757,10 @@ impl BridgeInputRuntime {
                 "-hide_banner",
                 "-loglevel",
                 "warning",
+                "-probesize",
+                "32",
+                "-analyzeduration",
+                "0",
                 "-f",
                 "f32le",
                 "-ar",
@@ -715,6 +783,8 @@ impl BridgeInputRuntime {
                 &request.payload_type.to_string(),
                 "-ssrc",
                 &request.ssrc.to_string(),
+                "-cname",
+                &request.cname,
                 "-f",
                 "rtp",
                 &destination,
@@ -745,8 +815,23 @@ impl BridgeInputRuntime {
             )
         });
         let child = Arc::new(Mutex::new(child));
+        let writer_gain = Arc::clone(&audio_gain);
+        let mut previous_gain = writer_gain.linear();
+        let mut suppression = crate::input_noise::InputNoiseSuppression::new(input_sample_rate.parse().unwrap_or(48000));
+        let allow_suppression = !request.assignment.device_id.starts_with("bridge:");
+        let processing_error = Arc::clone(&last_error);
         let writer = thread::spawn(move || {
-            while let Ok(bytes) = receiver.recv() {
+            while let Ok(mut bytes) = receiver.recv() {
+                let enabled = allow_suppression && writer_gain.noise_suppression.load(Ordering::Relaxed);
+                if !enabled { suppression.reset_filter(); }
+                if enabled || suppression.has_pending() {
+                    bytes = match suppression.process(&bytes, enabled) {
+                        Ok(bytes) => bytes,
+                        Err(error) => { if let Ok(mut last) = processing_error.lock() { *last = Some(error); } break; }
+                    };
+                }
+                if bytes.is_empty() { continue; }
+                writer_gain.process(&mut bytes, &mut previous_gain, 1.0, true);
                 if stdin.write_all(&bytes).is_err() {
                     break;
                 }
@@ -754,10 +839,11 @@ impl BridgeInputRuntime {
         });
 
         Ok(Self {
+            rtp_relay,
             stream,
             child,
             last_error,
-            level_milli_db,
+            audio_gain,
             captured_frames,
             xrun_count,
             dropped_chunks,
@@ -783,6 +869,7 @@ impl BridgeInputRuntime {
         if let Some(stderr_reader) = self.stderr_reader.take() {
             let _ = stderr_reader.join();
         }
+        self.rtp_relay.take();
     }
 }
 
@@ -905,7 +992,7 @@ impl BridgeOutputMixerRuntime {
         &self,
         stream_id: String,
         assignment: &BridgeChannelAssignment,
-    ) -> Result<Arc<Mutex<VecDeque<StereoFrame>>>, String> {
+    ) -> Result<(Arc<Mutex<VecDeque<StereoFrame>>>, Arc<Mutex<BridgeOutputLevel>>), String> {
         let queue = Arc::new(Mutex::new(VecDeque::<StereoFrame>::new()));
         let source = BridgeOutputMixerSource {
             queue: Arc::clone(&queue),
@@ -920,8 +1007,9 @@ impl BridgeOutputMixerRuntime {
             .sources
             .lock()
             .map_err(|_| "bridge output mixer lock poisoned".to_string())?;
+        let level = Arc::clone(&source.level);
         sources.insert(stream_id, source);
-        Ok(queue)
+        Ok((queue, level))
     }
 
     fn set_source_level(
@@ -970,13 +1058,15 @@ impl BridgeOutputRuntime {
         request: &ActivateBridgeOutputRequest,
         mixer_key: OutputMixerKey,
         queue: Arc<Mutex<VecDeque<StereoFrame>>>,
+        source_level: Arc<Mutex<BridgeOutputLevel>>,
         output_sample_rate: SampleRate,
     ) -> Result<Self, String> {
         let PendingBridgeOutput {
-            request: _,
+            request: pending_request,
             port,
             socket,
         } = pending;
+        let audio_gain = Arc::new(AudioGain::new(pending_request.audio_level));
         match (
             request.handshake_ip.as_deref().map(str::trim),
             request.handshake_port,
@@ -1104,6 +1194,8 @@ impl BridgeOutputRuntime {
         let decoded_bytes = Arc::new(AtomicU64::new(0));
         let reader_decoded_frames = Arc::clone(&decoded_frames);
         let reader_decoded_bytes = Arc::clone(&decoded_bytes);
+        let reader_gain = Arc::clone(&audio_gain);
+        let mut previous_gain = reader_gain.linear();
         let reader = thread::spawn(move || {
             let mut read_buffer = [0_u8; 8192];
             let mut pending_bytes = Vec::<u8>::new();
@@ -1123,6 +1215,8 @@ impl BridgeOutputRuntime {
                 if complete_bytes == 0 {
                     continue;
                 }
+                let meter_scale = source_level.lock().map(|level| if level.muted { 0.0 } else { level.volume }).unwrap_or(1.0);
+                reader_gain.process(&mut pending_bytes[..complete_bytes], &mut previous_gain, meter_scale, false);
                 reader_decoded_frames.fetch_add((complete_bytes / 8) as u64, Ordering::Relaxed);
                 reader_decoded_bytes.fetch_add(complete_bytes as u64, Ordering::Relaxed);
                 if let Ok(mut queue) = reader_queue.lock() {
@@ -1141,6 +1235,7 @@ impl BridgeOutputRuntime {
         });
         Ok(Self {
             mixer_key,
+            audio_gain,
             child,
             last_error,
             decoded_frames,
@@ -1314,7 +1409,9 @@ fn status_from(state: &BridgeMediaState) -> BridgeMediaStatus {
         .iter()
         .map(|(stream_id, runtime)| BridgeMediaInputStats {
             stream_id: stream_id.clone(),
-            rms_db: runtime.level_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            rms_db: runtime.audio_gain.rms_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            peak_db: runtime.audio_gain.peak_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            clipped_samples: runtime.audio_gain.clipped_samples.load(Ordering::Relaxed),
             captured_frames: runtime.captured_frames.load(Ordering::Relaxed),
             xrun_count: runtime.xrun_count.load(Ordering::Relaxed),
             dropped_chunks: runtime.dropped_chunks.load(Ordering::Relaxed),
@@ -1328,6 +1425,9 @@ fn status_from(state: &BridgeMediaState) -> BridgeMediaStatus {
         .iter()
         .map(|(stream_id, runtime)| BridgeMediaOutputStats {
             stream_id: stream_id.clone(),
+            rms_db: runtime.audio_gain.rms_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            peak_db: runtime.audio_gain.peak_milli_db.load(Ordering::Relaxed) as f32 / 1000.0,
+            clipped_samples: runtime.audio_gain.clipped_samples.load(Ordering::Relaxed),
             decoded_frames: runtime.decoded_frames.load(Ordering::Relaxed),
             decoded_bytes: runtime.decoded_bytes.load(Ordering::Relaxed),
             ffmpeg_warning_count: runtime.ffmpeg_warning_count.load(Ordering::Relaxed),
@@ -1375,6 +1475,78 @@ fn read_last_error(last_error: &Arc<Mutex<Option<String>>>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn virtual_sources_encode_and_gain_mute_without_audio_hardware() {
+        for device in ["bridge:tone:400", "bridge:tone:1000", "bridge:none"] {
+            let output = UdpSocket::bind("127.0.0.1:0").unwrap();
+            output.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let runtime = BridgeInputRuntime::start(&StartBridgeInputRequest {
+                stream_id: "test-port:input".into(),
+                assignment: BridgeChannelAssignment { device_id: device.into(), left_channel: 1, right_channel: 2 },
+                rtp_ip: "127.0.0.1".into(), rtp_port: output.local_addr().unwrap().port(),
+                payload_type: 102, ssrc: 12345, cname: "virtual-input-test".into(),
+                audio_level: PortAudioLevel { gain_db: 6.0, muted: false, noise_suppression: true },
+            }).unwrap();
+            let mut packet = [0u8; 1500];
+            let received = output.recv(&mut packet);
+            std::thread::sleep(Duration::from_millis(100));
+            let rms = runtime.audio_gain.rms_milli_db.load(Ordering::Relaxed);
+            runtime.audio_gain.set(PortAudioLevel { gain_db: 6.0, muted: true, noise_suppression: false });
+            std::thread::sleep(Duration::from_millis(100));
+            let muted = runtime.audio_gain.rms_milli_db.load(Ordering::Relaxed);
+            runtime.stop();
+            assert!(received.is_ok(), "{device}: {received:?}");
+            if device == "bridge:none" { assert_eq!(rms, -120000); }
+            else { assert!((rms + 14000).abs() < 200, "{device}: {rms}"); }
+            assert_eq!(muted, -120000);
+        }
+    }
+
+    #[test]
+    fn real_opus_encoder_keeps_the_omt_presentation_clock_in_rtcp() {
+        let output = UdpSocket::bind("127.0.0.1:0").unwrap();
+        output.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let source_time = std::time::SystemTime::now() - Duration::from_millis(240);
+        let mut timeline = crate::media_timing::AudioTimeline::new("real-opus-sync-test");
+        timeline.append(4800, 0, source_time);
+        let relay = crate::media_timing::AudioRtpRelay::start(
+            "127.0.0.1", output.local_addr().unwrap().port(), 1234,
+            "av-sync-test".into(), Arc::new(Mutex::new(timeline))
+        ).unwrap();
+        let destination = format!("rtp://127.0.0.1:{}?pkt_size=1200", relay.port());
+        let mut encoder = ffmpeg_command().args([
+            "-hide_banner", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0",
+            "-f", "f32le", "-ar", "48000", "-ac", "2", "-i", "pipe:0",
+            "-c:a", "libopus", "-application", "voip", "-frame_duration", "20",
+            "-payload_type", "100", "-ssrc", "1234", "-f", "rtp", &destination,
+        ]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+        let samples = (0..4800 * 2).flat_map(|_| 0.25f32.to_le_bytes()).collect::<Vec<_>>();
+        encoder.stdin.take().unwrap().write_all(&samples).unwrap();
+        let encoded = encoder.wait_with_output().unwrap();
+        assert!(encoded.status.success(), "{}", String::from_utf8_lossy(&encoded.stderr));
+        let mut packet = [0u8; 1500];
+        let mut first_rtp = None;
+        let mut report = None;
+        for _ in 0..12 {
+            let size = output.recv(&mut packet).unwrap();
+            if packet[1] == 200 {
+                assert!(packet[..size].windows(12).any(|name| name == b"av-sync-test"));
+                report = Some(packet[..size].to_vec());
+                break;
+            }
+            first_rtp.get_or_insert(u32::from_be_bytes(packet[4..8].try_into().unwrap()));
+        }
+        let report = report.expect("source-clock sender report");
+        let ntp_seconds = u32::from_be_bytes(report[8..12].try_into().unwrap());
+        let ntp_fraction = u32::from_be_bytes(report[12..16].try_into().unwrap());
+        let report_time = std::time::UNIX_EPOCH + Duration::from_secs(u64::from(ntp_seconds) - 2_208_988_800)
+            + Duration::from_secs_f64(f64::from(ntp_fraction) / 4_294_967_296.0);
+        let reference = u32::from_be_bytes(report[16..20].try_into().unwrap());
+        let first_time = report_time - Duration::from_secs_f64(f64::from(reference.wrapping_sub(first_rtp.unwrap())) / 48_000.0);
+        let error = first_time.duration_since(source_time).unwrap_or_else(|e| e.duration());
+        assert!(error < Duration::from_millis(2), "Opus clock lost source PTS: {error:?}");
+    }
 
     #[test]
     fn only_non_fatal_stream_notifications_are_recoverable() {
