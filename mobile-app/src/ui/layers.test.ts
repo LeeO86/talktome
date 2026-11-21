@@ -22,6 +22,20 @@ import {
 } from './layers';
 
 describe('target layers', () => {
+  it.each([[320, 240, 160], [240, 320, 184]])(
+    'fits compact cards without overflow at %i × %i dp',
+    (width, height, availableHeight) => {
+      const compact = operatorLayout({ width, height, availableHeight, compact: true, fontScale: 1 });
+      const largeText = operatorLayout({ width, height, availableHeight, compact: true, fontScale: 1.5 });
+      expect(compact.columns).toBe(1);
+      expect(compact.rows).toBeGreaterThanOrEqual(3);
+      expect(compact.cardHeight).toBeGreaterThanOrEqual(44);
+      expect(compact.rows * compact.cardHeight + (compact.rows - 1) * compact.gap).toBeLessThanOrEqual(availableHeight);
+      expect(largeText.cardHeight).toBeGreaterThanOrEqual(53);
+      expect(largeText.rows).toBeLessThanOrEqual(compact.rows);
+    },
+  );
+
   it('fits 8 portrait rows on an iPhone-sized screen', () => {
     const layout = operatorLayout({ width: 390, height: 844 });
     expect(layout.columns).toBe(1);

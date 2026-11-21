@@ -1,3 +1,4 @@
+import { confirmDisconnect } from './confirmDisconnect';
 import { Alert, Pressable, Text, View } from 'react-native';
 
 import { describePttDevicesSummary } from '../ble/bindings';
@@ -40,23 +41,7 @@ export function SessionPage({
   const choices = store.productions.length > 0 ? productionChoices(store.productions) : [];
   const connection = connectionHealthFromSession(store);
 
-  const disconnect = () => {
-    Alert.alert(
-      'Disconnect?',
-      'You will appear offline. Opening the app again reconnects you to this production.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Disconnect',
-          style: 'destructive',
-          onPress: () => {
-            onClose();
-            void session.disconnect();
-          },
-        },
-      ],
-    );
-  };
+  const disconnect = () => confirmDisconnect(onClose);
 
   return (
     <>

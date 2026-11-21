@@ -32,6 +32,7 @@ export type SessionUiState = {
   leftHanded: boolean;
   lockMultipleTargets: boolean;
   tapToLock: boolean;
+  hardwarePttPageRequest: { targetKey: string } | null;
   /** Empty string means Reply. A talk-target identity pins the bottom button. */
   mainButtonTargets: Record<string, string>;
   watchTargetSelections: WatchTargetSelections;
@@ -133,6 +134,7 @@ export const initialState: SessionUiState = {
   leftHanded: false,
   lockMultipleTargets: false,
   tapToLock: true,
+  hardwarePttPageRequest: null,
   mainButtonTargets: {},
   watchTargetSelections: {},
   bigMainButton: false,

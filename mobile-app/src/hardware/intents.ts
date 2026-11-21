@@ -9,7 +9,19 @@ export type PttIntentRule = {
 };
 
 /** Zello partner intents plus OEM aliases we have seen or expect on rugged phones. */
+const CROSSCALL_KEYS: readonly PttIntentRule[] = [
+  { action: 'android.intent.action.FUNCTION_KEY_DOWN_PRESSED', button: 'ptt', pressed: true },
+  { action: 'android.intent.action.FUNCTION_KEY_RELEASED', button: 'ptt', pressed: false },
+  { action: 'android.intent.action.CHANNEL_NEXT', button: 'channelUp', pressed: true },
+  { action: 'android.intent.action.CHANNEL_PREVIOUS', button: 'channelDown', pressed: true },
+];
+
+export function isCrosscallHardwareEvent(action?: string): boolean {
+  return CROSSCALL_KEYS.some(rule => rule.action === action);
+}
+
 export const PTT_INTENT_CATALOG: readonly PttIntentRule[] = [
+  ...CROSSCALL_KEYS,
   { action: 'com.zello.ptt.down', button: 'ptt', pressed: true },
   { action: 'com.zello.ptt.up', button: 'ptt', pressed: false },
   { action: 'com.zello.intent.buttonExtra1.down', button: 'ptt2', pressed: true },

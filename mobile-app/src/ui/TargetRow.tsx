@@ -16,6 +16,7 @@ import {
   HeadphonesIcon,
   ListenOnlyIcon,
   LockIcon,
+  PttButtonIcon,
   PersonIcon,
   PlayIcon,
   StopIcon,
@@ -34,6 +35,8 @@ import { beginVolumeAdjustment, endVolumeAdjustment, moveVolumeAdjustment, useVo
 type Props = {
   target: TalkTarget;
   compact?: boolean;
+  dense?: boolean;
+  hardwarePtt?: boolean;
   compactLabel?: boolean;
   volumeReadout?: boolean;
   height?: number;
@@ -50,6 +53,8 @@ type Props = {
 export function TargetRow({
   target,
   compact = false,
+  dense = false,
+  hardwarePtt = false,
   compactLabel = false,
   volumeReadout = false,
   height,
@@ -119,9 +124,9 @@ export function TargetRow({
         accessibilityRole="button"
         accessibilityLabel={`Choose who you hear in ${target.label}`}
         onPress={() => onOpenConferenceMembers?.(target)}
-        style={[styles.avatar, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}
+        style={[styles.avatar, dense && styles.avatarDense, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}
       >
-        <ConferenceIcon />
+        <ConferenceIcon size={dense ? 16 : 22} />
         {listenOnly ? (
           <View style={styles.listenBadge}>
             <ListenOnlyIcon color={colors.muted} size={10} />
@@ -145,9 +150,10 @@ export function TargetRow({
   const identity = (
     <View style={styles.identity} pointerEvents="none">
       <View style={styles.nameRow}>
+        {hardwarePtt ? <PttButtonIcon /> : null}
         {locked ? <LockIcon color={colors.text} size={14} /> : null}
         <Text
-          style={[styles.label, compactLabel && styles.labelCompact, dimmed && styles.dimText]}
+          style={[styles.label, (compactLabel || dense) && styles.labelCompact, dimmed && styles.dimText]}
           numberOfLines={1}
           adjustsFontSizeToFit
           minimumFontScale={0.85}
@@ -155,17 +161,18 @@ export function TargetRow({
           {target.label}
         </Text>
       </View>
-      <Text style={styles.meta} numberOfLines={1}>
+      <Text style={[styles.meta, dense && styles.metaDense]} numberOfLines={1}>
         {meta}
       </Text>
     </View>
   );
 
-  const wrapTalk = (children: ReactNode, style: StyleProp<ViewStyle>, accessibilityLabel: string) => {
+  const wrapTalk = (children: ReactNode, style: StyleProp<ViewStyle>, accessibilityLabel: string, keypad = false) => {
     if (canTalk) {
       return (
         <HoldToTalk
-          accessibilityLabel={locked ? `Unlock ${target.label}` : accessibilityLabel}
+          accessibilityLabel={`${locked ? `Unlock ${target.label}` : accessibilityLabel}${hardwarePtt ? ', hardware PTT target' : ''}`}
+          nativeID={keypad ? `operator-talk:${key}` : undefined}
           disabled={!canTalk}
           locked={locked}
           leftHanded={leftHanded}
@@ -186,6 +193,7 @@ export function TargetRow({
     identity,
     [styles.talkZone, talking ? styles.talkZoneActive : null],
     `Talk to ${target.label}`,
+    true,
   );
 
   const edgeIconColor = talking || keyboardHeld ? colors.talking : dimmed ? 'rgba(255,255,255,0.28)' : colors.text;
@@ -220,15 +228,16 @@ export function TargetRow({
     styles.row,
     leftHanded && styles.rowLeft,
     tight && styles.rowCompact,
+    dense && styles.rowDense,
     dimmed && styles.rowOffline,
     (talking || keyboardHeld) && styles.rowTalking,
     speaking && !talking && !keyboardHeld && styles.rowSpeaking,
     adjustingVolume && styles.rowAdjusting,
-    height != null ? { height, minHeight: height, flex: 1, paddingVertical: tight ? 4 : 8 } : null,
+    height != null ? { height, minHeight: height, flex: 1, paddingVertical: dense ? 2 : tight ? 4 : 8 } : null,
   ];
 
   return (
-    <View style={[otherVolumeAdjusting && { opacity: 0.3 }, videoExpanded ? [styles.videoCard, speaking && styles.rowSpeaking, dimmed && styles.rowOffline,
+    <View nativeID={`operator-card:${key}`} collapsable={false} focusable={!canTalk} style={[otherVolumeAdjusting && { opacity: 0.3 }, videoExpanded ? [styles.videoCard, speaking && styles.rowSpeaking, dimmed && styles.rowOffline,
       height != null && { height: height + videoHeight }] : height != null ? { height } : undefined]}>
       {canToggleVideo ? <Pressable
         accessibilityRole="button" accessibilityLabel={`${videoExpanded ? 'Hide' : 'Show'} video, ${target.label}`}
@@ -317,6 +326,9 @@ const styles = StyleSheet.create({
     minHeight: 62,
     paddingHorizontal: 8,
   },
+  rowDense: { gap: 4, paddingHorizontal: 5 },
+  avatarDense: { width: 26, height: 26 },
+  metaDense: { fontSize: 10 },
   rowTalking: {
     backgroundColor: 'rgba(139,92,246,0.12)',
     borderColor: 'rgba(139,92,246,0.8)',

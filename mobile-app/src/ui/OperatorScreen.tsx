@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AppState, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { AppState, BackHandler, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import {
   cameraTallyColor,
@@ -8,7 +8,11 @@ import {
   talkTargetIdentity,
   type TalkTarget,
 } from '../protocol';
-import { missingAccessoryNotice } from '../ble/bindings';
+import { bindingControlTarget, missingAccessoryNotice } from '../ble/bindings';
+import { resolveBleTalkTarget } from '../ble/target';
+import { focusOperatorTarget, isKeypadOnlyDevice } from '../hardware/native';
+import type { KeyboardEvent } from '../keyboard/NativeKeyboard';
+import { loadOperatorPreferences, useOperatorPreferences } from './operatorPreferences';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
 import { session, useSessionStore } from '../session/store';
@@ -16,7 +20,7 @@ import { slideToLockHint } from '../talk/slideToLock';
 import { ConferenceMembersModal } from './ConferenceMembersModal';
 import { AudioRouteButton, AudioRouteMenu } from './AudioRouteButton';
 import { ConnectionStatusBadge } from './ConnectionStatusBadge';
-import { ChevronIcon, LockIcon, ReplyArrowIcon, WalkieTalkieIcon } from './icons';
+import { ChevronIcon, LockIcon, PttButtonIcon, ReplyArrowIcon, WalkieTalkieIcon } from './icons';
 import { endTalkTouches, HoldToTalk, moveTalkTouches } from './HoldToTalk';
 import {
   COLLAPSED_HEADER_HEIGHT,
@@ -26,11 +30,12 @@ import {
   operatorLayout,
   shouldOfferHeaderCollapse,
 } from './layers';
-import { openSessionSheet } from './sessionSheetState';
+import { openSessionSheet, useSessionSheetOpen } from './sessionSheetState';
 import { feedVideoHeight, feedVideoLayers } from './feedVideoLayout';
 import { TargetRow } from './TargetRow';
 import { VolumeAdjustmentHUD } from './VolumeAdjustmentHUD';
 import { colors } from './theme';
+import { confirmDisconnect } from './confirmDisconnect';
 import { KeyboardShortcuts } from '../keyboard/KeyboardShortcuts';
 
 /** Launch and short dropouts reconnect on their own; only warn when an accessory stays away. */
@@ -56,17 +61,23 @@ export function OperatorScreen() {
   const [measured, setMeasured] = useState({ width: 0, height: 0 });
   const width = measured.width || window.width;
   const height = measured.height || window.height;
-  const compact = isCompactOperatorScreen(width, height);
+  const { density, topBar } = useOperatorPreferences();
+  const smallScreen = isCompactOperatorScreen(width, height);
+  const compact = density === 'compact' || (density === 'auto' && smallScreen);
+  const defaultCollapsed = topBar === 'hidden' || (topBar === 'auto' && smallScreen);
+  const sheetOpen = useSessionSheetOpen(state => state.open);
+  useEffect(() => { void loadOperatorPreferences(); }, []);
   const tablet = isTabletOperatorScreen(width, height);
   const [layerIndex, setLayerIndex] = useState(0);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const [conferenceTarget, setConferenceTarget] = useState<TalkTarget | null>(null);
-  const [headerCollapsed, setHeaderCollapsed] = useState(compact);
+  const [headerCollapsed, setHeaderCollapsed] = useState(defaultCollapsed);
   const [headerHeight, setHeaderHeight] = useState(96);
   const [listHeight, setListHeight] = useState(0);
   const [listWidth, setListWidth] = useState(0);
   const [expandedVideos, setExpandedVideos] = useState<Set<string>>(() => new Set());
-  const compactRef = useRef(compact);
+  const keypadHeld = useRef(false);
+  const [pageFocus, setPageFocus] = useState<string | null>(null);
   const reply = store.replyTarget;
   const mainButton = resolveMainButton({
     storedIdentity: store.mainButtonTargets[mainButtonStorageKey(store.activeProfileId, store.productionId)],
@@ -80,6 +91,8 @@ export function OperatorScreen() {
     height,
     availableHeight,
     headerCollapsed,
+    compact,
+    fontScale: window.fontScale,
   });
   const replyBeside = layout.replyBeside;
   const videoCellWidth = (listWidth || width - 32) / layout.columns - layout.gap;
@@ -129,13 +142,97 @@ export function OperatorScreen() {
     setLayerIndex(0);
   }, [store.productionId, store.targets.length, layout.columns, replyBeside]);
 
+  const hardwareTargetKeys = new Set(store.bleBindings.flatMap(binding => {
+    const target = resolveBleTalkTarget({ selection: bindingControlTarget(binding, 'ptt'), replyTarget: reply, targets: store.targets });
+    return target ? [talkTargetIdentity(target)] : [];
+  }));
+  const hardwarePage = store.hardwarePttPageRequest;
+  const lastHardwarePage = useRef(hardwarePage);
   useEffect(() => {
-    if (compactRef.current === compact) {
+    if (lastHardwarePage.current === hardwarePage) return;
+    lastHardwarePage.current = hardwarePage;
+    if (!hardwarePage || session.hasMomentaryTalk()) return;
+    const index = pages.findIndex(page => page.some(row =>
+      row.targets.some(target => talkTargetIdentity(target) === hardwarePage.targetKey)));
+    if (index >= 0) setLayerIndex(index);
+  }, [hardwarePage, pages]);
+
+  useEffect(() => {
+    if (!pageFocus) return;
+    const timer = setTimeout(() => {
+      focusOperatorTarget(pageFocus);
+      setPageFocus(null);
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [pageFocus, safeLayerIndex]);
+
+  useEffect(() => {
+    setHeaderCollapsed(defaultCollapsed);
+  }, [defaultCollapsed, topBar]);
+
+  function releaseKeypadTalk() {
+    if (!keypadHeld.current) return;
+    keypadHeld.current = false;
+    void session.releaseTalk(undefined, 'keypad:ok');
+  }
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') releaseKeypadTalk();
+    });
+    return () => { subscription.remove(); releaseKeypadTalk(); };
+  }, []);
+
+  useEffect(() => {
+    if (sheetOpen || conferenceTarget || audioMenuOpen || !store.operatorReady) releaseKeypadTalk();
+  }, [sheetOpen, conferenceTarget, audioMenuOpen, store.operatorReady]);
+
+  function handleKeypad(event: KeyboardEvent) {
+    if (event.code === 'TalkUp') {
+      releaseKeypadTalk();
       return;
     }
-    compactRef.current = compact;
-    setHeaderCollapsed(compact);
-  }, [compact]);
+    if (sheetOpen || conferenceTarget || audioMenuOpen) return;
+    if (event.code === 'Stop') {
+      releaseKeypadTalk();
+      void session.stopTalk();
+      return;
+    }
+    if (event.code === 'PageLeft' || event.code === 'PageRight') {
+      if (layers <= 1 || keypadHeld.current || session.hasMomentaryTalk()) return;
+      const current = grid.flatMap(row => row.targets);
+      const slot = Math.max(0, current.findIndex(target => talkTargetIdentity(target) === event.targetKey));
+      const delta = event.code === 'PageLeft' ? -1 : 1;
+      const next = (safeLayerIndex + delta + layers) % layers;
+      const candidates = pages[next]!.flatMap(row => row.targets);
+      const target = candidates[Math.min(slot, candidates.length - 1)];
+      if (target) {
+        const key = talkTargetIdentity(target);
+        const focus = session.canTalkTo(target) ? `operator-talk:${key}` : `operator-card:${key}`;
+        setPageFocus(focus);
+      }
+      setLayerIndex(next);
+      return;
+    }
+    const target = event.targetKey === 'main' ? mainButton.target :
+      store.targets.find(item => talkTargetIdentity(item) === event.targetKey);
+    if (!target || !session.canTalkTo(target)) return;
+    if (event.code === 'TalkDown' && !keypadHeld.current) {
+      keypadHeld.current = true;
+      void session.pressKeypadTalk(target, 'keypad:ok');
+    } else if (event.code === 'Lock' && !store.lockedTargetKeys.includes(talkTargetIdentity(target))) {
+      void session.lockTalk(target);
+    }
+  }
+
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !isKeypadOnlyDevice() || sheetOpen || conferenceTarget || audioMenuOpen) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      confirmDisconnect();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [sheetOpen, conferenceTarget, audioMenuOpen]);
 
   const collapseHeader = () => {
     setHeaderCollapsed(true);
@@ -168,8 +265,8 @@ export function OperatorScreen() {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={layerLabel}
-        onPress={() => setLayerIndex((current) => (current + 1) % layers)}
-        style={[styles.layer, compact && styles.layerCompact]}
+        onPress={() => { if (!session.hasMomentaryTalk()) setLayerIndex((current) => (current + 1) % layers); }}
+        style={[styles.layer, compact && styles.layerCompact, headerCollapsed && { height: COLLAPSED_HEADER_HEIGHT }]}
       >
         {/* Reserve the widest page label, including the jump from 9 to 10. */}
         <Text
@@ -189,6 +286,7 @@ export function OperatorScreen() {
   const replyButton = (
     <HoldToTalk
       accessibilityLabel={mainButton.accessibilityLabel}
+      nativeID="operator-talk:main"
       disabled={!mainTarget}
       locked={mainLocked}
       leftHanded={store.leftHanded}
@@ -200,8 +298,9 @@ export function OperatorScreen() {
         styles.reply,
         replyBeside && styles.replyLandscape,
         compact && !replyBeside && styles.replyCompact,
-        store.bigMainButton && styles.replyBig,
-        store.bigMainButton && replyBeside && styles.replyBigLandscape,
+        store.bigMainButton && !compact && styles.replyBig,
+        store.bigMainButton && !compact && replyBeside && styles.replyBigLandscape,
+        compact && replyBeside && styles.replyCompactLandscape,
         mainTalking && styles.replyActive,
         !mainTarget && styles.replyDisabled,
       ]}
@@ -275,19 +374,22 @@ export function OperatorScreen() {
         headerCollapsed && styles.screenPeek,
       ]}
     >
-      <KeyboardShortcuts />
+      <KeyboardShortcuts onKeypad={handleKeypad} onKeypadReset={releaseKeypadTalk} />
       <View style={{ flex: 1 }} accessibilityElementsHidden={audioMenuOpen} importantForAccessibility={audioMenuOpen ? 'no-hide-descendants' : 'auto'}>
         {headerCollapsed ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Show top bar"
-            accessibilityHint="Reveals name, connection, audio route, and layers"
-            onPress={expandHeader}
-            style={styles.headerPeekCard}
-          >
-            <ChevronIcon color={colors.text} direction="down" size={14} />
-            <Text style={styles.headerPeekLabel}>Show top bar</Text>
-          </Pressable>
+          <View style={styles.collapsedActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Show top bar"
+              accessibilityHint="Reveals name, connection, audio route, and layers"
+              onPress={expandHeader}
+              style={styles.headerPeekCard}
+            >
+              <ChevronIcon color={colors.text} direction="down" size={14} />
+              <Text style={styles.headerPeekLabel}>Show top bar</Text>
+            </Pressable>
+            {layerButton}
+          </View>
         ) : (
           <View
             style={[styles.header, compact && styles.headerCompact]}
@@ -341,7 +443,7 @@ export function OperatorScreen() {
 
         {/* Reserve one line even when healthy: transient warnings must never
             change the target grid's measured height or move a held button. */}
-        <View style={styles.noticeSlot}>
+        <View style={[styles.noticeSlot, compact && styles.noticeCompact]}>
           {store.error || mediaNotice || store.overBudget ? (
             <Text style={store.error ? styles.error : styles.warn} numberOfLines={1}
               accessibilityLiveRegion="polite">
@@ -369,7 +471,7 @@ export function OperatorScreen() {
           ]}
         >
           <View
-            style={styles.list}
+            style={[styles.list, { gap: layout.gap }]}
             onLayout={(event) => { setListHeight(event.nativeEvent.layout.height); setListWidth(event.nativeEvent.layout.width); }}
           >
             {grid.map((row, rowIndex) => (
@@ -379,6 +481,8 @@ export function OperatorScreen() {
                     <TargetRow
                       target={target}
                       compact={compact || replyBeside}
+                      dense={compact}
+                      hardwarePtt={hardwareTargetKeys.has(talkTargetIdentity(target))}
                       compactLabel={layout.columns > 1 && width / layout.columns < 400}
                       volumeReadout={compact}
                       height={layout.cardHeight}
@@ -450,7 +554,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
+  collapsedActions: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 4,
+  },
+  noticeCompact: { height: 16, marginBottom: 2 },
+  replyCompactLandscape: { width: 62, minWidth: 62, paddingHorizontal: 4 },
   headerPeekCard: {
+    flex: 1,
     flexDirection: 'row',
     gap: 6,
     height: COLLAPSED_HEADER_HEIGHT,

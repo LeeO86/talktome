@@ -5,11 +5,14 @@ import { mainButtonStorageKey, resolveMainButton } from '../session/mainButton';
 import { useSessionSheetOpen } from '../ui/sessionSheetState';
 import { keyAssignments, KeyboardHolds } from './bindings';
 import { hydrateKeyboardPreferences, useKeyboardPreferences } from './preferences';
-import { NativeKeyboard } from './NativeKeyboard';
+import { NativeKeyboard, type KeyboardEvent } from './NativeKeyboard';
 import { useKeyboardFocus } from './focus';
 import { publishKeyboardHolds } from './activity';
 
-export function KeyboardShortcuts() {
+export function KeyboardShortcuts({ onKeypad, onKeypadReset }: {
+  onKeypad?: (event: KeyboardEvent) => void;
+  onKeypadReset?: () => void;
+} = {}) {
   const state = useSessionStore();
   const preferences = useKeyboardPreferences();
   const sheetOpen = useSessionSheetOpen(s => s.open);
@@ -37,6 +40,12 @@ export function KeyboardShortcuts() {
     return () => { subscription.remove(); holds.current?.reset(); };
   }, []);
   return <NativeKeyboard listening={active} focusRequest={focusRequest} codes={codes} onKeyboardEvent={({ nativeEvent }) => {
-    if ((active && AppState.currentState === 'active') || !nativeEvent.pressed) holds.current?.event(nativeEvent.code, nativeEvent.pressed, assignments);
-  }} onReset={() => holds.current?.reset()} />;
+    if ((active && AppState.currentState === 'active') || !nativeEvent.pressed) {
+      if (nativeEvent.keypad) onKeypad?.(nativeEvent);
+      else holds.current?.event(nativeEvent.code, nativeEvent.pressed, assignments);
+    }
+  }} onReset={() => {
+    holds.current?.reset();
+    onKeypadReset?.();
+  }} />;
 }

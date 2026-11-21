@@ -111,6 +111,7 @@ export function VolumeRing({
   return (
     <View
       accessible
+      focusable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={onAdjustBegin ? 'Tap for volume controls, double tap to mute, or hold and slide up or down to adjust' : onDoublePress ? 'Double tap to mute or unmute' : undefined}

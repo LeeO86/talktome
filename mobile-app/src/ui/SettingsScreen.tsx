@@ -1,4 +1,5 @@
 import {
+  Alert,
   BackHandler,
   Platform,
   Pressable,
@@ -10,6 +11,7 @@ import {
   useColorScheme,
   useWindowDimensions,
 } from 'react-native';
+import { loadOperatorPreferences, saveOperatorPreferences, useOperatorPreferences } from './operatorPreferences';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ScreenStack, ScreenStackItem } from 'react-native-screens';
 
@@ -434,11 +436,25 @@ function LayoutSettingsPage({
     replyTarget: store.replyTarget,
     canTalk: (target) => session.canTalkTo(target),
   });
+  const { density, topBar } = useOperatorPreferences();
+  useEffect(() => { void loadOperatorPreferences(); }, []);
+  const chooseDensity = () => Alert.alert('Card layout', undefined, [
+    { text: 'Automatic', onPress: () => saveOperatorPreferences({ density: 'auto' }) },
+    { text: 'Standard', onPress: () => saveOperatorPreferences({ density: 'standard' }) },
+    { text: 'Compact', onPress: () => saveOperatorPreferences({ density: 'compact' }) },
+  ]);
+  const chooseTopBar = () => Alert.alert('Top bar on startup', undefined, [
+    { text: 'Automatic', onPress: () => saveOperatorPreferences({ topBar: 'auto' }) },
+    { text: 'Shown', onPress: () => saveOperatorPreferences({ topBar: 'shown' }) },
+    { text: 'Hidden', onPress: () => saveOperatorPreferences({ topBar: 'hidden' }) },
+  ]);
   const canArrange = store.identity?.kind === 'user' && (store.allowTargetRearrange || store.allowTargetAddRemove);
 
   return (
     <>
       <SettingsSection>
+        <SettingsNavRow label="Card layout" value={{ auto: 'Automatic', standard: 'Standard', compact: 'Compact' }[density]} onPress={chooseDensity} />
+        <SettingsNavRow label="Top bar on startup" value={{ auto: 'Automatic', shown: 'Shown', hidden: 'Hidden' }[topBar]} onPress={chooseTopBar} />
         <SettingsSwitchRow
           label="Left-handed mode"
           value={store.leftHanded}

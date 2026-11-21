@@ -16,6 +16,7 @@ export function endTalkTouches(touches: readonly HoldTouch[], cancelled = false)
 
 type Props = {
   accessibilityLabel: string;
+  nativeID?: string;
   disabled?: boolean;
   locked?: boolean;
   leftHanded?: boolean;
@@ -29,6 +30,7 @@ type Props = {
 
 export function HoldToTalk({
   accessibilityLabel,
+  nativeID,
   disabled,
   locked,
   leftHanded = false,
@@ -65,6 +67,8 @@ export function HoldToTalk({
   return (
     <View
       ref={viewRef}
+      nativeID={nativeID}
+      focusable={Boolean(nativeID && !disabled)}
       accessible
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}

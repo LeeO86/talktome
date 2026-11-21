@@ -12,7 +12,7 @@ import {
 } from './codecs';
 import { PttEventDeduper } from './dedup';
 import { matchPttIntent } from './intents';
-import { nextTalkableTarget, talkableAtKnob } from './rotary';
+import { nextTalkableTarget, stepPttSelection, talkableAtKnob } from './rotary';
 
 describe('BLE bitmask', () => {
   it('diffs simultaneous presses and releases', () => {
@@ -132,5 +132,38 @@ describe('rotary / up-down targeting', () => {
     expect(talkableAtKnob([all, beni, cam], 2)?.label).toBe('beni');
     expect(talkableAtKnob([all, beni, cam], 0)?.label).toBe('All');
     expect(talkableAtKnob([all, beni, cam], 9)?.label).toBe('cam');
+  });
+});
+
+describe('relative handset channel knob', () => {
+  it('keeps quick uninterrupted steps from the same hardware transport', () => {
+    const dedup = new PttEventDeduper();
+    const event = { source: 'intent', button: 'channelUp', pressed: true, timestamp: 100 } as const;
+    expect(dedup.shouldDrop(event)).toBe(false);
+    expect(dedup.shouldDrop({ ...event, timestamp: 120 })).toBe(false);
+    expect(dedup.shouldDrop({ ...event, source: 'spp', timestamp: 125 })).toBe(true);
+  });
+
+  it('walks through Reply and every target while preserving absolute positions', () => {
+    const targets = [
+      { type: 'user' as const, id: 1, label: 'Director', canTalk: true },
+      { type: 'conference' as const, id: 2, label: 'Crew', canTalk: true },
+    ];
+    const first = stepPttSelection(targets, { kind: 'reply' }, 1, true);
+    const second = stepPttSelection(targets, first!, 1, true);
+    expect(first).toMatchObject({ id: 1 });
+    expect(second).toMatchObject({ id: 2 });
+    expect(stepPttSelection(targets, second!, 1, true)).toEqual({ kind: 'reply' });
+    expect(stepPttSelection(targets, { kind: 'reply' }, -1, true)).toEqual(second);
+    expect(talkableAtKnob(targets, 2)?.id).toBe(2);
+  });
+
+  it.each([
+    ['FUNCTION_KEY_DOWN_PRESSED', 'ptt', true],
+    ['FUNCTION_KEY_RELEASED', 'ptt', false],
+    ['CHANNEL_NEXT', 'channelUp', true],
+    ['CHANNEL_PREVIOUS', 'channelDown', true],
+  ])('recognizes the firmware action %s', (action, button, pressed) => {
+    expect(matchPttIntent(`android.intent.action.${action}`)).toEqual({ button, pressed });
   });
 });

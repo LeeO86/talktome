@@ -44,6 +44,27 @@ The app includes:
   no external output is selected. The default is all targets.
 - Per-host certificate pinning for self-hosted servers with self-signed TLS. On a certificate error, the app displays the fingerprint and asks for confirmation before signing in.
 
+## Small screens and hardware keys
+
+**Session → Layout** offers Automatic, Standard and Compact cards, plus a
+separate top-bar startup preference. Automatic uses the compact cards and
+starts with the top bar collapsed on small displays. The layer button stays
+visible next to the collapsed bar. Targets remain on fixed pages.
+
+On Android, use the D-pad to focus controls. On a target's talk area, Left
+and Right change layers, and holding OK talks until it is released. When
+Android delivers the phone keys to Talktome, the green key locks talk on the
+focused target and the red key stops talk while keeping the session connected.
+The focus ring, hardware PTT button icon and talk-lock icon show distinct states.
+
+On Crosscall Core-P6, assign the side PTT button to Talktome in the phone's
+programmable-key settings. The side key and channel knob use the existing
+Accessories controls. The first hardware event adds **This phone** when no
+binding exists. A relative channel step can select Reply or a target on any
+page, and the app shows the selected target's page. A fixed-position channel
+selector retains its position mapping. Paging and retargeting are blocked during
+momentary talk. A native Android rebuild is required.
+
 ## Development
 
 Use Node.js 22, an Android SDK/JDK 17 for Android, and macOS/Xcode for iOS.

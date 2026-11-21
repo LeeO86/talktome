@@ -1,5 +1,19 @@
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
-import type { BleTargetSelection } from '../ble/target';
+import { bleTargetSelectionKey, type BleTargetSelection } from '../ble/target';
+
+export function stepPttSelection(
+  candidates: readonly TalkTarget[],
+  current: BleTargetSelection,
+  delta: number,
+  includeReply: boolean,
+): BleTargetSelection | null {
+  const stops = candidates.map(selectionFromTalkTarget);
+  if (includeReply) stops.unshift({ kind: 'reply' });
+  if (!stops.length) return null;
+  const index = stops.findIndex(stop => bleTargetSelectionKey(stop) === bleTargetSelectionKey(current));
+  const start = index < 0 ? (delta < 0 ? 0 : -1) : index;
+  return stops[((start + delta) % stops.length + stops.length) % stops.length] ?? null;
+}
 
 export function nextTalkableTarget(
   candidates: readonly TalkTarget[],

@@ -36,6 +36,8 @@ export type OperatorLayoutInput = {
   height: number;
   availableHeight?: number;
   headerCollapsed?: boolean;
+  compact?: boolean;
+  fontScale?: number;
 };
 
 export type OperatorLayout = {
@@ -120,12 +122,20 @@ export function cardHeightForRows(availableHeight: number, rows: number): number
 export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const landscape = isLandscape(input.width, input.height);
   const tablet = isTabletOperatorScreen(input.width, input.height);
+  const compact = input.compact === true;
   const replyBeside = replyBesideTargets(input.width, input.height);
-  const columns = targetGridColumns(input.width, input.height);
+  const columns = compact && !tablet ? 1 : targetGridColumns(input.width, input.height);
   const maxRows = targetGridMaxRows(input.width, input.height);
   const available =
     input.availableHeight ?? estimateTargetListHeight(input.width, input.height, input.headerCollapsed);
-  const rows = rowsThatFit(available, maxRows);
+  const gap = compact ? 4 : CARD_GAP;
+  const minHeight = Math.max(44, Math.ceil(30 * (input.fontScale ?? 1) + 8));
+  const rows = compact
+    ? Math.max(1, Math.min(maxRows, Math.floor((available + gap) / (minHeight + gap))))
+    : rowsThatFit(available, maxRows);
+  const cardHeight = compact
+    ? Math.max(0, Math.min(Math.max(minHeight, 56), (available - (rows - 1) * gap) / rows))
+    : cardHeightForRows(available, rows);
   return {
     landscape,
     tablet,
@@ -133,8 +143,8 @@ export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
     columns,
     rows,
     layerSize: rows * columns,
-    cardHeight: cardHeightForRows(available, rows),
-    gap: CARD_GAP,
+    cardHeight,
+    gap,
     maxRows,
   };
 }

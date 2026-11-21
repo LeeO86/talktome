@@ -182,7 +182,7 @@ export function AppContent() {
         {sheetOpen && Platform.OS === 'android' ? (
           // Android: a plain overlay. Taps did not reach the settings inside a native
           // react-native-screens modal on several phones (thepoison606/talktome#186).
-          <View
+          <View nativeID="keypad-focus-scope"
             style={[
               styles.androidSheet,
               {

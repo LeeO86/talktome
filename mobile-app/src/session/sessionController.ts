@@ -1357,6 +1357,18 @@ export class SessionController {
     await this.talk.pressTalk(target, inputKey);
   }
 
+  pressKeypadTalk(target: TalkTarget, inputKey: string): Promise<void> {
+    return this.talk.pressTalk(target, inputKey, false);
+  }
+
+  hasMomentaryTalk(): boolean {
+    return this.talk.hasMomentaryHold();
+  }
+
+  stopTalk(): Promise<void> {
+    return this.talk.unlockTalk();
+  }
+
   async lockTalk(target: TalkTarget): Promise<void> {
     await this.talk.lockTalk(target);
   }

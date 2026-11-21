@@ -3,6 +3,9 @@ package expo.modules.ptthardware
 import android.content.Context
 import android.graphics.Rect
 import android.view.KeyEvent
+import android.view.View
+import android.widget.EditText
+import java.lang.ref.WeakReference
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -37,21 +40,31 @@ class TalkToMeKeyboardView(context: Context, appContext: AppContext) : ExpoView(
 
   fun listen(value: Boolean) {
     listening = value
-    if (value) post { if (listening && isAttachedToWindow) requestFocus() }
-    else { reset(); clearFocus() }
+    if (value) {
+      if (!capture) active = WeakReference(this)
+      refocus()
+    } else {
+      if (active.get() === this) active = WeakReference(null)
+      reset()
+      clearFocus()
+    }
   }
 
-  fun refocus() { if (listening) post { if (listening && isAttachedToWindow) requestFocus() } }
+  fun refocus() {
+    if (listening) post {
+      if (listening && isAttachedToWindow && (capture || !TalkToMeKeypadNavigation.isKeypadOnly())) requestFocus()
+    }
+  }
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
-    if (listening) post { if (listening) requestFocus() }
+    refocus()
   }
 
   override fun onDetachedFromWindow() { reset(); super.onDetachedFromWindow() }
   override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
     super.onWindowFocusChanged(hasWindowFocus)
-    if (!hasWindowFocus) reset() else if (listening) requestFocus()
+    if (!hasWindowFocus) reset() else refocus()
   }
   override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
     super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
@@ -72,6 +85,29 @@ class TalkToMeKeyboardView(context: Context, appContext: AppContext) : ExpoView(
     if (!held.remove(code)) return super.onKeyUp(keyCode, event)
     onKeyboardEvent(mapOf("code" to code, "pressed" to false))
     return true
+  }
+
+  companion object {
+    private var active = WeakReference<TalkToMeKeyboardView>(null)
+
+    fun dispatchKeypad(code: String, target: String? = null): Boolean {
+      val view = active.get() ?: return false
+      if (!view.listening || view.capture || !view.isAttachedToWindow || !view.hasWindowFocus()) return false
+      val payload = mutableMapOf<String, Any>("code" to code, "pressed" to (code != "TalkUp"), "keypad" to true)
+      if (target != null) payload["targetKey"] = target
+      view.onKeyboardEvent(payload)
+      return true
+    }
+
+    fun dispatchUnfocused(event: KeyEvent, focused: View?): Boolean {
+      val view = active.get() ?: return false
+      if (focused === view || focused is EditText || view.capture || !view.isAttachedToWindow || !view.hasWindowFocus()) return false
+      return when (event.action) {
+        KeyEvent.ACTION_DOWN -> view.onKeyDown(event.keyCode, event)
+        KeyEvent.ACTION_UP -> view.onKeyUp(event.keyCode, event)
+        else -> false
+      }
+    }
   }
 
   private fun code(key: Int): String? = when (key) {

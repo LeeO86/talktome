@@ -45,6 +45,8 @@ export type BondedSerialDevice = {
 
 type NativePttHardware = {
   isAvailable?: () => boolean;
+  isKeypadOnly?: () => boolean;
+  focusOperatorTarget?: (nativeId: string) => void;
   getState?: () => HardwareNativeState;
   start?: (intentCatalogJson?: string) => Promise<HardwareNativeState>;
   stop?: () => Promise<HardwareNativeState>;
@@ -79,6 +81,14 @@ function loadNative(): NativePttHardware | null {
     cached = null;
   }
   return cached;
+}
+
+export function isKeypadOnlyDevice(): boolean {
+  return loadNative()?.isKeypadOnly?.() === true;
+}
+
+export function focusOperatorTarget(nativeId: string): void {
+  loadNative()?.focusOperatorTarget?.(nativeId);
 }
 
 export function pttHardwareAvailable(): boolean {

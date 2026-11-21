@@ -138,6 +138,17 @@ export function PlayIcon({ color = colors.text, size = 18 }: IconProps) {
   return <Image source={PLAY} style={{ width: size, height: size, tintColor: color }} {...iconEvents} />;
 }
 
+export function PttButtonIcon({ color = colors.accent, size = 14 }: IconProps) {
+  return (
+    <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>
+      <View style={{ position: 'absolute', top: size * 0.16, width: size * 0.48, height: size * 0.34,
+        alignSelf: 'center', borderRadius: 2, backgroundColor: color }} />
+      <View style={{ position: 'absolute', bottom: size * 0.12, width: size * 0.88, height: size * 0.4,
+        alignSelf: 'center', borderWidth: 1.5, borderColor: color, borderRadius: 2 }} />
+    </View>
+  );
+}
+
 export function LockIcon({ color = colors.text, size = 16 }: IconProps) {
   return (
     <View style={[styles.box, { width: size, height: size }]} {...iconEvents}>

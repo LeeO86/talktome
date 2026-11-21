@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react';
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 
-export type KeyboardEvent = { code: string; pressed: boolean };
+export type KeyboardEvent = { code: string; pressed: boolean; keypad?: boolean; targetKey?: string };
 type Props = {
   listening: boolean;
   capture?: boolean;

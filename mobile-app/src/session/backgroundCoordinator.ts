@@ -93,7 +93,8 @@ import {
   type HardwareNativeEvent,
   type HardwareNativeState,
 } from '../hardware/native';
-import { nextTalkableTarget, selectionFromTalkTarget, talkableAtKnob } from '../hardware/rotary';
+import { nextTalkableTarget, selectionFromTalkTarget, stepPttSelection, talkableAtKnob } from '../hardware/rotary';
+import { isCrosscallHardwareEvent } from '../hardware/intents';
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
 import { sessionPresence, presenceNotification } from './presence';
 import { publishSessionPresence, subscribeAppTerminating, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
@@ -109,6 +110,7 @@ import type { SessionController } from './sessionController';
 export class BackgroundCoordinator {
   private hardwareBound = false;
   private appStateSubscription: { remove: () => void } | null = null;
+  private readonly pttPressedTargets = new Map<string, TalkTarget>();
   private readonly blePolicies = new Map<string, BleButtonPolicy>();
   private readonly bleWatchdogs = new Map<string, BleReleaseWatchdog>();
   private readonly notifySessions = new Map<string, AccessoryNotifySession>();
@@ -365,6 +367,7 @@ export class BackgroundCoordinator {
     }
     this.bleWatchdogs.clear();
     this.blePolicies.clear();
+    this.pttPressedTargets.clear();
     this.notifySessions.clear();
     this.sppParsers.clear();
     this.eventDeduper.reset();
@@ -689,6 +692,16 @@ export class BackgroundCoordinator {
     );
     const state = useSessionStore.getState();
     const bound = state.bleBindings.some((item) => item.id === deviceId);
+    if (!bound && kind === 'onboard' && isCrosscallHardwareEvent(event.raw)) {
+      // Crosscall sends both the side key and knob to its selected PTT app.
+      // Bind synchronously so a quick key-up cannot overtake the first press.
+      useSessionStore.setState({ bleBindings: upsertBleDeviceBinding(state.bleBindings, {
+        id: deviceId, name: event.deviceName || 'This phone', kind, rotaryRetargetsPtt1: true,
+      }) });
+      this.persistBlePreferences();
+      this.applyBoundEvent({ ...event, deviceId }, kind);
+      return;
+    }
     if (state.blePairingActive && !bound) {
       void this.completeButtonPairing(deviceId, {
         kind,
@@ -730,7 +743,7 @@ export class BackgroundCoordinator {
       if (event.pressed === false) {
         return;
       }
-      this.handleChannelStep(deviceId, event.button === 'channelUp' ? 1 : -1);
+      this.handleChannelStep(deviceId, event.button === 'channelUp' ? 1 : -1, isCrosscallHardwareEvent(event.raw));
       return;
     }
     if (event.button === 'setChannel') {
@@ -738,7 +751,8 @@ export class BackgroundCoordinator {
     }
   }
 
-  private handleChannelStep(deviceId: string, delta: number): void {
+  private handleChannelStep(deviceId: string, delta: number, includeReply: boolean): void {
+    if (this.c.talk.hasMomentaryHold()) return;
     const state = useSessionStore.getState();
     const binding = state.bleBindings.find((item) => item.id === deviceId);
     if (!binding?.rotaryRetargetsPtt1) {
@@ -746,6 +760,11 @@ export class BackgroundCoordinator {
       return;
     }
     const candidates = bleTalkCandidates(state.targets);
+    if (includeReply) {
+      const selection = stepPttSelection(candidates, bindingControlTarget(binding, 'ptt'), delta, true);
+      if (selection) this.applyRotarySelection(selection, deviceId);
+      return;
+    }
     const current = resolveBleTalkTarget({
       selection: bindingControlTarget(binding, 'ptt'),
       replyTarget: state.replyTarget,
@@ -755,10 +774,11 @@ export class BackgroundCoordinator {
     if (!next) {
       return;
     }
-    this.setBluetoothButtonTarget(selectionFromTalkTarget(next), deviceId, 'ptt');
+    this.applyRotarySelection(selectionFromTalkTarget(next), deviceId);
   }
 
   private handleChannelSet(deviceId: string, position: number): void {
+    if (this.c.talk.hasMomentaryHold()) return;
     const state = useSessionStore.getState();
     const candidates = bleTalkCandidates(state.targets);
     const next = talkableAtKnob(candidates, position);
@@ -770,7 +790,14 @@ export class BackgroundCoordinator {
       this.noteHardwareLog('Channel knob ignored (enable “Change PTT 1 target”).');
       return;
     }
-    this.setBluetoothButtonTarget(selectionFromTalkTarget(next), deviceId, 'ptt');
+    this.applyRotarySelection(selectionFromTalkTarget(next), deviceId);
+  }
+
+  private applyRotarySelection(selection: BleTargetSelection, deviceId: string): void {
+    this.setBluetoothButtonTarget(selection, deviceId, 'ptt');
+    const { replyTarget, targets } = useSessionStore.getState();
+    const target = resolveBleTalkTarget({ selection, replyTarget, targets });
+    if (target) useSessionStore.setState({ hardwarePttPageRequest: { targetKey: talkTargetIdentity(target) } });
   }
 
   private forceBleRelease(deviceId?: string): void {
@@ -922,7 +949,11 @@ export class BackgroundCoordinator {
       button === 'sos'
         ? { kind: 'reply' as const }
         : bindingTarget(state.bleBindings, deviceId, bleSelectionFromState(state), button);
-    const target = resolveBleTalkTarget({
+    const inputKey = `hardware:${deviceId}:${button}`;
+    const previousTarget = this.pttPressedTargets.get(inputKey);
+    if (!pressed) this.pttPressedTargets.delete(inputKey);
+    if (!pressed && !previousTarget) return;
+    const target = previousTarget ?? resolveBleTalkTarget({
       selection,
       replyTarget: state.replyTarget,
       targets: state.targets,
@@ -933,6 +964,7 @@ export class BackgroundCoordinator {
       });
       return;
     }
+    if (pressed) this.pttPressedTargets.set(inputKey, target);
     const action = this.policyFor(deviceId, button).handle(pressed, {
       shortPressLocks: state.bleShortPressLocks,
       lockedToTarget: state.talkLocked && state.lockedTargetKeys.includes(talkTargetIdentity(target)),
@@ -941,18 +973,19 @@ export class BackgroundCoordinator {
       return;
     }
     if (action === 'startTalk') {
-      await this.c.talk.pressTalk(target);
+      await this.c.talk.pressTalk(target, inputKey);
       return;
     }
     if (action === 'lockTalk') {
       await this.c.talk.lockTalk(target);
+      await this.c.talk.releaseTalk(undefined, inputKey);
       return;
     }
     if (action === 'unlockTalk') {
       await this.c.talk.unlockTalk(target);
       return;
     }
-    await this.c.talk.releaseTalk(target);
+    await this.c.talk.releaseTalk(undefined, inputKey);
   }
 
   private async handleBleButton(deviceId: string, pressed: boolean): Promise<void> {

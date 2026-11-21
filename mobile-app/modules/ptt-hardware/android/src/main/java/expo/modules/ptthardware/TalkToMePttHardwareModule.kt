@@ -15,6 +15,21 @@ class TalkToMePttHardwareModule : Module() {
       true
     }
 
+    Function("isKeypadOnly") {
+      TalkToMeKeypadNavigation.isKeypadOnly()
+    }
+
+    Function("focusOperatorTarget") { nativeId: String ->
+      val root = appContext.currentActivity?.window?.decorView ?: return@Function
+      root.post {
+        val target = com.facebook.react.uimanager.util.ReactFindViewUtil.findView(root, nativeId)
+        if (target != null) {
+          target.isFocusableInTouchMode = true
+          target.requestFocus()
+        }
+      }
+    }
+
     Function("getState") {
       controller()?.currentState() ?: mapOf("listening" to false, "devices" to emptyList<Map<String, Any?>>())
     }

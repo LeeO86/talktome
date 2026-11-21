@@ -24,7 +24,11 @@ export class TalkCoordinator {
     return canTalkToTarget(target, useSessionStore.getState().peers);
   }
 
-  async pressTalk(target: TalkTarget, inputKey = talkTargetIdentity(target)): Promise<void> {
+  hasMomentaryHold(): boolean {
+    return this.localHolds.size > 0 || this.remoteHolds.size > 0;
+  }
+
+  async pressTalk(target: TalkTarget, inputKey = talkTargetIdentity(target), unlockOnPress = true): Promise<void> {
     if (!this.canTalkTo(target) || !this.c.media) {
       useSessionStore.setState({ error: !this.c.media ? 'Media is not ready.' : target.type === 'user' ? 'This target is currently offline.' : 'This target is listen-only.' });
       return;
@@ -35,6 +39,7 @@ export class TalkCoordinator {
     try {
       const state = useSessionStore.getState();
       if (state.talkLocked && this.isLocked(target) && this.c.overrideFrom === null) {
+        if (!unlockOnPress) return;
         if (state.lockMultipleTargets && this.c.lockedTargets.length > 1) await this.removeLock(target);
         else await this.unlockTalk();
         return;
