@@ -22,7 +22,7 @@ import {
 } from './layers';
 
 describe('target layers', () => {
-  it.each([[320, 240, 130, 5], [240, 320, 164, 6]])(
+  it.each([[320, 240, 130, 4], [320, 184, 146, 4], [480, 320, 192, 5], [240, 320, 164, 6]])(
     'fits compact cards without overflow at %i × %i dp',
     (width, height, availableHeight, expectedRows) => {
       const compact = operatorLayout({ width, height, availableHeight, compact: true, fontScale: 1 });

@@ -127,7 +127,9 @@ export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const replyBeside = replyBesideTargets(input.width, input.height);
   const small = compact && isCompactOperatorScreen(input.width, input.height);
   const columns = compact && !tablet ? 1 : targetGridColumns(input.width, input.height);
-  const maxRows = small && replyBeside ? COMPACT_HANDSET_LANDSCAPE_MAX_ROWS
+  // At P6 dimensions, use the space for four taller cards.
+  const p6Sized = input.width <= 360 && input.height <= 260;
+  const maxRows = small && replyBeside && !p6Sized ? COMPACT_HANDSET_LANDSCAPE_MAX_ROWS
     : targetGridMaxRows(input.width, input.height);
   const available =
     input.availableHeight ?? estimateTargetListHeight(input.width, input.height, input.headerCollapsed);
