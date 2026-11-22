@@ -77,8 +77,8 @@ public final class TalkToMeAudioSessionModule: Module {
       self.controller.playWatchReadyCue()
     }
 
-    AsyncFunction("announceTarget") { (label: String) in
-      self.controller.announceTarget(label)
+    AsyncFunction("announceTarget") { (label: String, volume: Double) in
+      self.controller.announceTarget(label, volume: Float(volume))
     }.runOnQueue(.main)
 
     AsyncFunction("stopTargetAnnouncement") {

@@ -78,13 +78,15 @@ final class TalkToMeAudioSessionController {
     return true
   }
 
-  func announceTarget(_ label: String) -> Bool {
+  func announceTarget(_ label: String, volume: Float) -> Bool {
     guard activeProfile != "idle", !label.isEmpty else { return false }
     let speech = targetSpeech ?? AVSpeechSynthesizer()
     targetSpeech = speech
     speech.stopSpeaking(at: .immediate)
     speech.usesApplicationAudioSession = true
-    speech.speak(AVSpeechUtterance(string: label))
+    let utterance = AVSpeechUtterance(string: label)
+    utterance.volume = volume
+    speech.speak(utterance)
     return true
   }
 

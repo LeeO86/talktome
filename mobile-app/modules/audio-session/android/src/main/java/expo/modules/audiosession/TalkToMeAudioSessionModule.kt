@@ -83,12 +83,12 @@ class TalkToMeAudioSessionModule : Module() {
       playConnectionCue(name)
     }
 
-    AsyncFunction("announceTarget") { label: String, result: Promise ->
+    AsyncFunction("announceTarget") { label: String, volume: Float, result: Promise ->
       val context = appContext.reactContext
       if (profile == "idle" || context == null || label.isBlank()) {
         result.resolve(false)
       } else {
-        targetSpeech.speak(context, label, result)
+        targetSpeech.speak(context, label, volume, result)
       }
     }.runOnQueue(Queues.MAIN)
 

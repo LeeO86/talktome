@@ -8,6 +8,7 @@ import {
 } from '../hardware/events';
 import { DEFAULT_BLE_TARGET, describeBleTarget, parseBleTargetSelection, type BleTargetSelection } from './target';
 import type { BleConnectionKind, BleDeviceState } from './native';
+import { clampVolume } from '../protocol/audioPreference';
 
 export type PttControlBinding = {
   target: BleTargetSelection;
@@ -23,9 +24,11 @@ export type BleDeviceBinding = {
   rotaryRetargetsPtt1: boolean;
   radioMode?: boolean;
   announceSelectedTarget?: boolean;
+  announcementVolume?: number;
 };
 
 export const BLE_MAX_ACCESSORIES = 8;
+export const DEFAULT_ANNOUNCEMENT_VOLUME = 1;
 
 export const DEFAULT_BLE_RELEASE_TIMEOUT_MS = BLE_RELEASE_WATCHDOG_MS;
 
@@ -186,6 +189,8 @@ export function parseBleDeviceBinding(value: unknown): BleDeviceBinding | null {
     rotaryRetargetsPtt1: record.rotaryRetargetsPtt1 === true,
     ...(record.radioMode === true ? { radioMode: true } : {}),
     ...(record.announceSelectedTarget === true ? { announceSelectedTarget: true } : {}),
+    ...(typeof record.announcementVolume === 'number' && Number.isFinite(record.announcementVolume)
+      ? { announcementVolume: clampVolume(record.announcementVolume) } : {}),
   };
 }
 
@@ -262,6 +267,7 @@ export function upsertBleDeviceBinding(
     rotaryRetargetsPtt1: input.rotaryRetargetsPtt1 ?? existing?.rotaryRetargetsPtt1 ?? false,
     ...(existing?.radioMode ? { radioMode: true } : {}),
     ...(existing?.announceSelectedTarget ? { announceSelectedTarget: true } : {}),
+    ...(existing?.announcementVolume !== undefined ? { announcementVolume: existing.announcementVolume } : {}),
   };
   if (!existing) {
     return [...bindings, next];

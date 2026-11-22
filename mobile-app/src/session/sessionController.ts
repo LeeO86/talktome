@@ -1495,6 +1495,10 @@ export class SessionController {
     this.background.setAnnounceSelectedTarget(deviceId, enabled);
   }
 
+  setAnnouncementVolume(deviceId: string, volume: number): void {
+    this.background.setAnnouncementVolume(deviceId, volume);
+  }
+
   setRadioMode(deviceId: string, enabled: boolean): void {
     this.background.setRadioMode(deviceId, enabled);
   }

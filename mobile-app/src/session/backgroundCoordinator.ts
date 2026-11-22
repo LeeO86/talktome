@@ -35,6 +35,7 @@ import { requestAndroidBlePermissions, requestAndroidSessionPermissions } from '
 import { BleButtonPolicy } from '../ble/button';
 import {
   aggregateBleKind,
+  DEFAULT_ANNOUNCEMENT_VOLUME,
   anyBleDeviceActive,
   bindingControlTarget,
   bindingTarget,
@@ -99,7 +100,7 @@ import {
 } from '../hardware/native';
 import { nextTalkableTarget, selectionFromTalkTarget, stepPttSelection, talkableAtKnob } from '../hardware/rotary';
 import { isCrosscallHardwareEvent } from '../hardware/intents';
-import { talkTargetIdentity, type TalkTarget } from '../protocol';
+import { clampVolume, talkTargetIdentity, type TalkTarget } from '../protocol';
 import { sessionPresence, presenceNotification } from './presence';
 import { publishSessionPresence, subscribeAppTerminating, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
 import { shouldDisconnectForAppStateChange } from './presenceShutdown';
@@ -196,6 +197,18 @@ export class BackgroundCoordinator {
     useSessionStore.setState({
       bleBindings: bleBindings.map(binding =>
         binding.id === deviceId ? { ...binding, announceSelectedTarget: enabled } : binding),
+    });
+    this.persistBlePreferences();
+  }
+
+  setAnnouncementVolume(deviceId: string, volume: number): void {
+    const level = clampVolume(volume);
+    const { bleBindings } = useSessionStore.getState();
+    const binding = bleBindings.find(item => item.id === deviceId);
+    if (!binding || (binding.announcementVolume ?? DEFAULT_ANNOUNCEMENT_VOLUME) === level) return;
+    void this.targetAnnouncements.cancel();
+    useSessionStore.setState({
+      bleBindings: bleBindings.map(item => item === binding ? { ...item, announcementVolume: level } : item),
     });
     this.persistBlePreferences();
   }
@@ -840,7 +853,8 @@ export class BackgroundCoordinator {
     useSessionStore.setState({ hardwarePttPageRequest: { targetKey: talkTargetIdentity(target) } });
     if (!changed || !binding?.announceSelectedTarget || state.talking || state.talkLocked) return;
 
-    this.targetAnnouncements.schedule(target.label, () => {
+    const volume = binding.announcementVolume ?? DEFAULT_ANNOUNCEMENT_VOLUME;
+    this.targetAnnouncements.schedule(target.label, volume, () => {
       const current = useSessionStore.getState();
       const device = current.bleBindings.find(item => item.id === deviceId);
       return current.operatorReady && current.status === 'ready' &&

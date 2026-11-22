@@ -378,7 +378,7 @@ function SettingsSheet({
           {page.kind === 'ptt-add' ? <PttAddDevicePage onBound={showPttList} /> : null}
 
           {page.kind === 'ptt-device' ? (
-            <PttDeviceDetailPage deviceId={page.id} onDeleted={showPttList} />
+            <PttDeviceDetailPage deviceId={page.id} onDeleted={showPttList} onVolumeSliding={onDimSliding} />
           ) : null}
 
           {page.kind === 'debug' ? <DebugSettingsPage /> : null}

@@ -15,7 +15,7 @@ type NativeAudioSession = {
   updateNowPlaying?: (title: string, detail: string, active: boolean) => Promise<boolean>;
   playWatchReadyCue?: () => Promise<boolean>;
   playConnectionCue?: (name: string) => Promise<boolean>;
-  announceTarget?: (label: string) => Promise<boolean>;
+  announceTarget?: (label: string, volume: number) => Promise<boolean>;
   stopTargetAnnouncement?: () => Promise<void>;
 };
 
@@ -71,8 +71,8 @@ export async function playConnectionCue(name: 'disconnected' | 'reconnected'): P
   }
 }
 
-export async function announceTarget(label: string): Promise<boolean> {
-  try { return (await loadNative()?.announceTarget?.(label)) === true; }
+export async function announceTarget(label: string, volume: number): Promise<boolean> {
+  try { return (await loadNative()?.announceTarget?.(label, volume)) === true; }
   catch { return false; }
 }
 

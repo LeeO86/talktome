@@ -1,7 +1,7 @@
 const KNOB_SETTLE_MS = 400;
 
 export function createTargetAnnouncements(
-  speak: (label: string) => Promise<boolean>,
+  speak: (label: string, volume: number) => Promise<boolean>,
   stop: () => Promise<void>,
   unavailable: () => void,
 ) {
@@ -25,14 +25,15 @@ export function createTargetAnnouncements(
 
   return {
     cancel,
-    schedule(label: string, canSpeak: () => boolean) {
+    schedule(label: string, volume: number, canSpeak: () => boolean) {
       void cancel();
+      if (volume <= 0) return;
       timer = setTimeout(() => {
         timer = undefined;
         if (!canSpeak()) return;
         const current = {};
         request = current;
-        void speak(label).then(ok => {
+        void speak(label, volume).then(ok => {
           if (request !== current || ok) return;
           request = undefined;
           unavailable();

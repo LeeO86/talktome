@@ -3,6 +3,7 @@ package expo.modules.audiosession
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -15,17 +16,18 @@ internal class TargetSpeech {
   private val main = Handler(Looper.getMainLooper())
   private var engine: TextToSpeech? = null
   private var initializing = false
-  private data class Announcement(val label: String, val result: Promise)
+  private data class Announcement(val label: String, val volume: Float, val result: Promise)
   private var pending: Announcement? = null
 
-  fun speak(context: Context, label: String, result: Promise) {
+  fun speak(context: Context, label: String, volume: Float, result: Promise) {
+    val announcement = Announcement(label, volume, result)
     if (initializing) {
       clearPending()
-      pending = Announcement(label, result)
+      pending = announcement
       return
     }
     engine?.let {
-      result.resolve(speakNow(it, label))
+      result.resolve(speakNow(it, announcement))
       return
     }
     val service = Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE)
@@ -35,7 +37,7 @@ internal class TargetSpeech {
     }
 
     initializing = true
-    pending = Announcement(label, result)
+    pending = announcement
     engine = TextToSpeech(context.applicationContext) { status ->
       main.post { finishInitialization(status) }
     }
@@ -75,10 +77,10 @@ internal class TargetSpeech {
       .build())
     val announcement = pending
     pending = null
-    announcement?.let { it.result.resolve(speakNow(synth, it.label)) }
+    announcement?.let { it.result.resolve(speakNow(synth, it)) }
   }
 
-  private fun speakNow(synth: TextToSpeech, label: String): Boolean {
+  private fun speakNow(synth: TextToSpeech, announcement: Announcement): Boolean {
     val current = synth.voice
     if (current == null || !isOffline(current)) {
       val locale = current?.locale ?: Locale.getDefault()
@@ -88,7 +90,8 @@ internal class TargetSpeech {
         ?: return false
       if (synth.setVoice(voice) != TextToSpeech.SUCCESS) return false
     }
-    return synth.speak(label, TextToSpeech.QUEUE_FLUSH, null, "talktome-target") == TextToSpeech.SUCCESS
+    val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, announcement.volume) }
+    return synth.speak(announcement.label, TextToSpeech.QUEUE_FLUSH, params, "talktome-target") == TextToSpeech.SUCCESS
   }
 
   private fun isOffline(voice: Voice): Boolean =

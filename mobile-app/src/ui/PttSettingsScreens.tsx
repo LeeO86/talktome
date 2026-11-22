@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Platform, Switch, Text, View } from 'react-native';
+import { Platform, StyleSheet, Switch, Text, View } from 'react-native';
 
 import {
   BLE_MAX_ACCESSORIES,
+  DEFAULT_ANNOUNCEMENT_VOLUME,
   describeBindingTargets,
   describeBleDeviceStatus,
   describeBleReleaseTimeout,
@@ -14,16 +15,20 @@ import { BLE_BUTTON_PAIRING_MS } from '../ble/catalog';
 import { describeBleTarget, type BleTargetSelection } from '../ble/target';
 import { describePttButton, describePttDeviceKind, isChannelButton, ONBOARD_DEVICE_ID } from '../hardware/events';
 import type { PttButton } from '../hardware/events';
+import { formatLinearLevelDb, nudgeVolume } from '../protocol';
 import { session, useSessionStore } from '../session/store';
 import {
   SettingsActionRow,
+  SettingsButton,
   SettingsFootnote,
   SettingsHint,
   SettingsNavRow,
   SettingsRow,
   SettingsSection,
   useSettingsStyles,
+  useSettingsTheme,
 } from './settingsChrome';
+import { VolumeSlider } from './VolumeSlider';
 
 export function PttDevicesPage({
   onAddDevice,
@@ -174,9 +179,11 @@ export function PttAddDevicePage({ onBound }: { onBound: () => void }) {
 export function PttDeviceDetailPage({
   deviceId,
   onDeleted,
+  onVolumeSliding,
 }: {
   deviceId: string;
   onDeleted: () => void;
+  onVolumeSliding: (active: boolean) => void;
 }) {
   const store = useSessionStore();
   const styles = useSettingsStyles();
@@ -258,6 +265,13 @@ export function PttDeviceDetailPage({
             full="Read out the target after the knob stops moving. Speaking takes priority. Uses the phone’s text-to-speech voice."
             compact={Platform.OS === 'android' ? 'Uses an installed offline voice. PTT interrupts the announcement.' : 'Uses the system voice. PTT interrupts the announcement.'}
           />
+          {binding.announceSelectedTarget ? (
+            <AnnouncementVolume
+              deviceId={deviceId}
+              volume={binding.announcementVolume ?? DEFAULT_ANNOUNCEMENT_VOLUME}
+              onSliding={onVolumeSliding}
+            />
+          ) : null}
         </SettingsSection>
       ) : null}
 
@@ -283,6 +297,50 @@ export function PttDeviceDetailPage({
     </>
   );
 }
+
+function AnnouncementVolume({
+  deviceId,
+  volume,
+  onSliding,
+}: {
+  deviceId: string;
+  volume: number;
+  onSliding: (active: boolean) => void;
+}) {
+  const { scheme, styles } = useSettingsTheme();
+  const setVolume = (level: number) => session.setAnnouncementVolume(deviceId, level);
+  const nudge = (direction: 1 | -1) => {
+    const current = useSessionStore.getState().bleBindings.find(binding => binding.id === deviceId);
+    setVolume(nudgeVolume(current?.announcementVolume ?? DEFAULT_ANNOUNCEMENT_VOLUME, direction));
+  };
+
+  return (
+    <>
+      <SettingsRow label="Announcement volume" value={formatLinearLevelDb(volume)} />
+      <View style={styles.sliderRow}>
+        <SettingsButton accessibilityLabel="Decrease announcement volume" onPress={() => nudge(-1)} style={volumeStyles.step}>
+          <Text style={styles.actionLabel}>−</Text>
+        </SettingsButton>
+        <VolumeSlider
+          accessibilityLabel="Announcement volume"
+          flex
+          light={scheme === 'light'}
+          logarithmic
+          value={volume}
+          onChange={setVolume}
+          onSliding={onSliding}
+        />
+        <SettingsButton accessibilityLabel="Increase announcement volume" onPress={() => nudge(1)} style={volumeStyles.step}>
+          <Text style={styles.actionLabel}>+</Text>
+        </SettingsButton>
+      </View>
+    </>
+  );
+}
+
+const volumeStyles = StyleSheet.create({
+  step: { width: 36, height: 40, alignItems: 'center', justifyContent: 'center' },
+});
 
 function TalkTargetSection({
   deviceId,
