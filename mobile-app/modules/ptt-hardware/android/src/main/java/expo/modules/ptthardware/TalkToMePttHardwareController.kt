@@ -36,7 +36,7 @@ class TalkToMePttHardwareController(private val appContext: Context) {
 
   private val handler = Handler(Looper.getMainLooper())
   private var rules: List<IntentRule> = parseIntentCatalog(null)
-  private var receiverRegistered = false
+  private var receiverContext: Context? = null
   private var listening = false
   private var pairing = false
   private var pairingBoundIds = emptySet<String>()
@@ -123,6 +123,7 @@ class TalkToMePttHardwareController(private val appContext: Context) {
     rules = parseIntentCatalog(json)
   }
 
+  @Synchronized
   fun start() {
     listening = true
     PttHardwareHost.pendingService?.let { serviceContext = it }
@@ -133,6 +134,7 @@ class TalkToMePttHardwareController(private val appContext: Context) {
     listener?.onDiagnostic("PTT hardware listening for onboard keys, serial buttons, and USB CDC.")
   }
 
+  @Synchronized
   fun stop() {
     listening = false
     pairing = false
@@ -216,6 +218,7 @@ class TalkToMePttHardwareController(private val appContext: Context) {
 
   fun listBondedSerial(): List<Map<String, Any?>> = spp.listBonded()
 
+  @Synchronized
   fun attachService(service: Service) {
     serviceContext = service
     if (listening) {
@@ -223,6 +226,7 @@ class TalkToMePttHardwareController(private val appContext: Context) {
     }
   }
 
+  @Synchronized
   fun detachService(service: Service) {
     if (serviceContext === service) {
       serviceContext = null
@@ -249,22 +253,21 @@ class TalkToMePttHardwareController(private val appContext: Context) {
     val context = serviceContext ?: appContext
     try {
       ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
-      receiverRegistered = true
+      receiverContext = context
     } catch (error: Exception) {
       listener?.onDiagnostic("Could not register PTT intent receiver: ${error.message}")
     }
   }
 
   private fun unregisterReceiver() {
-    if (!receiverRegistered) {
-      return
-    }
-    val context = serviceContext ?: appContext
+    // The foreground service may have changed since this receiver was registered.
+    val context = receiverContext ?: return
+    receiverContext = null
     try {
       context.unregisterReceiver(receiver)
-    } catch (_: Exception) {
+    } catch (_: IllegalArgumentException) {
+      // Android may already have removed a receiver owned by a destroyed service.
     }
-    receiverRegistered = false
   }
 
   private fun cancelPairingTimeout() {
