@@ -144,18 +144,20 @@ describe('relative handset channel knob', () => {
     expect(dedup.shouldDrop({ ...event, source: 'spp', timestamp: 125 })).toBe(true);
   });
 
-  it('walks through Reply and every target while preserving absolute positions', () => {
+  it('follows the reordered cards in both directions, including when starting from Reply', () => {
     const targets = [
-      { type: 'user' as const, id: 1, label: 'Director', canTalk: true },
       { type: 'conference' as const, id: 2, label: 'Crew', canTalk: true },
+      { type: 'user' as const, id: 1, label: 'Director', canTalk: true },
+      { type: 'conference' as const, id: 3, label: 'Studio', canTalk: true },
     ];
-    const first = stepPttSelection(targets, { kind: 'reply' }, 1, true);
-    const second = stepPttSelection(targets, first!, 1, true);
-    expect(first).toMatchObject({ id: 1 });
-    expect(second).toMatchObject({ id: 2 });
-    expect(stepPttSelection(targets, second!, 1, true)).toEqual({ kind: 'reply' });
-    expect(stepPttSelection(targets, { kind: 'reply' }, -1, true)).toEqual(second);
-    expect(talkableAtKnob(targets, 2)?.id).toBe(2);
+    const first = stepPttSelection(targets, { kind: 'reply' }, 1)!;
+    const second = stepPttSelection(targets, first, 1)!;
+    const last = stepPttSelection(targets, second, 1)!;
+    expect([first, second, last]).toMatchObject([{ id: 2 }, { id: 1 }, { id: 3 }]);
+    expect(stepPttSelection(targets, last, 1)).toEqual(first);
+    expect(stepPttSelection(targets, first, -1)).toEqual(last);
+    expect(stepPttSelection(targets, { kind: 'reply' }, -1)).toEqual(last);
+    expect(talkableAtKnob(targets, 2)?.id).toBe(1);
   });
 
   it.each([

@@ -798,7 +798,7 @@ export class BackgroundCoordinator {
     }
   }
 
-  private handleChannelStep(deviceId: string, delta: number, includeReply: boolean): void {
+  private handleChannelStep(deviceId: string, delta: number, fromCrosscall: boolean): void {
     if (this.c.talk.hasMomentaryHold()) return;
     const state = useSessionStore.getState();
     const binding = state.bleBindings.find((item) => item.id === deviceId);
@@ -807,8 +807,8 @@ export class BackgroundCoordinator {
       return;
     }
     const candidates = bleTalkCandidates(state.targets);
-    if (includeReply) {
-      const selection = stepPttSelection(candidates, bindingControlTarget(binding, 'ptt'), delta, true);
+    if (fromCrosscall) {
+      const selection = stepPttSelection(candidates, bindingControlTarget(binding, 'ptt'), delta);
       if (selection) this.applyRotarySelection(selection, deviceId);
       return;
     }

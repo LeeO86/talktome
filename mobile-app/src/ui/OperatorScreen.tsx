@@ -242,8 +242,6 @@ export function OperatorScreen() {
       : null);
     if (event.code === 'ToggleTalk') {
       void session.toggleKeypadTalk(selected);
-    } else if (event.code === 'ToggleMute' && selected) {
-      session.toggleTargetMuted(selected);
     }
   }
 

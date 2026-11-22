@@ -1,7 +1,7 @@
 import { confirmDisconnect } from './confirmDisconnect';
 import { Alert, Pressable, Text, View } from 'react-native';
 
-import { describePttDevicesSummary } from '../ble/bindings';
+import { describePttDevicesSummary, radioModeShortcutBinding } from '../ble/bindings';
 import { productionChoices, visibleProductionName } from '../protocol';
 import { connectionHealthFromSession } from '../session/connectionHealth';
 import { session, useSessionStore } from '../session/store';
@@ -14,6 +14,7 @@ import {
   SettingsNavRow,
   SettingsRow,
   SettingsSection,
+  SettingsSwitchRow,
   useSettingsStyles,
   useSettingsTheme,
 } from './settingsChrome';
@@ -40,11 +41,21 @@ export function SessionPage({
   const production = visibleProductionName(store.productionName);
   const choices = store.productions.length > 0 ? productionChoices(store.productions) : [];
   const connection = connectionHealthFromSession(store);
+  const radioDevice = radioModeShortcutBinding(store.bleBindings);
 
   const disconnect = () => confirmDisconnect(onClose);
 
   return (
     <>
+      {radioDevice ? (
+        <SettingsSection>
+          <SettingsSwitchRow
+            label="Radio mode"
+            value={radioDevice.radioMode === true}
+            onValueChange={enabled => session.setRadioMode(radioDevice.id, enabled)}
+          />
+        </SettingsSection>
+      ) : null}
       <SettingsSection title="Signed in as">
         <SettingsRow label={store.identity?.name ?? store.username} />
         <View style={styles.row}>

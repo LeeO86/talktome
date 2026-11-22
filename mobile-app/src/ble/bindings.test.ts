@@ -12,6 +12,7 @@ import {
   nextBleReleaseTimeoutMs,
   parseBleDeviceBindings,
   parseBleReleaseTimeoutMs,
+  radioModeShortcutBinding,
   removeBleDeviceBinding,
   upsertBleDeviceBinding,
 } from './bindings';
@@ -50,6 +51,18 @@ describe('BLE device bindings', () => {
     });
     expect(bindingTarget(next, 'aa')).toEqual({ kind: 'target', type: 'conference', id: 4, label: 'All' });
     expect(removeBleDeviceBinding(next, 'aa')).toEqual([]);
+  });
+
+  it('targets the active radio or a single unambiguous channel control in Session', () => {
+    const bindings = parseBleDeviceBindings([
+      { id: 'ble' }, { id: 'spp:channel' }, { id: 'onboard' },
+    ]);
+    expect(radioModeShortcutBinding(bindings)?.id).toBe('onboard');
+    expect(radioModeShortcutBinding(bindings.slice(0, 2))?.id).toBe('spp:channel');
+    expect(radioModeShortcutBinding(bindings.slice(0, 1))).toBeUndefined();
+    expect(radioModeShortcutBinding(bindings.map(binding =>
+      binding.id === 'spp:channel' ? { ...binding, radioMode: true } : binding,
+    ))?.id).toBe('spp:channel');
   });
 
   it('keeps the knob settings when the knob retargets PTT 1', () => {

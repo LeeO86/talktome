@@ -244,7 +244,7 @@ export function SettingsSwitchRow({
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
-      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: trackColor }} />
+      <Switch accessibilityLabel={label} value={value} onValueChange={onValueChange} trackColor={{ true: trackColor }} />
     </View>
   );
 }

@@ -1,6 +1,7 @@
 package expo.modules.ptthardware
 
 import android.app.Activity
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
@@ -86,12 +87,11 @@ internal object TalkToMeKeypadNavigation {
     }
 }
 
-private class FocusRing(density: Float) : GradientDrawable() {
+private class FocusRing(density: Float, color: Int, stroke: Int, radius: Int) : GradientDrawable() {
   init {
     setColor(Color.TRANSPARENT)
-    // Orange reads on the dark talk screen and on the light settings sheets.
-    setStroke((3 * density).toInt(), Color.rgb(255, 149, 0))
-    cornerRadius = 10 * density
+    setStroke((stroke * density).toInt(), color)
+    cornerRadius = radius * density
   }
 }
 
@@ -101,14 +101,14 @@ private class WindowKeys(private val root: View) {
   private var press: Press? = null
   private var heldTalk: String? = null
   private val capturedOperatorKeys = mutableSetOf<Int>()
+  private var outlinedCard: View? = null
 
   private fun View.nativeId(): String? = getTag(R.id.view_tag_native_id) as? String
 
-  private fun cardKey(view: View?): String? {
+  private fun operatorCard(view: View?): View? {
     var current = view
     while (current != null) {
-      val id = current.nativeId()
-      if (id?.startsWith("operator-card:") == true) return id.removePrefix("operator-card:")
+      if (current.nativeId()?.startsWith("operator-card:") == true) return current
       current = current.parent as? View
     }
     return null
@@ -127,7 +127,7 @@ private class WindowKeys(private val root: View) {
     val scope = focusScope()
     val id = focused?.nativeId()
     val target = id?.takeIf { it.startsWith("operator-talk:") }?.removePrefix("operator-talk:")
-    val card = cardKey(focused)
+    val card = operatorCard(focused)?.nativeId()?.removePrefix("operator-card:")
     if (scope === root && focused !is EditText && event.action == KeyEvent.ACTION_DOWN) {
       when (event.keyCode) {
         KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
@@ -144,10 +144,9 @@ private class WindowKeys(private val root: View) {
             return true
           }
         }
-        KeyEvent.KEYCODE_CALL, KeyEvent.KEYCODE_ENDCALL -> {
+        KeyEvent.KEYCODE_CALL -> {
           if (event.repeatCount > 0) return event.keyCode in capturedOperatorKeys
-          val action = if (event.keyCode == KeyEvent.KEYCODE_CALL) "ToggleTalk" else "ToggleMute"
-          if (TalkToMeKeyboardView.dispatchKeypad(action, target ?: card)) {
+          if (TalkToMeKeyboardView.dispatchKeypad("ToggleTalk", target ?: card)) {
             capturedOperatorKeys.add(event.keyCode)
             return true
           }
@@ -175,6 +174,8 @@ private class WindowKeys(private val root: View) {
 
   fun onFocusChanged(old: View?, new: View?) {
     if (old?.foreground is FocusRing) old.foreground = null
+    outlinedCard?.let { if (it.foreground is FocusRing) it.foreground = null }
+    outlinedCard = null
     if (new == null) return
     // Modals give first focus to their full-window backdrop (tap outside = close): OK there
     // would close them at once, and no arrow finds anything beyond it. Start on a control.
@@ -183,12 +184,27 @@ private class WindowKeys(private val root: View) {
       new.post { if (new.isFocused) control.requestFocus() }
       return
     }
-    // The 2 px shortcut listener (TalkToMeKeyboardView) and hidden views get no ring.
-    if (new.foreground == null && new.width > 4 && new.height > 4 &&
-      TalkToMeKeypadNavigation.visibleRect(new) != null
-    ) {
-      new.foreground = FocusRing(new.resources.displayMetrics.density)
+    val card = operatorCard(new)
+    val talkControl = new.nativeId()?.startsWith("operator-talk:") == true
+    val accent = Color.rgb(61, 214, 245) // matches the hardware PTT marker
+    if (card != null && drawFocus(card, accent, 2, 6)) {
+      outlinedCard = card
+      // Secondary controls still need their own focus cue to show what OK will activate.
+      if (new !== card && !talkControl) drawFocus(new, accent, 2, 6)
+      return
     }
+    val dark = (new.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+      Configuration.UI_MODE_NIGHT_YES
+    drawFocus(new, if (talkControl) accent else if (dark) Color.rgb(10, 132, 255) else Color.rgb(0, 122, 255))
+  }
+
+  private fun drawFocus(view: View, color: Int, stroke: Int = 3, radius: Int = 10): Boolean {
+    // The 2 px shortcut listener and hidden views get no ring.
+    if (view.foreground != null || view.width <= 4 || view.height <= 4 ||
+      TalkToMeKeypadNavigation.visibleRect(view) == null
+    ) return false
+    view.foreground = FocusRing(view.resources.displayMetrics.density, color, stroke, radius)
+    return true
   }
 
   /**

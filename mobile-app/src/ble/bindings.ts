@@ -2,6 +2,7 @@ import { BLE_RELEASE_WATCHDOG_MS } from './catalog';
 import {
   ONBOARD_DEVICE_ID,
   describePttButton,
+  isChannelButton,
   isTalkButton,
   type PttButton,
   type PttDeviceKind,
@@ -319,6 +320,13 @@ export function visibleButtons(binding: BleDeviceBinding): PttButton[] {
     ...(Object.keys(binding.controls) as PttButton[]),
   ]);
   return BUTTON_VALUES.filter((button) => buttons.has(button));
+}
+
+export function radioModeShortcutBinding(bindings: readonly BleDeviceBinding[]): BleDeviceBinding | undefined {
+  const candidates = bindings.filter(binding => visibleButtons(binding).some(isChannelButton));
+  return candidates.find(binding => binding.radioMode) ??
+    candidates.find(binding => binding.kind === 'onboard') ??
+    (candidates.length === 1 ? candidates[0] : undefined);
 }
 
 export function visibleTalkButtons(binding: BleDeviceBinding): PttButton[] {

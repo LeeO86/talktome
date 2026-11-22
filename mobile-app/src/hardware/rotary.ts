@@ -1,18 +1,16 @@
 import { talkTargetIdentity, type TalkTarget } from '../protocol';
 import { bleTargetSelectionKey, type BleTargetSelection } from '../ble/target';
 
+/** Follow the displayed talk cards. Reply has its own button and no card position. */
 export function stepPttSelection(
   candidates: readonly TalkTarget[],
   current: BleTargetSelection,
   delta: number,
-  includeReply: boolean,
 ): BleTargetSelection | null {
-  const stops = candidates.map(selectionFromTalkTarget);
-  if (includeReply) stops.unshift({ kind: 'reply' });
-  if (!stops.length) return null;
-  const index = stops.findIndex(stop => bleTargetSelectionKey(stop) === bleTargetSelectionKey(current));
-  const start = index < 0 ? (delta < 0 ? 0 : -1) : index;
-  return stops[((start + delta) % stops.length + stops.length) % stops.length] ?? null;
+  const key = bleTargetSelectionKey(current);
+  const selected = candidates.find(target => talkTargetIdentity(target) === key);
+  const next = nextTalkableTarget(candidates, selected, delta);
+  return next ? selectionFromTalkTarget(next) : null;
 }
 
 export function nextTalkableTarget(
