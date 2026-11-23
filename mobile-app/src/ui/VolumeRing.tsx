@@ -15,6 +15,7 @@ type Props = {
   dimmed?: boolean;
   compact?: boolean;
   dense?: boolean;
+  largerReadout?: boolean;
   variant?: 'ring' | 'readout';
   accessibilityLabel: string;
   onPress?: () => void;
@@ -30,6 +31,7 @@ export function VolumeRing({
   dimmed = false,
   compact = false,
   dense = false,
+  largerReadout = false,
   variant = 'ring',
   accessibilityLabel,
   onPress,
@@ -54,14 +56,33 @@ export function VolumeRing({
   const face = readout ? (
     <View
       pointerEvents="none"
-      style={[styles.readout, dense && styles.readoutDense, muted && styles.readoutMuted, dimmed && styles.readoutDimmed]}
+      style={[
+        styles.readout,
+        dense && styles.readoutDense,
+        largerReadout && styles.readoutLarge,
+        muted && styles.readoutMuted,
+        dimmed && styles.readoutDimmed,
+      ]}
     >
       {muted ? (
         <SpeakerIcon muted color={colors.danger} size={dense ? 11 : 14} />
       ) : (
-        <Text style={[styles.readoutValue, dense && styles.readoutValueDense, dimmed && styles.dimText]}>
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.readoutValue,
+            dense && styles.readoutValueDense,
+            largerReadout && styles.readoutValueLarge,
+            dimmed && styles.dimText,
+          ]}
+        >
           {label}
-          <Text style={[styles.readoutUnit, dense && styles.readoutUnitDense, dimmed && styles.dimText]}> dB</Text>
+          <Text style={[
+            styles.readoutUnit,
+            dense && styles.readoutUnitDense,
+            largerReadout && styles.readoutUnitLarge,
+            dimmed && styles.dimText,
+          ]}> dB</Text>
         </Text>
       )}
     </View>
@@ -195,6 +216,9 @@ const styles = StyleSheet.create({
   readoutDense: { minHeight: 18, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 },
   readoutValueDense: { fontSize: 10 },
   readoutUnitDense: { fontSize: 9 },
+  readoutLarge: { minHeight: 22 },
+  readoutValueLarge: { fontSize: 13 },
+  readoutUnitLarge: { fontSize: 11 },
   readoutMuted: {
     backgroundColor: 'rgba(255,90,90,0.16)',
   },

@@ -34,7 +34,7 @@ type Props = {
   target: TalkTarget;
   compact?: boolean;
   dense?: boolean;
-  largerLabel?: boolean;
+  largerText?: boolean;
   hardwarePtt?: boolean;
   compactLabel?: boolean;
   volumeReadout?: boolean;
@@ -55,7 +55,7 @@ export function TargetRow({
   target,
   compact = false,
   dense = false,
-  largerLabel = false,
+  largerText = false,
   hardwarePtt = false,
   compactLabel = false,
   volumeReadout = false,
@@ -164,7 +164,7 @@ export function TargetRow({
             styles.label,
             compactLabel && styles.labelCompact,
             dense && styles.labelDense,
-            largerLabel && styles.labelLarge,
+            largerText && styles.labelLarge,
             dimmed && styles.dimText,
           ]}
           numberOfLines={1}
@@ -275,6 +275,7 @@ export function TargetRow({
           dimmed={dimmed}
           compact={tight}
           dense={dense}
+          largerReadout={largerText}
           variant={volumeReadout ? 'readout' : 'ring'}
           accessibilityLabel={
             radioSuppressed ? `Muted by Radio mode, ${target.label}`
