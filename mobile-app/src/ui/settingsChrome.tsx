@@ -10,7 +10,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { isCompactOperatorScreen } from './layers';
+import { isCompactOperatorScreen, isShortLandscapeScreen } from './layers';
 import { settingsPalette, settingsScheme, type SettingsPalette, type SettingsScheme } from './settingsTheme';
 
 type SettingsStyles = ReturnType<typeof makeSettingsStyles>;
@@ -30,11 +30,13 @@ export function SettingsThemeProvider({
   scheme: string | null | undefined;
   children: ReactNode;
 }) {
+  const { width, height } = useWindowDimensions();
+  const shortLandscape = isShortLandscapeScreen(width, height);
   const value = useMemo(() => {
     const resolved = settingsScheme(scheme);
     const palette = settingsPalette(resolved);
-    return { scheme: resolved, palette, styles: makeSettingsStyles(palette) };
-  }, [scheme]);
+    return { scheme: resolved, palette, styles: makeSettingsStyles(palette, shortLandscape) };
+  }, [scheme, shortLandscape]);
   return <SettingsThemeContext.Provider value={value}>{children}</SettingsThemeContext.Provider>;
 }
 
@@ -249,7 +251,7 @@ export function SettingsSwitchRow({
   );
 }
 
-function makeSettingsStyles(palette: SettingsPalette) {
+function makeSettingsStyles(palette: SettingsPalette, shortLandscape = false) {
   return StyleSheet.create({
     sheet: {
       flex: 1,
@@ -265,8 +267,8 @@ function makeSettingsStyles(palette: SettingsPalette) {
       gap: 12,
     },
     headerCompact: {
-      paddingTop: 12,
-      paddingBottom: 8,
+      paddingTop: shortLandscape ? 4 : 12,
+      paddingBottom: shortLandscape ? 4 : 8,
     },
     title: {
       fontSize: 34,
@@ -275,11 +277,11 @@ function makeSettingsStyles(palette: SettingsPalette) {
       flex: 1,
     },
     titleCompact: {
-      fontSize: 26,
+      fontSize: shortLandscape ? 19 : 26,
     },
     nestedTitle: {
       flex: 1,
-      fontSize: 17,
+      fontSize: shortLandscape ? 14 : 17,
       fontWeight: '600',
       color: palette.text,
       textAlign: 'center',
@@ -287,14 +289,14 @@ function makeSettingsStyles(palette: SettingsPalette) {
     },
     navLink: {
       color: palette.link,
-      fontSize: 17,
+      fontSize: shortLandscape ? 13 : 17,
       fontWeight: '400',
       marginBottom: 4,
       minWidth: 72,
     },
     done: {
       color: palette.link,
-      fontSize: 17,
+      fontSize: shortLandscape ? 13 : 17,
       fontWeight: '600',
       marginBottom: 6,
       minWidth: 48,
@@ -309,8 +311,8 @@ function makeSettingsStyles(palette: SettingsPalette) {
       minHeight: 0,
     },
     body: {
-      padding: 16,
-      gap: 18,
+      padding: shortLandscape ? 10 : 16,
+      gap: shortLandscape ? 8 : 18,
     },
     section: {
       backgroundColor: palette.card,
@@ -319,20 +321,20 @@ function makeSettingsStyles(palette: SettingsPalette) {
     },
     sectionTitle: {
       color: palette.muted,
-      fontSize: 13,
+      fontSize: shortLandscape ? 11 : 13,
       fontWeight: '600',
       paddingHorizontal: 16,
-      paddingTop: 12,
-      paddingBottom: 6,
+      paddingTop: shortLandscape ? 5 : 12,
+      paddingBottom: shortLandscape ? 3 : 6,
       textTransform: 'uppercase',
     },
     row: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      minHeight: 48,
+      minHeight: shortLandscape ? 34 : 48,
       paddingHorizontal: 16,
-      paddingVertical: 12,
+      paddingVertical: shortLandscape ? 5 : 12,
     },
     rowSelected: {
       backgroundColor: palette.selected,
@@ -343,22 +345,22 @@ function makeSettingsStyles(palette: SettingsPalette) {
     },
     rowLabel: {
       color: palette.text,
-      fontSize: 16,
+      fontSize: shortLandscape ? 13 : 16,
       flex: 1,
       paddingRight: 12,
     },
     navLabel: {
       color: palette.text,
-      fontSize: 16,
+      fontSize: shortLandscape ? 13 : 16,
     },
     rowSubtitle: {
       color: palette.muted,
-      fontSize: 13,
+      fontSize: shortLandscape ? 11 : 13,
       paddingTop: 2,
     },
     rowValue: {
       color: palette.muted,
-      fontSize: 16,
+      fontSize: shortLandscape ? 13 : 16,
       flexShrink: 1,
       textAlign: 'right',
       marginLeft: 12,
@@ -386,7 +388,7 @@ function makeSettingsStyles(palette: SettingsPalette) {
     },
     actionLabel: {
       color: palette.link,
-      fontSize: 16,
+      fontSize: shortLandscape ? 13 : 16,
       fontWeight: '600',
     },
     destructiveLabel: {
@@ -397,12 +399,12 @@ function makeSettingsStyles(palette: SettingsPalette) {
     },
     footnote: {
       color: palette.muted,
-      fontSize: 13,
+      fontSize: shortLandscape ? 11 : 13,
       paddingHorizontal: 16,
       paddingBottom: 10,
     },
     footnoteCompact: {
-      fontSize: 12,
+      fontSize: shortLandscape ? 11 : 12,
       paddingBottom: 8,
     },
     pairingHero: {

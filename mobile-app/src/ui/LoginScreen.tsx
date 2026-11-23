@@ -214,17 +214,19 @@ export function LoginScreen() {
             <Text style={[styles.backText, shortLandscape && styles.smallControlText]}>Profiles</Text>
           </Pressable>
         ) : null}
-        <View style={[styles.intro, compact && styles.introCompact]}>
+        <View style={[styles.intro, compact && styles.introCompact, shortLandscape && styles.introShort]}>
           <View style={styles.brandRow}>
             <Image
               source={require('../../assets/talktome-mark.png')}
-              style={[styles.brandIcon, compact && styles.brandIconCompact]}
+              style={[styles.brandIcon, compact && styles.brandIconCompact, shortLandscape && styles.brandIconShort]}
             />
             <Text style={[styles.brand, compact && styles.brandCompact, shortLandscape && styles.brandShort]}>talktome</Text>
           </View>
-          <Text style={[styles.subtitle, compact && styles.subtitleCompact, shortLandscape && styles.smallMessage]}>
-            Connect with an operator account or a login link.
-          </Text>
+          {!shortLandscape ? (
+            <Text style={[styles.subtitle, compact && styles.subtitleCompact]}>
+              Connect with an operator account or a login link.
+            </Text>
+          ) : null}
         </View>
 
         <View style={[styles.card, compact && styles.cardCompact, shortLandscape && styles.cardShort]}>
@@ -356,13 +358,24 @@ export function LoginScreen() {
             </View>
           ) : null}
 
-          {store.error ? <Text style={[styles.error, shortLandscape && styles.smallMessage]} accessibilityLiveRegion="polite">{store.error}</Text> : null}
+          {store.error && !shortLandscape ? (
+            <Text style={styles.error} accessibilityLiveRegion="polite">{store.error}</Text>
+          ) : null}
           {store.statusMessage ? <Text style={[styles.status, shortLandscape && styles.smallMessage]}>{store.statusMessage}</Text> : null}
         </View>
         <PrivacyPolicyLink compact={shortLandscape} />
       </ScrollView>
 
       <View style={styles.actions}>
+        {shortLandscape && store.error ? (
+          <Text
+            style={[styles.error, styles.errorShort, styles.smallMessage]}
+            numberOfLines={3}
+            accessibilityLiveRegion="polite"
+          >
+            {store.error}
+          </Text>
+        ) : null}
         {method === 'account' && guest?.enabled ? (
           <Pressable
             accessibilityRole="button"
@@ -457,7 +470,9 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   screenShort: { paddingHorizontal: 10, paddingTop: 4, paddingBottom: 6 },
-  brandShort: { fontSize: 20 },
+  introShort: { marginBottom: 4 },
+  brandShort: { fontSize: 18 },
+  brandIconShort: { width: 20, height: 20, borderRadius: 6 },
   cardShort: { padding: 8 },
   segmentItemShort: { paddingVertical: 4 },
   labelShort: { fontSize: 11, marginTop: 6, marginBottom: 3 },
@@ -467,6 +482,7 @@ const styles = StyleSheet.create({
   actionShort: { paddingVertical: 6, borderRadius: 9 },
   smallMessage: { fontSize: 11, lineHeight: 14 },
   smallControlText: { fontSize: 13 },
+  errorShort: { marginTop: 0 },
   scrollFill: {
     flex: 1,
     minHeight: 0,
