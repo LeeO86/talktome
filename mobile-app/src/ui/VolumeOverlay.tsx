@@ -12,6 +12,7 @@ type Props = {
   level: number;
   muted: boolean;
   embedded?: boolean;
+  compact?: boolean;
   fader?: boolean;
   onNudge: (direction: 1 | -1) => void;
   onChange?: (level: number) => void;
@@ -25,6 +26,7 @@ export function VolumeOverlay({
   level,
   muted,
   embedded = false,
+  compact = false,
   fader = false,
   onNudge,
   onChange,
@@ -39,22 +41,22 @@ export function VolumeOverlay({
   const sheet = (
     <View style={[styles.backdrop, embedded && styles.embedded]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close volume" />
-      <View style={styles.sheet}>
+      <View style={[styles.sheet, compact && styles.sheetCompact]}>
         <Text style={styles.title} numberOfLines={1}>
           {title}
         </Text>
-        <VolumeRing level={level} muted={muted} accessibilityLabel={readout} />
-        <Text style={[styles.db, muted && styles.mutedText]}>{readout}</Text>
+        {!compact ? <VolumeRing level={level} muted={muted} accessibilityLabel={readout} /> : null}
+        <Text style={[styles.db, compact && styles.dbCompact, muted && styles.mutedText]}>{readout}</Text>
         {fader && onChange ? (
           <View style={styles.fader}>
             <VolumeSlider value={level} disabled={muted} onChange={onChange} flex logarithmic />
           </View>
         ) : (
           <View style={styles.steppers}>
-            <NudgeButton accessibilityLabel="Quieter" onNudge={() => onNudge(-1)} style={styles.step} textStyle={styles.stepText}>
+            <NudgeButton accessibilityLabel="Quieter" onNudge={() => onNudge(-1)} style={[styles.step, compact && styles.stepCompact]} textStyle={styles.stepText}>
               {'−'}
             </NudgeButton>
-            <NudgeButton accessibilityLabel="Louder" onNudge={() => onNudge(1)} style={styles.step} textStyle={styles.stepText}>
+            <NudgeButton accessibilityLabel="Louder" onNudge={() => onNudge(1)} style={[styles.step, compact && styles.stepCompact]} textStyle={styles.stepText}>
               {'+'}
             </NudgeButton>
           </View>
@@ -63,11 +65,11 @@ export function VolumeOverlay({
           accessibilityRole="button"
           accessibilityLabel={muted ? 'Unmute' : 'Mute'}
           onPress={onToggleMute}
-          style={[styles.mute, muted && styles.muteOn]}
+          style={[styles.mute, compact && styles.buttonCompact, muted && styles.muteOn]}
         >
           <Text style={[styles.muteText, muted && styles.muteOnText]}>{muted ? 'Unmute' : 'Mute'}</Text>
         </Pressable>
-        <Pressable accessibilityRole="button" onPress={onClose} style={styles.done}>
+        <Pressable accessibilityRole="button" onPress={onClose} style={[styles.done, compact && styles.buttonCompact]}>
           <Text style={styles.doneText}>Done</Text>
         </Pressable>
       </View>
@@ -110,6 +112,10 @@ const styles = StyleSheet.create({
     zIndex: 1,
     elevation: 2,
   },
+  sheetCompact: { paddingTop: 6, paddingBottom: 6, gap: 4 },
+  dbCompact: { fontSize: 18 },
+  stepCompact: { width: 54, height: 32, borderRadius: 9 },
+  buttonCompact: { minHeight: 28, borderRadius: 9 },
   title: {
     color: colors.text,
     fontSize: 18,

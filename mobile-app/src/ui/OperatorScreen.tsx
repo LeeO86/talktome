@@ -27,6 +27,7 @@ import { ChevronIcon, LockIcon, PttButtonIcon, ReplyArrowIcon, WalkieTalkieIcon 
 import { endTalkTouches, HoldToTalk, moveTalkTouches } from './HoldToTalk';
 import {
   COLLAPSED_HEADER_HEIGHT,
+  COMPACT_REPLY_HEIGHT,
   estimateTargetListHeight,
   isCompactOperatorScreen,
   isTabletOperatorScreen,
@@ -37,6 +38,7 @@ import { openSessionSheet, useSessionSheetOpen } from './sessionSheetState';
 import { feedVideoHeight, feedVideoLayers } from './feedVideoLayout';
 import { TargetRow } from './TargetRow';
 import { VolumeAdjustmentHUD } from './VolumeAdjustmentHUD';
+import { VolumeOverlay } from './VolumeOverlay';
 import { colors } from './theme';
 import { confirmDisconnect } from './confirmDisconnect';
 import { KeyboardShortcuts } from '../keyboard/KeyboardShortcuts';
@@ -73,6 +75,7 @@ export function OperatorScreen() {
   const tablet = isTabletOperatorScreen(width, height);
   const [layerIndex, setLayerIndex] = useState(0);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  const [volumeTargetKey, setVolumeTargetKey] = useState<string | null>(null);
   const [conferenceTarget, setConferenceTarget] = useState<TalkTarget | null>(null);
   const [headerCollapsed, setHeaderCollapsed] = useState(defaultCollapsed);
   const [headerHeight, setHeaderHeight] = useState(96);
@@ -151,6 +154,13 @@ export function OperatorScreen() {
   }));
   const radioTarget = radioReceiveTarget(store);
   const radioTargetKey = radioTarget ? talkTargetIdentity(radioTarget) : radioTarget;
+  const volumeTarget = store.targets.find(item => talkTargetIdentity(item) === volumeTargetKey)
+    ?? (reply && talkTargetIdentity(reply) === volumeTargetKey ? reply : null);
+  const volumePreference = volumeTarget ? session.audioPreference(volumeTarget) : null;
+
+  useEffect(() => {
+    setVolumeTargetKey(null);
+  }, [store.productionId, store.activeProfileId]);
   const hardwarePage = store.hardwarePttPageRequest;
   const lastHardwarePage = useRef(hardwarePage);
   useEffect(() => {
@@ -195,31 +205,15 @@ export function OperatorScreen() {
   }, []);
 
   useEffect(() => {
-    if (sheetOpen || conferenceTarget || audioMenuOpen || !store.operatorReady) releaseKeypadTalk();
-  }, [sheetOpen, conferenceTarget, audioMenuOpen, store.operatorReady]);
+    if (sheetOpen || conferenceTarget || audioMenuOpen || volumeTarget || !store.operatorReady) releaseKeypadTalk();
+  }, [sheetOpen, conferenceTarget, audioMenuOpen, volumeTarget, store.operatorReady]);
 
   function handleKeypad(event: KeyboardEvent) {
     if (event.code === 'TalkUp') {
       releaseKeypadTalk();
       return;
     }
-    if (sheetOpen || conferenceTarget || audioMenuOpen) return;
-    if (event.code === 'PageLeft' || event.code === 'PageRight') {
-      if (layers <= 1 || keypadHeld.current || session.hasMomentaryTalk()) return;
-      const current = grid.flatMap(row => row.targets);
-      const slot = Math.max(0, current.findIndex(target => talkTargetIdentity(target) === event.targetKey));
-      const delta = event.code === 'PageLeft' ? -1 : 1;
-      const next = (safeLayerIndex + delta + layers) % layers;
-      const candidates = pages[next]!.flatMap(row => row.targets);
-      const target = candidates[Math.min(slot, candidates.length - 1)];
-      if (target) {
-        const key = talkTargetIdentity(target);
-        const focus = session.canTalkTo(target) ? `operator-talk:${key}` : `operator-card:${key}`;
-        setPageFocus(focus);
-      }
-      setLayerIndex(next);
-      return;
-    }
+    if (sheetOpen || conferenceTarget || audioMenuOpen || volumeTarget) return;
     const target = event.targetKey === 'main' ? mainButton.target :
       store.targets.find(item => talkTargetIdentity(item) === event.targetKey);
     if (event.code === 'TalkDown') {
@@ -229,30 +223,26 @@ export function OperatorScreen() {
       }
       return;
     }
-    if (event.code === 'VolumeUp' || event.code === 'VolumeDown') {
-      if (radioTarget) {
-        const { volume } = session.audioPreference(radioTarget);
-        session.setTargetVolume(radioTarget, nudgeVolume(volume, event.code === 'VolumeUp' ? 1 : -1));
-      }
-      return;
-    }
     const phone = store.bleBindings.find(binding => binding.id === ONBOARD_DEVICE_ID);
-    const selected = radioTarget !== undefined ? radioTarget : target ?? (phone
+    const selected = target ?? radioTarget ?? (phone
       ? resolveBleTalkTarget({ selection: bindingControlTarget(phone), replyTarget: reply, targets: store.targets })
       : null);
-    if (event.code === 'ToggleTalk') {
-      void session.toggleKeypadTalk(selected);
+    if (!selected) return;
+    if (event.code === 'ToggleMute') {
+      session.toggleTargetMuted(selected);
+    } else if (event.code === 'OpenVolume') {
+      setVolumeTargetKey(talkTargetIdentity(selected));
     }
   }
 
   useEffect(() => {
-    if (Platform.OS !== 'android' || !isKeypadOnlyDevice() || sheetOpen || conferenceTarget || audioMenuOpen) return;
+    if (Platform.OS !== 'android' || !isKeypadOnlyDevice() || sheetOpen || conferenceTarget || audioMenuOpen || volumeTarget) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       confirmDisconnect();
       return true;
     });
     return () => subscription.remove();
-  }, [sheetOpen, conferenceTarget, audioMenuOpen]);
+  }, [sheetOpen, conferenceTarget, audioMenuOpen, volumeTarget]);
 
   const collapseHeader = () => {
     setHeaderCollapsed(true);
@@ -403,8 +393,6 @@ export function OperatorScreen() {
       <KeyboardShortcuts
         onKeypad={handleKeypad}
         onKeypadReset={releaseKeypadTalk}
-        captureVolumeKeys={Platform.OS === 'android'
-          ? Boolean(radioTarget && !sheetOpen && !audioMenuOpen && !conferenceTarget) : undefined}
       />
       <View style={{ flex: 1 }} accessibilityElementsHidden={audioMenuOpen} importantForAccessibility={audioMenuOpen ? 'no-hide-descendants' : 'auto'}>
         {headerCollapsed ? (
@@ -536,6 +524,7 @@ export function OperatorScreen() {
                       onToggleVideo={() => toggleVideo(target)}
                       edgeTalkAffordance={!replyBeside}
                       onOpenConferenceMembers={setConferenceTarget}
+                      onOpenVolume={() => setVolumeTargetKey(talkTargetIdentity(target))}
                     />
                   </View>
                 ))}
@@ -553,6 +542,23 @@ export function OperatorScreen() {
         <ConferenceMembersModal target={conferenceTarget} onClose={() => setConferenceTarget(null)} />
       </View>
       <VolumeAdjustmentHUD />
+      {volumeTarget && volumePreference ? (
+        <VolumeOverlay
+          visible
+          compact={smallScreen}
+          title={volumeTarget.label}
+          level={volumePreference.volume}
+          muted={volumePreference.muted}
+          fader={store.operatorAudio.volumeFader && !isKeypadOnlyDevice()}
+          onNudge={direction => {
+            const current = session.audioPreference(volumeTarget);
+            session.setTargetVolume(volumeTarget, nudgeVolume(current.volume, direction));
+          }}
+          onChange={volume => session.setTargetVolume(volumeTarget, volume)}
+          onToggleMute={() => session.toggleTargetMuted(volumeTarget)}
+          onClose={() => setVolumeTargetKey(null)}
+        />
+      ) : null}
       {audioMenuOpen ? <AudioRouteMenu onClose={() => setAudioMenuOpen(false)} /> : null}
     </View>
   );
@@ -792,7 +798,7 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   replyCompact: {
-    minHeight: 44,
+    minHeight: COMPACT_REPLY_HEIGHT,
     paddingHorizontal: 8,
     gap: 4,
     borderRadius: 10,

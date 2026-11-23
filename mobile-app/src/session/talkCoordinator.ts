@@ -17,7 +17,6 @@ export class TalkCoordinator {
   private localHolds = new Map<string, { target: TalkTarget }>();
   private remoteHolds = new Map<string, { target: TalkTarget }>();
   private generation = 0;
-  private keypadLockRequest: object | null = null;
 
   constructor(private readonly c: SessionController) {}
 
@@ -152,21 +151,6 @@ export class TalkCoordinator {
 
   private mediaTalkState(): { targets: TalkTarget[]; lockActive: boolean } {
     return { targets: this.c.talkingTargets, lockActive: this.c.overrideFrom === null && this.c.lockedTargets.length > 0 };
-  }
-
-  async toggleKeypadTalk(target: TalkTarget | null): Promise<void> {
-    if (this.keypadLockRequest || this.c.talkingTargets.length || this.c.lockedTargets.length) {
-      await this.unlockTalk();
-      return;
-    }
-    if (!target) return;
-    const request = {};
-    this.keypadLockRequest = request;
-    try {
-      await this.lockTalk(target);
-    } finally {
-      if (this.keypadLockRequest === request) this.keypadLockRequest = null;
-    }
   }
 
   async lockTalk(target: TalkTarget): Promise<void> {
@@ -394,7 +378,6 @@ export class TalkCoordinator {
       await this.removeLock(target);
       return;
     }
-    this.keypadLockRequest = null;
     this.generation++;
     this.localHolds.clear();
     this.remoteHolds.clear();

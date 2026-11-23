@@ -7,6 +7,7 @@ import {
   CARD_MIN_HEIGHT,
   CARD_PREFERRED_HEIGHT,
   COLLAPSED_HEADER_HEIGHT,
+  COMPACT_REPLY_HEIGHT,
   HEADER_PEEK_CARD_HEIGHT,
   chunkTargets,
   estimateTargetListHeight,
@@ -22,7 +23,7 @@ import {
 } from './layers';
 
 describe('target layers', () => {
-  it.each([[320, 240, 130, 4], [320, 184, 146, 4], [480, 320, 192, 5], [240, 320, 164, 6]])(
+  it.each([[320, 240, 130, 4], [320, 184, 146, 4], [480, 320, 192, 5], [240, 320, 166, 4]])(
     'fits compact cards without overflow at %i × %i dp',
     (width, height, availableHeight, expectedRows) => {
       const compact = operatorLayout({ width, height, availableHeight, compact: true, fontScale: 1 });
@@ -35,6 +36,12 @@ describe('target layers', () => {
       expect(largeText.rows).toBeLessThanOrEqual(compact.rows);
     },
   );
+
+  it('fits five Reply-height cards on the RG440 with the top bar collapsed', () => {
+    const layout = operatorLayout({ width: 320, height: 427, availableHeight: 310, compact: true });
+    expect(layout.layerSize).toBe(5);
+    expect(layout.cardHeight).toBe(COMPACT_REPLY_HEIGHT);
+  });
 
   it('fits 8 portrait rows on an iPhone-sized screen', () => {
     const layout = operatorLayout({ width: 390, height: 844 });

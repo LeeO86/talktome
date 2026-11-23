@@ -99,7 +99,7 @@ import {
   type HardwareNativeState,
 } from '../hardware/native';
 import { nextTalkableTarget, selectionFromTalkTarget, stepPttSelection, talkableAtKnob } from '../hardware/rotary';
-import { isCrosscallHardwareEvent } from '../hardware/intents';
+import { isCrosscallHardwareEvent, isRugGearChannelEvent } from '../hardware/intents';
 import { clampVolume, talkTargetIdentity, type TalkTarget } from '../protocol';
 import { sessionPresence, presenceNotification } from './presence';
 import { publishSessionPresence, subscribeAppTerminating, subscribeDisconnectShortcut, subscribeTalkShortcut } from './presenceNative';
@@ -739,8 +739,7 @@ export class BackgroundCoordinator {
     );
     const state = useSessionStore.getState();
     const bound = state.bleBindings.some((item) => item.id === deviceId);
-    if (!bound && kind === 'onboard' && isCrosscallHardwareEvent(event.raw)) {
-      // Crosscall sends both the side key and knob to its selected PTT app.
+    if (!bound && kind === 'onboard' && (isCrosscallHardwareEvent(event.raw) || isRugGearChannelEvent(event.raw))) {
       // Bind synchronously so a quick key-up cannot overtake the first press.
       useSessionStore.setState({ bleBindings: upsertBleDeviceBinding(state.bleBindings, {
         id: deviceId, name: event.deviceName || 'This phone', kind, rotaryRetargetsPtt1: true,

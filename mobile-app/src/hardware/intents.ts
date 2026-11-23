@@ -12,6 +12,8 @@ export type PttIntentRule = {
 const CROSSCALL_KEYS: readonly PttIntentRule[] = [
   { action: 'android.intent.action.FUNCTION_KEY_DOWN_PRESSED', button: 'ptt', pressed: true },
   { action: 'android.intent.action.FUNCTION_KEY_RELEASED', button: 'ptt', pressed: false },
+  { action: 'android.intent.action.FUNCTION_KEY1_DOWN_PRESSED', button: 'sos', pressed: true },
+  { action: 'android.intent.action.FUNCTION_KEY1_RELEASED', button: 'sos', pressed: false },
   { action: 'android.intent.action.CHANNEL_NEXT', button: 'channelUp', pressed: true },
   { action: 'android.intent.action.CHANNEL_PREVIOUS', button: 'channelDown', pressed: true },
 ];
@@ -20,8 +22,18 @@ export function isCrosscallHardwareEvent(action?: string): boolean {
   return CROSSCALL_KEYS.some(rule => rule.action === action);
 }
 
+const RUGGEAR_CHANNEL_KEYS: readonly PttIntentRule[] = [
+  { action: 'com.ruggear.intent.action.PTT.CHANNEL.next', button: 'channelUp', pressed: true },
+  { action: 'com.ruggear.intent.action.PTT.CHANNEL.prev', button: 'channelDown', pressed: true },
+];
+
+export function isRugGearChannelEvent(action?: string): boolean {
+  return RUGGEAR_CHANNEL_KEYS.some(rule => rule.action === action);
+}
+
 export const PTT_INTENT_CATALOG: readonly PttIntentRule[] = [
   ...CROSSCALL_KEYS,
+  ...RUGGEAR_CHANNEL_KEYS,
   { action: 'com.zello.ptt.down', button: 'ptt', pressed: true },
   { action: 'com.zello.ptt.up', button: 'ptt', pressed: false },
   { action: 'com.zello.intent.buttonExtra1.down', button: 'ptt2', pressed: true },

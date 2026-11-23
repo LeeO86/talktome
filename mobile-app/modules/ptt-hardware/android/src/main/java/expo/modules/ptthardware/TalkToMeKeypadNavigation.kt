@@ -130,13 +130,6 @@ private class WindowKeys(private val root: View) {
     val card = operatorCard(focused)?.nativeId()?.removePrefix("operator-card:")
     if (scope === root && focused !is EditText && event.action == KeyEvent.ACTION_DOWN) {
       when (event.keyCode) {
-        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-          if (heldTalk != null) return true
-          val action = if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) "PageLeft" else "PageRight"
-          if (card != null && (target != null || id?.startsWith("operator-card:") == true)) {
-            if (event.repeatCount > 0 || TalkToMeKeyboardView.dispatchKeypad(action, card)) return true
-          }
-        }
         KeyEvent.KEYCODE_DPAD_CENTER -> {
           if (heldTalk != null) return true
           if (target != null && event.repeatCount == 0 && TalkToMeKeyboardView.dispatchKeypad("TalkDown", target)) {
@@ -144,16 +137,11 @@ private class WindowKeys(private val root: View) {
             return true
           }
         }
-        KeyEvent.KEYCODE_CALL -> {
+        KeyEvent.KEYCODE_CALL, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SOFT_LEFT -> {
+          if (!TalkToMeKeypadNavigation.isKeypadOnly()) return false
           if (event.repeatCount > 0) return event.keyCode in capturedOperatorKeys
-          if (TalkToMeKeyboardView.dispatchKeypad("ToggleTalk", target ?: card)) {
-            capturedOperatorKeys.add(event.keyCode)
-            return true
-          }
-        }
-        KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
-          val action = if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) "VolumeUp" else "VolumeDown"
-          if (TalkToMeKeyboardView.dispatchKeypad(action)) {
+          val action = if (event.keyCode == KeyEvent.KEYCODE_CALL) "ToggleMute" else "OpenVolume"
+          if (TalkToMeKeyboardView.dispatchKeypad(action, target ?: card)) {
             capturedOperatorKeys.add(event.keyCode)
             return true
           }

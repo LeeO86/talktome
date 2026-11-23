@@ -82,6 +82,13 @@ describe('SPP ASCII tokens', () => {
 });
 
 describe('broadcast intents', () => {
+  it('maps the P6 SOS edges and RG440 rotary steps to separate controls', () => {
+    expect(matchPttIntent('android.intent.action.FUNCTION_KEY1_DOWN_PRESSED')).toEqual({ button: 'sos', pressed: true });
+    expect(matchPttIntent('android.intent.action.FUNCTION_KEY1_RELEASED')).toEqual({ button: 'sos', pressed: false });
+    expect(matchPttIntent('com.ruggear.intent.action.PTT.CHANNEL.next')).toEqual({ button: 'channelUp', pressed: true });
+    expect(matchPttIntent('com.ruggear.intent.action.PTT.CHANNEL.prev')).toEqual({ button: 'channelDown', pressed: true });
+  });
+
   it('maps Zello PTT, SOS, extras, and the channel knob extra', () => {
     expect(matchPttIntent('com.zello.ptt.down')).toEqual({ button: 'ptt', pressed: true });
     expect(matchPttIntent('com.zello.intent.buttonSOS.up')).toEqual({ button: 'sos', pressed: false });

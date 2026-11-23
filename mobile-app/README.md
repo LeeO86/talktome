@@ -51,19 +51,24 @@ separate top-bar startup preference. Automatic uses the compact cards and
 starts with the top bar collapsed on small displays. The layer button stays
 visible next to the collapsed bar. Targets remain on fixed pages.
 
-On Android, use the D-pad to focus controls. On a target's talk area, Left
-and Right change layers, and holding OK talks until it is released. When
-Android delivers the phone keys to Talktome, the green key locks talk on the
-focused target and the red key stops talk while keeping the session connected.
-The focus ring, hardware PTT button icon and talk-lock icon show distinct states.
+On Android, use the D-pad to focus controls and activate the layer button to
+change layers. Hold OK on a target's talk area to talk until it is released.
+On keypad phones, the green key toggles the focused target's receive mute
+and the upper-left Select key opens its volume dialog. If focus is outside a
+target, these keys use the channel tuned by the built-in rotary selector when
+available. The volume rocker adjusts Android's volume in all modes.
 
-On Crosscall Core-P6, assign the side PTT button to Talktome in the phone's
-programmable-key settings. The side key and channel knob use the existing
-Accessories controls. The first hardware event adds **This phone** when no
-binding exists. A relative channel step can select Reply or a target on any
-page, and the app shows the selected target's page. A fixed-position channel
-selector retains its position mapping. Paging and retargeting are blocked during
-momentary talk. A native Android rebuild is required.
+On Crosscall Core-P6, select Talktome in the phone's **Push to Talk App**
+settings for the PTT and SOS buttons. The SOS key talks to the current Reply
+target. The side key and channel knob use the existing Accessories controls.
+The first hardware event adds **This phone** when no binding exists. A relative
+channel step can select Reply or a target on any page, and the app shows its
+page. A native Android rebuild is required.
+
+On RugGear RG440, choose PTT in **CustomKey** for the side key. The rotary
+selector uses **Accessories → This phone → Change PTT 1 target**. **SetM1**
+and **SetM2** can launch Talktome or use RugGear's PTT preset. On this firmware,
+the PTT preset for M1 and M2 emits the same primary PTT events as CustomKey.
 
 ## Development
 

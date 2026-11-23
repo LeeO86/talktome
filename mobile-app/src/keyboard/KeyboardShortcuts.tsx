@@ -9,10 +9,9 @@ import { NativeKeyboard, type KeyboardEvent } from './NativeKeyboard';
 import { useKeyboardFocus } from './focus';
 import { publishKeyboardHolds } from './activity';
 
-export function KeyboardShortcuts({ onKeypad, onKeypadReset, captureVolumeKeys }: {
+export function KeyboardShortcuts({ onKeypad, onKeypadReset }: {
   onKeypad?: (event: KeyboardEvent) => void;
   onKeypadReset?: () => void;
-  captureVolumeKeys?: boolean;
 } = {}) {
   const state = useSessionStore();
   const preferences = useKeyboardPreferences();
@@ -41,7 +40,7 @@ export function KeyboardShortcuts({ onKeypad, onKeypadReset, captureVolumeKeys }
     return () => { subscription.remove(); holds.current?.reset(); };
   }, []);
   return <NativeKeyboard listening={active} focusRequest={focusRequest} codes={codes}
-    captureVolumeKeys={captureVolumeKeys} onKeyboardEvent={({ nativeEvent }) => {
+    onKeyboardEvent={({ nativeEvent }) => {
     if ((active && AppState.currentState === 'active') || !nativeEvent.pressed) {
       if (nativeEvent.keypad) onKeypad?.(nativeEvent);
       else holds.current?.event(nativeEvent.code, nativeEvent.pressed, assignments);

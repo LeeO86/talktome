@@ -20,28 +20,6 @@ function fixture() {
 }
 
 describe('panel Talk ownership', () => {
-  it('stops the green-key transmission after the operator selects another target', async () => {
-    const { c, talk, media } = fixture();
-    await talk.toggleKeypadTalk(a);
-    expect(c.lockedTargets).toEqual([a]);
-    await talk.toggleKeypadTalk(b);
-    expect(c.lockedTargets).toEqual([]);
-    expect(media.startTalking).toHaveBeenCalledOnce();
-    expect(media.stopTalking).toHaveBeenCalledOnce();
-  });
-
-  it('cancels the green-key transmission during microphone startup', async () => {
-    const { c, talk, media } = fixture();
-    let ready!: () => void;
-    c.background.prepareAudioForTalk.mockImplementation(() => new Promise<void>(resolve => { ready = resolve; }));
-    const pending = talk.toggleKeypadTalk(a);
-    await talk.toggleKeypadTalk(a);
-    ready();
-    await pending;
-    expect(c.lockedTargets).toEqual([]);
-    expect(media.startTalking).not.toHaveBeenCalled();
-  });
-
   it('releases a keyboard key during microphone startup and does not start late', async () => {
     const { c, talk, media } = fixture();
     let ready!: () => void;

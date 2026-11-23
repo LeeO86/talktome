@@ -5,4 +5,12 @@
   <uses-feature
     android:name="android.hardware.usb.host"
     android:required="false" />
+  <application>
+    <receiver android:name=".CrosscallPttDiscoveryReceiver" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.FUNCTION_KEY_DOWN_PRESSED" />
+        <action android:name="android.intent.action.FUNCTION_KEY1_DOWN_PRESSED" />
+      </intent-filter>
+    </receiver>
+  </application>
 </manifest>

@@ -10,6 +10,8 @@ export const CARD_MAX_HEIGHT = 88;
 export const PORTRAIT_MAX_ROWS = 8;
 export const LANDSCAPE_MAX_ROWS = 4;
 const COMPACT_HANDSET_LANDSCAPE_MAX_ROWS = 5;
+const COMPACT_HANDSET_PORTRAIT_MAX_ROWS = 5;
+export const COMPACT_REPLY_HEIGHT = 44;
 export const LANDSCAPE_COLUMNS = 2;
 export const HEADER_COLLAPSE_ROW_THRESHOLD = 4;
 /** Target-card minimum. The collapsed header is half of this height. */
@@ -129,18 +131,21 @@ export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const columns = compact && !tablet ? 1 : targetGridColumns(input.width, input.height);
   // At P6 dimensions, use the space for four taller cards.
   const p6Sized = input.width <= 360 && input.height <= 260;
-  const maxRows = small && replyBeside && !p6Sized ? COMPACT_HANDSET_LANDSCAPE_MAX_ROWS
-    : targetGridMaxRows(input.width, input.height);
+  const smallPortrait = small && !landscape;
+  const maxRows = smallPortrait ? COMPACT_HANDSET_PORTRAIT_MAX_ROWS
+    : small && replyBeside && !p6Sized ? COMPACT_HANDSET_LANDSCAPE_MAX_ROWS
+      : targetGridMaxRows(input.width, input.height);
   const available =
     input.availableHeight ?? estimateTargetListHeight(input.width, input.height, input.headerCollapsed);
   const gap = small ? 2 : compact ? 4 : CARD_GAP;
   // Compact handset cards have one line of text and an 18 dp volume readout.
-  const minHeight = Math.max(small ? 24 : 44, Math.ceil(18 * (input.fontScale ?? 1) + 6));
+  const minHeight = Math.max(smallPortrait ? 40 : small ? 24 : 44, Math.ceil(18 * (input.fontScale ?? 1) + 6));
+  const preferredHeight = smallPortrait ? COMPACT_REPLY_HEIGHT : small ? 40 : 56;
   const rows = compact
     ? Math.max(1, Math.min(maxRows, Math.floor((available + gap) / (minHeight + gap))))
     : rowsThatFit(available, maxRows);
   const cardHeight = compact
-    ? Math.max(0, Math.min(Math.max(minHeight, small ? 40 : 56), (available - (rows - 1) * gap) / rows))
+    ? Math.max(0, Math.min(Math.max(minHeight, preferredHeight), (available - (rows - 1) * gap) / rows))
     : cardHeightForRows(available, rows);
   return {
     landscape,

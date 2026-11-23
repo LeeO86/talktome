@@ -1,10 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import {
   DEFAULT_AUDIO_PREFERENCE,
   formatLinearLevelDb,
-  nudgeVolume,
   talkTargetIdentity,
   type TalkTarget,
 } from '../protocol';
@@ -28,7 +27,6 @@ import { FeedVideoPlayer } from './FeedVideoPlayer';
 import { colors } from './theme';
 import { useKeyboardActivity } from '../keyboard/activity';
 import { conferenceSpeakingLabel, targetActivity } from './targetActivity';
-import { VolumeOverlay } from './VolumeOverlay';
 import { VolumeRing } from './VolumeRing';
 import { beginVolumeAdjustment, endVolumeAdjustment, moveVolumeAdjustment, useVolumeAdjustment } from './volumeAdjustmentState';
 
@@ -49,6 +47,7 @@ type Props = {
   videoError?: string;
   onToggleVideo?: () => void;
   onOpenConferenceMembers?: (target: TalkTarget) => void;
+  onOpenVolume: () => void;
 };
 
 export function TargetRow({
@@ -61,7 +60,7 @@ export function TargetRow({
   radioSuppressed = false,
   height,
   edgeTalkAffordance = false,
-  onOpenConferenceMembers,
+  onOpenConferenceMembers, onOpenVolume,
   videoAvailable = false, videoExpanded = false, videoHeight = 0,
   videoStreamURL, videoError, onToggleVideo,
 }: Props) {
@@ -83,7 +82,6 @@ export function TargetRow({
   const tapToLock = useSessionStore((state) => state.tapToLock);
   const feedStopped = useSessionStore((state) => state.stoppedFeedKeys.includes(key));
   const feedOnline = useSessionStore((state) => state.activeFeedKeys.includes(key));
-  const volumeFader = useSessionStore((state) => state.operatorAudio.volumeFader);
   const canTalk = session.canTalkTo(target);
   // Web `#targets-list .talk-btn` always paints the walkie, including offline
   // users. Feeds and listen-only conferences have no talk button.
@@ -94,7 +92,6 @@ export function TargetRow({
     type: target.type, incoming, feedOnline, feedStopped, userOnline,
   });
   const listenOnly = target.type === 'conference' && !target.canTalk;
-  const [volumeOpen, setVolumeOpen] = useState(false);
   const tight = compact || (height != null && height < 64);
 
   const speaking = receiving;
@@ -275,7 +272,7 @@ export function TargetRow({
             radioSuppressed ? `Muted by Radio mode, ${target.label}`
               : muted ? `Volume muted, ${target.label}` : `Volume ${formatLinearLevelDb(preference.volume)}`
           }
-          onPress={() => setVolumeOpen(true)}
+          onPress={onOpenVolume}
           onDoublePress={() => session.toggleTargetMuted(target)}
           onAdjustBegin={point => {
             const current = useSessionStore.getState().audioPreferences[key] ?? DEFAULT_AUDIO_PREFERENCE;
@@ -288,20 +285,6 @@ export function TargetRow({
       </View>
       {talkControl}
     </View>
-      <VolumeOverlay
-        visible={volumeOpen}
-        title={target.label}
-        level={preference.volume}
-        muted={preference.muted}
-        fader={volumeFader}
-        onNudge={(direction) => {
-          const current = useSessionStore.getState().audioPreferences[key] ?? DEFAULT_AUDIO_PREFERENCE;
-          session.setTargetVolume(target, nudgeVolume(current.volume, direction));
-        }}
-        onChange={(volume) => session.setTargetVolume(target, volume)}
-        onToggleMute={() => session.toggleTargetMuted(target)}
-        onClose={() => setVolumeOpen(false)}
-      />
     </View>
   );
 }
