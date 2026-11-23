@@ -16,6 +16,7 @@ type NativeAudioSession = {
   playWatchReadyCue?: () => Promise<boolean>;
   playConnectionCue?: (name: string) => Promise<boolean>;
   announceTarget?: (label: string, volume: number) => Promise<boolean>;
+  waitForTargetAnnouncement?: (delayMs: number) => Promise<boolean>;
   stopTargetAnnouncement?: () => Promise<void>;
 };
 
@@ -74,6 +75,18 @@ export async function playConnectionCue(name: 'disconnected' | 'reconnected'): P
 export async function announceTarget(label: string, volume: number): Promise<boolean> {
   try { return (await loadNative()?.announceTarget?.(label, volume)) === true; }
   catch { return false; }
+}
+
+export function scheduleNativeTargetAnnouncementDelay(delayMs: number, run: () => void): (() => void) | undefined {
+  const native = loadNative();
+  if (!native?.waitForTargetAnnouncement) return undefined;
+  let cancelled = false;
+  void native.waitForTargetAnnouncement(delayMs).then(elapsed => {
+    if (elapsed && !cancelled) run();
+  }, () => {
+    if (!cancelled) run();
+  });
+  return () => { cancelled = true; };
 }
 
 export async function stopTargetAnnouncement(): Promise<void> {

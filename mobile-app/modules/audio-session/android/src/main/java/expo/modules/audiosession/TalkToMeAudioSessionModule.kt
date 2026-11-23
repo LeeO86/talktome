@@ -83,6 +83,15 @@ class TalkToMeAudioSessionModule : Module() {
       playConnectionCue(name)
     }
 
+    AsyncFunction("waitForTargetAnnouncement") { delayMs: Int, result: Promise ->
+      val context = appContext.reactContext
+      if (profile == "idle" || context == null) {
+        result.resolve(false)
+      } else {
+        targetSpeech.waitForQuiet(context, delayMs, result)
+      }
+    }.runOnQueue(Queues.MAIN)
+
     AsyncFunction("announceTarget") { label: String, volume: Float, result: Promise ->
       val context = appContext.reactContext
       if (profile == "idle" || context == null || label.isBlank()) {

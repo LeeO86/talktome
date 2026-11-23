@@ -7,6 +7,7 @@ import {
   audioSessionAvailable,
   deactivateAudioSession,
   reactivateForOutgoingTalkCapture,
+  scheduleNativeTargetAnnouncementDelay,
   setWebRTCAudioEnabled,
   startBackgroundKeepalive,
   stopBackgroundKeepalive,
@@ -125,6 +126,7 @@ export class BackgroundCoordinator {
     announceTarget,
     stopTargetAnnouncement,
     () => this.noteHardwareLog('Target announcement unavailable. Check the phone’s text-to-speech voice.'),
+    scheduleNativeTargetAnnouncementDelay,
   );
   private hardwareLiveDevices: BleDeviceState[] = [];
   private unsubscribeHardware: (() => void) | null = null;

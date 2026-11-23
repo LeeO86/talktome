@@ -57,6 +57,27 @@ describe('rotary target announcements', () => {
     expect(unavailable).not.toHaveBeenCalled();
   });
 
+  it('revalidates the target when the native settle timer expires without a JS timer tick', () => {
+    const { speak, stop, unavailable } = fixture();
+    const canSpeak = vi.fn(() => true);
+    let elapsed: (() => void) | undefined;
+    const scheduleNativeDelay = vi.fn((_delayMs: number, run: () => void) => {
+      elapsed = run;
+      return () => { elapsed = undefined; };
+    });
+    const announcements = createTargetAnnouncements(speak, stop, unavailable, scheduleNativeDelay);
+    announcements.schedule('Crew', 0.4, canSpeak);
+    expect(scheduleNativeDelay).toHaveBeenCalledWith(400, expect.any(Function));
+    expect(speak).not.toHaveBeenCalled();
+    elapsed?.();
+    expect(speak).toHaveBeenCalledExactlyOnceWith('Crew', 0.4);
+
+    announcements.schedule('Studio A', 0.4, canSpeak);
+    canSpeak.mockReturnValue(false);
+    elapsed?.();
+    expect(speak).toHaveBeenCalledOnce();
+  });
+
   it('reports an unavailable device voice without stopping idle speech', async () => {
     const { speak, stop, unavailable, announcements } = fixture();
     speak.mockResolvedValue(false);

@@ -6,6 +6,7 @@ import android.media.AudioAttributes
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
 import expo.modules.kotlin.Promise
@@ -18,6 +19,30 @@ internal class TargetSpeech {
   private var initializing = false
   private data class Announcement(val label: String, val volume: Float, val result: Promise)
   private var pending: Announcement? = null
+  private data class SettleTask(val callback: Runnable, val result: Promise, val wakeLock: PowerManager.WakeLock?)
+  private var settling: SettleTask? = null
+
+  fun waitForQuiet(context: Context, delayMs: Int, result: Promise) {
+    finishSettling(false)
+    val delay = delayMs.coerceIn(0, 1_000).toLong()
+    val power = context.getSystemService(PowerManager::class.java)
+    val wakeLock = power?.takeUnless { it.isInteractive }
+      ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TalkToMe:TargetAnnouncement")
+    // Cover the delay and the next JS-to-TTS handoff with a bounded CPU-only wake lock.
+    wakeLock?.acquire(delay + 250)
+    val callback = Runnable { finishSettling(true) }
+    settling = SettleTask(callback, result, wakeLock)
+    // React Native pauses JS timers when the activity goes to the lock screen.
+    main.postDelayed(callback, delay)
+  }
+
+  private fun finishSettling(elapsed: Boolean) {
+    val task = settling ?: return
+    settling = null
+    main.removeCallbacks(task.callback)
+    if (!elapsed && task.wakeLock?.isHeld == true) task.wakeLock.release()
+    task.result.resolve(elapsed)
+  }
 
   fun speak(context: Context, label: String, volume: Float, result: Promise) {
     val announcement = Announcement(label, volume, result)
@@ -50,6 +75,7 @@ internal class TargetSpeech {
 
   fun shutdown() {
     main.post {
+      finishSettling(false)
       clearPending()
       initializing = false
       engine?.shutdown()

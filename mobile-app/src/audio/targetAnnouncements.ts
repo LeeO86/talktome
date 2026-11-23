@@ -4,14 +4,15 @@ export function createTargetAnnouncements(
   speak: (label: string, volume: number) => Promise<boolean>,
   stop: () => Promise<void>,
   unavailable: () => void,
+  scheduleNativeDelay?: (delayMs: number, run: () => void) => (() => void) | undefined,
 ) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancelDelay: (() => void) | undefined;
   let request: object | undefined;
   let stopping: Promise<void> | undefined;
 
   function cancel(): Promise<void> | undefined {
-    clearTimeout(timer);
-    timer = undefined;
+    cancelDelay?.();
+    cancelDelay = undefined;
     if (request) {
       request = undefined;
       const current = stop();
@@ -28,8 +29,8 @@ export function createTargetAnnouncements(
     schedule(label: string, volume: number, canSpeak: () => boolean) {
       void cancel();
       if (volume <= 0) return;
-      timer = setTimeout(() => {
-        timer = undefined;
+      const announce = () => {
+        cancelDelay = undefined;
         if (!canSpeak()) return;
         const current = {};
         request = current;
@@ -38,7 +39,12 @@ export function createTargetAnnouncements(
           request = undefined;
           unavailable();
         });
-      }, KNOB_SETTLE_MS);
+      };
+      cancelDelay = scheduleNativeDelay?.(KNOB_SETTLE_MS, announce);
+      if (!cancelDelay) {
+        const timer = setTimeout(announce, KNOB_SETTLE_MS);
+        cancelDelay = () => clearTimeout(timer);
+      }
     },
   };
 }
