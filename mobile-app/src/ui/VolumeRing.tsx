@@ -216,7 +216,7 @@ const styles = StyleSheet.create({
   readoutDense: { minHeight: 18, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 },
   readoutValueDense: { fontSize: 10 },
   readoutUnitDense: { fontSize: 9 },
-  readoutLarge: { minHeight: 22 },
+  readoutLarge: { minWidth: 64, minHeight: 36, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
   readoutValueLarge: { fontSize: 13 },
   readoutUnitLarge: { fontSize: 11 },
   readoutMuted: {

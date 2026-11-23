@@ -34,7 +34,7 @@ type Props = {
   target: TalkTarget;
   compact?: boolean;
   dense?: boolean;
-  largerText?: boolean;
+  largerControls?: boolean;
   hardwarePtt?: boolean;
   compactLabel?: boolean;
   volumeReadout?: boolean;
@@ -55,7 +55,7 @@ export function TargetRow({
   target,
   compact = false,
   dense = false,
-  largerText = false,
+  largerControls = false,
   hardwarePtt = false,
   compactLabel = false,
   volumeReadout = false,
@@ -125,12 +125,19 @@ export function TargetRow({
         accessibilityRole="button"
         accessibilityLabel={`Choose who you hear in ${target.label}`}
         onPress={() => onOpenConferenceMembers?.(target)}
-        style={dense ? styles.conferenceCompactHit :
+        style={dense ? [styles.conferenceCompactHit, largerControls && styles.conferenceCompactHitLarge] :
           [styles.avatar, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}
       >
         {dense ? (
-          <View pointerEvents="none" style={[styles.conferenceCompactIcon, { backgroundColor: targetAvatarBackground('conference', dimmed) }]}>
-            <ConferenceIcon size={13} />
+          <View
+            pointerEvents="none"
+            style={[
+              styles.conferenceCompactIcon,
+              largerControls && styles.conferenceCompactIconLarge,
+              { backgroundColor: targetAvatarBackground('conference', dimmed) },
+            ]}
+          >
+            <ConferenceIcon size={largerControls ? 17 : 13} />
           </View>
         ) : <ConferenceIcon />}
         {listenOnly && !dense ? (
@@ -164,7 +171,7 @@ export function TargetRow({
             styles.label,
             compactLabel && styles.labelCompact,
             dense && styles.labelDense,
-            largerText && styles.labelLarge,
+            largerControls && styles.labelLarge,
             dimmed && styles.dimText,
           ]}
           numberOfLines={1}
@@ -275,7 +282,7 @@ export function TargetRow({
           dimmed={dimmed}
           compact={tight}
           dense={dense}
-          largerReadout={largerText}
+          largerReadout={largerControls}
           variant={volumeReadout ? 'readout' : 'ring'}
           accessibilityLabel={
             radioSuppressed ? `Muted by Radio mode, ${target.label}`
@@ -334,7 +341,9 @@ const styles = StyleSheet.create({
   metaDense: { color: colors.muted, fontSize: 10, flexShrink: 1, maxWidth: '48%' },
   talkZoneDense: { minHeight: 0 },
   conferenceCompactHit: { width: 24, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
+  conferenceCompactHitLarge: { width: 30 },
   conferenceCompactIcon: { width: 16, height: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  conferenceCompactIconLarge: { width: 22, height: 22, borderRadius: 11 },
   feedButtonDense: { minHeight: 0, minWidth: 32, width: 32 },
   rowTalking: {
     backgroundColor: 'rgba(139,92,246,0.12)',

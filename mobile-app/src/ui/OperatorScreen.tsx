@@ -511,7 +511,7 @@ export function OperatorScreen() {
                       target={target}
                       compact={compact || replyBeside}
                       dense={compact}
-                      largerText={compact && smallScreen && !layout.landscape}
+                      largerControls={compact && smallScreen && !layout.landscape}
                       hardwarePtt={hardwareTargetKeys.has(talkTargetIdentity(target))}
                       compactLabel={layout.columns > 1 && width / layout.columns < 400}
                       volumeReadout={compact}
