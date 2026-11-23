@@ -14,10 +14,12 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.EditText
 import android.widget.ScrollView
 import android.view.inspector.WindowInspector
 import com.facebook.react.R
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.uimanager.util.ReactFindViewUtil
 import java.util.Collections
 import java.util.WeakHashMap
@@ -102,6 +104,7 @@ private class WindowKeys(private val root: View) {
   private var heldTalk: String? = null
   private val capturedOperatorKeys = mutableSetOf<Int>()
   private var outlinedCard: View? = null
+  private var activationView: View? = null
 
   private fun View.nativeId(): String? = getTag(R.id.view_tag_native_id) as? String
 
@@ -124,6 +127,12 @@ private class WindowKeys(private val root: View) {
       }
     }
     if (event.action == KeyEvent.ACTION_UP && capturedOperatorKeys.remove(event.keyCode)) return true
+    val direction = focusDirection(event.keyCode)
+    if (direction != null && TalkToMeKeypadNavigation.isKeypadOnly()) {
+      if (heldTalk != null) return true
+      val editingHorizontally = focused is EditText && (direction == View.FOCUS_LEFT || direction == View.FOCUS_RIGHT)
+      if (!editingHorizontally && event.action == KeyEvent.ACTION_DOWN && moveFocus(focused, direction)) return true
+    }
     val scope = focusScope()
     val id = focused?.nativeId()
     val target = id?.takeIf { it.startsWith("operator-talk:") }?.removePrefix("operator-talk:")
@@ -161,10 +170,26 @@ private class WindowKeys(private val root: View) {
   }
 
   fun onFocusChanged(old: View?, new: View?) {
+    activationView?.setOnKeyListener(null)
+    activationView = null
     if (old?.foreground is FocusRing) old.foreground = null
     outlinedCard?.let { if (it.foreground is FocusRing) it.foreground = null }
     outlinedCard = null
     if (new == null) return
+    val actions = new.getTag(R.id.accessibility_actions) as? ReadableArray
+    if (actions != null && (0 until actions.size()).any { actions.getMap(it)?.getString("name") == "activate" }) {
+      activationView = new
+      // Android may consume OK itself, before the unhandled-key listener can simulate a touch.
+      new.setOnKeyListener { view, code, event ->
+        if (code != KeyEvent.KEYCODE_DPAD_CENTER) return@setOnKeyListener false
+        if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) {
+          // Initialize React Native's action mapping even without an accessibility service.
+          view.createAccessibilityNodeInfo()
+          view.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK.id, null)
+        }
+        true
+      }
+    }
     // Modals give first focus to their full-window backdrop (tap outside = close): OK there
     // would close them at once, and no arrow finds anything beyond it. Start on a control.
     val control = focusScope()?.let(::controls)?.takeIf { new in it.backdrops }?.reachable?.firstOrNull()

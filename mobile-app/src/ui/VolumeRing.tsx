@@ -16,6 +16,7 @@ type Props = {
   compact?: boolean;
   dense?: boolean;
   largerReadout?: boolean;
+  paddedReadout?: boolean;
   variant?: 'ring' | 'readout';
   accessibilityLabel: string;
   onPress?: () => void;
@@ -32,6 +33,7 @@ export function VolumeRing({
   compact = false,
   dense = false,
   largerReadout = false,
+  paddedReadout = false,
   variant = 'ring',
   accessibilityLabel,
   onPress,
@@ -59,6 +61,7 @@ export function VolumeRing({
       style={[
         styles.readout,
         dense && styles.readoutDense,
+        paddedReadout && styles.readoutPadded,
         largerReadout && styles.readoutLarge,
         muted && styles.readoutMuted,
         dimmed && styles.readoutDimmed,
@@ -137,6 +140,10 @@ export function VolumeRing({
       focusable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      accessibilityActions={onPress ? [{ name: 'activate' }] : undefined}
+      onAccessibilityAction={event => {
+        if (event.nativeEvent.actionName === 'activate') onPress?.();
+      }}
       accessibilityHint={onAdjustBegin ? 'Tap for volume controls, double tap to mute, or hold and slide up or down to adjust' : onDoublePress ? 'Double tap to mute or unmute' : undefined}
       onAccessibilityTap={onPress}
       onStartShouldSetResponder={() => true}
@@ -216,6 +223,7 @@ const styles = StyleSheet.create({
   readoutDense: { minHeight: 18, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 },
   readoutValueDense: { fontSize: 10 },
   readoutUnitDense: { fontSize: 9 },
+  readoutPadded: { minWidth: 49, minHeight: 22, paddingHorizontal: 6, paddingVertical: 2 },
   readoutLarge: { minWidth: 64, minHeight: 36, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
   readoutValueLarge: { fontSize: 13 },
   readoutUnitLarge: { fontSize: 11 },

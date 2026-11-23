@@ -5,7 +5,7 @@ import { colors } from './theme';
 
 export const PRIVACY_POLICY_URL = 'https://platonstudio.de/talktome/privacy/';
 
-export function PrivacyPolicyLink({ settings = false }: { settings?: boolean }) {
+export function PrivacyPolicyLink({ settings = false, compact = false }: { settings?: boolean; compact?: boolean }) {
   const settingsStyles = useSettingsStyles();
 
   const openPolicy = async () => {
@@ -25,9 +25,9 @@ export function PrivacyPolicyLink({ settings = false }: { settings?: boolean }) 
       accessibilityLabel="Privacy Policy"
       accessibilityHint="Opens the privacy policy website in your browser."
       onPress={() => void openPolicy()}
-      style={settings ? settingsStyles.row : styles.link}
+      style={settings ? settingsStyles.row : [styles.link, compact && styles.linkCompact]}
     >
-      <Text style={settings ? settingsStyles.actionLabel : styles.label}>Privacy Policy</Text>
+      <Text style={settings ? settingsStyles.actionLabel : [styles.label, compact && styles.labelCompact]}>Privacy Policy</Text>
     </Pressable>
   );
 }
@@ -40,6 +40,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
+  linkCompact: { minHeight: 26, paddingVertical: 4 },
+  labelCompact: { fontSize: 11 },
   label: {
     color: colors.accent,
     fontSize: 14,

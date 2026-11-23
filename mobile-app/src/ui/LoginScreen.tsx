@@ -20,7 +20,7 @@ import { session, useSessionStore } from '../session/store';
 import { QrIcon } from './icons';
 import { QrScannerModal } from './QrScannerModal';
 import { PrivacyPolicyLink } from './PrivacyPolicyLink';
-import { isCompactOperatorScreen } from './layers';
+import { isCompactOperatorScreen, isShortLandscapeScreen } from './layers';
 import { colors } from './theme';
 
 type LoginMethod = 'account' | 'link';
@@ -29,6 +29,7 @@ export function LoginScreen() {
   const store = useSessionStore();
   const { width, height } = useWindowDimensions();
   const compact = isCompactOperatorScreen(width, height);
+  const shortLandscape = isShortLandscapeScreen(width, height);
   const [method, setMethod] = useState<LoginMethod>('account');
   const [password, setPassword] = useState('');
   const [loginLink, setLoginLink] = useState('');
@@ -200,7 +201,7 @@ export function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={[styles.screen, compact && styles.screenCompact]}
+      style={[styles.screen, compact && styles.screenCompact, shortLandscape && styles.screenShort]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
@@ -210,7 +211,7 @@ export function LoginScreen() {
       >
         {canGoBack ? (
           <Pressable accessibilityRole="button" onPress={() => session.cancelAddProfile()} style={styles.back}>
-            <Text style={styles.backText}>Profiles</Text>
+            <Text style={[styles.backText, shortLandscape && styles.smallControlText]}>Profiles</Text>
           </Pressable>
         ) : null}
         <View style={[styles.intro, compact && styles.introCompact]}>
@@ -219,37 +220,38 @@ export function LoginScreen() {
               source={require('../../assets/talktome-mark.png')}
               style={[styles.brandIcon, compact && styles.brandIconCompact]}
             />
-            <Text style={[styles.brand, compact && styles.brandCompact]}>talktome</Text>
+            <Text style={[styles.brand, compact && styles.brandCompact, shortLandscape && styles.brandShort]}>talktome</Text>
           </View>
-          <Text style={[styles.subtitle, compact && styles.subtitleCompact]}>
+          <Text style={[styles.subtitle, compact && styles.subtitleCompact, shortLandscape && styles.smallMessage]}>
             Connect with an operator account or a login link.
           </Text>
         </View>
 
-        <View style={[styles.card, compact && styles.cardCompact]}>
+        <View style={[styles.card, compact && styles.cardCompact, shortLandscape && styles.cardShort]}>
           <View style={styles.segment} accessibilityRole="tablist">
             <Pressable
               accessibilityRole="tab"
               accessibilityState={{ selected: method === 'account' }}
-              style={[styles.segmentItem, method === 'account' && styles.segmentItemOn]}
+              style={[styles.segmentItem, shortLandscape && styles.segmentItemShort, method === 'account' && styles.segmentItemOn]}
               onPress={() => setMethod('account')}
             >
-              <Text style={[styles.segmentText, method === 'account' && styles.segmentTextOn]}>Account</Text>
+              <Text style={[styles.segmentText, shortLandscape && styles.smallControlText, method === 'account' && styles.segmentTextOn]}>Account</Text>
             </Pressable>
             <Pressable
               accessibilityRole="tab"
               accessibilityState={{ selected: method === 'link' }}
-              style={[styles.segmentItem, method === 'link' && styles.segmentItemOn]}
+              style={[styles.segmentItem, shortLandscape && styles.segmentItemShort, method === 'link' && styles.segmentItemOn]}
               onPress={() => setMethod('link')}
             >
-              <Text style={[styles.segmentText, method === 'link' && styles.segmentTextOn]}>Login link</Text>
+              <Text style={[styles.segmentText, shortLandscape && styles.smallControlText, method === 'link' && styles.segmentTextOn]}>Login link</Text>
             </Pressable>
           </View>
 
           {method === 'account' ? (
             <>
-              <Text style={styles.label}>Server</Text>
+              <Text style={[styles.label, shortLandscape && styles.labelShort]}>Server</Text>
               <ScanField
+                shortLandscape={shortLandscape}
                 accessibilityLabel="Server"
                 keyboardType="url"
                 placeholder="https://intercom.local"
@@ -259,32 +261,32 @@ export function LoginScreen() {
                 scanLabel="Scan server QR"
               />
 
-              <Text style={styles.label}>Username</Text>
+              <Text style={[styles.label, shortLandscape && styles.labelShort]}>Username</Text>
               <TextInput
                 accessibilityLabel="Username"
                 autoCapitalize="none"
                 autoCorrect={false}
                 placeholder="Username"
                 placeholderTextColor="#8A8F99"
-                style={styles.input}
+                style={[styles.input, shortLandscape && styles.inputShort]}
                 value={store.username}
                 onChangeText={(value) => store.setField('username', value)}
               />
 
-              <Text style={styles.label}>Password</Text>
+              <Text style={[styles.label, shortLandscape && styles.labelShort]}>Password</Text>
               <TextInput
                 accessibilityLabel="Password"
                 secureTextEntry
                 placeholder="Password"
                 placeholderTextColor="#8A8F99"
-                style={styles.input}
+                style={[styles.input, shortLandscape && styles.inputShort]}
                 value={password}
                 onChangeText={setPassword}
                 onSubmitEditing={() => void submit()}
               />
 
-              <View style={styles.toggleRow}>
-                <Text style={styles.toggleLabel}>Remember password</Text>
+              <View style={[styles.toggleRow, shortLandscape && styles.toggleRowShort]}>
+                <Text style={[styles.toggleLabel, shortLandscape && styles.smallControlText]}>Remember password</Text>
                 <Switch
                   value={store.rememberPassword}
                   onValueChange={(value) => store.setField('rememberPassword', value)}
@@ -294,8 +296,9 @@ export function LoginScreen() {
             </>
           ) : (
             <>
-              <Text style={styles.label}>Login link</Text>
+              <Text style={[styles.label, shortLandscape && styles.labelShort]}>Login link</Text>
               <ScanField
+                shortLandscape={shortLandscape}
                 accessibilityLabel="Login link"
                 keyboardType="url"
                 placeholder="https://host/#login=…"
@@ -312,7 +315,7 @@ export function LoginScreen() {
           )}
 
           {store.pendingCertificate ? (
-            <View style={styles.trust}>
+            <View style={[styles.trust, shortLandscape && styles.cardShort]}>
               <Text style={styles.trustTitle}>Trust this certificate?</Text>
               <Text style={styles.trustBody}>{store.pendingCertificate.hostname}</Text>
               <Text style={styles.trustBody}>Verify the fingerprint before trusting this server.</Text>
@@ -334,7 +337,7 @@ export function LoginScreen() {
           ) : null}
 
           {store.conflictName ? (
-            <View style={styles.conflict}>
+            <View style={[styles.conflict, shortLandscape && styles.cardShort]}>
               <Text style={styles.conflictTitle}>User already signed in</Text>
               <Text style={styles.conflictBody}>
                 This user is already signed in on another session ({store.conflictName}). You can
@@ -353,17 +356,17 @@ export function LoginScreen() {
             </View>
           ) : null}
 
-          {store.error ? <Text style={styles.error}>{store.error}</Text> : null}
-          {store.statusMessage ? <Text style={styles.status}>{store.statusMessage}</Text> : null}
+          {store.error ? <Text style={[styles.error, shortLandscape && styles.smallMessage]} accessibilityLiveRegion="polite">{store.error}</Text> : null}
+          {store.statusMessage ? <Text style={[styles.status, shortLandscape && styles.smallMessage]}>{store.statusMessage}</Text> : null}
         </View>
-        <PrivacyPolicyLink />
+        <PrivacyPolicyLink compact={shortLandscape} />
       </ScrollView>
 
       <View style={styles.actions}>
         {method === 'account' && guest?.enabled ? (
           <Pressable
             accessibilityRole="button"
-            style={[styles.guest, busy && styles.buttonDisabled]}
+            style={[styles.guest, shortLandscape && styles.actionShort, busy && styles.buttonDisabled]}
             onPress={() =>
               void run(() =>
                 session.loginGuest({
@@ -374,18 +377,18 @@ export function LoginScreen() {
             }
             disabled={busy}
           >
-            <Text style={styles.guestText}>
+            <Text style={[styles.guestText, shortLandscape && styles.smallControlText]}>
               {busy ? 'Signing in…' : `Continue as ${guest.label || 'Guest'}`}
             </Text>
           </Pressable>
         ) : null}
         <Pressable
           accessibilityRole="button"
-          style={[styles.signIn, busy && styles.buttonDisabled]}
+          style={[styles.signIn, shortLandscape && styles.actionShort, busy && styles.buttonDisabled]}
           onPress={() => void submit()}
           disabled={busy}
         >
-          <Text style={styles.signInText}>{busy ? 'Signing in…' : 'Sign In'}</Text>
+          <Text style={[styles.signInText, shortLandscape && styles.smallControlText]}>{busy ? 'Signing in…' : 'Sign In'}</Text>
         </Pressable>
       </View>
       <QrScannerModal visible={scanning} onClose={() => setScanning(false)} onScanned={applyScanned} />
@@ -394,6 +397,7 @@ export function LoginScreen() {
 }
 
 function ScanField({
+  shortLandscape,
   accessibilityLabel,
   keyboardType,
   placeholder,
@@ -403,6 +407,7 @@ function ScanField({
   scanLabel,
   onSubmitEditing,
 }: {
+  shortLandscape: boolean;
   accessibilityLabel: string;
   keyboardType: 'url';
   placeholder: string;
@@ -421,7 +426,7 @@ function ScanField({
         keyboardType={keyboardType}
         placeholder={placeholder}
         placeholderTextColor="#8A8F99"
-        style={styles.inputInWrap}
+        style={[styles.inputInWrap, shortLandscape && styles.inputShort]}
         value={value}
         onChangeText={onChangeText}
         onSubmitEditing={onSubmitEditing}
@@ -431,7 +436,7 @@ function ScanField({
         accessibilityLabel={scanLabel}
         hitSlop={8}
         onPress={onScan}
-        style={styles.inputScan}
+        style={[styles.inputScan, shortLandscape && styles.inputScanShort]}
       >
         <QrIcon color="#111318" size={18} />
       </Pressable>
@@ -451,6 +456,17 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 12,
   },
+  screenShort: { paddingHorizontal: 10, paddingTop: 4, paddingBottom: 6 },
+  brandShort: { fontSize: 20 },
+  cardShort: { padding: 8 },
+  segmentItemShort: { paddingVertical: 4 },
+  labelShort: { fontSize: 11, marginTop: 6, marginBottom: 3 },
+  inputShort: { fontSize: 13, paddingVertical: 5 },
+  inputScanShort: { paddingVertical: 5 },
+  toggleRowShort: { marginTop: 7 },
+  actionShort: { paddingVertical: 6, borderRadius: 9 },
+  smallMessage: { fontSize: 11, lineHeight: 14 },
+  smallControlText: { fontSize: 13 },
   scrollFill: {
     flex: 1,
     minHeight: 0,

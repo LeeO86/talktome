@@ -42,7 +42,7 @@ export function VolumeOverlay({
     <View style={[styles.backdrop, embedded && styles.embedded]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close volume" />
       <View style={[styles.sheet, compact && styles.sheetCompact]}>
-        <Text style={styles.title} numberOfLines={1}>
+        <Text style={[styles.title, compact && styles.titleCompact]} numberOfLines={1}>
           {title}
         </Text>
         {!compact ? <VolumeRing level={level} muted={muted} accessibilityLabel={readout} /> : null}
@@ -53,12 +53,10 @@ export function VolumeOverlay({
           </View>
         ) : (
           <View style={styles.steppers}>
-            <NudgeButton accessibilityLabel="Quieter" onNudge={() => onNudge(-1)} style={[styles.step, compact && styles.stepCompact]} textStyle={styles.stepText}>
-              {'−'}
-            </NudgeButton>
-            <NudgeButton accessibilityLabel="Louder" onNudge={() => onNudge(1)} style={[styles.step, compact && styles.stepCompact]} textStyle={styles.stepText}>
-              {'+'}
-            </NudgeButton>
+            <NudgeButton accessibilityLabel="Quieter" direction={-1} onNudge={() => onNudge(-1)}
+              style={[styles.step, compact && styles.stepCompact]} symbolSize={compact ? 14 : 22} />
+            <NudgeButton accessibilityLabel="Louder" direction={1} onNudge={() => onNudge(1)}
+              style={[styles.step, compact && styles.stepCompact]} symbolSize={compact ? 14 : 22} />
           </View>
         )}
         <Pressable
@@ -67,10 +65,12 @@ export function VolumeOverlay({
           onPress={onToggleMute}
           style={[styles.mute, compact && styles.buttonCompact, muted && styles.muteOn]}
         >
-          <Text style={[styles.muteText, muted && styles.muteOnText]}>{muted ? 'Unmute' : 'Mute'}</Text>
+          <Text style={[styles.muteText, compact && styles.buttonTextCompact, muted && styles.muteOnText]}>
+            {muted ? 'Unmute' : 'Mute'}
+          </Text>
         </Pressable>
         <Pressable accessibilityRole="button" onPress={onClose} style={[styles.done, compact && styles.buttonCompact]}>
-          <Text style={styles.doneText}>Done</Text>
+          <Text style={[styles.doneText, compact && styles.buttonTextCompact]}>Done</Text>
         </Pressable>
       </View>
     </View>
@@ -113,9 +113,11 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   sheetCompact: { paddingTop: 6, paddingBottom: 6, gap: 4 },
-  dbCompact: { fontSize: 18 },
+  titleCompact: { fontSize: 15 },
+  dbCompact: { fontSize: 16 },
   stepCompact: { width: 54, height: 32, borderRadius: 9 },
   buttonCompact: { minHeight: 28, borderRadius: 9 },
+  buttonTextCompact: { fontSize: 14 },
   title: {
     color: colors.text,
     fontSize: 18,
@@ -150,12 +152,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(61,214,245,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  stepText: {
-    color: colors.text,
-    fontSize: 32,
-    fontWeight: '600',
-    marginTop: -2,
   },
   mute: {
     alignSelf: 'stretch',

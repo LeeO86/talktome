@@ -30,6 +30,7 @@ import {
   COMPACT_REPLY_HEIGHT,
   estimateTargetListHeight,
   isCompactOperatorScreen,
+  isShortLandscapeScreen,
   isTabletOperatorScreen,
   operatorLayout,
   shouldOfferHeaderCollapse,
@@ -68,6 +69,7 @@ export function OperatorScreen() {
   const height = measured.height || window.height;
   const { density, topBar } = useOperatorPreferences();
   const smallScreen = isCompactOperatorScreen(width, height);
+  const shortLandscape = isShortLandscapeScreen(width, height);
   const compact = density === 'compact' || (density === 'auto' && smallScreen);
   const defaultCollapsed = topBar === 'hidden' || (topBar === 'auto' && smallScreen);
   const sheetOpen = useSessionSheetOpen(state => state.open);
@@ -408,6 +410,7 @@ export function OperatorScreen() {
               <Text
                 style={[
                   styles.headerPeekLabel,
+                  shortLandscape && topBarNotice && styles.noticeTextShort,
                   topBarNotice && (store.error ? styles.headerPeekError : styles.headerPeekWarning),
                 ]}
                 numberOfLines={1}
@@ -473,7 +476,7 @@ export function OperatorScreen() {
         {!noticeInTopBar ? (
           <View style={[styles.noticeSlot, compact && styles.noticeCompact]}>
             {warning ? (
-              <Text style={styles.error} numberOfLines={1} accessibilityLiveRegion="polite">
+              <Text style={[styles.error, shortLandscape && styles.noticeTextShort]} numberOfLines={1} accessibilityLiveRegion="polite">
                 {warning}
               </Text>
             ) : accessoryNotice ? (
@@ -484,7 +487,7 @@ export function OperatorScreen() {
                 onPress={() => openSessionSheet('accessories')}
                 style={styles.accessoryNotice}
               >
-                <Text style={styles.accessoryNoticeText} numberOfLines={1}>{accessoryNotice}</Text>
+                <Text style={[styles.accessoryNoticeText, shortLandscape && styles.noticeTextShort]} numberOfLines={1}>{accessoryNotice}</Text>
                 <Text style={styles.accessoryNoticeChevron}>›</Text>
               </Pressable>
             ) : null}
@@ -512,6 +515,7 @@ export function OperatorScreen() {
                       compact={compact || replyBeside}
                       dense={compact}
                       largerControls={compact && smallScreen && !layout.landscape}
+                      paddedVolumeReadout={compact && shortLandscape}
                       hardwarePtt={hardwareTargetKeys.has(talkTargetIdentity(target))}
                       compactLabel={layout.columns > 1 && width / layout.columns < 400}
                       volumeReadout={compact}
@@ -612,6 +616,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 4,
   },
+  noticeTextShort: { fontSize: 10 },
   noticeCompact: { height: 14, marginBottom: 2 },
   replyCompactLandscape: { width: 52, minWidth: 52, paddingHorizontal: 3, borderRadius: 10 },
   headerPeekCard: {

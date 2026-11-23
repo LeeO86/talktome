@@ -96,10 +96,8 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
                         accessibilityLabel={`Quieter ${member.name}`}
                         onNudge={() => nudgeMember(member.userId, -1)}
                         style={styles.nudge}
-                        textStyle={styles.nudgeText}
-                      >
-                        {'−'}
-                      </NudgeButton>
+                        direction={-1}
+                      />
                     )}
                     <VolumeRing
                       level={level}
@@ -119,10 +117,8 @@ export function ConferenceMembersModal({ target, onClose }: Props) {
                         accessibilityLabel={`Louder ${member.name}`}
                         onNudge={() => nudgeMember(member.userId, 1)}
                         style={styles.nudge}
-                        textStyle={styles.nudgeText}
-                      >
-                        {'+'}
-                      </NudgeButton>
+                        direction={1}
+                      />
                     )}
                   </View>
                 );
@@ -236,12 +232,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(61,214,245,0.32)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  nudgeText: {
-    color: colors.text,
-    fontSize: 22,
-    fontWeight: '600',
-    marginTop: -1,
   },
   done: {
     margin: 16,

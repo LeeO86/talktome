@@ -1,18 +1,20 @@
 import { useEffect, useRef } from 'react';
-import { Pressable, type StyleProp, Text, type TextStyle, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+
+import { colors } from './theme';
 
 export const NUDGE_HOLD_DELAY_MS = 420;
 export const NUDGE_HOLD_INTERVAL_MS = 180;
 
 type Props = {
   accessibilityLabel: string;
+  direction: 1 | -1;
   onNudge: () => void;
   style?: StyleProp<ViewStyle>;
-  textStyle?: StyleProp<TextStyle>;
-  children: string;
+  symbolSize?: number;
 };
 
-export function NudgeButton({ accessibilityLabel, onNudge, style, textStyle, children }: Props) {
+export function NudgeButton({ accessibilityLabel, direction, onNudge, style, symbolSize = 14 }: Props) {
   const onNudgeRef = useRef(onNudge);
   onNudgeRef.current = onNudge;
   const delay = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -35,6 +37,10 @@ export function NudgeButton({ accessibilityLabel, onNudge, style, textStyle, chi
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      accessibilityActions={[{ name: 'activate' }]}
+      onAccessibilityAction={event => {
+        if (event.nativeEvent.actionName === 'activate') onNudgeRef.current();
+      }}
       onPressIn={() => {
         stop();
         onNudgeRef.current();
@@ -45,7 +51,16 @@ export function NudgeButton({ accessibilityLabel, onNudge, style, textStyle, chi
       onPressOut={stop}
       style={style}
     >
-      <Text style={textStyle}>{children}</Text>
+      <View pointerEvents="none" style={[styles.symbol, { width: symbolSize, height: symbolSize }]}>
+        <View style={styles.horizontal} />
+        {direction > 0 ? <View style={styles.vertical} /> : null}
+      </View>
     </Pressable>
   );
 }
+
+const styles = StyleSheet.create({
+  symbol: { alignItems: 'center', justifyContent: 'center' },
+  horizontal: { width: '100%', height: 2, borderRadius: 1, backgroundColor: colors.text },
+  vertical: { position: 'absolute', width: 2, height: '100%', borderRadius: 1, backgroundColor: colors.text },
+});

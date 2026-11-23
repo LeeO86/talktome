@@ -1,12 +1,15 @@
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { visibleProductionName } from '../protocol';
 import { session, useSessionStore } from '../session/store';
+import { isShortLandscapeScreen } from './layers';
 import { QrIcon, TrashIcon } from './icons';
 import { PrivacyPolicyLink } from './PrivacyPolicyLink';
 import { colors } from './theme';
 
 export function ProfilePickerScreen() {
+  const { width, height } = useWindowDimensions();
+  const compact = isShortLandscapeScreen(width, height);
   const profiles = useSessionStore((state) => state.profiles);
   const lastProfileId = useSessionStore((state) => state.activeProfileId);
   const busy = useSessionStore((state) => state.status === 'connecting');
@@ -14,11 +17,13 @@ export function ProfilePickerScreen() {
   const statusMessage = useSessionStore((state) => state.statusMessage);
 
   return (
-    <View style={styles.screen}>
-      <Text style={styles.title}>Profiles</Text>
-      <Text style={styles.subtitle}>Tap a profile to connect. The trash can deletes it from this device.</Text>
+    <View style={[styles.screen, compact && styles.screenCompact]}>
+      <Text style={[styles.title, compact && styles.titleCompact]}>Profiles</Text>
+      <Text style={[styles.subtitle, compact && styles.subtitleCompact]}>
+        {compact ? 'Select a profile to connect.' : 'Tap a profile to connect. The trash can deletes it from this device.'}
+      </Text>
 
-      <ScrollView contentContainerStyle={styles.list}>
+      <ScrollView contentContainerStyle={[styles.list, compact && styles.listCompact]}>
         {profiles.map((profile) => {
           const production = visibleProductionName(profile.productionName);
           return (
@@ -27,15 +32,15 @@ export function ProfilePickerScreen() {
                 accessibilityRole="button"
                 disabled={busy}
                 onPress={() => void session.connectProfile(profile.id)}
-                style={[styles.cardMain, busy && styles.busy]}
+                style={[styles.cardMain, compact && styles.cardMainCompact, busy && styles.busy]}
               >
-                <Text style={styles.name}>{profile.username}</Text>
-                <Text style={styles.server}>{profile.serverAddress}</Text>
-                {production ? <Text style={styles.production}>{production}</Text> : null}
+                <Text style={[styles.name, compact && styles.actionTextCompact]}>{profile.username}</Text>
+                <Text style={[styles.server, compact && styles.serverCompact]}>{profile.serverAddress}</Text>
+                {production ? <Text style={[styles.production, compact && styles.serverCompact]}>{production}</Text> : null}
                 {busy && profile.id === lastProfileId ? (
                   <View style={styles.connection} accessibilityLiveRegion="polite">
                     <ActivityIndicator size="small" color={colors.accent} />
-                    <Text style={styles.server}>{statusMessage || 'Connecting…'}</Text>
+                    <Text style={[styles.server, compact && styles.serverCompact]}>{statusMessage || 'Connecting…'}</Text>
                   </View>
                 ) : null}
               </Pressable>
@@ -54,7 +59,7 @@ export function ProfilePickerScreen() {
                   ]);
                 }}
                 hitSlop={8}
-                style={styles.remove}
+                style={[styles.remove, compact && styles.removeCompact]}
               >
                 <TrashIcon />
               </Pressable>
@@ -63,11 +68,12 @@ export function ProfilePickerScreen() {
         })}
       </ScrollView>
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? <Text style={[styles.error, compact && styles.errorCompact]} numberOfLines={compact ? 2 : undefined}
+        accessibilityLiveRegion="polite">{error}</Text> : null}
 
       {busy ? (
-        <Pressable accessibilityRole="button" onPress={() => session.cancelProfileConnection()} style={styles.add}>
-          <Text style={styles.addText}>Cancel connection</Text>
+        <Pressable accessibilityRole="button" onPress={() => session.cancelProfileConnection()} style={[styles.add, compact && styles.addCompact]}>
+          <Text style={[styles.addText, compact && styles.actionTextCompact]}>Cancel connection</Text>
         </Pressable>
       ) : null}
 
@@ -75,17 +81,17 @@ export function ProfilePickerScreen() {
         accessibilityRole="button"
         disabled={busy}
         onPress={() => session.startAddProfile({ openScanner: true })}
-        style={styles.add}
+        style={[styles.add, compact && styles.addCompact]}
       >
         <View style={styles.addRow}>
-          <QrIcon color={colors.text} />
-          <Text style={styles.addText}>Scan QR code</Text>
+          <QrIcon color={colors.text} size={compact ? 15 : undefined} />
+          <Text style={[styles.addText, compact && styles.actionTextCompact]}>Scan QR code</Text>
         </View>
       </Pressable>
-      <Pressable accessibilityRole="button" disabled={busy} onPress={() => session.startAddProfile()} style={styles.add}>
-        <Text style={styles.addText}>Add profile</Text>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={() => session.startAddProfile()} style={[styles.add, compact && styles.addCompact]}>
+        <Text style={[styles.addText, compact && styles.actionTextCompact]}>Add profile</Text>
       </Pressable>
-      <PrivacyPolicyLink />
+      <PrivacyPolicyLink compact={compact} />
     </View>
   );
 }
@@ -96,6 +102,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
   },
+  screenCompact: { paddingHorizontal: 10, paddingTop: 4 },
+  titleCompact: { fontSize: 21 },
+  subtitleCompact: { fontSize: 11, marginTop: 2, marginBottom: 5 },
+  listCompact: { gap: 5, paddingBottom: 5 },
+  cardMainCompact: { paddingHorizontal: 9, paddingVertical: 5 },
+  serverCompact: { fontSize: 11, marginTop: 2 },
+  removeCompact: { paddingHorizontal: 10, paddingVertical: 8 },
+  errorCompact: { fontSize: 11, lineHeight: 14, marginBottom: 4 },
+  addCompact: { minHeight: 28, marginBottom: 4, borderRadius: 9 },
+  actionTextCompact: { fontSize: 13 },
   title: {
     color: colors.text,
     fontSize: 34,

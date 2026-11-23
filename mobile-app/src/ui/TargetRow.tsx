@@ -35,6 +35,7 @@ type Props = {
   compact?: boolean;
   dense?: boolean;
   largerControls?: boolean;
+  paddedVolumeReadout?: boolean;
   hardwarePtt?: boolean;
   compactLabel?: boolean;
   volumeReadout?: boolean;
@@ -56,6 +57,7 @@ export function TargetRow({
   compact = false,
   dense = false,
   largerControls = false,
+  paddedVolumeReadout = false,
   hardwarePtt = false,
   compactLabel = false,
   volumeReadout = false,
@@ -283,6 +285,7 @@ export function TargetRow({
           compact={tight}
           dense={dense}
           largerReadout={largerControls}
+          paddedReadout={paddedVolumeReadout}
           variant={volumeReadout ? 'readout' : 'ring'}
           accessibilityLabel={
             radioSuppressed ? `Muted by Radio mode, ${target.label}`

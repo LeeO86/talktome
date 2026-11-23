@@ -60,6 +60,10 @@ export function isLandscape(width: number, height: number): boolean {
   return width > height;
 }
 
+export function isShortLandscapeScreen(width: number, height: number): boolean {
+  return isLandscape(width, height) && width <= COMPACT_SHORT_SIDE_MAX && height <= 260;
+}
+
 export function isCompactOperatorScreen(width: number, height: number): boolean {
   return Math.min(width, height) <= COMPACT_SHORT_SIDE_MAX;
 }
@@ -131,7 +135,7 @@ export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const small = compact && isCompactOperatorScreen(input.width, input.height);
   const columns = compact && !tablet ? 1 : targetGridColumns(input.width, input.height);
   // At P6 dimensions, use the space for four taller cards.
-  const p6Sized = input.width <= 360 && input.height <= 260;
+  const p6Sized = isShortLandscapeScreen(input.width, input.height);
   const smallPortrait = small && !landscape;
   const maxRows = smallPortrait ? COMPACT_HANDSET_PORTRAIT_MAX_ROWS
     : small && replyBeside && !p6Sized ? COMPACT_HANDSET_LANDSCAPE_MAX_ROWS
