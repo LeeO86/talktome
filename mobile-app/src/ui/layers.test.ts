@@ -37,10 +37,11 @@ describe('target layers', () => {
     },
   );
 
-  it('fits five Reply-height cards on the RG440 with the top bar collapsed', () => {
-    const layout = operatorLayout({ width: 320, height: 427, availableHeight: 310, compact: true });
+  it.each([280, 310])('fills %i dp on the RG440 with five taller cards', (availableHeight) => {
+    const layout = operatorLayout({ width: 320, height: 427, availableHeight, compact: true });
     expect(layout.layerSize).toBe(5);
-    expect(layout.cardHeight).toBe(COMPACT_REPLY_HEIGHT);
+    expect(layout.cardHeight).toBeGreaterThan(COMPACT_REPLY_HEIGHT);
+    expect(layout.rows * layout.cardHeight + (layout.rows - 1) * layout.gap).toBeCloseTo(availableHeight);
   });
 
   it('fits 8 portrait rows on an iPhone-sized screen', () => {

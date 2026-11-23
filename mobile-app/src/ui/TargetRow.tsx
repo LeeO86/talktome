@@ -34,6 +34,7 @@ type Props = {
   target: TalkTarget;
   compact?: boolean;
   dense?: boolean;
+  largerLabel?: boolean;
   hardwarePtt?: boolean;
   compactLabel?: boolean;
   volumeReadout?: boolean;
@@ -54,6 +55,7 @@ export function TargetRow({
   target,
   compact = false,
   dense = false,
+  largerLabel = false,
   hardwarePtt = false,
   compactLabel = false,
   volumeReadout = false,
@@ -158,7 +160,13 @@ export function TargetRow({
         {hardwarePtt ? <PttButtonIcon size={dense ? 12 : 14} /> : null}
         {locked ? <LockIcon color={colors.text} size={dense ? 12 : 14} /> : null}
         <Text
-          style={[styles.label, compactLabel && styles.labelCompact, dense && styles.labelDense, dimmed && styles.dimText]}
+          style={[
+            styles.label,
+            compactLabel && styles.labelCompact,
+            dense && styles.labelDense,
+            largerLabel && styles.labelLarge,
+            dimmed && styles.dimText,
+          ]}
           numberOfLines={1}
           adjustsFontSizeToFit
           minimumFontScale={0.85}
@@ -320,6 +328,7 @@ const styles = StyleSheet.create({
   },
   rowDense: { gap: 4, paddingHorizontal: 7 },
   labelDense: { fontSize: 12 },
+  labelLarge: { fontSize: 15 },
   nameRowDense: { gap: 4 },
   metaDense: { color: colors.muted, fontSize: 10, flexShrink: 1, maxWidth: '48%' },
   talkZoneDense: { minHeight: 0 },

@@ -11,6 +11,7 @@ export const PORTRAIT_MAX_ROWS = 8;
 export const LANDSCAPE_MAX_ROWS = 4;
 const COMPACT_HANDSET_LANDSCAPE_MAX_ROWS = 5;
 const COMPACT_HANDSET_PORTRAIT_MAX_ROWS = 5;
+const COMPACT_HANDSET_PORTRAIT_MAX_CARD_HEIGHT = 64;
 export const COMPACT_REPLY_HEIGHT = 44;
 export const LANDSCAPE_COLUMNS = 2;
 export const HEADER_COLLAPSE_ROW_THRESHOLD = 4;
@@ -140,7 +141,7 @@ export function operatorLayout(input: OperatorLayoutInput): OperatorLayout {
   const gap = small ? 2 : compact ? 4 : CARD_GAP;
   // Compact handset cards have one line of text and an 18 dp volume readout.
   const minHeight = Math.max(smallPortrait ? 40 : small ? 24 : 44, Math.ceil(18 * (input.fontScale ?? 1) + 6));
-  const preferredHeight = smallPortrait ? COMPACT_REPLY_HEIGHT : small ? 40 : 56;
+  const preferredHeight = smallPortrait ? COMPACT_HANDSET_PORTRAIT_MAX_CARD_HEIGHT : small ? 40 : 56;
   const rows = compact
     ? Math.max(1, Math.min(maxRows, Math.floor((available + gap) / (minHeight + gap))))
     : rowsThatFit(available, maxRows);
