@@ -59,6 +59,8 @@ export const PTT_INTENT_CATALOG: readonly PttIntentRule[] = [
   { action: 'com.ruggear.ptt.up', button: 'ptt', pressed: false },
   { action: 'com.ruggear.intent.action.PTT_DOWN', button: 'ptt', pressed: true },
   { action: 'com.ruggear.intent.action.PTT_UP', button: 'ptt', pressed: false },
+  { action: 'com.ruggear.intent.action.SOS.down', button: 'sos', pressed: true },
+  { action: 'com.ruggear.intent.action.SOS.up', button: 'sos', pressed: false },
   { action: 'com.ruggear.intent.action.SOS_DOWN', button: 'sos', pressed: true },
   { action: 'com.ruggear.intent.action.SOS_UP', button: 'sos', pressed: false },
 

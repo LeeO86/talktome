@@ -100,6 +100,12 @@ describe('broadcast intents', () => {
       decodeIntentAction('com.ruggear.ptt.down', null, { deviceId: 'onboard', timestamp: 1 })[0]?.button,
     ).toBe('ptt');
   });
+
+  it('maps the RG440 SOS press and release to Reply while leaving its emergency action to the device', () => {
+    expect(matchPttIntent('com.ruggear.intent.action.SOS.down')).toEqual({ button: 'sos', pressed: true });
+    expect(matchPttIntent('com.ruggear.intent.action.SOS.up')).toEqual({ button: 'sos', pressed: false });
+    expect(matchPttIntent('com.ruggear.intent.action.SOS_LWP')).toBeNull();
+  });
 });
 
 describe('notify peek / pairing', () => {

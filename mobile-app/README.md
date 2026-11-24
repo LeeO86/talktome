@@ -69,6 +69,8 @@ On RugGear RG440, choose PTT in **CustomKey** for the side key. The rotary
 selector uses **Accessories → This phone → Change PTT 1 target**. **SetM1**
 and **SetM2** can launch Talktome or use RugGear's PTT preset. On this firmware,
 the PTT preset for M1 and M2 emits the same primary PTT events as CustomKey.
+With **This phone** paired, the red SOS key's regular press and release use
+the current Reply target. The firmware handles its separate long-press alarm.
 
 ## Development
 
